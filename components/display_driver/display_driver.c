@@ -34,6 +34,7 @@
 
 /* Type Definitions -------------------------------------------------------- */
 /* Define local enums, structs, and typedefs here. */
+/* ST7735 is configured for RGB565, which uses 16 bits for each pixel. */
 #define LCD_BITS_PER_PIXEL 16
 
 /* Static Variables -------------------------------------------------------- */
@@ -54,6 +55,7 @@ static uint16_t display_driver_swap_rgb565_bytes(uint16_t color);
 /* Implement static helper functions here. */
 esp_err_t display_driver_init_backlight(void)
 {
+    /* Configure the LCD backlight pin as a normal output GPIO. */
     gpio_config_t m_BLConfig = {
         .mode = GPIO_MODE_OUTPUT,
         .pin_bit_mask = (1UL << LCD_GPIO_BL),
@@ -71,6 +73,7 @@ esp_err_t display_driver_init_backlight(void)
 esp_err_t display_driver_init_spi_bus(void)
 {
     // Seting SPI
+    /* The SPI bus carries LCD commands and pixel data to the ST7735 panel. */
     const spi_bus_config_t bus_config = {
         .miso_io_num = LCD_GPIO_MISO,
         .mosi_io_num = LCD_GPIO_MOSI,
@@ -94,6 +97,7 @@ esp_err_t display_driver_init_spi_bus(void)
 /* Implement non-static functions here. */
 esp_err_t display_driver_init(display_driver_handle_t *handle)
 {
+    /* Caller owns the handle; this function fills in the LCD IO and panel handles. */
     ESP_RETURN_ON_FALSE(handle != NULL, ESP_ERR_INVALID_ARG, TAG, "Invalid handle pointer");
 
     
@@ -101,12 +105,15 @@ esp_err_t display_driver_init(display_driver_handle_t *handle)
         Add your display driver initialization code here
             such as initializing the LCD panel and IO handles.
     */
+    /* Start from a known empty state before creating ESP-IDF LCD handles. */
     handle->io_handle = NULL;
     handle->panel_handle = NULL;
 
+    /* Hardware-level setup must happen before creating the LCD panel object. */
     ESP_RETURN_ON_ERROR(display_driver_init_backlight(), TAG, "Failed to init backlight");
     ESP_RETURN_ON_ERROR(display_driver_init_spi_bus(), TAG, "Failed to init SPI bus");
     
+    /* Panel IO maps ESP-IDF LCD transactions onto the SPI bus and LCD DC/CS pins. */
     const esp_lcd_panel_io_spi_config_t io_config = {
         .dc_gpio_num = LCD_GPIO_DC,
         .cs_gpio_num = LCD_GPIO_CS,
@@ -128,13 +135,14 @@ esp_err_t display_driver_init(display_driver_handle_t *handle)
 
     ESP_LOGI(TAG, "Create ST7735 panel");
 
-const esp_lcd_panel_dev_config_t panel_config = {
-.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
-.data_endian = LCD_RGB_DATA_ENDIAN_BIG,
-    .bits_per_pixel = 16,
-    .reset_gpio_num = LCD_GPIO_RST,
-    .vendor_config = NULL,
-};
+    /* Panel config describes how the ST7735 interprets pixel format and reset GPIO. */
+    const esp_lcd_panel_dev_config_t panel_config = {
+    .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
+    .data_endian = LCD_RGB_DATA_ENDIAN_BIG,
+        .bits_per_pixel = 16,
+        .reset_gpio_num = LCD_GPIO_RST,
+        .vendor_config = NULL,
+    };
 
     ESP_RETURN_ON_ERROR(
         esp_lcd_new_panel_st7735(
@@ -145,6 +153,7 @@ const esp_lcd_panel_dev_config_t panel_config = {
         ,TAG
         , "Fail to create ST7735 panel");
 
+    /* Reset and initialize the actual LCD controller before drawing to it. */
     ESP_LOGI(TAG, "Reset ST7735 panel");
     ESP_RETURN_ON_ERROR(
         esp_lcd_panel_reset(handle->panel_handle),
@@ -161,6 +170,7 @@ const esp_lcd_panel_dev_config_t panel_config = {
 
 
 
+    /* Keep the panel enabled before turning on the backlight so the screen wakes cleanly. */
     ESP_LOGI(TAG, "Turn display on");
     ESP_RETURN_ON_ERROR(
         esp_lcd_panel_disp_on_off(handle->panel_handle, true),
@@ -180,6 +190,7 @@ esp_err_t display_driver_set_backlight(bool enable)
 {
     ESP_LOGI(TAG, "Setting backlight: %s", enable ? "ON" : "OFF");
 
+    /* Board config decides whether the backlight is active-high or active-low. */
     uint8_t m_u8BacklightState = enable ? LCD_BACKLIGHT_ON_LEVEL : LCD_BACKLIGHT_OFF_LEVEL;
     ESP_RETURN_ON_ERROR(gpio_set_level(LCD_GPIO_BL, m_u8BacklightState),
                         TAG,
@@ -190,6 +201,7 @@ esp_err_t display_driver_set_backlight(bool enable)
 
 esp_err_t display_driver_raw_color_test(const display_driver_handle_t *handle)
 {
+    /* This test fills the whole screen with known RGB565 colors one by one. */
     ESP_RETURN_ON_FALSE(handle != NULL, ESP_ERR_INVALID_ARG, TAG, "Invalid handle pointer");
     
     ESP_LOGI(TAG, "Performing raw color test on the display");
@@ -200,20 +212,22 @@ esp_err_t display_driver_raw_color_test(const display_driver_handle_t *handle)
 
     ESP_LOGI(TAG, "Start LCD raw color test");
 
-const struct {
-    const char *name;
-    uint16_t color;
-} tests[] = {
-{"RED",   0xF800},
-{"GREEN", 0x07E0},
-{"BLUE",  0x001F},
-{"WHITE", 0xFFFF},
-{"BLACK", 0x0000},
-};
+    /* These values are standard RGB565 test colors: red, green, blue, white, black. */
+    const struct {
+        const char *name;
+        uint16_t color;
+    } tests[] = {
+    {"RED",   0xF800},
+    {"GREEN", 0x07E0},
+    {"BLUE",  0x001F},
+    {"WHITE", 0xFFFF},
+    {"BLACK", 0x0000},
+    };
 
     for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
         ESP_LOGI(TAG, "Fill %s", tests[i].name);
 
+        /* Draw one solid color, then wait so the result is visible on the LCD. */
         ESP_RETURN_ON_ERROR(
             display_driver_fill_color(handle, tests[i].color),
             TAG,
@@ -225,12 +239,6 @@ const struct {
 
     ESP_LOGI(TAG, "LCD raw color test done");
 
-    return ESP_OK;
-
-    /*
-    Add your code to perform the raw color test on the display
-    */
-   
    return ESP_OK;
 }
 
@@ -238,20 +246,25 @@ esp_err_t display_driver_fill_color(const display_driver_handle_t *handle, uint1
 {
     esp_err_t ret = ESP_OK;
 
+    /* A valid panel handle is required before any bitmap drawing operation. */
     ESP_RETURN_ON_FALSE(handle != NULL, ESP_ERR_INVALID_ARG, TAG, "Invalid handle pointer");
     ESP_RETURN_ON_FALSE(handle->panel_handle != NULL, ESP_ERR_INVALID_ARG, TAG, "Invalid handle pointer");
 
+    /* Draw the screen in small horizontal chunks to keep DMA memory usage low. */
     const int draw_lines = LCD_LVGL_DRAW_BUF_LINES;
     const size_t pixel_count = LCD_H_RES * draw_lines;
     const size_t buffer_size = pixel_count * sizeof(uint16_t);
 
+    /* Pixel buffer must be DMA-capable because the SPI driver reads from it directly. */
     uint16_t *color_buffer = heap_caps_malloc(buffer_size, MALLOC_CAP_DMA);
     ESP_RETURN_ON_FALSE(color_buffer != NULL, ESP_ERR_NO_MEM, TAG, "No memory for color buffer");
 
+    /* Pre-fill one chunk with the requested color so it can be reused for every band. */
     for (size_t i = 0; i < pixel_count; ++i) {
         color_buffer[i] = display_driver_swap_rgb565_bytes(color);
     }
 
+    /* Sweep from top to bottom, drawing one chunk of rows at a time. */
     for (int y = 0; y < LCD_V_RES; y += draw_lines) {
     int y_end = y + draw_lines;
     if (y_end > LCD_V_RES) {
@@ -279,5 +292,6 @@ esp_err_t display_driver_fill_color(const display_driver_handle_t *handle, uint1
 
 uint16_t display_driver_swap_rgb565_bytes(uint16_t color)
 {
+    /* ST7735/SPI transfers often expect RGB565 bytes in the opposite byte order. */
     return (uint16_t)((color << 8) | (color >> 8));
 }
