@@ -43,6 +43,8 @@ void app_main(void)
     display_driver_handle_t display_handle;
     esp_err_t ret = display_driver_init(&display_handle);
 
+    ESP_ERROR_CHECK(display_driver_raw_color_test(&display_handle));
+
     while (1)
     {
         vTaskDelay(pdMS_TO_TICKS(10000));

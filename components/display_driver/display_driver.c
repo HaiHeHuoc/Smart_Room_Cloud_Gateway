@@ -48,6 +48,7 @@ const static char * TAG = "display_driver";
 static esp_err_t display_driver_init_backlight(void);
 static esp_err_t display_driver_init_spi_bus(void);
 static esp_err_t display_driver_fill_color(const display_driver_handle_t *handle, uint16_t color);
+static uint16_t display_driver_swap_rgb565_bytes(uint16_t color);
 
 /* Static Functions ------------------------------------------------------- */
 /* Implement static helper functions here. */
@@ -83,7 +84,7 @@ esp_err_t display_driver_init_spi_bus(void)
 
     ESP_RETURN_ON_ERROR(spi_bus_initialize(LCD_SPI_HOST,
                         &bus_config,
-                        SPI_DMA_DISABLED
+                        SPI_DMA_CH_AUTO
                         ), TAG, "Fail to initialize SPI bus");
 
     return ESP_OK;
@@ -127,11 +128,13 @@ esp_err_t display_driver_init(display_driver_handle_t *handle)
 
     ESP_LOGI(TAG, "Create ST7735 panel");
 
-    const esp_lcd_panel_dev_config_t panel_config = {
-        .bits_per_pixel = 16,
-        .reset_gpio_num = LCD_GPIO_RST,
-        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB
-    };
+const esp_lcd_panel_dev_config_t panel_config = {
+.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
+.data_endian = LCD_RGB_DATA_ENDIAN_BIG,
+    .bits_per_pixel = 16,
+    .reset_gpio_num = LCD_GPIO_RST,
+    .vendor_config = NULL,
+};
 
     ESP_RETURN_ON_ERROR(
         esp_lcd_new_panel_st7735(
@@ -155,6 +158,8 @@ esp_err_t display_driver_init(display_driver_handle_t *handle)
         TAG,
         "Failed to init LCD"
     );
+
+
 
     ESP_LOGI(TAG, "Turn display on");
     ESP_RETURN_ON_ERROR(
@@ -186,12 +191,93 @@ esp_err_t display_driver_set_backlight(bool enable)
 esp_err_t display_driver_raw_color_test(const display_driver_handle_t *handle)
 {
     ESP_RETURN_ON_FALSE(handle != NULL, ESP_ERR_INVALID_ARG, TAG, "Invalid handle pointer");
-
+    
     ESP_LOGI(TAG, "Performing raw color test on the display");
 
-    /*
-        Add your code to perform the raw color test on the display
-    */
+    ESP_RETURN_ON_FALSE(handle != NULL, ESP_ERR_INVALID_ARG, TAG, "handle is NULL");
+    ESP_RETURN_ON_FALSE(handle->panel_handle != NULL, ESP_ERR_INVALID_ARG, TAG, "panel_handle is NULL");
+
+
+    ESP_LOGI(TAG, "Start LCD raw color test");
+
+const struct {
+    const char *name;
+    uint16_t color;
+} tests[] = {
+{"RED",   0xF800},
+{"GREEN", 0x07E0},
+{"BLUE",  0x001F},
+{"WHITE", 0xFFFF},
+{"BLACK", 0x0000},
+};
+
+    for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
+        ESP_LOGI(TAG, "Fill %s", tests[i].name);
+
+        ESP_RETURN_ON_ERROR(
+            display_driver_fill_color(handle, tests[i].color),
+            TAG,
+            "Fill color failed"
+        );
+
+        vTaskDelay(pdMS_TO_TICKS(800));
+    }
+
+    ESP_LOGI(TAG, "LCD raw color test done");
 
     return ESP_OK;
+
+    /*
+    Add your code to perform the raw color test on the display
+    */
+   
+   return ESP_OK;
+}
+
+esp_err_t display_driver_fill_color(const display_driver_handle_t *handle, uint16_t color)
+{
+    esp_err_t ret = ESP_OK;
+
+    ESP_RETURN_ON_FALSE(handle != NULL, ESP_ERR_INVALID_ARG, TAG, "Invalid handle pointer");
+    ESP_RETURN_ON_FALSE(handle->panel_handle != NULL, ESP_ERR_INVALID_ARG, TAG, "Invalid handle pointer");
+
+    const int draw_lines = LCD_LVGL_DRAW_BUF_LINES;
+    const size_t pixel_count = LCD_H_RES * draw_lines;
+    const size_t buffer_size = pixel_count * sizeof(uint16_t);
+
+    uint16_t *color_buffer = heap_caps_malloc(buffer_size, MALLOC_CAP_DMA);
+    ESP_RETURN_ON_FALSE(color_buffer != NULL, ESP_ERR_NO_MEM, TAG, "No memory for color buffer");
+
+    for (size_t i = 0; i < pixel_count; ++i) {
+        color_buffer[i] = display_driver_swap_rgb565_bytes(color);
+    }
+
+    for (int y = 0; y < LCD_V_RES; y += draw_lines) {
+    int y_end = y + draw_lines;
+    if (y_end > LCD_V_RES) {
+    y_end = LCD_V_RES;
+    }
+        ret = esp_lcd_panel_draw_bitmap(
+            handle->panel_handle,
+            0,
+            y,
+            LCD_H_RES,
+            y_end,
+            color_buffer
+        );
+
+        if (ret != ESP_OK) {
+            break;
+        }
+
+    }
+
+    free(color_buffer);
+
+    return ret;
+}
+
+uint16_t display_driver_swap_rgb565_bytes(uint16_t color)
+{
+    return (uint16_t)((color << 8) | (color >> 8));
 }

@@ -27,7 +27,7 @@
 #define LCD_H_RES 128
 #define LCD_V_RES 160
 
-#define LCD_PIXEL_CLOCK_HZ (20 * 1000 * 1000) // 20 MHz
+#define LCD_PIXEL_CLOCK_HZ (1 * 1000 * 1000) // 5 MHz
 
 /* LCD GPIO Pin Mapping ---------------------------------------------------- */
 /*
