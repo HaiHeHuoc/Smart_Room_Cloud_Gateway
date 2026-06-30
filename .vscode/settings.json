@@ -1,0 +1,14 @@
+{
+  "C_Cpp.intelliSenseEngine": "default",
+  "idf.extensionActivationMode": "always",
+  "clangd.path": "C:\\Espressif\\tools\\esp-clang\\esp-20.1.1_20250829\\esp-clang\\bin\\clangd.exe",
+  "clangd.arguments": [
+    "--background-index",
+    "--query-driver=**",
+    "--compile-commands-dir=d:\\01_Hai_Project\\01_Smart_Room_Cloud_Gateway\\Smart_Room_Cloud_Gateway\\Smart_Room_Cloud_Gateway\\build"
+  ],
+  "idf.currentSetup": "C:\\esp\\v6.0.1\\esp-idf",
+  "idf.openOcdConfigs": [
+    "board/esp32s3-builtin.cfg"
+  ]
+}
