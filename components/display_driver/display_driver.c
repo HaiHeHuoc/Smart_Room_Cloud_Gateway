@@ -13,6 +13,9 @@
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
@@ -103,8 +106,66 @@ esp_err_t display_driver_init(display_driver_handle_t *handle)
     ESP_RETURN_ON_ERROR(display_driver_init_backlight(), TAG, "Failed to init backlight");
     ESP_RETURN_ON_ERROR(display_driver_init_spi_bus(), TAG, "Failed to init SPI bus");
     
-    ESP_RETURN_ON_ERROR(display_driver_set_backlight(true), TAG, "Failed to init backlight");
+    const esp_lcd_panel_io_spi_config_t io_config = {
+        .dc_gpio_num = LCD_GPIO_DC,
+        .cs_gpio_num = LCD_GPIO_CS,
+        .pclk_hz     = LCD_PIXEL_CLOCK_HZ,
+        .lcd_cmd_bits = LCD_CMD_BITS,
+        .lcd_param_bits = LCD_PARAM_BITS,
+        .spi_mode = 0,
+        .trans_queue_depth = 10
+    };
 
+    ESP_LOGI(TAG, "Creating LCD IOs");
+
+    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_spi(
+        LCD_SPI_HOST,
+        &io_config,
+        &handle->io_handle
+    ), TAG, "Failed to create LCD IOs, %s", __func__);
+
+
+    ESP_LOGI(TAG, "Create ST7735 panel");
+
+    const esp_lcd_panel_dev_config_t panel_config = {
+        .bits_per_pixel = 16,
+        .reset_gpio_num = LCD_GPIO_RST,
+        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB
+    };
+
+    ESP_RETURN_ON_ERROR(
+        esp_lcd_new_panel_st7735(
+            handle->io_handle,
+            &panel_config,
+            &handle->panel_handle
+        )
+        ,TAG
+        , "Fail to create ST7735 panel");
+
+    ESP_LOGI(TAG, "Reset ST7735 panel");
+    ESP_RETURN_ON_ERROR(
+        esp_lcd_panel_reset(handle->panel_handle),
+        TAG,
+        "Failed to reset LCD"
+    );
+
+    ESP_LOGI(TAG, "init ST7735 panel");
+    ESP_RETURN_ON_ERROR(
+        esp_lcd_panel_init(handle->panel_handle),
+        TAG,
+        "Failed to init LCD"
+    );
+
+    ESP_LOGI(TAG, "Turn display on");
+    ESP_RETURN_ON_ERROR(
+        esp_lcd_panel_disp_on_off(handle->panel_handle, true),
+        TAG,
+        "Fail to turn LCD on"
+    );
+
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    ESP_RETURN_ON_ERROR(display_driver_set_backlight(true), TAG, "Failed to init backlight");
 
     ESP_LOGI(TAG, "Display Driver initialized successfully");
     return ESP_OK;
