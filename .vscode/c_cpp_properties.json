@@ -10,6 +10,7 @@
       ],
       "browse": {
         "path": [
+          "C:\\esp\\v6.0.1\\esp-idf\\components\\*",
           "${workspaceFolder}"
         ],
         "limitSymbolsToIncludedHeaders": true
