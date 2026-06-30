@@ -6,11 +6,11 @@
       "compileCommands": "${config:idf.buildPath}/compile_commands.json",
       "intelliSenseMode": "gcc-x86",
       "includePath": [
+        "C:\\esp\\v6.0.1\\esp-idf\\components\\**",
         "${workspaceFolder}/**"
       ],
       "browse": {
         "path": [
-          "C:\\esp\\v6.0.1\\esp-idf\\components\\*",
           "${workspaceFolder}"
         ],
         "limitSymbolsToIncludedHeaders": true

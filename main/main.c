@@ -5,10 +5,12 @@
 
 #include "esp_log.h"
 
+/* Common components ------------------------------------------------------- */
 #include "app_common.h"
 #include "board_config.h"
 
-
+/* DISPLAY components ------------------------------------------------------- */
+#include "display_driver.h"
 
 /* Macros ------------------------------------------------------------------ */
 /* Define event bits, GPIO pins, task stack sizes, priorities, etc. here. */
@@ -32,9 +34,14 @@ const char *TAG = "Main_App";
 /* Application ------------------------------------------------------------- */
 void app_main(void)
 {
+    // Project information
     ESP_LOGI(TAG, "PROJECT: %s", APP_PROJECT_NAME);
     ESP_LOGI(TAG, "VERSION: %s", APP_PROJECT_VER);
     ESP_LOGI(TAG, "BUILD DATE: %s", APP_PROJECT_VER_DATE);
+
+    // Display driver initialization
+    display_driver_handle_t display_handle;
+    esp_err_t ret = display_driver_init(&display_handle);
 
     while (1)
     {
