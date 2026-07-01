@@ -33,6 +33,13 @@ esp_err_t display_driver_set_backlight(bool enable);
 
 esp_err_t display_driver_raw_color_test(const display_driver_handle_t *handle);
 
+esp_err_t display_driver_draw_bitmap(const display_driver_handle_t *handle,
+                                     int x_start,
+                                     int y_start,
+                                     int x_end,
+                                     int y_end,
+                                     const void *color_data);
+
 /* Static Functions ------------------------------------------------------- */
 /* Implement static helper functions here. */
 

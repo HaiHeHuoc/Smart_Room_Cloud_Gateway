@@ -5,5 +5,7 @@ idf_component_register(
         common
         display_driver
         lvgl
+        esp_lcd
         esp_timer
+        heap
 )

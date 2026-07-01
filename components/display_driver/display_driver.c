@@ -39,7 +39,7 @@
 
 /* Static Variables -------------------------------------------------------- */
 /* Define file-scope static variables here. */
-const static char * TAG = "display_driver";
+const static char * TAG = "DISPLAY_DRIVER";
 
 /* Global Variables -------------------------------------------------------- */
 /* Define file-scope Global variables here. */
@@ -288,6 +288,32 @@ esp_err_t display_driver_fill_color(const display_driver_handle_t *handle, uint1
     free(color_buffer);
 
     return ret;
+}
+
+esp_err_t display_driver_draw_bitmap(const display_driver_handle_t *handle,
+                                     int x_start,
+                                     int y_start,
+                                     int x_end,
+                                     int y_end,
+                                     const void *color_data)
+{
+    esp_err_t ret = ESP_OK;
+
+    ESP_RETURN_ON_FALSE(handle!=NULL, ESP_ERR_INVALID_ARG,TAG , "invalid handle pointer");
+    ESP_RETURN_ON_FALSE(handle->panel_handle!=NULL, ESP_ERR_INVALID_ARG,TAG , "invalid panel handle pointer");
+    ESP_RETURN_ON_FALSE(color_data!=NULL, ESP_ERR_INVALID_ARG,TAG , "invalid color data pointer");
+
+    ret = esp_lcd_panel_draw_bitmap(
+        handle->panel_handle,
+        x_start,
+        y_start,
+        x_end,
+        y_end,
+        color_data
+    );
+
+    return ret;
+
 }
 
 uint16_t display_driver_swap_rgb565_bytes(uint16_t color)

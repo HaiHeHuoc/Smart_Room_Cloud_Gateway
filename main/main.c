@@ -15,7 +15,6 @@
 /* LVGL Management components ----------------------------------------------- */
 #include "ui_manager_lvgl.h"
 
-
 /* Macros ------------------------------------------------------------------ */
 /* Define event bits, GPIO pins, task stack sizes, priorities, etc. here. */
 
@@ -28,6 +27,7 @@ const char *TAG = "Main_App";
 
 /* Static Variables -------------------------------------------------------- */
 /* Define file-scope static variables here. */
+static display_driver_handle_t display_handle;
 
 /* Global Variables -------------------------------------------------------- */
 /* Define file-scope Global variables here. */
@@ -44,14 +44,17 @@ void app_main(void)
     ESP_LOGI(TAG, "BUILD DATE: %s", APP_PROJECT_VER_DATE);
 
     // Display driver initialization
-    display_driver_handle_t display_handle;
     esp_err_t ret = display_driver_init(&display_handle);
 
     // Used to test the display by filling it with known colors. Uncomment to run the test.
     // ESP_ERROR_CHECK(display_driver_raw_color_test(&display_handle));
 
+    // Initialize LVGL UI manager
+    ESP_ERROR_CHECK(ui_manager_lvgl_init(&display_handle));
+
     while (1)
     {
+        ui_manager_lvgl_task_handler();
         vTaskDelay(pdMS_TO_TICKS(10000));
     }
     
