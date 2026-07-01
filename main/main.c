@@ -12,6 +12,10 @@
 /* DISPLAY components ------------------------------------------------------- */
 #include "display_driver.h"
 
+/* LVGL Management components ----------------------------------------------- */
+#include "ui_manager_lvgl.h"
+
+
 /* Macros ------------------------------------------------------------------ */
 /* Define event bits, GPIO pins, task stack sizes, priorities, etc. here. */
 
@@ -43,7 +47,8 @@ void app_main(void)
     display_driver_handle_t display_handle;
     esp_err_t ret = display_driver_init(&display_handle);
 
-    ESP_ERROR_CHECK(display_driver_raw_color_test(&display_handle));
+    // Used to test the display by filling it with known colors. Uncomment to run the test.
+    // ESP_ERROR_CHECK(display_driver_raw_color_test(&display_handle));
 
     while (1)
     {

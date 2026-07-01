@@ -18,3 +18,4 @@ dependencies:
   # waveshare/esp_lcd_st7735: ^1.0.1
   # espressif/esp_lvgl_port: ^2.8.0
   waveshare/esp_lcd_st7735: ^1.0.1
+  lvgl/lvgl: ^9
