@@ -52,10 +52,14 @@ void app_main(void)
     // Initialize LVGL UI manager
     ESP_ERROR_CHECK(ui_manager_lvgl_init(&display_handle));
 
+    ui_manager_lvgl_create_demo_screen();
+
+    ESP_LOGI(TAG, "LVGL display initialized successfully");
+
     while (1)
     {
         ui_manager_lvgl_task_handler();
-        vTaskDelay(pdMS_TO_TICKS(10000));
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
     
 }
