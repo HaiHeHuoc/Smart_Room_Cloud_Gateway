@@ -34,6 +34,7 @@ static display_driver_handle_t display_handle;
 
 /* Function Prototypes ----------------------------------------------------- */
 /* Declare static helper functions here. */
+void lvgl_task_handler(void* param);
 
 /* Application ------------------------------------------------------------- */
 void app_main(void)
@@ -50,16 +51,32 @@ void app_main(void)
     // ESP_ERROR_CHECK(display_driver_raw_color_test(&display_handle));
 
     // Initialize LVGL UI manager
-    ESP_ERROR_CHECK(ui_manager_lvgl_init(&display_handle));
+    esp_err_t lvgl_ret = ui_manager_lvgl_init(&display_handle);
 
-    ui_manager_lvgl_create_demo_screen();
+    if (lvgl_ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize LVGL UI manager");
+    }
+    else
+    {
+        ESP_LOGI(TAG, "Start LVGL task handler");
+        ui_manager_lvgl_create_demo_screen();
+
+        xTaskCreate(
+            lvgl_task_handler,
+            "lvgl_task",
+            4096,
+            NULL,
+            5,
+            NULL
+        );
+    }
 
     ESP_LOGI(TAG, "LVGL display initialized successfully");
 
     while (1)
     {
-        ui_manager_lvgl_task_handler();
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        ESP_LOGI(TAG, "Main loop running...");
+        vTaskDelay(pdMS_TO_TICKS(2000));
     }
     
 }
@@ -69,3 +86,14 @@ void app_main(void)
 
 /* Functions -------------------------------------------------------------- */
 /* Implement non-static functions here. */
+void lvgl_task_handler(void* param)
+{
+    while(1)
+    {
+        uint32_t delay_ms = ui_manager_lvgl_task_handler(); // Call the LVGL task handler
+        if(delay_ms == UINT32_MAX) {
+            delay_ms = 5; // If no timer is ready, set a default delay
+        }
+        vTaskDelay(pdMS_TO_TICKS(delay_ms)); // Delay for the specified milliseconds
+    }
+}
