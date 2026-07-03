@@ -5,8 +5,6 @@
 
 #include "lvgl.h"
 
-static lv_display_t *gs_lvgl_display = NULL;
-
 
 /**
  * @brief LVGL initialization function. This function initializes the LVGL library, sets up the display, and configures the necessary buffers and callbacks.
@@ -21,7 +19,7 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t* diplay_handle);
  * 
  * @return uint32_t 
  */
-uint32_t ui_manager_lvgl_task_handler(void);
+void ui_manager_lvgl_task_handler(void);
 
 /**
  * @brief Demo function to create a simple screen with a label displaying "LVGL OK".

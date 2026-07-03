@@ -90,10 +90,7 @@ void lvgl_task_handler(void* param)
 {
     while(1)
     {
-        uint32_t delay_ms = ui_manager_lvgl_task_handler(); // Call the LVGL task handler
-        if(delay_ms == UINT32_MAX) {
-            delay_ms = 5; // If no timer is ready, set a default delay
-        }
-        vTaskDelay(pdMS_TO_TICKS(delay_ms)); // Delay for the specified milliseconds
+        ui_manager_lvgl_task_handler(); // Call the LVGL task handler
+        vTaskDelay(pdMS_TO_TICKS(5)); // Delay for the specified milliseconds
     }
 }

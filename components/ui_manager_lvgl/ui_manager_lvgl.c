@@ -51,7 +51,6 @@
 /* Constants --------------------------------------------------------------- */
 /* Define file-scope const values here. */
 const static char *TAG = "UI_LVGL";
-static SemaphoreHandle_t s_lvgl_mutex = NULL;
 
 /* Type Definitions -------------------------------------------------------- */
 /* Define local enums, structs, and typedefs here. */
@@ -60,6 +59,9 @@ static SemaphoreHandle_t s_lvgl_mutex = NULL;
 /* Define file-scope static variables here. */
 static display_driver_handle_t* s_display_handle = NULL;
 static esp_timer_handle_t s_lvgl_tick_timer = NULL;
+
+static SemaphoreHandle_t s_lvgl_mutex = NULL;
+static lv_display_t *s_lvgl_display = NULL;
 
 static void *s_lvgl_draw_buffer = NULL;
 #if LCD_ROTATE == LCD_RORATE_LANDSCAPE
@@ -171,15 +173,15 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t* display_handle)
                             "Failed to allocate LVGL rotate buffer");
     #endif
 
-    gs_lvgl_display = lv_display_create(LCD_H_RES, LCD_V_RES);
+    s_lvgl_display = lv_display_create(LCD_H_RES, LCD_V_RES);
 
-    lv_display_set_buffers(gs_lvgl_display,
+    lv_display_set_buffers(s_lvgl_display,
                         s_lvgl_draw_buffer,
                         NULL,
                         LVGL_DRAW_BUFFER_SIZE,
                         LV_DISPLAY_RENDER_MODE_PARTIAL);
 
-    ESP_RETURN_ON_FALSE(gs_lvgl_display != NULL,
+    ESP_RETURN_ON_FALSE(s_lvgl_display != NULL,
                         ESP_ERR_NO_MEM,
                         TAG,
                         "Failed to create LVGL display");
@@ -187,14 +189,14 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t* display_handle)
                         
     ESP_LOGI(TAG, "LVGL display created successfully with resolution: %dx%d", LCD_H_RES, LCD_V_RES);
     
-    lv_display_set_color_format(gs_lvgl_display, LV_COLOR_FORMAT_RGB565);
+    lv_display_set_color_format(s_lvgl_display, LV_COLOR_FORMAT_RGB565);
     ESP_LOGI(TAG, "LVGL display color format set to RGB565");
 
     #if LCD_ROTATE == LCD_RORATE_LANDSCAPE
-        lv_display_set_rotation(gs_lvgl_display, LCD_ROTATE_ANGLE);
+        lv_display_set_rotation(s_lvgl_display, LCD_ROTATE_ANGLE);
     #endif
                         
-    lv_display_set_flush_cb(gs_lvgl_display, ui_manager_lvgl_flush_cb);
+    lv_display_set_flush_cb(s_lvgl_display, ui_manager_lvgl_flush_cb);
     ESP_LOGI(TAG, "LVGL display flush callback set");
 
     const esp_lcd_panel_io_callbacks_t io_callbacks = {
@@ -204,7 +206,7 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t* display_handle)
     ESP_RETURN_ON_ERROR(
         esp_lcd_panel_io_register_event_callbacks(display_handle->io_handle,
                                                   &io_callbacks,
-                                                  gs_lvgl_display),
+                                                  s_lvgl_display),
         TAG,
         "Failed to register LCD IO callbacks"
     );
@@ -230,14 +232,15 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t* display_handle)
  * @brief Task handler for the LVGL task.
  * 
  */
-uint32_t ui_manager_lvgl_task_handler(void)
+void ui_manager_lvgl_task_handler(void)
 {
     // waiting for the LVGL mutex to ensure thread safety
     ui_manager_lvgl_wait_for_mutex();
-    ui_manager_lvgl_release_mutex();
-    
+
     // Call the LVGL timer handler to process LVGL tasks
-    return lv_timer_handler();
+    lv_timer_handler();
+
+    ui_manager_lvgl_release_mutex();
 }
 
 /**
