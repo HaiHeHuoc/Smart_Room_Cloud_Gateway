@@ -4,4 +4,5 @@ idf_component_register(SRCS "main.c"
         common
         display_driver
         ui_manager_lvgl
+        sd_card_manager
         )

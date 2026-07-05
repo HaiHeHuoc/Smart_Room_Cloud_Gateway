@@ -6,11 +6,17 @@
 #include "driver/spi_master.h"
 
 /* =========================================================================
- * Board Configuration
- * Target : ESP32-S3
- * LCD    : ST7735 Green Tab, 128x160 SPI TFT
+ * ST7735 LCD Device Configuration
+ *
+ * Includes:
+ * - LCD controller and panel variant
+ * - SPI host and display resolution
+ * - LCD GPIO pin mapping
+ * - SPI command/parameter bit width
+ * - Backlight control level
+ * - SPI transfer size
+ * - LVGL draw buffer settings for this LCD
  * ========================================================================= */
-
 /* LCD Controller / Variant ------------------------------------------------ */
 #define LCD_CONTROLLER_ST7735            1
 #define LCD_ST7735_VARIANT_GREENTAB      1
@@ -27,7 +33,7 @@
 #define LCD_H_RES 128
 #define LCD_V_RES 160
 
-#define LCD_PIXEL_CLOCK_HZ (5 * 1000 * 1000) // 5 MHz
+#define LCD_PIXEL_CLOCK_HZ (4 * 1000 * 1000) // 4 MHz
 
 /* LCD GPIO Pin Mapping ---------------------------------------------------- */
 /*
@@ -66,3 +72,33 @@
  * This is safer than using full screen buffer at the beginning.
  */
 #define LCD_LVGL_DRAW_BUF_LINES     20
+
+
+
+
+/* =========================================================================
+ * Device: ST7735 SPI TFT SD slot
+ * ========================================================================= */
+#define SD_SPI_HOST      SPI3_HOST
+
+#define SD_GPIO_MOSI     GPIO_NUM_16
+#define SD_GPIO_MISO     GPIO_NUM_17
+#define SD_GPIO_SCLK     GPIO_NUM_18
+#define SD_GPIO_CS       GPIO_NUM_8
+
+#define SD_MOUNT_POINT           "/sdcard"
+
+#define SD_CLOCK_KHZ (2 * 1000) // 2 MHz //By defaut unit, it is KHz
+
+/*
+ * Maximum number of files that can be opened at the same time.
+ * This does NOT limit the total number of files stored on the SD card.
+ */
+#define SD_MAX_FILES             5
+
+/*
+ * FATFS allocation unit / cluster size used when formatting the card.
+ * 16 * 1024 = 16 KB.
+ * This does NOT limit SD card capacity.
+ */
+#define SD_ALLOCATION_UNIT_SIZE  (16 * 1024)
