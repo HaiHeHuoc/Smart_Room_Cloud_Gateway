@@ -28,6 +28,33 @@ void ui_manager_lvgl_task_handler(void);
 void ui_manager_lvgl_create_demo_screen(void);
 
 /**
+ * @brief Demo function for LVGL while running
+ * 
+ * @param vPrama 
+ */
+void ui_manager_lvgl_running_demo(void* vPrama);
+
+/**
+ * @brief Start running demo task
+ * 
+ * @param vPrama 
+ */
+void ui_manager_lvgl_start_running_demo_task(void);
+
+/**
+ * @brief LVGL task handler
+ * 
+ * @param param 
+ */
+void lvgl_task_handler(void* param);
+
+/**
+ * @brief Start running demo task
+ * 
+ */
+void ui_manager_lvgl_start_UI_task();
+
+/**
  * @brief Wait for the LVGL mutex to become available.
  * 
  */
