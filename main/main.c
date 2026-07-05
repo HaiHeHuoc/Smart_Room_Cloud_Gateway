@@ -61,7 +61,19 @@ void app_main(void)
     // ESP_ERROR_CHECK(display_driver_raw_color_test(&display_handle));
 
     // Initilize SD card manager
-    sd_card_manager_init();
+    esp_err_t sd_card_ret = sd_card_manager_init();
+    if(sd_card_ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Fail to initialize SD card driver");
+        return;
+    }
+    else
+    {
+        ESP_LOGI(TAG, "Start test SD card");
+        ESP_ERROR_CHECK(sd_card_manager_write_test_file());
+        ESP_ERROR_CHECK(sd_card_manager_read_test_file());
+        ESP_LOGI(TAG, "testing SD card is done");
+    }
 
     // Initialize LVGL UI manager
     esp_err_t lvgl_ret = ui_manager_lvgl_init(&display_handle);

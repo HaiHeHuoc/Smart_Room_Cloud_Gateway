@@ -5,6 +5,9 @@
 
 #include "board_config.h"
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "esp_log.h"
 #include "esp_check.h"
 
@@ -22,6 +25,8 @@
 
 /* Type Definitions -------------------------------------------------------- */
 /* Define local enums, structs, and typedefs here. */
+#define SD_MOUNT_MAX_RETRY        5
+#define SD_MOUNT_RETRY_DELAY_MS   1000
 
 /* Static Variables -------------------------------------------------------- */
 /* Define file-scope static variables here. */
@@ -29,6 +34,10 @@ static const char* TAG = "sd_card_manager";
 
 /*
  * SD card runtime state.
+ *
+ * s_card is owned by esp_vfs_fat_sdspi_mount() after a successful mount.
+ * This component currently provides mount/read/write helpers only; an unmount
+ * API can be added later when the application needs card removal support.
  */
 static sdmmc_card_t *s_card = NULL;
 static bool s_sd_mounted = false;
@@ -39,6 +48,19 @@ static bool s_spi_bus_initialized = false;
 
 /* Static Functions ------------------------------------------------------- */
 /* Implement static helper functions here. */
+
+/**
+ * @brief Initialize the SPI bus used by the SD card.
+ *
+ * The SD card is connected through SDSPI, so it uses the normal ESP-IDF SPI
+ * master driver underneath. Pin mapping and host selection come from
+ * board_config.h.
+ *
+ * This function only initializes the bus once. Calling it again returns ESP_OK
+ * and leaves the existing bus configuration untouched.
+ *
+ * @return ESP_OK on success, or an ESP-IDF error code on failure.
+ */
 static esp_err_t sd_card_manager_init_spi_bus(void)
 {
     if (s_spi_bus_initialized) {
@@ -55,6 +77,11 @@ static esp_err_t sd_card_manager_init_spi_bus(void)
         .max_transfer_sz = 4096,
     };
 
+    /*
+     * SDSPI_DEFAULT_DMA lets ESP-IDF choose a DMA channel automatically.
+     * DMA is important because SD card transfers can be larger than simple
+     * register-style SPI transactions.
+     */
     ESP_LOGI(TAG, "spi bus initializes");
 
     ESP_RETURN_ON_ERROR(
@@ -67,6 +94,19 @@ static esp_err_t sd_card_manager_init_spi_bus(void)
     return ESP_OK;
 }
 
+/**
+ * @brief Mount the SD card as a FAT filesystem.
+ *
+ * esp_vfs_fat_sdspi_mount() combines three jobs:
+ * - Attach the card as an SDSPI device.
+ * - Initialize the SD/MMC card protocol.
+ * - Register a FAT filesystem under SD_MOUNT_POINT.
+ *
+ * File APIs such as fopen(), fgets(), and fprintf() can be used after this
+ * succeeds.
+ *
+ * @return ESP_OK on success, or an ESP-IDF error code on failure.
+ */
 static esp_err_t sd_card_manager_mount_filesystem(void)
 {
     ESP_RETURN_ON_FALSE(s_spi_bus_initialized,
@@ -83,18 +123,41 @@ static esp_err_t sd_card_manager_mount_filesystem(void)
     ESP_LOGI(TAG, "Mounting SD card filesystem at %s", SD_MOUNT_POINT);
 
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
+        /*
+         * Keep formatting disabled for safety during bring-up. If mounting
+         * fails, the card content will not be erased automatically.
+         */
         .format_if_mount_failed = false,
+
+        /*
+         * Max number of files that can be opened at the same time through VFS.
+         * Keep this small unless the application really needs many open files.
+         */
         .max_files = SD_MAX_FILES,
+
+        /*
+         * FAT allocation unit size affects storage efficiency and performance.
+         * 16 KB is a common starting point for SD cards.
+         */
         .allocation_unit_size = SD_ALLOCATION_UNIT_SIZE,
     };
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+
+    /*
+     * The SDSPI host default config uses placeholder values. Override the host
+     * slot and clock with the board-level SD card settings.
+     */
     host.slot = SD_SPI_HOST;
 
     host.max_freq_khz = SD_CLOCK_KHZ;
 
     sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
 
+    /*
+     * Only CS belongs to the SDSPI device config. MOSI/MISO/SCLK belong to the
+     * SPI bus config created in sd_card_manager_init_spi_bus().
+     */
     slot_config.gpio_cs = SD_GPIO_CS;
     slot_config.host_id = SD_SPI_HOST;
 
@@ -111,6 +174,10 @@ static esp_err_t sd_card_manager_mount_filesystem(void)
 
     ESP_LOGI(TAG, "SD card mounted successfully");
 
+    /*
+     * Print card manufacturer, capacity, speed, and other useful bring-up
+     * information to the serial monitor.
+     */
     sdmmc_card_print_info(stdout, s_card);
     /*
      * Lower speed for first bring-up.
@@ -130,40 +197,52 @@ esp_err_t sd_card_manager_init(void)
 {
     ESP_LOGI(TAG, "Start initlize sd_card_manager");
 
-    if(s_sd_mounted)
+    esp_err_t ret = ESP_FAIL;
+    /*
+     * Avoid reinitializing the bus and remounting VFS if another caller already
+     * initialized the SD card manager.
+     */
+    uint8_t m_ui8RetryCounter = SD_MOUNT_MAX_RETRY + 1;
+
+    while(ret != ESP_OK && (--m_ui8RetryCounter > 0))
     {
-        ESP_LOGI(TAG, "SD card is mounted");
-        return ESP_OK;
-    }
+        if(m_ui8RetryCounter != SD_MOUNT_MAX_RETRY)
+        {
+            ESP_LOGE(TAG, "Fail to init sd_card_manager_init, trying to do it again, trying times remains %d", m_ui8RetryCounter);
+            vTaskDelay(pdMS_TO_TICKS(SD_MOUNT_RETRY_DELAY_MS));
+        }
+
+        if(s_sd_mounted)
+        {
+            ESP_LOGI(TAG, "SD card is mounted");
+            return ESP_OK;
+        }
+        
+        ESP_LOGW(TAG, "SD card is not mounted");
     
-    ESP_LOGW(TAG, "SD card is not mounted");
-
-    /*
-     * TODO Step 1:
-     * Implement sd_card_manager_init_spi_bus()
-     */
-    esp_err_t ret = sd_card_manager_init_spi_bus();
-
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize SD SPI bus: %s", esp_err_to_name(ret));
-        return ret;
+        /* Step 1: initialize the SPI bus before attaching the SD card device. */
+        ret = sd_card_manager_init_spi_bus();
+    
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to initialize SD SPI bus: %s", esp_err_to_name(ret));
+            continue;
+        }
+    
+        /* Step 2: mount the card and register the FAT filesystem in VFS. */
+        ret = sd_card_manager_mount_filesystem();
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to mount SD filesystem: %s", esp_err_to_name(ret));
+            /*
+             * If mount fails after the SPI bus was initialized, release the bus so
+             * a later retry starts from a clean state.
+             */
+            spi_bus_free(SD_SPI_HOST);
+            s_spi_bus_initialized = false;
+            continue;
+        }
     }
 
-    /*
-     * TODO Step 2:
-     * Implement sd_card_manager_mount_filesystem()
-     */
-    ret = sd_card_manager_mount_filesystem();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to mount SD filesystem: %s", esp_err_to_name(ret));
-
-        spi_bus_free(SD_SPI_HOST);
-        s_spi_bus_initialized = false;
-
-        return ret;
-    }
-
-    return ESP_OK;
+    return ret;
 }
 
 bool sd_card_manager_is_mounted(void)
@@ -178,26 +257,34 @@ esp_err_t sd_card_manager_write_test_file(void)
                         TAG,
                         "SD card is not mounted");
 
-    ESP_LOGI(TAG, "TODO: write test file to SD card");
+    /*
+     * This fixed test path is intentionally simple. Later application code
+     * should add generic read/write APIs instead of hardcoding filenames here.
+     */
+    const char *file_path = SD_MOUNT_POINT "/hello.txt";
+
+    ESP_LOGI(TAG, "Opening file for writing: %s", file_path);
+
+    FILE *file = fopen(file_path, "w");
+    ESP_RETURN_ON_FALSE(file != NULL,
+                        ESP_FAIL,
+                        TAG,
+                        "Failed to open file for writing: %s",
+                        file_path);
+
+    fprintf(file, "Hello from ESP32-S3 SD card!\n");
+    fprintf(file, "SD clock: %d kHz\n", SD_CLOCK_KHZ);
+    fprintf(file, "Write/read test from sd_card_manager.\n");
 
     /*
-     * TODO Step 4:
-     *
-     * const char *file_path = SD_MOUNT_POINT "/hello.txt";
-     *
-     * FILE *file = fopen(file_path, "w");
-     * ESP_RETURN_ON_FALSE(file != NULL,
-     *                     ESP_FAIL,
-     *                     TAG,
-     *                     "Failed to open file for writing");
-     *
-     * fprintf(file, "Hello from ESP32-S3 SD card!\n");
-     * fclose(file);
-     *
-     * ESP_LOGI(TAG, "File written: %s", file_path);
+     * fclose() flushes buffered stdio data to the FAT filesystem. Without it,
+     * recently written data may not be committed before reading or power-off.
      */
+    fclose(file);
 
-    return ESP_ERR_NOT_SUPPORTED;
+    ESP_LOGI(TAG, "File written successfully: %s", file_path);
+
+    return ESP_OK;
 }
 
 esp_err_t sd_card_manager_read_test_file(void)
@@ -207,25 +294,30 @@ esp_err_t sd_card_manager_read_test_file(void)
                         TAG,
                         "SD card is not mounted");
 
-    ESP_LOGI(TAG, "TODO: read test file from SD card");
+    const char *file_path = SD_MOUNT_POINT "/hello.txt";
+
+    ESP_LOGI(TAG, "Opening file for reading: %s", file_path);
+
+    FILE *file = fopen(file_path, "r");
+    ESP_RETURN_ON_FALSE(file != NULL,
+                        ESP_FAIL,
+                        TAG,
+                        "Failed to open file for reading: %s",
+                        file_path);
 
     /*
-     * TODO Step 5:
-     *
-     * const char *file_path = SD_MOUNT_POINT "/hello.txt";
-     *
-     * FILE *file = fopen(file_path, "r");
-     * ESP_RETURN_ON_FALSE(file != NULL,
-     *                     ESP_FAIL,
-     *                     TAG,
-     *                     "Failed to open file for reading");
-     *
-     * char line[128] = {0};
-     * fgets(line, sizeof(line), file);
-     * fclose(file);
-     *
-     * ESP_LOGI(TAG, "Read from file: %s", line);
+     * Keep the line buffer small for embedded RAM usage. fgets() reads one line
+     * at a time and prevents overflowing this buffer.
      */
+    char line[128] = {0};
 
-    return ESP_ERR_NOT_SUPPORTED;
+    while (fgets(line, sizeof(line), file) != NULL) {
+        ESP_LOGI(TAG, "Read line: %s", line);
+    }
+
+    fclose(file);
+
+    ESP_LOGI(TAG, "File read successfully: %s", file_path);
+
+    return ESP_OK;
 }
