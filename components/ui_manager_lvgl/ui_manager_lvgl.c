@@ -36,6 +36,8 @@
 
 #define LVGL_RGB565_BYTES_PER_PIXEL  2
 #define LVGL_DRAW_BUFFER_LINES       LCD_LVGL_DRAW_BUF_LINES
+#define LVGL_TICK_PERIOD_MS          1
+#define LVGL_FLUSH_WAIT_TIMEOUT_MS   1000
 #if LCD_ROTATE == LCD_RORATE_LANDSCAPE
     #define LVGL_DRAW_BUFFER_WIDTH_MAX   LCD_V_RES
     #define LVGL_DRAW_BUFFER_SIZE        (LVGL_DRAW_BUFFER_WIDTH_MAX * LVGL_DRAW_BUFFER_LINES * LVGL_RGB565_BYTES_PER_PIXEL)
@@ -61,6 +63,7 @@ static display_driver_handle_t* s_display_handle = NULL;
 static esp_timer_handle_t s_lvgl_tick_timer = NULL;
 
 static SemaphoreHandle_t s_lvgl_mutex = NULL;
+static SemaphoreHandle_t s_lvgl_flush_done_sem = NULL;
 static lv_display_t *s_lvgl_display = NULL;
 
 static void *s_lvgl_draw_buffer = NULL;
@@ -91,6 +94,13 @@ static void ui_manager_lvgl_tick_cb(void *arg);
 static void ui_manager_lvgl_flush_cb(lv_display_t *display,
                                      const lv_area_t *area,
                                      uint8_t *px_map);
+
+/**
+ * @brief Wait until the asynchronous LCD color transfer is complete.
+ *
+ * @param display
+ */
+static void ui_manager_lvgl_flush_wait_cb(lv_display_t *display);
 
 /**
  * @brief Callback function to handle color transformation completion.
@@ -124,7 +134,7 @@ static void ui_manager_lvgl_swap_rgb565_bytes(uint16_t *buffer,
  */
 static void ui_manager_lvgl_tick_cb(void *arg)
 {
-    lv_tick_inc(1); // Increment the LVGL tick count by 1 millisecond
+    lv_tick_inc(LVGL_TICK_PERIOD_MS); // Increment the LVGL tick count by 1 millisecond
 }
 
 /* Functions -------------------------------------------------------------- */
@@ -150,6 +160,9 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t* display_handle)
     // Create a mutex for LVGL operations to ensure thread safety
     s_lvgl_mutex = xSemaphoreCreateMutex();
     ESP_RETURN_ON_FALSE(s_lvgl_mutex != NULL, ESP_ERR_NO_MEM, TAG, "Failed to create LVGL mutex");
+
+    s_lvgl_flush_done_sem = xSemaphoreCreateBinary();
+    ESP_RETURN_ON_FALSE(s_lvgl_flush_done_sem != NULL, ESP_ERR_NO_MEM, TAG, "Failed to create LVGL flush semaphore");
 
     // Init lvgl core
     lv_init();
@@ -197,6 +210,7 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t* display_handle)
     #endif
                         
     lv_display_set_flush_cb(s_lvgl_display, ui_manager_lvgl_flush_cb);
+    lv_display_set_flush_wait_cb(s_lvgl_display, ui_manager_lvgl_flush_wait_cb);
     ESP_LOGI(TAG, "LVGL display flush callback set");
 
     const esp_lcd_panel_io_callbacks_t io_callbacks = {
@@ -222,6 +236,11 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t* display_handle)
     ESP_RETURN_ON_ERROR(esp_timer_create(&tick_timer_args, &s_lvgl_tick_timer), 
                         TAG, 
                         "Failed to create LVGL tick timer");
+
+    ESP_RETURN_ON_ERROR(esp_timer_start_periodic(s_lvgl_tick_timer,
+                                                 LVGL_TICK_PERIOD_MS * 1000),
+                        TAG,
+                        "Failed to start LVGL tick timer");
 
     ESP_LOGI(TAG, "LVGL core and tick timer initialized");
 
@@ -303,6 +322,10 @@ static void ui_manager_lvgl_flush_cb(lv_display_t *display,
         ui_manager_lvgl_swap_rgb565_bytes((uint16_t *)draw_buffer, pixel_count);
     #endif
 
+    if(s_lvgl_flush_done_sem != NULL) {
+        (void)xSemaphoreTake(s_lvgl_flush_done_sem, 0);
+    }
+
     esp_err_t ret = display_driver_draw_bitmap(
         s_display_handle,
         draw_area->x1,
@@ -317,9 +340,30 @@ static void ui_manager_lvgl_flush_cb(lv_display_t *display,
 
         /*
          * If draw fails, notify LVGL anyway to avoid LVGL getting stuck.
-         * On success, flush_ready will be called from color_trans_done callback.
+         * On success, the LCD IO callback will release the flush semaphore.
          */
-        lv_display_flush_ready(display);
+        if(s_lvgl_flush_done_sem != NULL) {
+            xSemaphoreGive(s_lvgl_flush_done_sem);
+        }
+    }
+}
+
+/**
+ * @brief Wait until the asynchronous LCD color transfer is complete.
+ *
+ * @param display
+ */
+static void ui_manager_lvgl_flush_wait_cb(lv_display_t *display)
+{
+    (void)display;
+
+    if(s_lvgl_flush_done_sem == NULL) {
+        ESP_LOGE(TAG, "LVGL flush semaphore is NULL");
+        return;
+    }
+
+    if(xSemaphoreTake(s_lvgl_flush_done_sem, pdMS_TO_TICKS(LVGL_FLUSH_WAIT_TIMEOUT_MS)) != pdTRUE) {
+        ESP_LOGE(TAG, "LVGL flush wait timeout");
     }
 }
 
@@ -338,14 +382,15 @@ static bool ui_manager_lvgl_color_trans_done_cb(esp_lcd_panel_io_handle_t panel_
 {
     (void)panel_io;
     (void)edata;
+    (void)user_ctx;
 
-    lv_display_t *display = (lv_display_t *)user_ctx;
+    BaseType_t high_task_woken = pdFALSE;
 
-    if (display != NULL) {
-        lv_display_flush_ready(display);
+    if(s_lvgl_flush_done_sem != NULL) {
+        xSemaphoreGiveFromISR(s_lvgl_flush_done_sem, &high_task_woken);
     }
 
-    return false;
+    return high_task_woken == pdTRUE;
 }
 
 /**
