@@ -15,6 +15,9 @@
 /* LVGL Management components ----------------------------------------------- */
 #include "ui_manager_lvgl.h"
 
+/* SD Management components ------------------------------------------------- */
+#include "sd_card_manager.h"
+
 /* Macros ------------------------------------------------------------------ */
 /* Define event bits, GPIO pins, task stack sizes, priorities, etc. here. */
 
@@ -57,6 +60,9 @@ void app_main(void)
     // Used to test the display by filling it with known colors. Uncomment to run the test.
     // ESP_ERROR_CHECK(display_driver_raw_color_test(&display_handle));
 
+    // Initilize SD card manager
+    sd_card_manager_init();
+
     // Initialize LVGL UI manager
     esp_err_t lvgl_ret = ui_manager_lvgl_init(&display_handle);
 
@@ -76,7 +82,7 @@ void app_main(void)
 
     while (1)
     {
-        ESP_LOGI(TAG, "Main loop running...");
+        // ESP_LOGI(TAG, "Main loop running...");
         vTaskDelay(pdMS_TO_TICKS(2000));
     }
     
