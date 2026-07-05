@@ -36,6 +36,7 @@ static display_driver_handle_t display_handle;
 /* Declare static helper functions here. */
 void lvgl_task_handler(void* param);
 void ui_manager_lvgl_running_demo(void* vPrama);
+void ui_manager_lvgl_running_demo(void* vPrama);
 
 /* Application ------------------------------------------------------------- */
 void app_main(void)
@@ -47,6 +48,10 @@ void app_main(void)
 
     // Display driver initialization
     esp_err_t ret = display_driver_init(&display_handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize display driver: %s", esp_err_to_name(ret));
+        return;
+    }
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize display driver: %s", esp_err_to_name(ret));
         return;
@@ -65,6 +70,7 @@ void app_main(void)
     {
         ESP_LOGI(TAG, "Start LVGL task handler");
         
+        
         xTaskCreate(
             lvgl_task_handler,
             "lvgl_task",
@@ -73,6 +79,16 @@ void app_main(void)
             5,
             NULL
         );
+        xTaskCreate(
+            ui_manager_lvgl_running_demo,
+            "lvgl_task",
+            4096,
+            NULL,
+            5,
+            NULL
+        );
+
+        // ui_manager_lvgl_create_demo_screen();
         xTaskCreate(
             ui_manager_lvgl_running_demo,
             "lvgl_task",
