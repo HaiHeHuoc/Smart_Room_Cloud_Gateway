@@ -18,12 +18,15 @@
 /* SD Management components ------------------------------------------------- */
 #include "sd_card_manager.h"
 
+/* LVGL SD Management ------------------------------------------------------- */
+#include "lvgl_sd_fs.h"
+
 /* Macros ------------------------------------------------------------------ */
 /* Define event bits, GPIO pins, task stack sizes, priorities, etc. here. */
 
 /* Constants --------------------------------------------------------------- */
 /* Define file-scope const values here. */
-const char *TAG = "Main_App";
+static const char *TAG = "MAIN_APP";
 
 /* Type Definitions -------------------------------------------------------- */
 /* Define local enums, structs, and typedefs here. */
@@ -60,6 +63,11 @@ void app_main(void)
     // Used to test the display by filling it with known colors. Uncomment to run the test.
     // ESP_ERROR_CHECK(display_driver_raw_color_test(&display_handle));
 
+    // Initialize LVGL UI manager
+    // Because LVGL core needs lvgl_init inside ui_manager_lvgl_init
+    esp_err_t lvgl_ret = ui_manager_lvgl_init(&display_handle);
+
+
     // Initilize SD card manager
     esp_err_t sd_card_ret = sd_card_manager_init();
     if(sd_card_ret != ESP_OK)
@@ -69,15 +77,16 @@ void app_main(void)
     }
     else
     {
-        ESP_LOGI(TAG, "Start test SD card");
-        ESP_ERROR_CHECK(sd_card_manager_write_test_file());
-        ESP_ERROR_CHECK(sd_card_manager_read_test_file());
-        ESP_LOGI(TAG, "testing SD card is done");
-        sd_card_manager_list_files_recursive(NULL, 3);
-    }
+        // ESP_LOGI(TAG, "Start test SD card");
+        // ESP_ERROR_CHECK(sd_card_manager_write_test_file());
+        // ESP_ERROR_CHECK(sd_card_manager_read_test_file());
+        // ESP_LOGI(TAG, "testing SD card is done");
 
-    // Initialize LVGL UI manager
-    esp_err_t lvgl_ret = ui_manager_lvgl_init(&display_handle);
+        // Scan files inside specific folder
+        sd_card_manager_list_files(NULL);
+
+        ESP_ERROR_CHECK(lvgl_sd_fs_register());
+    }
 
     if (lvgl_ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize LVGL UI manager");

@@ -18,6 +18,7 @@ types, and board/device configuration, not feature logic.
   and LVGL draw buffer line count.
 - Exposes SD card mount point, SPI host, SPI speed, max open files, and FAT
   allocation unit size.
+- Exposes shared SD path buffer length through `SD_CARD_MANAGER_PATH_MAX_LEN`.
 
 ## How To Use
 
@@ -33,6 +34,8 @@ Typical users:
   size.
 - `ui_manager_lvgl` uses LCD resolution and `LCD_LVGL_DRAW_BUF_LINES`.
 - `sd_card_manager` uses SD SPI pins, mount point, clock, and FAT settings.
+- `lvgl_sd_fs` uses the SD mount point and SD path length when mapping LVGL
+  paths such as `S:/image.png` to VFS paths such as `/sdcard/image.png`.
 
 ## Important Notes
 
@@ -41,6 +44,8 @@ Typical users:
 - `LCD_LVGL_DRAW_BUF_LINES` is not the screen height. It is the number of rows
   LVGL renders per partial draw buffer.
 - `SD_CLOCK_KHZ` is in kHz because ESP-IDF SDSPI host config expects kHz.
+- `SD_CARD_MANAGER_PATH_MAX_LEN` is shared by SD file listing code and the LVGL
+  SD filesystem adapter.
 - Keep hardware pin changes here instead of spreading pin numbers across
   drivers.
 
