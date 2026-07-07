@@ -102,3 +102,5 @@
  * This does NOT limit SD card capacity.
  */
 #define SD_ALLOCATION_UNIT_SIZE  (16 * 1024)
+
+#define SD_CARD_MANAGER_PATH_MAX_LEN    256

@@ -73,6 +73,7 @@ void app_main(void)
         ESP_ERROR_CHECK(sd_card_manager_write_test_file());
         ESP_ERROR_CHECK(sd_card_manager_read_test_file());
         ESP_LOGI(TAG, "testing SD card is done");
+        sd_card_manager_list_files_recursive(NULL, 3);
     }
 
     // Initialize LVGL UI manager
