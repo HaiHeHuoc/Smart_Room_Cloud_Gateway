@@ -26,6 +26,9 @@
 
 /* Macros ------------------------------------------------------------------ */
 /* Define event bits, GPIO pins, task stack sizes, priorities, etc. here. */
+#define DISPLAY_IMAGE_TASK_STACK_SIZE_BYTES (12U * 1024U)
+#define DISPLAY_IMAGE_TASK_PRIORITY         5U
+#define TASK_STACK_WARNING_BYTES            (2U * 1024U)
 
 /* Constants --------------------------------------------------------------- */
 /* Define file-scope const values here. */
@@ -99,16 +102,33 @@ void app_main(void)
     {
         ESP_LOGI(TAG, "Start LVGL task handler");
 
-        ui_manager_lvgl_start_UI_task();
+        esp_err_t ui_task_ret = ui_manager_lvgl_start_UI_task();
+        if (ui_task_ret != ESP_OK) {
+            ESP_LOGE(TAG,
+                     "Failed to start LVGL UI task: %s",
+                     esp_err_to_name(ui_task_ret));
+            return;
+        }
 
-        xTaskCreate(
+        BaseType_t display_task_ret = xTaskCreate(
             displayimage,
             "Display image",
-            40950,
+            DISPLAY_IMAGE_TASK_STACK_SIZE_BYTES,
             NULL,
-            5,
+            DISPLAY_IMAGE_TASK_PRIORITY,
             NULL
         );
+
+        if (display_task_ret != pdPASS) {
+            ESP_LOGE(TAG,
+                     "Failed to create image task with %u-byte stack",
+                     (unsigned int)DISPLAY_IMAGE_TASK_STACK_SIZE_BYTES);
+            return;
+        }
+
+        ESP_LOGI(TAG,
+                 "Image task started with %u-byte stack",
+                 (unsigned int)DISPLAY_IMAGE_TASK_STACK_SIZE_BYTES);
 
         // ui_manager_lvgl_start_running_demo_task();
     }
@@ -130,6 +150,8 @@ void app_main(void)
 /* Implement non-static functions here. */
 static void displayimage(void* arg)
 {
+    (void)arg;
+
     while(1)
     {
         ui_manager_lvgl_wait_for_mutex();
@@ -144,6 +166,20 @@ static void displayimage(void* arg)
             ESP_LOGE(TAG,
                     "Failed to show JPG image: %s",
                     esp_err_to_name(image_ret));
+        }
+
+        const UBaseType_t minimum_free_stack =
+            uxTaskGetStackHighWaterMark(NULL);
+
+        if (minimum_free_stack < TASK_STACK_WARNING_BYTES) {
+            ESP_LOGW(TAG,
+                     "Image task minimum free stack is low: %u bytes",
+                     (unsigned int)minimum_free_stack);
+        }
+        else {
+            ESP_LOGI(TAG,
+                     "Image task minimum free stack: %u bytes",
+                     (unsigned int)minimum_free_stack);
         }
 
         vTaskDelay(pdMS_TO_TICKS(1'000'000));

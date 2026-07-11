@@ -38,6 +38,11 @@
 #define LVGL_DRAW_BUFFER_LINES       LCD_LVGL_DRAW_BUF_LINES
 #define LVGL_TICK_PERIOD_MS          1
 #define LVGL_FLUSH_WAIT_TIMEOUT_MS   1000
+#define LVGL_UI_TASK_STACK_SIZE_BYTES   (24U * 1024U)
+#define LVGL_DEMO_TASK_STACK_SIZE_BYTES (4U * 1024U)
+#define LVGL_TASK_PRIORITY              5U
+#define LVGL_STACK_LOG_PERIOD_MS         (30U * 1000U)
+#define LVGL_STACK_WARNING_BYTES         (2U * 1024U)
 #if LCD_ROTATE == LCD_RORATE_LANDSCAPE
     #define LVGL_DRAW_BUFFER_WIDTH_MAX   LCD_V_RES
     #define LVGL_DRAW_BUFFER_SIZE        (LVGL_DRAW_BUFFER_WIDTH_MAX * LVGL_DRAW_BUFFER_LINES * LVGL_RGB565_BYTES_PER_PIXEL)
@@ -124,6 +129,8 @@ static bool ui_manager_lvgl_color_trans_done_cb(esp_lcd_panel_io_handle_t panel_
 static void ui_manager_lvgl_swap_rgb565_bytes(uint16_t *buffer,
                                               uint32_t pixel_count);
 
+static void ui_manager_lvgl_log_stack_usage(const char *task_name);
+
 /* Static Functions ------------------------------------------------------- */
 /* Implement static helper functions here. */
 
@@ -135,6 +142,25 @@ static void ui_manager_lvgl_swap_rgb565_bytes(uint16_t *buffer,
 static void ui_manager_lvgl_tick_cb(void *arg)
 {
     lv_tick_inc(LVGL_TICK_PERIOD_MS); // Increment the LVGL tick count by 1 millisecond
+}
+
+static void ui_manager_lvgl_log_stack_usage(const char *task_name)
+{
+    const UBaseType_t minimum_free_stack =
+        uxTaskGetStackHighWaterMark(NULL);
+
+    if (minimum_free_stack < LVGL_STACK_WARNING_BYTES) {
+        ESP_LOGW(TAG,
+                 "%s minimum free stack is low: %u bytes",
+                 task_name,
+                 (unsigned int)minimum_free_stack);
+    }
+    else {
+        ESP_LOGI(TAG,
+                 "%s minimum free stack: %u bytes",
+                 task_name,
+                 (unsigned int)minimum_free_stack);
+    }
 }
 
 /* Functions -------------------------------------------------------------- */
@@ -457,6 +483,8 @@ void ui_manager_lvgl_release_mutex(void)
  */
 void ui_manager_lvgl_running_demo(void* vPrama)
 {
+    (void)vPrama;
+
     const lv_align_t state[9] = {   
     LV_ALIGN_TOP_LEFT,
     LV_ALIGN_TOP_MID,
@@ -480,7 +508,9 @@ void ui_manager_lvgl_running_demo(void* vPrama)
     lv_obj_set_align(label, state[0]);
     ui_manager_lvgl_release_mutex();
 
-    uint8_t counter = 0; 
+    uint8_t counter = 0;
+    TickType_t last_stack_log = xTaskGetTickCount();
+
     while(1) { 
         vTaskDelay(pdMS_TO_TICKS(500)); 
         // Delay for 1 second 
@@ -491,23 +521,44 @@ void ui_manager_lvgl_running_demo(void* vPrama)
         lv_label_set_text(label, text); ESP_LOGI(TAG, "Updated label text to: %s", text); 
         lv_obj_set_align(label, state[counter%9]);
         ui_manager_lvgl_release_mutex();
+
+        const TickType_t now = xTaskGetTickCount();
+        if ((now - last_stack_log) >=
+            pdMS_TO_TICKS(LVGL_STACK_LOG_PERIOD_MS)) {
+            ui_manager_lvgl_log_stack_usage("LVGL demo task");
+            last_stack_log = now;
+        }
     } 
 }
 
 /**
  * @brief Start running demo task
- * 
+ *
+ * @return ESP_OK on success, ESP_ERR_NO_MEM if task creation fails.
  */
-void ui_manager_lvgl_start_running_demo_task(void)
+esp_err_t ui_manager_lvgl_start_running_demo_task(void)
 {
-    xTaskCreate(
+    BaseType_t task_ret = xTaskCreate(
         ui_manager_lvgl_running_demo,
-        "lvgl_task",
-        4096,
+        "lvgl_demo",
+        LVGL_DEMO_TASK_STACK_SIZE_BYTES,
         NULL,
-        5,
+        LVGL_TASK_PRIORITY,
         NULL
     );
+
+    if (task_ret != pdPASS) {
+        ESP_LOGE(TAG,
+                 "Failed to create LVGL demo task with %u-byte stack",
+                 (unsigned int)LVGL_DEMO_TASK_STACK_SIZE_BYTES);
+        return ESP_ERR_NO_MEM;
+    }
+
+    ESP_LOGI(TAG,
+             "LVGL demo task started with %u-byte stack",
+             (unsigned int)LVGL_DEMO_TASK_STACK_SIZE_BYTES);
+
+    return ESP_OK;
 }
 
 /**
@@ -517,25 +568,51 @@ void ui_manager_lvgl_start_running_demo_task(void)
  */
 void lvgl_task_handler(void* param)
 {
+    (void)param;
+
+    TickType_t last_stack_log = xTaskGetTickCount();
+
     while(1)
     {
         ui_manager_lvgl_task_handler(); // Call the LVGL task handler
+
+        const TickType_t now = xTaskGetTickCount();
+        if ((now - last_stack_log) >=
+            pdMS_TO_TICKS(LVGL_STACK_LOG_PERIOD_MS)) {
+            ui_manager_lvgl_log_stack_usage("LVGL UI task");
+            last_stack_log = now;
+        }
+
         vTaskDelay(pdMS_TO_TICKS(33)); // Delay for the specified milliseconds
     }
 }
 
 /**
- * @brief LVGL start Task handler
- * 
+ * @brief Start the main LVGL timer and rendering task.
+ *
+ * @return ESP_OK on success, ESP_ERR_NO_MEM if task creation fails.
  */
-void ui_manager_lvgl_start_UI_task()
+esp_err_t ui_manager_lvgl_start_UI_task(void)
 {
-    xTaskCreate(
+    BaseType_t task_ret = xTaskCreate(
         lvgl_task_handler,
-        "lvgl_task",
-        128'000 - 1,
+        "lvgl_ui",
+        LVGL_UI_TASK_STACK_SIZE_BYTES,
         NULL,
-        5,
+        LVGL_TASK_PRIORITY,
         NULL
     );
+
+    if (task_ret != pdPASS) {
+        ESP_LOGE(TAG,
+                 "Failed to create LVGL UI task with %u-byte stack",
+                 (unsigned int)LVGL_UI_TASK_STACK_SIZE_BYTES);
+        return ESP_ERR_NO_MEM;
+    }
+
+    ESP_LOGI(TAG,
+             "LVGL UI task started with %u-byte stack",
+             (unsigned int)LVGL_UI_TASK_STACK_SIZE_BYTES);
+
+    return ESP_OK;
 }

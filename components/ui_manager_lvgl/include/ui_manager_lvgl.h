@@ -36,10 +36,10 @@ void ui_manager_lvgl_running_demo(void* vPrama);
 
 /**
  * @brief Start running demo task
- * 
- * @param vPrama 
+ *
+ * @return ESP_OK on success, ESP_ERR_NO_MEM if task creation fails.
  */
-void ui_manager_lvgl_start_running_demo_task(void);
+esp_err_t ui_manager_lvgl_start_running_demo_task(void);
 
 /**
  * @brief LVGL task handler
@@ -49,10 +49,11 @@ void ui_manager_lvgl_start_running_demo_task(void);
 void lvgl_task_handler(void* param);
 
 /**
- * @brief Start running demo task
- * 
+ * @brief Start the main LVGL timer and rendering task.
+ *
+ * @return ESP_OK on success, ESP_ERR_NO_MEM if task creation fails.
  */
-void ui_manager_lvgl_start_UI_task();
+esp_err_t ui_manager_lvgl_start_UI_task(void);
 
 /**
  * @brief Wait for the LVGL mutex to become available.
