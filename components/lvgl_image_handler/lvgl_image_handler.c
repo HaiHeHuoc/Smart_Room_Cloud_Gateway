@@ -22,11 +22,17 @@
 #endif
 #include "lvgl_sd_fs.h"
 
+#include "ui_manager_lvgl.h"
+
 
 /* Macros ------------------------------------------------------------------ */
 /* Define event bits, GPIO pins, task stack sizes, priorities, etc. here. */
 #define PNG_RGBA_BYTES_PER_PIXEL 4U
 #define GIF_MAX_SOURCE_PIXELS (3840ULL * 2160ULL)
+
+#define DISPLAY_IMAGE_TASK_STACK_SIZE_BYTES (12U * 1024U)
+#define DISPLAY_IMAGE_TASK_PRIORITY         5U
+#define TASK_STACK_WARNING_BYTES            (2U * 1024U)
 
 /* Constants --------------------------------------------------------------- */
 /* Define file-scope const values here. */
@@ -35,6 +41,11 @@ static const char* TAG = "LVGL_IMAGE_HANDLER";
 /* Type Definitions -------------------------------------------------------- */
 /* Define local enums, structs, and typedefs here. */
 #if LV_USE_GIF
+/*
+ * One GIF state owns the decoder, LVGL front frame, ESP-heap back frame, and
+ * optional restore-previous frame. Keeping these resources together makes an
+ * image replacement or clear operation release the entire animation safely.
+ */
 typedef struct {
     GIFIMAGE decoder;
     lv_obj_t *object;
@@ -70,6 +81,7 @@ typedef struct {
 static lv_obj_t *s_active_object = NULL;
 static lv_draw_buf_t *s_active_draw_buf = NULL;
 #if LV_USE_GIF
+/* Only one image/animation is active; a successful show call replaces it. */
 static lvgl_image_handler_gif_state_t *s_active_gif = NULL;
 #endif
 
@@ -82,6 +94,118 @@ static lvgl_image_handler_gif_state_t *s_active_gif = NULL;
 
 /* Static Functions ------------------------------------------------------- */
 /* Implement static helper functions here. */
+
+static void displayimage(void* arg)
+{
+    (void)arg;
+
+    uint8_t index = 0;
+
+    while(1)
+    {
+        ui_manager_lvgl_wait_for_mutex();
+        index++;
+        esp_err_t image_ret = ESP_OK;
+
+        switch (index%3)
+        {
+        case 0:
+            ESP_LOGI(TAG,"Displaying PNG image");
+            image_ret =
+                lvgl_image_handler_show_png("S:/Hinh.png");
+
+
+        if (image_ret == ESP_OK) {
+            lv_obj_t *image_obj =
+                lvgl_image_handler_get_image_obj();
+
+            image_ret =
+                lvgl_image_handler_apply_scale_and_align(
+                    image_obj,
+                    90U,
+                    LV_ALIGN_TOP_LEFT,
+                    0,
+                    0
+                );
+        }
+
+            // lv_obj_align(m_obj, LV_ALIGN_TOP_LEFT, 0, 0);
+
+            break;
+
+        case 1:
+            ESP_LOGI(TAG,"Displaying JPG image");
+            image_ret =
+                lvgl_image_handler_show_jpg("S:/Hinh.jpg");
+
+        if (image_ret == ESP_OK) {
+            lv_obj_t *image_obj =
+                lvgl_image_handler_get_image_obj();
+
+            image_ret =
+                lvgl_image_handler_apply_scale_and_align(
+                    image_obj,
+                    60U,
+                    LV_ALIGN_BOTTOM_LEFT,
+                    0,
+                    0
+                );
+        }
+            break;
+
+        case 2:
+            ESP_LOGI(TAG,"Displaying GIF image");
+            image_ret =
+                lvgl_image_handler_show_gif("S:/Hinh.gif");
+
+        if (image_ret == ESP_OK) {
+            lv_obj_t *image_obj =
+                lvgl_image_handler_get_image_obj();
+
+            image_ret =
+                lvgl_image_handler_apply_scale_and_align(
+                    image_obj,
+                    70U,
+                    LV_ALIGN_BOTTOM_RIGHT,
+                    0,
+                    0
+                );
+        }
+            break;
+
+        default:
+            break;
+        }
+
+        ui_manager_lvgl_release_mutex();
+
+        if (image_ret != ESP_OK) {
+            ESP_LOGE(TAG,
+                    "Failed to show image: %s",
+                    esp_err_to_name(image_ret));
+        }
+
+        const UBaseType_t minimum_free_stack =
+            uxTaskGetStackHighWaterMark(NULL);
+
+        if (minimum_free_stack < TASK_STACK_WARNING_BYTES) {
+            ESP_LOGW(TAG,
+                     "Image task minimum free stack is low: %u bytes",
+                     (unsigned int)minimum_free_stack);
+        }
+        else {
+            ESP_LOGI(TAG,
+                     "Image task minimum free stack: %u bytes",
+                     (unsigned int)minimum_free_stack);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(2'000));
+        ui_manager_lvgl_wait_for_mutex();
+        lvgl_image_handler_clear();
+        ui_manager_lvgl_release_mutex();
+    }
+}
+
 
 #if LV_USE_GIF
 static void lvgl_image_handler_release_gif_state(
@@ -1866,4 +1990,16 @@ esp_err_t lvgl_image_handler_apply_scale_and_align(
     );
 
     return ESP_OK;
+}
+
+void lvgl_image_handler_example_task(void)
+{
+    xTaskCreate(
+            displayimage,
+            "Display image",
+            DISPLAY_IMAGE_TASK_STACK_SIZE_BYTES,
+            NULL,
+            DISPLAY_IMAGE_TASK_PRIORITY,
+            NULL
+    );
 }

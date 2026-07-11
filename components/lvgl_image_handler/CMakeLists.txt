@@ -16,4 +16,5 @@ idf_component_register(
         lvgl
         sd_card_manager
         lvgl_sd_fs
+        ui_manager_lvgl
 )

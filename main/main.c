@@ -29,10 +29,6 @@
 
 /* Macros ------------------------------------------------------------------ */
 /* Define event bits, GPIO pins, task stack sizes, priorities, etc. here. */
-#define DISPLAY_IMAGE_TASK_STACK_SIZE_BYTES (12U * 1024U)
-#define DISPLAY_IMAGE_TASK_PRIORITY         5U
-#define TASK_STACK_WARNING_BYTES            (2U * 1024U)
-
 #define PERFORMANCE_MONITOR 1
 
 /* Constants --------------------------------------------------------------- */
@@ -109,7 +105,7 @@ void app_main(void)
         // ESP_LOGI(TAG, "testing SD card is done");
 
         // Scan files inside specific folder
-        sd_card_manager_list_files(NULL);
+        // sd_card_manager_list_files(NULL);
 
         ESP_ERROR_CHECK(lvgl_sd_fs_register());
     }
@@ -129,14 +125,7 @@ void app_main(void)
             return;
         }
 
-        BaseType_t display_task_ret = xTaskCreate(
-            displayimage,
-            "Display image",
-            DISPLAY_IMAGE_TASK_STACK_SIZE_BYTES,
-            NULL,
-            DISPLAY_IMAGE_TASK_PRIORITY,
-            NULL
-        );
+        lvgl_image_handler_example_task();
 
         // ui_manager_lvgl_start_running_demo_task();
     }
@@ -156,113 +145,3 @@ void app_main(void)
 
 /* Functions -------------------------------------------------------------- */
 /* Implement non-static functions here. */
-static void displayimage(void* arg)
-{
-    (void)arg;
-
-    uint8_t index = 0;
-
-    while(1)
-    {
-        ui_manager_lvgl_wait_for_mutex();
-        index++;
-        esp_err_t image_ret = ESP_OK;
-
-        switch (index%3)
-        {
-        case 0:
-            ESP_LOGI(TAG,"Displaying PNG image");
-            image_ret =
-                lvgl_image_handler_show_png("S:/Hinh.png");
-
-
-        if (image_ret == ESP_OK) {
-            lv_obj_t *image_obj =
-                lvgl_image_handler_get_image_obj();
-
-            image_ret =
-                lvgl_image_handler_apply_scale_and_align(
-                    image_obj,
-                    90U,
-                    LV_ALIGN_TOP_LEFT,
-                    0,
-                    0
-                );
-        }
-
-            // lv_obj_align(m_obj, LV_ALIGN_TOP_LEFT, 0, 0);
-
-            break;
-
-        case 1:
-            ESP_LOGI(TAG,"Displaying JPG image");
-            image_ret =
-                lvgl_image_handler_show_jpg("S:/Hinh.jpg");
-
-        if (image_ret == ESP_OK) {
-            lv_obj_t *image_obj =
-                lvgl_image_handler_get_image_obj();
-
-            image_ret =
-                lvgl_image_handler_apply_scale_and_align(
-                    image_obj,
-                    60U,
-                    LV_ALIGN_BOTTOM_LEFT,
-                    0,
-                    0
-                );
-        }
-            break;
-
-        case 2:
-            ESP_LOGI(TAG,"Displaying GIF image");
-            image_ret =
-                lvgl_image_handler_show_gif("S:/Hinh.gif");
-
-        if (image_ret == ESP_OK) {
-            lv_obj_t *image_obj =
-                lvgl_image_handler_get_image_obj();
-
-            image_ret =
-                lvgl_image_handler_apply_scale_and_align(
-                    image_obj,
-                    70U,
-                    LV_ALIGN_BOTTOM_RIGHT,
-                    0,
-                    0
-                );
-        }
-            break;
-
-        default:
-            break;
-        }
-
-        ui_manager_lvgl_release_mutex();
-
-        if (image_ret != ESP_OK) {
-            ESP_LOGE(TAG,
-                    "Failed to show image: %s",
-                    esp_err_to_name(image_ret));
-        }
-
-        const UBaseType_t minimum_free_stack =
-            uxTaskGetStackHighWaterMark(NULL);
-
-        if (minimum_free_stack < TASK_STACK_WARNING_BYTES) {
-            ESP_LOGW(TAG,
-                     "Image task minimum free stack is low: %u bytes",
-                     (unsigned int)minimum_free_stack);
-        }
-        else {
-            ESP_LOGI(TAG,
-                     "Image task minimum free stack: %u bytes",
-                     (unsigned int)minimum_free_stack);
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(2'000));
-        ui_manager_lvgl_wait_for_mutex();
-        lvgl_image_handler_clear();
-        ui_manager_lvgl_release_mutex();
-    }
-}
