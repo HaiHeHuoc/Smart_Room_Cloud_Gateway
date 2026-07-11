@@ -2,6 +2,10 @@
 
 #include <string.h>
 
+#include "esp_netif.h"
+#include "esp_wifi.h"
+#include "esp_wifi_default.h"
+
 #include "esp_log.h"
 #include "esp_check.h"
 /* Macros ------------------------------------------------------------------ */
@@ -24,6 +28,18 @@ typedef struct
 {
     bool initialized;
 
+    /*
+     * ESP-NETIF object representing the Wi-Fi Station interface.
+     */
+    esp_netif_t *station_netif;
+
+    /*
+     * Handles returned when registering event callbacks.
+     * These handles can later be used to unregister the callbacks.
+     */
+    esp_event_handler_instance_t wifi_event_instance;
+    esp_event_handler_instance_t ip_event_instance;
+
     wifi_manager_status_t status;
 
     wifi_manager_status_callback_t status_callback;
@@ -35,6 +51,10 @@ typedef struct
 /* Define file-scope static variables here. */
 static wifi_manager_context_t s_wifi_manager = {
     .initialized = false,
+    .station_netif = NULL,
+
+    .wifi_event_instance = NULL,
+    .ip_event_instance = NULL,
 
     .status = {
         .state = WIFI_MANAGER_STATE_UNINITIALIZED,
@@ -56,9 +76,80 @@ static wifi_manager_context_t s_wifi_manager = {
 
 /* Function Prototypes ----------------------------------------------------- */
 /* Declare static helper functions here. */
+static void wifi_manager_event_handler(
+    void *handler_argument,
+    esp_event_base_t event_base,
+    int32_t event_id,
+    void *event_data
+);
 
 /* Static Functions ------------------------------------------------------- */
 /* Implement static helper functions here. */
+static void wifi_manager_event_handler(
+    void *handler_argument,
+    esp_event_base_t event_base,
+    int32_t event_id,
+    void *event_data)
+{
+    /*
+     * These parameters will be used in later steps.
+     */
+    (void)handler_argument;
+    (void)event_data;
+
+
+    if (event_base == WIFI_EVENT) {
+        switch (event_id)
+        {
+            case WIFI_EVENT_STA_START:
+                ESP_LOGI(TAG, "Event: WIFI_EVENT_STA_START");
+                break;
+
+            case WIFI_EVENT_STA_CONNECTED:
+                ESP_LOGI(TAG, "Event: WIFI_EVENT_STA_CONNECTED");
+                break;
+
+            case WIFI_EVENT_STA_DISCONNECTED:
+                ESP_LOGI(TAG, "Event: WIFI_EVENT_STA_DISCONNECTED");
+                break;
+
+            case WIFI_EVENT_STA_STOP:
+                ESP_LOGI(TAG, "Event: WIFI_EVENT_STA_STOP");
+                break;
+
+            default:
+                ESP_LOGD(
+                    TAG,
+                    "Unhandled WIFI_EVENT id=%ld",
+                    (long)event_id
+                );
+                break;
+        }
+
+        return;
+    }
+
+    if (event_base == IP_EVENT) {
+        switch (event_id)
+        {
+            case IP_EVENT_STA_GOT_IP:
+                ESP_LOGI(TAG, "Event: IP_EVENT_STA_GOT_IP");
+                break;
+
+            case IP_EVENT_STA_LOST_IP:
+                ESP_LOGI(TAG, "Event: IP_EVENT_STA_LOST_IP");
+                break;
+
+            default:
+                ESP_LOGD(
+                    TAG,
+                    "Unhandled IP_EVENT id=%ld",
+                    (long)event_id
+                );
+                break;
+        }
+    }
+}
 
 /* Functions -------------------------------------------------------------- */
 /* Implement non-static functions here. */
@@ -71,21 +162,237 @@ esp_err_t wifi_manager_init(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    ESP_LOGW(TAG, "wifi_manager_init() is not implemented yet");
+    /*
+     * Create the default Wi-Fi Station network interface.
+     *
+     * Prerequisites:
+     *
+     *     esp_netif_init()
+     *     esp_event_loop_create_default()
+     *
+     * Both have already been initialized by network_platform_init().
+     */
+    esp_netif_t *station_netif =
+        esp_netif_create_default_wifi_sta();
+
+    if (station_netif == NULL) {
+        ESP_LOGE(
+            TAG,
+            "Failed to create default Wi-Fi Station interface"
+        );
+
+        return ESP_FAIL;
+    }
 
     /*
-     * The real initialization flow will be implemented in Sprint 2.3:
-     *
-     * 1. Create default Wi-Fi Station network interface.
-     * 2. Initialize Wi-Fi driver.
-     * 3. Register Wi-Fi event handler.
-     * 4. Register IP event handler.
-     * 5. Set WIFI_MODE_STA.
-     *
-     * For now this is intentionally a compile-only skeleton.
+     * Initialize the Wi-Fi driver using ESP-IDF's recommended
+     * default configuration.
      */
+    wifi_init_config_t wifi_init_config =
+        WIFI_INIT_CONFIG_DEFAULT();
 
-    return ESP_ERR_NOT_SUPPORTED;
+    esp_err_t ret =
+        esp_wifi_init(&wifi_init_config);
+
+    if (ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Failed to initialize Wi-Fi driver: %s",
+            esp_err_to_name(ret)
+        );
+
+        esp_netif_destroy_default_wifi(station_netif);
+
+        return ret;
+    }
+
+
+    /*
+     * During Sprint 2, credentials are temporary and hardcoded.
+     *
+     * Do not let the Wi-Fi driver silently persist them into NVS.
+     * Persistent configuration will be owned by config_manager
+     * during Sprint 5.
+     */
+    ret = esp_wifi_set_storage(WIFI_STORAGE_RAM);
+
+    if (ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Failed to configure Wi-Fi storage: %s",
+            esp_err_to_name(ret)
+        );
+
+        const esp_err_t deinit_ret =
+            esp_wifi_deinit();
+
+        if (deinit_ret != ESP_OK) {
+            ESP_LOGW(
+                TAG,
+                "Wi-Fi cleanup failed: %s",
+                esp_err_to_name(deinit_ret)
+            );
+        }
+
+        esp_netif_destroy_default_wifi(station_netif);
+
+        return ret;
+    }
+
+
+    /*
+     * Configure the device as a Wi-Fi client.
+     *
+     * Station mode:
+     *
+     *     ESP32-S3 → connects to an existing router/access point
+     */
+    ret = esp_wifi_set_mode(WIFI_MODE_STA);
+
+
+    if (ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Failed to set Wi-Fi Station mode: %s",
+            esp_err_to_name(ret)
+        );
+
+        const esp_err_t deinit_ret =
+            esp_wifi_deinit();
+
+        if (deinit_ret != ESP_OK) {
+            ESP_LOGW(
+                TAG,
+                "Wi-Fi cleanup failed: %s",
+                esp_err_to_name(deinit_ret)
+            );
+        }
+
+        esp_netif_destroy_default_wifi(station_netif);
+
+        return ret;
+    }
+
+    ret = esp_event_handler_instance_register(
+        WIFI_EVENT,
+        ESP_EVENT_ANY_ID,
+        wifi_manager_event_handler,
+        NULL,
+        &s_wifi_manager.wifi_event_instance
+    );
+
+    if (ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Failed to register Wi-Fi event handler: %s",
+            esp_err_to_name(ret)
+        );
+
+        esp_wifi_deinit();
+        esp_netif_destroy_default_wifi(station_netif);
+
+        return ret;
+    }
+
+    ret = esp_event_handler_instance_register(
+        IP_EVENT,
+        ESP_EVENT_ANY_ID,
+        wifi_manager_event_handler,
+        NULL,
+        &s_wifi_manager.ip_event_instance
+    );
+
+    if (ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Failed to register IP event handler: %s",
+            esp_err_to_name(ret)
+        );
+
+        esp_event_handler_instance_unregister(
+            WIFI_EVENT,
+            ESP_EVENT_ANY_ID,
+            s_wifi_manager.wifi_event_instance
+        );
+
+        s_wifi_manager.wifi_event_instance = NULL;
+
+        esp_wifi_deinit();
+        esp_netif_destroy_default_wifi(station_netif);
+
+        return ret;
+    }
+    
+    ret = esp_wifi_start();
+    
+    if (ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Failed to start Wi-Fi Station: %s",
+            esp_err_to_name(ret)
+        );
+        
+        /*
+        * Undo IP event registration.
+        */
+       esp_event_handler_instance_unregister(
+           IP_EVENT,
+           ESP_EVENT_ANY_ID,
+           s_wifi_manager.ip_event_instance
+        );
+        
+        s_wifi_manager.ip_event_instance = NULL;
+        
+        /*
+        * Undo Wi-Fi event registration.
+        */
+       esp_event_handler_instance_unregister(
+           WIFI_EVENT,
+           ESP_EVENT_ANY_ID,
+           s_wifi_manager.wifi_event_instance
+        );
+        
+        s_wifi_manager.wifi_event_instance = NULL;
+        
+        /*
+        * Release Wi-Fi driver and Station interface.
+        */
+       const esp_err_t deinit_ret =
+       esp_wifi_deinit();
+       
+       if (deinit_ret != ESP_OK) {
+           ESP_LOGW(
+               TAG,
+               "Failed to deinitialize Wi-Fi after start error: %s",
+               esp_err_to_name(deinit_ret)
+            );
+        }
+
+        esp_netif_destroy_default_wifi(station_netif);
+        
+        return ret;
+    }
+    
+        /*
+         * Commit component state only after all initialization steps succeed.
+         */
+        s_wifi_manager.station_netif =
+            station_netif;
+    
+        s_wifi_manager.initialized =
+            true;
+    
+        s_wifi_manager.status.state =
+            WIFI_MANAGER_STATE_READY;
+    
+        ESP_LOGI(
+            TAG,
+            "Wi-Fi manager initialized: mode=%s, storage=%s",
+            "STATION",
+            "RAM"
+        );
+    
+    return ESP_OK;
 }
 
 esp_err_t wifi_manager_connect(

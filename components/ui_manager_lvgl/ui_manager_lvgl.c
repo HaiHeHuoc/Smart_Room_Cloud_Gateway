@@ -509,7 +509,6 @@ void ui_manager_lvgl_running_demo(void* vPrama)
     ui_manager_lvgl_release_mutex();
 
     uint8_t counter = 0;
-    TickType_t last_stack_log = xTaskGetTickCount();
 
     while(1) { 
         vTaskDelay(pdMS_TO_TICKS(500)); 
@@ -518,16 +517,10 @@ void ui_manager_lvgl_running_demo(void* vPrama)
         char text[20]; counter = (counter + 1) % 100; 
         // Increment counter and wrap around at 100 
         snprintf(text, sizeof(text), "Counter: %d", counter); 
-        lv_label_set_text(label, text); ESP_LOGI(TAG, "Updated label text to: %s", text); 
+        lv_label_set_text(label, text);
+        // ESP_LOGI(TAG, "Updated label text to: %s", text); 
         lv_obj_set_align(label, state[counter%9]);
         ui_manager_lvgl_release_mutex();
-
-        const TickType_t now = xTaskGetTickCount();
-        if ((now - last_stack_log) >=
-            pdMS_TO_TICKS(LVGL_STACK_LOG_PERIOD_MS)) {
-            ui_manager_lvgl_log_stack_usage("LVGL demo task");
-            last_stack_log = now;
-        }
     } 
 }
 

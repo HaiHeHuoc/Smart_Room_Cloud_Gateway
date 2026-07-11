@@ -9,4 +9,9 @@ idf_component_register(SRCS "main.c"
         lvgl_image_handler
         performance_monitor
         wifi_manager
+
+    PRIV_REQUIRES
+        nvs_flash
+        esp_netif
+        esp_event
         )

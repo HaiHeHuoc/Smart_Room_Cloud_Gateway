@@ -2,7 +2,9 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-
+#include "nvs_flash.h"
+#include "esp_netif.h"
+#include "esp_event.h"
 #include "esp_log.h"
 
 /* Common components ------------------------------------------------------- */
@@ -27,9 +29,12 @@
 /* Performance monitor ----------------------------------------------------- */
 #include "performance_monitor.h"
 
+/* Wifi manager ------------------------------------------------------------ */
+#include "wifi_manager.h"
+
 /* Macros ------------------------------------------------------------------ */
 /* Define event bits, GPIO pins, task stack sizes, priorities, etc. here. */
-#define PERFORMANCE_MONITOR 1
+#define PERFORMANCE_MONITOR 0
 
 /* Constants --------------------------------------------------------------- */
 /* Define file-scope const values here. */
@@ -47,6 +52,7 @@ static display_driver_handle_t display_handle;
 
 /* Function Prototypes ----------------------------------------------------- */
 /* Declare static helper functions here. */
+static esp_err_t network_platform_init(void);
 
 /* Application ------------------------------------------------------------- */
 void app_main(void)
@@ -57,7 +63,6 @@ void app_main(void)
     ESP_LOGI(TAG, "BUILD DATE: %s", APP_PROJECT_VER_DATE);
 
 #if PERFORMANCE_MONITOR
-
     esp_err_t monitor_ret =
         performance_monitor_start();
 
@@ -68,8 +73,38 @@ void app_main(void)
             esp_err_to_name(monitor_ret)
         );
     }
-
 #endif
+
+    /*
+     * Initialize shared network infrastructure before initializing
+     * the Wi-Fi manager.
+     */
+    esp_err_t network_ret =
+        network_platform_init();
+
+    if (network_ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Failed to initialize network platform: %s",
+            esp_err_to_name(network_ret)
+        );
+
+        return;
+    }
+
+    esp_err_t wifi_ret =
+        wifi_manager_init();
+
+    if (wifi_ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Failed to initialize Wi-Fi manager: %s",
+            esp_err_to_name(wifi_ret)
+        );
+
+        return;
+    }
+
     // Display driver initialization
     esp_err_t ret = display_driver_init(&display_handle);
     if (ret != ESP_OK) {
@@ -124,9 +159,9 @@ void app_main(void)
             return;
         }
 
-        lvgl_image_handler_example_task();
+        // lvgl_image_handler_example_task();
 
-        // ui_manager_lvgl_start_running_demo_task();
+        ui_manager_lvgl_start_running_demo_task();
     }
 
     ESP_LOGI(TAG, "LVGL display initialized successfully");
@@ -144,3 +179,92 @@ void app_main(void)
 
 /* Functions -------------------------------------------------------------- */
 /* Implement non-static functions here. */
+static esp_err_t network_platform_init(void)
+{
+    /*
+     * Initialize the default NVS partition.
+     */
+    esp_err_t ret = nvs_flash_init();
+    
+
+    /*
+     * These errors can occur when:
+     *
+     * - the NVS partition has no free pages;
+     * - the stored NVS format belongs to another ESP-IDF version.
+     *
+     * Erasing is acceptable during the current development phase because
+     * Sprint 5 NVS configuration storage has not been implemented yet.
+     */
+    if ((ret == ESP_ERR_NVS_NO_FREE_PAGES) ||
+        (ret == ESP_ERR_NVS_NEW_VERSION_FOUND)) {
+
+        ESP_LOGW(
+            TAG,
+            "NVS partition requires erase: %s",
+            esp_err_to_name(ret)
+        );
+
+        ret = nvs_flash_erase();
+
+        if (ret != ESP_OK) {
+            ESP_LOGE(
+                TAG,
+                "Failed to erase NVS: %s",
+                esp_err_to_name(ret)
+            );
+
+            return ret;
+        }
+
+        ret = nvs_flash_init();
+    }
+
+    if (ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Failed to initialize NVS: %s",
+            esp_err_to_name(ret)
+        );
+
+        return ret;
+    }
+
+    /*
+     * Initialize ESP-NETIF and the underlying TCP/IP stack.
+     *
+     * This must be called once before creating Wi-Fi or Ethernet
+     * network interfaces.
+     */
+    ret = esp_netif_init();
+
+    if (ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Failed to initialize ESP-NETIF: %s",
+            esp_err_to_name(ret)
+        );
+
+        return ret;
+    }
+    /*
+     * Create the default system event loop.
+     *
+     * Wi-Fi and IP events will later be delivered through this loop.
+     */
+    ret = esp_event_loop_create_default();
+
+    if (ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Failed to create default event loop: %s",
+            esp_err_to_name(ret)
+        );
+
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "Network platform initialized");
+
+    return ESP_OK;
+}
