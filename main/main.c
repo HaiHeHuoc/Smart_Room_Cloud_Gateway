@@ -21,6 +21,9 @@
 /* LVGL SD Management ------------------------------------------------------- */
 #include "lvgl_sd_fs.h"
 
+/* LVGL Image Handler------------------------------------------------------- */
+#include "lvgl_image_handler.h"
+
 /* Macros ------------------------------------------------------------------ */
 /* Define event bits, GPIO pins, task stack sizes, priorities, etc. here. */
 

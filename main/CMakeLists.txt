@@ -6,4 +6,5 @@ idf_component_register(SRCS "main.c"
         ui_manager_lvgl
         sd_card_manager
         lvgl_sd_fs
+        lvgl_image_handler
         )

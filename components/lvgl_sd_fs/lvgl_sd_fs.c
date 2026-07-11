@@ -413,3 +413,13 @@ esp_err_t lvgl_sd_fs_register(void)
 
     return ESP_OK;
 }
+
+bool lvgl_sd_fs_is_registered(void)
+{
+    return s_lvgl_sd_fs_registered;
+}
+
+bool lvgl_sd_fs_is_ready(void)
+{
+    return s_lvgl_sd_fs_registered && sd_card_manager_is_mounted();
+}
