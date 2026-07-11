@@ -152,19 +152,43 @@ static void displayimage(void* arg)
 {
     (void)arg;
 
+    uint8_t index = 0;
+
     while(1)
     {
         ui_manager_lvgl_wait_for_mutex();
-        ESP_LOGI(TAG,"Displaying image");
+        index++;
+        esp_err_t image_ret = ESP_OK;
 
-        esp_err_t image_ret =
-            lvgl_image_handler_show_jpg("S:/Hinh.jpg");
+        switch (index%3)
+        {
+        case 0:
+            ESP_LOGI(TAG,"Displaying PNG image");
+            image_ret =
+                lvgl_image_handler_show_png("S:/Hinh.png");
+            break;
+
+        case 1:
+            ESP_LOGI(TAG,"Displaying JPG image");
+            image_ret =
+                lvgl_image_handler_show_jpg("S:/Hinh.jpg");
+            break;
+
+        case 2:
+            ESP_LOGI(TAG,"Displaying GIF image");
+            image_ret =
+                lvgl_image_handler_show_gif("S:/Hinh.gif");
+            break;
+
+        default:
+            break;
+        }
 
         ui_manager_lvgl_release_mutex();
 
         if (image_ret != ESP_OK) {
             ESP_LOGE(TAG,
-                    "Failed to show JPG image: %s",
+                    "Failed to show image: %s",
                     esp_err_to_name(image_ret));
         }
 
@@ -182,77 +206,9 @@ static void displayimage(void* arg)
                      (unsigned int)minimum_free_stack);
         }
 
-        vTaskDelay(pdMS_TO_TICKS(1'000'000));
+        vTaskDelay(pdMS_TO_TICKS(5'000));
         ui_manager_lvgl_wait_for_mutex();
         lvgl_image_handler_clear();
         ui_manager_lvgl_release_mutex();
     }
-
-    // (void)arg;
-
-    // TickType_t last_stack_log = 0;
-
-    // while (1) {
-    //     ui_manager_lvgl_wait_for_mutex();
-
-    //     lv_timer_handler();
-
-    //     ui_manager_lvgl_release_mutex();
-
-    //     const TickType_t now = xTaskGetTickCount();
-
-    //     if ((now - last_stack_log) >= pdMS_TO_TICKS(1000)) {
-    //         ESP_LOGI(
-    //             TAG,
-    //             "lvgl_task minimum remaining stack: %u bytes",
-    //             (unsigned int)uxTaskGetStackHighWaterMark(NULL)
-    //         );
-
-    //         last_stack_log = now;
-    //     }
-
-    //     vTaskDelay(pdMS_TO_TICKS(5));
-    // }
 }
-
-// static void displayimage(void *arg)
-// {
-//     (void)arg;
-
-//     ESP_LOGI(TAG, "Displaying JPG image");
-
-//     ui_manager_lvgl_wait_for_mutex();
-
-//     ESP_LOGI(
-//         TAG,
-//         "Display task minimum stack remaining=%u bytes",
-//         (unsigned int)uxTaskGetStackHighWaterMark(NULL)
-//     );
-    
-//     esp_err_t image_ret =
-//         lvgl_image_handler_show_jpg("S:/Hinh.jpg");
-
-//     ui_manager_lvgl_release_mutex();
-
-//     if (image_ret != ESP_OK) {
-//         ESP_LOGE(
-//             TAG,
-//             "Failed to show JPG image: %s",
-//             esp_err_to_name(image_ret)
-//         );
-//     } else {
-//         ESP_LOGI(TAG, "JPG image object created");
-//     }
-
-//     ESP_LOGI(
-//         TAG,
-//         "Display task minimum stack remaining=%u bytes",
-//         (unsigned int)uxTaskGetStackHighWaterMark(NULL)
-//     );
-
-//     /*
-//      * Deleting this task does not delete the LVGL image object.
-//      * The object remains owned and rendered by LVGL.
-//      */
-//     vTaskDelete(NULL);
-// }
