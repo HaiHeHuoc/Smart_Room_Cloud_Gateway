@@ -1747,3 +1747,123 @@ bool lvgl_image_handler_has_active_object(void)
 {
     return (s_active_object != NULL);
 }
+
+lv_obj_t* lvgl_image_handler_get_image_obj(void)
+{
+    if(s_active_object == NULL)
+    {
+        ESP_LOGE(TAG,  "Image is not available");
+        return NULL;
+    }
+    return s_active_object;
+}
+
+
+esp_err_t lvgl_image_handler_apply_scale_and_align(
+    lv_obj_t *image_obj,
+    uint32_t percent,
+    lv_align_t align,
+    int32_t offset_x,
+    int32_t offset_y)
+{
+    if (image_obj == NULL) {
+        ESP_LOGE(TAG, "Image object is NULL");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if ((percent == 0U) || (percent > 100U)) {
+        ESP_LOGE(TAG,
+                 "Invalid image scale percentage: %lu",
+                 (unsigned long)percent);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /*
+     * Obtain the original widget dimensions before changing its size.
+     */
+    lv_obj_update_layout(image_obj);
+
+    const int32_t original_width =
+        lv_obj_get_width(image_obj);
+
+    const int32_t original_height =
+        lv_obj_get_height(image_obj);
+
+    if ((original_width <= 0) ||
+        (original_height <= 0)) {
+        ESP_LOGE(TAG,
+                 "Invalid image object size: %ldx%ld",
+                 (long)original_width,
+                 (long)original_height);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    /*
+     * LV_SCALE_NONE = 256 = 100%.
+     */
+    const uint32_t scale =
+        (LV_SCALE_NONE * percent + 50U) / 100U;
+
+    const int32_t scaled_width =
+        (int32_t)(
+            ((int64_t)original_width * scale +
+             LV_SCALE_NONE - 1U) /
+            LV_SCALE_NONE
+        );
+
+    const int32_t scaled_height =
+        (int32_t)(
+            ((int64_t)original_height * scale +
+             LV_SCALE_NONE - 1U) /
+            LV_SCALE_NONE
+        );
+
+    /*
+     * Scale the source from its top-left corner.
+     */
+    lv_image_set_pivot(image_obj, 0, 0);
+    lv_image_set_scale(image_obj, scale);
+
+    /*
+     * Make the widget layout box match its scaled visual size.
+     * Without this, lv_obj_align() still sees a full-screen object.
+     */
+    lv_obj_set_size(
+        image_obj,
+        scaled_width,
+        scaled_height
+    );
+
+    /*
+     * Keep the transformed image source at the widget's top-left.
+     */
+    lv_image_set_inner_align(
+        image_obj,
+        LV_IMAGE_ALIGN_TOP_LEFT
+    );
+
+    /*
+     * Now alignment uses the smaller widget dimensions.
+     */
+    lv_obj_align(
+        image_obj,
+        align,
+        offset_x,
+        offset_y
+    );
+
+    lv_obj_invalidate(image_obj);
+
+    ESP_LOGI(
+        TAG,
+        "Image layout: original=%ldx%ld, "
+        "scaled=%ldx%ld, scale=%lu/256",
+        (long)original_width,
+        (long)original_height,
+        (long)scaled_width,
+        (long)scaled_height,
+        (unsigned long)scale
+    );
+
+    return ESP_OK;
+}

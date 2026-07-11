@@ -2,6 +2,7 @@
 
 #include "esp_err.h"
 #include <stdbool.h>
+#include "lvgl.h"
 
 
 
@@ -24,3 +25,12 @@ esp_err_t lvgl_image_handler_show_gif(const char *path);
 esp_err_t lvgl_image_handler_clear(void);
 
 bool lvgl_image_handler_has_active_object(void);
+
+lv_obj_t* lvgl_image_handler_get_image_obj(void);
+
+esp_err_t lvgl_image_handler_apply_scale_and_align(
+    lv_obj_t *image_obj,
+    uint32_t percent,
+    lv_align_t align,
+    int32_t offset_x,
+    int32_t offset_y);

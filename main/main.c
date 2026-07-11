@@ -166,18 +166,64 @@ static void displayimage(void* arg)
             ESP_LOGI(TAG,"Displaying PNG image");
             image_ret =
                 lvgl_image_handler_show_png("S:/Hinh.png");
+
+
+        if (image_ret == ESP_OK) {
+            lv_obj_t *image_obj =
+                lvgl_image_handler_get_image_obj();
+
+            image_ret =
+                lvgl_image_handler_apply_scale_and_align(
+                    image_obj,
+                    50U,
+                    LV_ALIGN_TOP_LEFT,
+                    0,
+                    0
+                );
+        }
+
+            // lv_obj_align(m_obj, LV_ALIGN_TOP_LEFT, 0, 0);
+
             break;
 
         case 1:
             ESP_LOGI(TAG,"Displaying JPG image");
             image_ret =
                 lvgl_image_handler_show_jpg("S:/Hinh.jpg");
+
+        if (image_ret == ESP_OK) {
+            lv_obj_t *image_obj =
+                lvgl_image_handler_get_image_obj();
+
+            image_ret =
+                lvgl_image_handler_apply_scale_and_align(
+                    image_obj,
+                    50U,
+                    LV_ALIGN_BOTTOM_LEFT,
+                    0,
+                    0
+                );
+        }
             break;
 
         case 2:
             ESP_LOGI(TAG,"Displaying GIF image");
             image_ret =
                 lvgl_image_handler_show_gif("S:/Hinh.gif");
+
+        if (image_ret == ESP_OK) {
+            lv_obj_t *image_obj =
+                lvgl_image_handler_get_image_obj();
+
+            image_ret =
+                lvgl_image_handler_apply_scale_and_align(
+                    image_obj,
+                    50U,
+                    LV_ALIGN_BOTTOM_RIGHT,
+                    0,
+                    0
+                );
+        }
             break;
 
         default:
