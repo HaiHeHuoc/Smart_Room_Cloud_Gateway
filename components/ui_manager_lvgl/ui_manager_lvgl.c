@@ -533,7 +533,7 @@ void ui_manager_lvgl_start_UI_task()
     xTaskCreate(
         lvgl_task_handler,
         "lvgl_task",
-        4096,
+        128'000 - 1,
         NULL,
         5,
         NULL
