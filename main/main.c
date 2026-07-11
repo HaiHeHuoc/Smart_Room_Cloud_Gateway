@@ -47,7 +47,6 @@ static display_driver_handle_t display_handle;
 
 /* Function Prototypes ----------------------------------------------------- */
 /* Declare static helper functions here. */
-static void displayimage(void* arg);
 
 /* Application ------------------------------------------------------------- */
 void app_main(void)

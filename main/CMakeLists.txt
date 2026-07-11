@@ -8,4 +8,5 @@ idf_component_register(SRCS "main.c"
         lvgl_sd_fs
         lvgl_image_handler
         performance_monitor
+        wifi_manager
         )
