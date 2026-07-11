@@ -146,7 +146,6 @@ static void displayimage(void* arg)
                     esp_err_to_name(image_ret));
         }
 
-        ui_manager_lvgl_release_mutex();
         vTaskDelay(pdMS_TO_TICKS(1'000'000));
         ui_manager_lvgl_wait_for_mutex();
         lvgl_image_handler_clear();
