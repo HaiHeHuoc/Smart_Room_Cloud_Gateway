@@ -10,6 +10,15 @@ for higher-level UI code.
 LVGL should not talk to the ST7735 driver directly. LVGL should go through this
 component via `display_driver_draw_bitmap()`.
 
+## Public API
+
+| API | Role |
+| --- | --- |
+| `display_driver_init()` | Initialize backlight GPIO, LCD SPI bus, panel IO, and ST7735 panel. |
+| `display_driver_set_backlight()` | Turn the configured backlight GPIO on or off. |
+| `display_driver_raw_color_test()` | Fill the screen with RGB565 test colors for bring-up. |
+| `display_driver_draw_bitmap()` | Submit a rectangular RGB565 bitmap to the panel. |
+
 ## What Is Done
 
 - Initializes the LCD backlight GPIO.
@@ -54,8 +63,12 @@ display_driver_draw_bitmap(&display_handle, x1, y1, x2, y2, color_data);
 - The driver currently swaps RGB565 byte order for raw color testing.
 - `display_driver_draw_bitmap()` expects `x_end` and `y_end` to be exclusive,
   matching ESP-IDF LCD panel API style.
+- SPI color transfers are asynchronous. `ui_manager_lvgl` registers the panel
+  IO completion callback and waits for it before LVGL reuses its draw buffer.
 - The LCD SPI bus is initialized inside this component. Do not initialize the
   same LCD SPI host somewhere else.
+- The current implementation has no deinit path and is not designed for a
+  second call to `display_driver_init()`.
 
 ## Future Attention
 

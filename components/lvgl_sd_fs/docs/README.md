@@ -29,6 +29,7 @@ Internally, those paths are mapped to the ESP-IDF VFS mount point:
 - Maps LVGL paths to `SD_MOUNT_POINT`.
 - Opens files using standard C `fopen()`.
 - Supports LVGL file close, read, seek, and tell callbacks.
+- Exposes registration and readiness state helpers.
 - Keeps LVGL filesystem cache disabled to reduce RAM use during bring-up.
 
 ## How To Use
@@ -53,7 +54,13 @@ The public API is intentionally small:
 
 ```c
 esp_err_t lvgl_sd_fs_register(void);
+bool lvgl_sd_fs_is_registered(void);
+bool lvgl_sd_fs_is_ready(void);
 ```
+
+`lvgl_sd_fs_is_registered()` only reports whether the LVGL driver was
+registered. `lvgl_sd_fs_is_ready()` additionally requires the SD manager to
+report a mounted card.
 
 ## Important Notes
 
@@ -63,6 +70,8 @@ esp_err_t lvgl_sd_fs_register(void);
   For example, `S:/a.png` arrives internally as `/a.png`.
 - File operations use ESP-IDF VFS and stdio, so the SD card must remain mounted
   while LVGL is reading assets.
+- Repeated calls to `lvgl_sd_fs_register()` return `ESP_OK` without registering
+  a second driver.
 - The component currently focuses on reading assets for LVGL. `open_cb` maps
   LVGL write mode to stdio mode, but there is no LVGL `write_cb`, directory
   listing callback, remove callback, or rename callback yet.

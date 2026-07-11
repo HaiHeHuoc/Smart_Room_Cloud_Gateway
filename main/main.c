@@ -33,7 +33,7 @@
 #define DISPLAY_IMAGE_TASK_PRIORITY         5U
 #define TASK_STACK_WARNING_BYTES            (2U * 1024U)
 
-#define PERFORMANCE_MONITOR 0
+#define PERFORMANCE_MONITOR 1
 
 /* Constants --------------------------------------------------------------- */
 /* Define file-scope const values here. */
@@ -183,7 +183,7 @@ static void displayimage(void* arg)
             image_ret =
                 lvgl_image_handler_apply_scale_and_align(
                     image_obj,
-                    50U,
+                    90U,
                     LV_ALIGN_TOP_LEFT,
                     0,
                     0
@@ -206,7 +206,7 @@ static void displayimage(void* arg)
             image_ret =
                 lvgl_image_handler_apply_scale_and_align(
                     image_obj,
-                    50U,
+                    60U,
                     LV_ALIGN_BOTTOM_LEFT,
                     0,
                     0
@@ -226,7 +226,7 @@ static void displayimage(void* arg)
             image_ret =
                 lvgl_image_handler_apply_scale_and_align(
                     image_obj,
-                    50U,
+                    70U,
                     LV_ALIGN_BOTTOM_RIGHT,
                     0,
                     0
@@ -260,7 +260,7 @@ static void displayimage(void* arg)
                      (unsigned int)minimum_free_stack);
         }
 
-        vTaskDelay(pdMS_TO_TICKS(5'000));
+        vTaskDelay(pdMS_TO_TICKS(2'000));
         ui_manager_lvgl_wait_for_mutex();
         lvgl_image_handler_clear();
         ui_manager_lvgl_release_mutex();

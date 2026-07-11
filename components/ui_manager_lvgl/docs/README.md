@@ -22,7 +22,24 @@ should be controlled through this component or protected by its LVGL mutex.
 - Uses an LCD transfer-complete callback to know when SPI flush is done.
 - Uses a FreeRTOS semaphore as `flush_wait_cb` so LVGL waits without busy-looping.
 - Starts an ESP timer that increments LVGL tick every `LVGL_TICK_PERIOD_MS`.
-- Provides demo label creation and demo update task helpers.
+- Calls `lv_timer_handler()` from a 24 KB UI task every 33 ms.
+- Provides a mutex for controlled LVGL access from the current application
+  tasks.
+- Provides optional demo label creation and a 4 KB demo task.
+
+## Public API
+
+| API | Role |
+| --- | --- |
+| `ui_manager_lvgl_init()` | Initialize LVGL, display buffers, flush synchronization, and the 1 ms tick timer. |
+| `ui_manager_lvgl_task_handler()` | Run one mutex-protected `lv_timer_handler()` iteration. |
+| `ui_manager_lvgl_start_UI_task()` | Start the continuously running LVGL handler task. |
+| `ui_manager_lvgl_wait_for_mutex()` | Lock LVGL before direct API access from another task. |
+| `ui_manager_lvgl_release_mutex()` | Unlock LVGL after direct API access. |
+| `ui_manager_lvgl_create_demo_screen()` | Create the static `LVGL OK` demo screen. |
+| `ui_manager_lvgl_running_demo()` | Demo task entry point that updates and moves a counter label. |
+| `ui_manager_lvgl_start_running_demo_task()` | Start the optional demo task. |
+| `lvgl_task_handler()` | Public task entry point used by `ui_manager_lvgl_start_UI_task()`. |
 
 ## How To Use
 
@@ -69,15 +86,19 @@ ui_manager_lvgl_release_mutex();
   the task watchdog.
 - RGB565 byte swapping is currently enabled with `LCD_SWAP_RGB565_BYTES`.
 - Landscape rotation costs extra RAM because a rotate buffer is allocated.
+- The configured rotation is currently `LV_DISPLAY_ROTATION_270`, so LVGL's
+  logical screen is landscape after initialization.
 - `LCD_LVGL_DRAW_BUF_LINES` controls partial draw buffer height, not full screen
   resolution.
+- `ui_manager_lvgl_wait_for_mutex()` waits indefinitely. Only call it after
+  successful `ui_manager_lvgl_init()`, keep the locked section short, and
+  always pair it with `ui_manager_lvgl_release_mutex()`.
+- There is currently no UI callback queue. Application tasks that call LVGL
+  directly must use the manager mutex.
 
 ## Future Attention
 
-- Add a queue-based public API for UI updates so application tasks can submit UI
-  work without touching LVGL directly.
 - Check `s_lvgl_display != NULL` before calling `lv_display_set_buffers()`.
-- Review task names because both demo and UI task helpers currently use
-  `"lvgl_task"` in some paths.
+- Add init/deinit guards if the manager must support repeated initialization.
 - Remove or separate demo helpers once the real dashboard UI exists.
 - Add labels/widgets for Wi-Fi, sensor, SD, and cloud state in later sprints.

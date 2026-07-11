@@ -3,8 +3,8 @@
 ## Purpose
 
 `common` stores shared project-level definitions that other components can include.
-At the moment, its main role is to provide hardware configuration through
-`board_config.h`.
+At the moment, it provides application identity through `app_common.h` and
+hardware configuration through `board_config.h`.
 
 This component should stay small. It should contain shared constants, common
 types, and board/device configuration, not feature logic.
@@ -13,6 +13,8 @@ types, and board/device configuration, not feature logic.
 
 - Provides LCD configuration for the ST7735 SPI TFT.
 - Provides SD card SPI configuration.
+- Provides `APP_PROJECT_NAME`, `APP_PROJECT_VER`, and
+  `APP_PROJECT_VER_DATE`.
 - Exposes GPIO pin mapping through one shared board config header.
 - Exposes display resolution, LCD SPI speed, backlight level, transfer size,
   and LVGL draw buffer line count.
@@ -26,6 +28,14 @@ Include the board config header from any component that needs hardware mapping:
 
 ```c
 #include "board_config.h"
+```
+
+Include the application metadata header when reporting firmware identity:
+
+```c
+#include "app_common.h"
+
+ESP_LOGI(TAG, "%s v%s", APP_PROJECT_NAME, APP_PROJECT_VER);
 ```
 
 Typical users:
@@ -48,6 +58,8 @@ Typical users:
   SD filesystem adapter.
 - Keep hardware pin changes here instead of spreading pin numbers across
   drivers.
+- `APP_PROJECT_VER_DATE` is a string constant; it is not generated from the
+  build time.
 
 ## Future Attention
 
