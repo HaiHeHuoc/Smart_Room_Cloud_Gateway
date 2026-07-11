@@ -24,11 +24,16 @@
 /* LVGL Image Handler------------------------------------------------------- */
 #include "lvgl_image_handler.h"
 
+/* Performance monitor ----------------------------------------------------- */
+#include "performance_monitor.h"
+
 /* Macros ------------------------------------------------------------------ */
 /* Define event bits, GPIO pins, task stack sizes, priorities, etc. here. */
 #define DISPLAY_IMAGE_TASK_STACK_SIZE_BYTES (12U * 1024U)
 #define DISPLAY_IMAGE_TASK_PRIORITY         5U
 #define TASK_STACK_WARNING_BYTES            (2U * 1024U)
+
+#define PERFORMANCE_MONITOR 0
 
 /* Constants --------------------------------------------------------------- */
 /* Define file-scope const values here. */
@@ -56,6 +61,20 @@ void app_main(void)
     ESP_LOGI(TAG, "VERSION: %s", APP_PROJECT_VER);
     ESP_LOGI(TAG, "BUILD DATE: %s", APP_PROJECT_VER_DATE);
 
+#if PERFORMANCE_MONITOR
+
+    esp_err_t monitor_ret =
+        performance_monitor_start();
+
+    if (monitor_ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Failed to start performance monitor: %s",
+            esp_err_to_name(monitor_ret)
+        );
+    }
+
+#endif
     // Display driver initialization
     esp_err_t ret = display_driver_init(&display_handle);
     if (ret != ESP_OK) {
@@ -118,17 +137,6 @@ void app_main(void)
             DISPLAY_IMAGE_TASK_PRIORITY,
             NULL
         );
-
-        if (display_task_ret != pdPASS) {
-            ESP_LOGE(TAG,
-                     "Failed to create image task with %u-byte stack",
-                     (unsigned int)DISPLAY_IMAGE_TASK_STACK_SIZE_BYTES);
-            return;
-        }
-
-        ESP_LOGI(TAG,
-                 "Image task started with %u-byte stack",
-                 (unsigned int)DISPLAY_IMAGE_TASK_STACK_SIZE_BYTES);
 
         // ui_manager_lvgl_start_running_demo_task();
     }
