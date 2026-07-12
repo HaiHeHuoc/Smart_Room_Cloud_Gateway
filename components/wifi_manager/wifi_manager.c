@@ -151,6 +151,23 @@ static void wifi_manager_event_handler(
     }
 }
 
+static const char *wifi_manager_rssi_to_quality(int8_t rssi)
+{
+    if (rssi >= -50) {
+        return "EXCELLENT";
+    }
+
+    if (rssi >= -60) {
+        return "GOOD";
+    }
+
+    if (rssi >= -70) {
+        return "FAIR";
+    }
+
+    return "WEAK";
+}
+
 /* Functions -------------------------------------------------------------- */
 /* Implement non-static functions here. */
 
@@ -405,7 +422,35 @@ esp_err_t wifi_manager_connect(
         "Station configuration is NULL"
     );
 
-    ESP_RETURN_ON_FALSE(config->ssid != NULL, 
+    ESP_RETURN_ON_FALSE(s_wifi_manager.initialized == true, 
+        ESP_ERR_INVALID_STATE,
+        TAG,
+        "Wi-Fi manager is not initialized"
+    );
+
+    /*
+     * Avoid starting another connection while one is already active.
+     */
+    if ((s_wifi_manager.status.state ==
+         WIFI_MANAGER_STATE_CONNECTING) ||
+        (s_wifi_manager.status.state ==
+         WIFI_MANAGER_STATE_WAITING_FOR_IP) ||
+        (s_wifi_manager.status.state ==
+         WIFI_MANAGER_STATE_CONNECTED)) {
+
+        ESP_LOGW(
+            TAG,
+            "Wi-Fi connection is already active: state=%s",
+            wifi_manager_state_to_string(
+                s_wifi_manager.status.state
+            )
+        );
+
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    ESP_RETURN_ON_FALSE(config->ssid != NULL ||
+        config->ssid[0] == '\0', 
         ESP_ERR_INVALID_ARG,
         TAG,
         "Wifi SSID is NULL"
@@ -417,15 +462,164 @@ esp_err_t wifi_manager_connect(
         "Wifi password is NULL"
     );
 
-    ESP_RETURN_ON_FALSE(s_wifi_manager.initialized == true, 
-        ESP_ERR_INVALID_STATE,
-        TAG,
-        "Wi-Fi manager is not initialized"
+
+    const size_t ssid_length =
+        strlen(config->ssid);
+
+    const size_t password_length =
+        strlen(config->password);
+
+
+    /*
+     * wifi_config_t.sta.ssid has space for 32 bytes.
+     * An SSID can legally use all 32 bytes.
+     */
+    if (ssid_length >
+        WIFI_MANAGER_SSID_MAX_LENGTH) {
+
+        ESP_LOGE(
+            TAG,
+            "SSID is too long: %u bytes, maximum=%u",
+            (unsigned int)ssid_length,
+            (unsigned int)WIFI_MANAGER_SSID_MAX_LENGTH
+        );
+
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (password_length >
+        WIFI_MANAGER_PASSWORD_MAX_LENGTH) {
+
+        ESP_LOGE(
+            TAG,
+            "Password is too long: %u bytes, maximum=%u",
+            (unsigned int)password_length,
+            (unsigned int)WIFI_MANAGER_PASSWORD_MAX_LENGTH
+        );
+
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /*
+     * 3. Build ESP-IDF Station configuration.
+     *
+     * Zero-initialization gives sensible defaults:
+     *
+     * - scan all necessary channels;
+     * - do not lock to a specific BSSID;
+     * - use default RSSI threshold.
+     */
+    wifi_config_t wifi_config = {0};
+
+    memcpy(
+        wifi_config.sta.ssid,
+        config->ssid,
+        ssid_length
     );
 
-    ESP_LOGW(TAG, "wifi_manager_connect() is not implemented yet");
+    if (password_length > 0U) {
+        memcpy(
+            wifi_config.sta.password,
+            config->password,
+            password_length
+        );
 
-    return ESP_ERR_NOT_SUPPORTED;
+        /*
+         * Reject deprecated/insecure APs below WPA2.
+         * WPA3 is still accepted because it is stronger than WPA2.
+         */
+        wifi_config.sta.threshold.authmode =
+            WIFI_AUTH_WPA2_PSK;
+    }
+    else {
+        /*
+         * Empty password means an open access point.
+         */
+        wifi_config.sta.threshold.authmode =
+            WIFI_AUTH_OPEN;
+    }
+
+    /*
+     * 4. Apply Station configuration to the Wi-Fi driver.
+     */
+    esp_err_t ret =
+        esp_wifi_set_config(
+            WIFI_IF_STA,
+            &wifi_config
+        );
+
+    if (ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Failed to set Wi-Fi Station config: %s",
+            esp_err_to_name(ret)
+        );
+
+        return ret;
+    }
+
+    /*
+     * 5. Prepare internal status before calling esp_wifi_connect().
+     *
+     * Setting CONNECTING first avoids a race where an asynchronous
+     * Wi-Fi event arrives before the state is updated.
+     */
+    memset(
+        s_wifi_manager.status.ssid,
+        0,
+        sizeof(s_wifi_manager.status.ssid)
+    );
+
+    memcpy(
+        s_wifi_manager.status.ssid,
+        config->ssid,
+        ssid_length
+    );
+
+
+    s_wifi_manager.status.ssid[ssid_length] =
+        '\0';
+
+    s_wifi_manager.status.ipv4_address[0] =
+        '\0';
+
+    s_wifi_manager.status.has_ipv4_address =
+        false;
+
+    s_wifi_manager.status.rssi_valid =
+        false;
+
+    s_wifi_manager.status.disconnect_reason =
+        0U;
+
+    s_wifi_manager.status.state =
+        WIFI_MANAGER_STATE_CONNECTING;
+
+    ESP_LOGI(
+        TAG,
+        "Connecting to Wi-Fi SSID: %s",
+        s_wifi_manager.status.ssid
+    );
+
+    /*
+     * 6. Start the asynchronous connection process.
+     */
+    ret = esp_wifi_connect();
+
+    if (ret != ESP_OK) {
+        s_wifi_manager.status.state =
+            WIFI_MANAGER_STATE_FAILED;
+
+        ESP_LOGE(
+            TAG,
+            "Failed to start Wi-Fi connection: %s",
+            esp_err_to_name(ret)
+        );
+
+        return ret;
+    }
+
+    return ESP_OK;
 }
 
 esp_err_t wifi_manager_disconnect(void)
@@ -555,4 +749,243 @@ const char *wifi_manager_state_to_string(
         default:
             return "UNKNOWN";
     }
+}
+
+esp_err_t wifi_manager_scan_and_log(void)
+{
+    if (!s_wifi_manager.initialized) {
+        ESP_LOGE(
+            TAG,
+            "Cannot scan because Wi-Fi manager is not initialized"
+        );
+
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /*
+     * Scan configuration:
+     *
+     * ssid        = NULL : do not filter by SSID
+     * bssid       = NULL : do not filter by BSSID
+     * channel     = 0    : scan all supported channels
+     * show_hidden = true : include APs with hidden SSIDs
+     * scan_type   = active scan
+     */
+    const wifi_scan_config_t scan_config = {
+        .ssid = NULL,
+        .bssid = NULL,
+        .channel = 0U,
+        .show_hidden = true,
+        .scan_type = WIFI_SCAN_TYPE_ACTIVE,
+
+        .scan_time = {
+            .active = {
+                .min = 0U,
+                .max = 120U,
+            },
+        },
+
+        /*
+         * While connected, periodically return to the current AP's
+         * channel so normal Wi-Fi traffic still has an opportunity
+         * to run.
+         */
+        .home_chan_dwell_time = 30U,
+    };
+
+    ESP_LOGI(TAG, "Starting all-channel Wi-Fi scan");
+
+    /*
+     * block = true:
+     *
+     * This task waits here until the scan finishes.
+     *
+     * A blocked scan does not generate WIFI_EVENT_SCAN_DONE.
+     */
+    esp_err_t ret =
+        esp_wifi_scan_start(
+            &scan_config,
+            true
+        );
+
+    if (ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Failed to start Wi-Fi scan: %s",
+            esp_err_to_name(ret)
+        );
+
+        return ret;
+    }
+
+    uint16_t ap_count = 0U;
+
+    ret = esp_wifi_scan_get_ap_num(&ap_count);
+
+    if (ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Failed to obtain scanned AP count: %s",
+            esp_err_to_name(ret)
+        );
+
+        /*
+         * Release result memory owned by the Wi-Fi driver.
+         */
+        const esp_err_t clear_ret =
+            esp_wifi_clear_ap_list();
+
+        if (clear_ret != ESP_OK) {
+            ESP_LOGW(
+                TAG,
+                "Failed to clear Wi-Fi scan list: %s",
+                esp_err_to_name(clear_ret)
+            );
+        }
+
+        return ret;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Wi-Fi scan completed: found=%u AP records",
+        (unsigned int)ap_count
+    );
+
+    if (ap_count == 0U) {
+        /*
+         * No records will be fetched, so explicitly clear the list.
+         */
+        const esp_err_t clear_ret =
+            esp_wifi_clear_ap_list();
+
+        if (clear_ret != ESP_OK) {
+            ESP_LOGW(
+                TAG,
+                "Failed to clear empty Wi-Fi scan list: %s",
+                esp_err_to_name(clear_ret)
+            );
+
+            return clear_ret;
+        }
+
+        return ESP_OK;
+    }
+
+    wifi_ap_record_t *ap_records =
+        calloc(
+            ap_count,
+            sizeof(*ap_records)
+        );
+
+    if (ap_records == NULL) {
+        ESP_LOGE(
+            TAG,
+            "No memory for %u Wi-Fi AP records",
+            (unsigned int)ap_count
+        );
+
+        /*
+         * The scan-result list is still owned by the Wi-Fi driver.
+         */
+        const esp_err_t clear_ret =
+            esp_wifi_clear_ap_list();
+
+        if (clear_ret != ESP_OK) {
+            ESP_LOGW(
+                TAG,
+                "Failed to clear scan list after allocation error: %s",
+                esp_err_to_name(clear_ret)
+            );
+        }
+
+        return ESP_ERR_NO_MEM;
+    }
+
+    /*
+     * Input:
+     *     records_to_read is the capacity of ap_records.
+     *
+     * Output:
+     *     records_to_read becomes the number of records returned.
+     */
+    uint16_t records_to_read = ap_count;
+
+    ret = esp_wifi_scan_get_ap_records(
+        &records_to_read,
+        ap_records
+    );
+
+    if (ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Failed to retrieve Wi-Fi AP records: %s",
+            esp_err_to_name(ret)
+        );
+
+        /*
+         * Be defensive in case the driver still owns scan entries.
+         */
+        const esp_err_t clear_ret =
+            esp_wifi_clear_ap_list();
+
+        if (clear_ret != ESP_OK) {
+            ESP_LOGW(
+                TAG,
+                "Failed to clear scan list after retrieval error: %s",
+                esp_err_to_name(clear_ret)
+            );
+        }
+
+        free(ap_records);
+
+        return ret;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "------------------------------------------------------------"
+    );
+
+    ESP_LOGI(
+        TAG,
+        " No. | RSSI | Channel | Quality   | SSID"
+    );
+
+    ESP_LOGI(
+        TAG,
+        "------------------------------------------------------------"
+    );
+
+    for (uint16_t index = 0U;
+         index < records_to_read;
+         ++index) {
+
+        const wifi_ap_record_t *record =
+            &ap_records[index];
+
+        const char *ssid =
+            record->ssid[0] != '\0'
+                ? (const char *)record->ssid
+                : "<hidden>";
+
+        ESP_LOGI(
+            TAG,
+            "%4u | %4d | %7u | %-9s | %s",
+            (unsigned int)(index + 1U),
+            (int)record->rssi,
+            (unsigned int)record->primary,
+            wifi_manager_rssi_to_quality(record->rssi),
+            ssid
+        );
+    }
+
+    ESP_LOGI(
+        TAG,
+        "------------------------------------------------------------"
+    );
+
+    free(ap_records);
+
+    return ESP_OK;
 }

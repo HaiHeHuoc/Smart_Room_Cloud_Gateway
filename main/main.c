@@ -105,6 +105,29 @@ void app_main(void)
         return;
     }
 
+/*
+ * Temporary hardcoded credentials for Sprint 2.
+ *
+ * Do not commit real credentials to a public repository.
+ */
+const wifi_manager_sta_config_t station_config = {
+    .ssid = "HaiHeHuoc888",
+    .password = "11233455",
+};
+
+esp_err_t connect_ret =
+    wifi_manager_connect(&station_config);
+
+if (connect_ret != ESP_OK) {
+    ESP_LOGE(
+        TAG,
+        "Failed to start Wi-Fi connection: %s",
+        esp_err_to_name(connect_ret)
+    );
+
+    return;
+}
+
     // Display driver initialization
     esp_err_t ret = display_driver_init(&display_handle);
     if (ret != ESP_OK) {
@@ -165,6 +188,10 @@ void app_main(void)
     }
 
     ESP_LOGI(TAG, "LVGL display initialized successfully");
+
+    // Scan and PrintOut Wifi SSID
+    const esp_err_t scan_ret =
+            wifi_manager_scan_and_log();
 
     while (1)
     {

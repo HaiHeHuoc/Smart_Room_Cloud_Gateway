@@ -298,6 +298,21 @@ const char *wifi_manager_state_to_string(
     wifi_manager_state_t state
 );
 
+/**
+ * @brief Scan nearby Wi-Fi access points and print SSID/RSSI information.
+ *
+ * This is a blocking function and must be called from a normal task.
+ * Do not call it from a Wi-Fi/IP event callback.
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - ESP_ERR_INVALID_STATE if wifi_manager is not initialized
+ *      - ESP_ERR_WIFI_STATE if Wi-Fi is currently connecting
+ *      - ESP_ERR_NO_MEM if scan-result allocation fails
+ *      - another ESP-IDF Wi-Fi error code
+ */
+esp_err_t wifi_manager_scan_and_log(void);
+
 #ifdef __cplusplus
 }
 #endif
