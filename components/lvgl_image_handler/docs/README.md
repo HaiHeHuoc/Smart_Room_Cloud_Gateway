@@ -31,7 +31,8 @@ The required initialization order is:
 ESP_ERROR_CHECK(ui_manager_lvgl_init(&display_handle));
 ESP_ERROR_CHECK(sd_card_manager_init());
 ESP_ERROR_CHECK(lvgl_sd_fs_register());
-ESP_ERROR_CHECK(ui_manager_lvgl_start_UI_task());
+ESP_ERROR_CHECK(app_gui_init());
+ESP_ERROR_CHECK(app_gui_start_ui_task());
 ```
 
 Image paths use the LVGL SD drive, for example `S:/images/photo.jpg`.

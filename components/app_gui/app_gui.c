@@ -1,18 +1,30 @@
 /* Includes ----------------------------------------------------------------- */
+#include <stdio.h>
+
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/task.h"
 
 #include "ui_manager_lvgl.h"
 #include "app_gui.h"
 #include "esp_log.h"
 #include "esp_err.h"
+#include "lvgl.h"
 
 /* Macros ------------------------------------------------------------------- */
-#define LVGL_DEMO_TASK_STACK_SIZE_BYTES (4U * 1024U)
-#define LVGL_TASK_PRIORITY              5U
+#define APP_GUI_WIFI_STATUS_QUEUE_LENGTH 1U
+#define APP_GUI_UI_TASK_STACK_SIZE_BYTES   (24U * 1024U)
+#define APP_GUI_DEMO_TASK_STACK_SIZE_BYTES (4U * 1024U)
+#define APP_GUI_TASK_PRIORITY              5U
+#define APP_GUI_TASK_PERIOD_MS              33U
+#define APP_GUI_STACK_LOG_PERIOD_MS         (60U * 1000U)
+#define APP_GUI_STACK_WARNING_BYTES         (2U * 1024U)
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "APP_GUI";
+
+/* Static Variables --------------------------------------------------------- */
+static QueueHandle_t s_wifi_status_queue = NULL;
 
 /* Application -------------------------------------------------------------- */
 /**
@@ -38,6 +50,86 @@ void app_gui_create_demo_screen(void)
 }
 
 /* Static Functions --------------------------------------------------------- */
+static void app_gui_process_wifi_status(void)
+{
+    ui_wifi_status_t wifi_status = {0};
+
+    if ((s_wifi_status_queue == NULL) ||
+        (xQueueReceive(
+            s_wifi_status_queue,
+            &wifi_status,
+            0) != pdTRUE)) {
+        return;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "GUI received Wi-Fi status: "
+        "state=%d, ssid=%s, ip=%s, rssi=%d",
+        (int)wifi_status.state,
+        wifi_status.ssid[0] != '\0'
+            ? wifi_status.ssid
+            : "<none>",
+        wifi_status.has_ipv4_address
+            ? wifi_status.ipv4_address
+            : "<none>",
+        wifi_status.rssi_valid
+            ? (int)wifi_status.rssi_dbm
+            : 0
+    );
+
+    
+}
+
+static void app_gui_log_stack_usage(const char *task_name)
+{
+    const UBaseType_t minimum_free_stack =
+        uxTaskGetStackHighWaterMark(NULL);
+
+    if (minimum_free_stack < APP_GUI_STACK_WARNING_BYTES) {
+        ESP_LOGW(TAG,
+                 "%s minimum free stack is low: %u bytes",
+                 task_name,
+                 (unsigned int)minimum_free_stack);
+    }
+    else {
+        ESP_LOGI(TAG,
+                 "%s minimum free stack: %u bytes",
+                 task_name,
+                 (unsigned int)minimum_free_stack);
+    }
+}
+
+static void app_gui_process_lvgl(void)
+{
+    ui_manager_lvgl_wait_for_mutex();
+
+    app_gui_process_wifi_status();
+    lv_timer_handler();
+
+    ui_manager_lvgl_release_mutex();
+}
+
+static void app_gui_ui_task(void *param)
+{
+    (void)param;
+
+    TickType_t last_stack_log = xTaskGetTickCount();
+
+    while (true) {
+        app_gui_process_lvgl();
+
+        const TickType_t now = xTaskGetTickCount();
+        if ((now - last_stack_log) >=
+            pdMS_TO_TICKS(APP_GUI_STACK_LOG_PERIOD_MS)) {
+            app_gui_log_stack_usage("Application GUI task");
+            last_stack_log = now;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(APP_GUI_TASK_PERIOD_MS));
+    }
+}
+
 /**
  * @brief Demo function for LVGL while running
  * 
@@ -87,32 +179,122 @@ static void app_gui_running_demo(void* vPrama)
 }
 
 /* Functions ---------------------------------------------------------------- */
+esp_err_t app_gui_init(void)
+{
+    if (s_wifi_status_queue != NULL) {
+        ESP_LOGW(TAG, "Application GUI is already initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    s_wifi_status_queue =
+        xQueueCreate(
+            APP_GUI_WIFI_STATUS_QUEUE_LENGTH,
+            sizeof(ui_wifi_status_t)
+        );
+
+    if (s_wifi_status_queue == NULL) {
+        ESP_LOGE(TAG, "Failed to create Wi-Fi GUI status queue");
+        return ESP_ERR_NO_MEM;
+    }
+
+    ESP_LOGI(TAG, "Application GUI initialized");
+
+    return ESP_OK;
+}
+
+esp_err_t app_gui_start_ui_task(void)
+{
+    if (s_wifi_status_queue == NULL) {
+        ESP_LOGE(TAG, "Application GUI is not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    BaseType_t task_ret = xTaskCreate(
+        app_gui_ui_task,
+        "app_gui_ui",
+        APP_GUI_UI_TASK_STACK_SIZE_BYTES,
+        NULL,
+        APP_GUI_TASK_PRIORITY,
+        NULL
+    );
+
+    if (task_ret != pdPASS) {
+        ESP_LOGE(TAG,
+                 "Failed to create application GUI task with %u-byte stack",
+                 (unsigned int)APP_GUI_UI_TASK_STACK_SIZE_BYTES);
+        return ESP_ERR_NO_MEM;
+    }
+
+    ESP_LOGI(TAG,
+             "Application GUI task started with %u-byte stack",
+             (unsigned int)APP_GUI_UI_TASK_STACK_SIZE_BYTES);
+
+    return ESP_OK;
+}
+
 /**
  * @brief Start running demo task
  *
- * @return ESP_OK on success, ESP_ERR_NO_MEM if task creation fails.
+ * @return ESP_OK on success, ESP_ERR_INVALID_STATE if app_gui is not
+ *         initialized, or ESP_ERR_NO_MEM if task creation fails.
  */
 esp_err_t app_gui_start_running_demo_task(void)
 {
+    if (s_wifi_status_queue == NULL) {
+        ESP_LOGE(TAG, "Application GUI is not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
     BaseType_t task_ret = xTaskCreate(
         app_gui_running_demo,
         "lvgl_demo",
-        LVGL_DEMO_TASK_STACK_SIZE_BYTES,
+        APP_GUI_DEMO_TASK_STACK_SIZE_BYTES,
         NULL,
-        LVGL_TASK_PRIORITY,
+        APP_GUI_TASK_PRIORITY,
         NULL
     );
 
     if (task_ret != pdPASS) {
         ESP_LOGE(TAG,
                  "Failed to create LVGL demo task with %u-byte stack",
-                 (unsigned int)LVGL_DEMO_TASK_STACK_SIZE_BYTES);
+                 (unsigned int)APP_GUI_DEMO_TASK_STACK_SIZE_BYTES);
         return ESP_ERR_NO_MEM;
     }
 
     ESP_LOGI(TAG,
              "LVGL demo task started with %u-byte stack",
-             (unsigned int)LVGL_DEMO_TASK_STACK_SIZE_BYTES);
+             (unsigned int)APP_GUI_DEMO_TASK_STACK_SIZE_BYTES);
+
+    return ESP_OK;
+}
+
+
+esp_err_t app_gui_post_wifi_status(
+    const ui_wifi_status_t *status)
+{
+    if (status == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_wifi_status_queue == NULL) {
+        ESP_LOGE(TAG, "Wi-Fi GUI queue is not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /*
+     * Queue length = 1:
+     * UI only needs the newest Wi-Fi state.
+     *
+     * No waiting because this function can be called from
+     * the ESP event-loop task through the application callback.
+     */
+    if (xQueueOverwrite(
+            s_wifi_status_queue,
+            status) != pdTRUE) {
+
+        ESP_LOGW(TAG, "Failed to post Wi-Fi status to UI");
+        return ESP_FAIL;
+    }
 
     return ESP_OK;
 }

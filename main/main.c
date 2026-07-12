@@ -139,12 +139,20 @@ void app_main(void)
     }
     else
     {
+        esp_err_t app_gui_ret = app_gui_init();
+        if (app_gui_ret != ESP_OK) {
+            ESP_LOGE(TAG,
+                     "Failed to initialize application GUI: %s",
+                     esp_err_to_name(app_gui_ret));
+            return;
+        }
+
         ESP_LOGI(TAG, "Start LVGL task handler");
 
-        esp_err_t ui_task_ret = ui_manager_lvgl_start_UI_task();
+        esp_err_t ui_task_ret = app_gui_start_ui_task();
         if (ui_task_ret != ESP_OK) {
             ESP_LOGE(TAG,
-                        "Failed to start LVGL UI task: %s",
+                        "Failed to start application GUI task: %s",
                         esp_err_to_name(ui_task_ret));
             return;
         }
@@ -481,7 +489,7 @@ static void app_wifi_status_callback(
     );
 
     const esp_err_t ret =
-        ui_manager_lvgl_post_wifi_status(
+        app_gui_post_wifi_status(
             &ui_status
         );
 

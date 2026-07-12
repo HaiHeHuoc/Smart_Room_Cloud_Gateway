@@ -113,9 +113,9 @@ The project uses this flow:
 ESP Wi-Fi/IP event
     -> wifi_manager updates status
     -> application status callback
-    -> ui_manager_lvgl_post_wifi_status()
+    -> app_gui_post_wifi_status()
     -> FreeRTOS queue
-    -> LVGL task receives and processes status
+    -> app_gui task receives and processes status under LVGL coordination
 ```
 
 The callback receives a temporary status snapshot. Copy any required values
