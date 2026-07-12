@@ -652,11 +652,16 @@ esp_err_t wifi_manager_connect(
         return ESP_ERR_INVALID_STATE;
     }
 
-    ESP_RETURN_ON_FALSE(config->ssid != NULL ||
-        config->ssid[0] == '\0', 
+    ESP_RETURN_ON_FALSE(config->ssid != NULL,
         ESP_ERR_INVALID_ARG,
         TAG,
-        "Wifi SSID is NULL"
+        "Wi-Fi SSID is NULL"
+    );
+
+    ESP_RETURN_ON_FALSE(config->ssid[0] != '\0',
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "Wi-Fi SSID is empty"
     );
 
     ESP_RETURN_ON_FALSE(config->password != NULL, 
@@ -667,10 +672,16 @@ esp_err_t wifi_manager_connect(
 
 
     const size_t ssid_length =
-        strlen(config->ssid);
+        strnlen(
+            config->ssid,
+            WIFI_MANAGER_SSID_BUFFER_SIZE
+        );
 
     const size_t password_length =
-        strlen(config->password);
+        strnlen(
+            config->password,
+            WIFI_MANAGER_PASSWORD_BUFFER_SIZE
+        );
 
 
     /*
@@ -949,18 +960,12 @@ esp_err_t wifi_manager_get_rssi(
 
 bool wifi_manager_is_connected(void)
 {
-
-    ESP_RETURN_ON_FALSE(s_wifi_manager.initialized == true, 
-        ESP_ERR_INVALID_STATE,
-        TAG,
-        "Wi-Fi manager is not initialized"
-    );
-
     bool connected = false;
 
     taskENTER_CRITICAL(&s_status_lock);
 
     connected =
+        s_wifi_manager.initialized &&
         (s_wifi_manager.status.state ==
          WIFI_MANAGER_STATE_CONNECTED) &&
         s_wifi_manager.status.has_ipv4_address;

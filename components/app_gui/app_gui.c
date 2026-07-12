@@ -140,6 +140,7 @@ esp_err_t app_gui_create_wifi_screen(void)
     lv_obj_t *screen = lv_screen_active();
     if (screen == NULL) {
         ESP_LOGE(TAG, "No active LVGL screen for Wi-Fi GUI");
+        ui_manager_lvgl_release_mutex();
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -151,6 +152,7 @@ esp_err_t app_gui_create_wifi_screen(void)
 
     lv_obj_t *title = lv_label_create(screen);
     if (title == NULL) {
+        ui_manager_lvgl_release_mutex();
         return ESP_ERR_NO_MEM;
     }
 
@@ -165,6 +167,7 @@ esp_err_t app_gui_create_wifi_screen(void)
 
     lv_obj_t *divider = lv_obj_create(screen);
     if (divider == NULL) {
+        ui_manager_lvgl_release_mutex();
         return ESP_ERR_NO_MEM;
     }
 
@@ -190,6 +193,7 @@ esp_err_t app_gui_create_wifi_screen(void)
          ++index) {
         lv_obj_t *field = lv_label_create(screen);
         if (field == NULL) {
+            ui_manager_lvgl_release_mutex();
             return ESP_ERR_NO_MEM;
         }
 
@@ -216,6 +220,7 @@ esp_err_t app_gui_create_wifi_screen(void)
         s_wifi_mode_label = NULL;
         s_wifi_ssid_label = NULL;
         s_wifi_ip_label = NULL;
+        ui_manager_lvgl_release_mutex();
         return ESP_ERR_NO_MEM;
     }
 

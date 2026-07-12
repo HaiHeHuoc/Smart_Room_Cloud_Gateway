@@ -28,6 +28,7 @@ tick timer, and LCD flush integration.
 ESP_ERROR_CHECK(ui_manager_lvgl_init(&display_handle));
 ESP_ERROR_CHECK(app_gui_init());
 ESP_ERROR_CHECK(app_gui_start_ui_task());
+ESP_ERROR_CHECK(app_gui_create_wifi_screen());
 ```
 
 The main GUI task must run continuously so LVGL timers, rendering, animations,
@@ -37,8 +38,9 @@ and queued Wi-Fi status updates continue to progress.
 
 | API | Role |
 | --- | --- |
-| `app_gui_init()` | Create the Wi-Fi queue and status screen. |
+| `app_gui_init()` | Create the Wi-Fi status queue. |
 | `app_gui_start_ui_task()` | Start the main LVGL/application GUI task. |
+| `app_gui_create_wifi_screen()` | Create the Wi-Fi status widgets on the active screen while holding the LVGL mutex. |
 | `app_gui_post_wifi_status()` | Overwrite the queue with the newest Wi-Fi status without waiting. |
 | `app_gui_create_demo_screen()` | Create the static `LVGL OK` demo screen. |
 | `app_gui_start_running_demo_task()` | Start the optional moving counter demo task. |
@@ -64,6 +66,8 @@ an IPv4 address is valid.
 - The queue length is one by design. Intermediate Wi-Fi transitions may be
   replaced if producers are faster than the GUI task; the latest state wins.
 - `app_gui_post_wifi_status()` does not call LVGL and does not block.
+- `app_gui_create_wifi_screen()` releases the LVGL mutex on success and on all
+  current error paths.
 - Only the main app GUI task should call `lv_timer_handler()`.
 - The optional demo task accesses LVGL under the UI manager mutex.
 - There is no deinit/stop API or duplicate-task guard yet.

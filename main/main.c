@@ -48,9 +48,6 @@ static display_driver_handle_t display_handle;
 /* Function Prototypes ------------------------------------------------------ */
 static esp_err_t network_platform_init(void);
 
-// For wifi section
-static void wifi_status_test_task(void *argument);
-static void wifi_disconnect_test_task(void *argument);
 static void app_wifi_status_callback(
     const wifi_manager_status_t *status,
     void *user_data);
@@ -231,24 +228,6 @@ if (connect_ret != ESP_OK) {
     // const esp_err_t scan_ret =
     //         wifi_manager_scan_and_log();
 
-    // xTaskCreate(
-    //     wifi_status_test_task,
-    //     "wifi_status_test",
-    //     3072U,
-    //     NULL,
-    //     3U,
-    //     NULL
-    // );
-
-    // xTaskCreate(
-    //     wifi_disconnect_test_task,
-    //     "wifi_disconnect_test",
-    //     3072U,
-    //     NULL,
-    //     3U,
-    //     NULL
-    // );
-
     while (1)
     {
         // ESP_LOGI(TAG, "Main loop running...");
@@ -348,90 +327,6 @@ static esp_err_t network_platform_init(void)
     return ESP_OK;
 }
 
-
-static void wifi_status_test_task(void *argument)
-{
-    (void)argument;
-
-    vTaskDelay(pdMS_TO_TICKS(5000));
-
-    wifi_manager_status_t status = {0};
-
-    const esp_err_t ret =
-        wifi_manager_get_status(&status);
-
-    if (ret == ESP_OK) {
-        ESP_LOGI(
-            TAG,
-            "Wi-Fi status: state=%s, ssid=%s, ip=%s",
-            wifi_manager_state_to_string(status.state),
-            status.ssid,
-            status.has_ipv4_address
-                ? status.ipv4_address
-                : "<none>"
-        );
-    }
-    else {
-        ESP_LOGE(
-            TAG,
-            "Failed to get Wi-Fi status: %s",
-            esp_err_to_name(ret)
-        );
-    }
-
-    vTaskDelete(NULL);
-}
-
-static void wifi_disconnect_test_task(void *argument)
-{
-    (void)argument;
-
-    while (true) {
-        wifi_manager_status_t status = {0};
-
-        const esp_err_t ret =
-            wifi_manager_get_status(&status);
-
-        if (ret == ESP_OK) {
-            ESP_LOGI(
-                TAG,
-                "Wi-Fi: state=%s, ip=%s, reason=%u",
-                wifi_manager_state_to_string(
-                    status.state
-                ),
-                status.has_ipv4_address
-                    ? status.ipv4_address
-                    : "<none>",
-                (unsigned int)status.disconnect_reason
-            );
-        }
-
-        if (wifi_manager_is_connected()) {
-            int8_t rssi_dbm = 0;
-
-            const esp_err_t ret =
-                wifi_manager_get_rssi(&rssi_dbm);
-            ESP_LOGI(TAG, "*------------------------------------------------------------------------------------------*");
-            if (ret == ESP_OK) {
-                ESP_LOGI(
-                    TAG,
-                    "Connected Wi-Fi RSSI: %d dBm",
-                    (int)rssi_dbm
-                );
-            }
-            else {
-                ESP_LOGE(
-                    TAG,
-                    "Failed to read RSSI: %s",
-                    esp_err_to_name(ret)
-                );
-            }
-            ESP_LOGI(TAG, "*------------------------------------------------------------------------------------------*");
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(20000));
-    }
-}
 
 static ui_wifi_state_t app_map_wifi_state(
     wifi_manager_state_t state)

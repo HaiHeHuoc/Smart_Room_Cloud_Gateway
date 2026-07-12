@@ -86,7 +86,9 @@ ESP_ERROR_CHECK(wifi_manager_connect(&config));
 
 The config structure and its strings only need to remain valid for the duration
 of `wifi_manager_connect()`. The function copies them into ESP-IDF's Station
-configuration.
+configuration. A NULL, empty, oversized, or unterminated SSID is rejected with
+`ESP_ERR_INVALID_ARG`. Password length is checked with the same bounded-read
+rule; an empty password remains valid for an open network.
 
 ## Public API
 
@@ -97,15 +99,15 @@ configuration.
 | `wifi_manager_disconnect()` | Currently returns `ESP_ERR_NOT_SUPPORTED`. |
 | `wifi_manager_get_status()` | Copy a locked snapshot of current manager status. |
 | `wifi_manager_get_rssi()` | Read and cache RSSI while connected with IPv4. |
-| `wifi_manager_is_connected()` | Report whether state is `CONNECTED` and IPv4 is valid. |
+| `wifi_manager_is_connected()` | Report whether state is `CONNECTED` and IPv4 is valid; returns `false` before initialization. |
 | `wifi_manager_register_status_callback()` | Register, replace, or unregister the single callback. |
 | `wifi_manager_state_to_string()` | Convert a state enum to constant readable text. |
 | `wifi_manager_scan_and_log()` | Block while scanning and print AP results. |
 
 ## Status Callback And LVGL
 
-The callback may run from the ESP event-loop task. It must return quickly and
-must not call LVGL directly.
+The callback may run synchronously from `wifi_manager_connect()` or from the
+ESP event-loop task. It must return quickly and must not call LVGL directly.
 
 The project uses this flow:
 
@@ -145,15 +147,11 @@ Do not call the scan API from a Wi-Fi/IP event callback or the LVGL task.
   application callback.
 - `IP_EVENT_STA_LOST_IP` clears the address/RSSI, transitions an associated
   station to `WAITING_FOR_IP`, and notifies the application callback.
-- Credential validation in `wifi_manager_connect()` needs review: the current
-  SSID null/empty condition uses `||`, which can accept an empty SSID and can
-  dereference a NULL SSID pointer.
-- `wifi_manager_is_connected()` should only be called after successful init.
-  Its current precondition macro returns an `esp_err_t` value from a `bool`
-  function when uninitialized, which can produce a truthy result.
 - Some status writes in connect/init paths are not protected by
   `s_status_lock`; event-loop reads/writes should be reviewed as concurrency
   grows.
+- Development credentials are currently supplied directly by `main.c`; move
+  them to local build configuration or provisioning before publishing code.
 - No connection timeout moves a long-running `CONNECTING` or
   `WAITING_FOR_IP` state to `FAILED`.
 
@@ -176,8 +174,6 @@ On disconnection, the ESP-IDF reason code is stored in
 ## Future Attention
 
 - Implement disconnect and a symmetric deinit path.
-- Fix SSID validation and the pre-init boolean return behavior.
-- Notify status after `GOT_IP` and update status after `LOST_IP`.
 - Protect all shared status mutations consistently.
 - Add bounded reconnect with backoff and a connection timeout.
 - Move credential persistence to the future configuration/NVS owner.

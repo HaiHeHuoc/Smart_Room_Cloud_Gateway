@@ -87,8 +87,8 @@ ui_manager_lvgl_release_mutex();
 - `ui_manager_lvgl_wait_for_mutex()` waits indefinitely. Only call it after
   successful `ui_manager_lvgl_init()`, keep the locked section short, and
   always pair it with `ui_manager_lvgl_release_mutex()`.
-- There is currently no UI callback queue. Application tasks that call LVGL
-  directly must use the manager mutex.
+- `ui_manager_lvgl` does not own a generic UI callback queue. Application
+  tasks that call LVGL directly must use the manager mutex.
 - Wi-Fi status queueing and the 24 KB LVGL timer task are owned by `app_gui`,
   not this component.
 

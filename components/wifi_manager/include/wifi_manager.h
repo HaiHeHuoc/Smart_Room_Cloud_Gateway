@@ -263,7 +263,11 @@ esp_err_t wifi_manager_get_rssi(
 /**
  * @brief Check whether the Station has received an IP address.
  *
- * @return true if the manager state is WIFI_MANAGER_STATE_CONNECTED.
+ * Connected means the Station has received a valid IPv4 address. Association
+ * while waiting for DHCP is not considered connected. The function returns
+ * false before wifi_manager_init() succeeds.
+ *
+ * @return true only while the Station has a valid IPv4 address.
  */
 bool wifi_manager_is_connected(void);
 
