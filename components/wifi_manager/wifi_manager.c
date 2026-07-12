@@ -93,8 +93,48 @@ static void wifi_manager_event_handler(
     void *event_data
 );
 
+static void wifi_manager_notify_status_changed(void);
+
 /* Static Functions ------------------------------------------------------- */
 /* Implement static helper functions here. */
+static void wifi_manager_notify_status_changed(void)
+{
+    wifi_manager_status_t status_snapshot = {0};
+
+    wifi_manager_status_callback_t callback = NULL;
+    void *callback_user_data = NULL;
+
+    /*
+     * Copy all shared information while holding the lock.
+     */
+    taskENTER_CRITICAL(&s_status_lock);
+
+    memcpy(
+        &status_snapshot,
+        &s_wifi_manager.status,
+        sizeof(status_snapshot)
+    );
+
+    callback =
+        s_wifi_manager.status_callback;
+
+    callback_user_data =
+        s_wifi_manager.status_callback_user_data;
+
+    taskEXIT_CRITICAL(&s_status_lock);
+
+
+    /*
+     * Never invoke application code while holding the critical section.
+     */
+    if (callback != NULL) {
+        callback(
+            &status_snapshot,
+            callback_user_data
+        );
+    }
+
+}
 
 static void wifi_manager_event_handler(
     void *handler_argument,
@@ -133,7 +173,10 @@ static void wifi_manager_event_handler(
 
                 taskEXIT_CRITICAL(&s_status_lock);
 
-                ESP_LOGI(TAG, "Event: WIFI_EVENT_STA_CONNECTED", "waiting for IPv4 address");
+                ESP_LOGI(TAG, "Event: WIFI_EVENT_STA_CONNECTED\nwaiting for IPv4 address");
+
+                wifi_manager_notify_status_changed();
+
                 break;
 
             case WIFI_EVENT_STA_DISCONNECTED:
@@ -178,6 +221,7 @@ static void wifi_manager_event_handler(
 
                 ESP_LOGI(TAG, "Event: WIFI_EVENT_STA_DISCONNECTED");
 
+                wifi_manager_notify_status_changed();
                 /*
                 * Chưa reconnect tự động tại đây.
                 * Reconnect/backoff thuộc Sprint 8.
@@ -214,7 +258,9 @@ static void wifi_manager_event_handler(
                         "IP_EVENT_STA_GOT_IP contains no event data"
                     );
 
-                    break;
+                wifi_manager_notify_status_changed();
+
+                break;
                 }
 
                 /*
@@ -748,8 +794,12 @@ esp_err_t wifi_manager_connect(
             esp_err_to_name(ret)
         );
 
+        wifi_manager_notify_status_changed();
+
         return ret;
     }
+
+    wifi_manager_notify_status_changed();
 
     return ESP_OK;
 }
@@ -900,8 +950,13 @@ esp_err_t wifi_manager_register_status_callback(
     void *user_data
 )
 {
+
+    taskENTER_CRITICAL(&s_status_lock);
+
     s_wifi_manager.status_callback = callback;
     s_wifi_manager.status_callback_user_data = user_data;
+
+    taskEXIT_CRITICAL(&s_status_lock);
 
     ESP_LOGI(
         TAG,

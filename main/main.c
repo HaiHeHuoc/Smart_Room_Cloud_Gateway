@@ -53,8 +53,13 @@ static display_driver_handle_t display_handle;
 /* Function Prototypes ----------------------------------------------------- */
 /* Declare static helper functions here. */
 static esp_err_t network_platform_init(void);
+
+// For wifi section
 static void wifi_status_test_task(void *argument);
 static void wifi_disconnect_test_task(void *argument);
+static void app_wifi_status_callback(
+    const wifi_manager_status_t *status,
+    void *user_data);
 
 /* Application ------------------------------------------------------------- */
 void app_main(void)
@@ -106,6 +111,23 @@ void app_main(void)
 
         return;
     }
+
+
+esp_err_t callback_ret =
+    wifi_manager_register_status_callback(
+        app_wifi_status_callback,
+        NULL
+    );
+
+if (callback_ret != ESP_OK) {
+    ESP_LOGE(
+        TAG,
+        "Failed to register Wi-Fi status callback: %s",
+        esp_err_to_name(callback_ret)
+    );
+
+    return;
+}
 
 /*
  * Temporary hardcoded credentials for Sprint 2.
@@ -224,8 +246,6 @@ if (connect_ret != ESP_OK) {
 /* Static Functions ------------------------------------------------------- */
 /* Implement static helper functions here. */
 
-/* Functions -------------------------------------------------------------- */
-/* Implement non-static functions here. */
 static esp_err_t network_platform_init(void)
 {
     /*
@@ -400,3 +420,32 @@ static void wifi_disconnect_test_task(void *argument)
         vTaskDelay(pdMS_TO_TICKS(2000));
     }
 }
+
+static void app_wifi_status_callback(
+    const wifi_manager_status_t *status,
+    void *user_data)
+{
+    (void)user_data;
+
+    if (status == NULL) {
+        return;
+    }
+
+    ESP_LOGI(TAG, "*------------------------------------------------------------------------------------------*");
+    ESP_LOGI(
+        TAG,
+        "Wi-Fi callback: state=%s, ssid=%s, ip=%s, reason=%u",
+        wifi_manager_state_to_string(status->state),
+        status->ssid[0] != '\0'
+            ? status->ssid
+            : "<none>",
+        status->has_ipv4_address
+            ? status->ipv4_address
+            : "<none>",
+        (unsigned int)status->disconnect_reason
+    );
+    ESP_LOGI(TAG, "*------------------------------------------------------------------------------------------*");
+}
+
+/* Functions -------------------------------------------------------------- */
+/* Implement non-static functions here. */
