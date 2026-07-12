@@ -1,7 +1,5 @@
 #pragma once
 
-#include <stdbool.h>
-
 #include "esp_err.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
@@ -31,14 +29,6 @@ typedef struct {
  * @note The LCD SPI host must not already be initialized by another owner.
  */
 esp_err_t display_driver_init(display_driver_handle_t *handle);
-
-/**
- * @brief Set the LCD backlight to its board-configured on or off level.
- *
- * @param enable true to turn the backlight on, false to turn it off.
- * @return ESP_OK on success, or a GPIO driver error.
- */
-esp_err_t display_driver_set_backlight(bool enable);
 
 /**
  * @brief Display full-screen red, green, blue, white, and black test patterns.

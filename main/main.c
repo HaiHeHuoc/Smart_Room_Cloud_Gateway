@@ -1,3 +1,4 @@
+/* Includes ----------------------------------------------------------------- */
 #include <stdio.h>
 
 #include "freertos/FreeRTOS.h"
@@ -35,26 +36,16 @@
 /* GUI Manager ------------------------------------------------------------- */
 #include "app_gui.h"
 
-/* Macros ------------------------------------------------------------------ */
-/* Define event bits, GPIO pins, task stack sizes, priorities, etc. here. */
+/* Macros ------------------------------------------------------------------- */
 #define PERFORMANCE_MONITOR 1
 
-/* Constants --------------------------------------------------------------- */
-/* Define file-scope const values here. */
+/* Constants ---------------------------------------------------------------- */
 static const char *TAG = "MAIN_APP";
 
-/* Type Definitions -------------------------------------------------------- */
-/* Define local enums, structs, and typedefs here. */
-
-/* Static Variables -------------------------------------------------------- */
-/* Define file-scope static variables here. */
+/* Static Variables --------------------------------------------------------- */
 static display_driver_handle_t display_handle;
 
-/* Global Variables -------------------------------------------------------- */
-/* Define file-scope Global variables here. */
-
-/* Function Prototypes ----------------------------------------------------- */
-/* Declare static helper functions here. */
+/* Function Prototypes ------------------------------------------------------ */
 static esp_err_t network_platform_init(void);
 
 // For wifi section
@@ -66,7 +57,7 @@ static void app_wifi_status_callback(
 static ui_wifi_state_t app_map_wifi_state(
     wifi_manager_state_t state);
 
-/* Application ------------------------------------------------------------- */
+/* Application -------------------------------------------------------------- */
 void app_main(void)
 {
     // Project information
@@ -194,7 +185,6 @@ if (callback_ret != ESP_OK) {
 
     return;
 }
-
 /*
  * Temporary hardcoded credentials for Sprint 2.
  *
@@ -248,9 +238,7 @@ if (connect_ret != ESP_OK) {
     
 }
 
-/* Static Functions ------------------------------------------------------- */
-/* Implement static helper functions here. */
-
+/* Static Functions --------------------------------------------------------- */
 static esp_err_t network_platform_init(void)
 {
     /*
@@ -521,6 +509,3 @@ static void app_wifi_status_callback(
     );
     ESP_LOGI(TAG, "*------------------------------------------------------------------------------------------*");
 }
-
-/* Functions -------------------------------------------------------------- */
-/* Implement non-static functions here. */

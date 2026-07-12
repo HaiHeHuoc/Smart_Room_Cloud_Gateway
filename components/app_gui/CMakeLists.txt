@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "app_gui.c" "app_gui_wifi.c"
+    SRCS "app_gui.c"
     INCLUDE_DIRS "include"
     REQUIRES
         common

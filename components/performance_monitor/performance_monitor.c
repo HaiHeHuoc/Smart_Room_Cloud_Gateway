@@ -1,3 +1,4 @@
+/* Includes ----------------------------------------------------------------- */
 #include "performance_monitor.h"
 
 #include <stdbool.h>
@@ -16,9 +17,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-/* -------------------------------------------------------------------------- */
-/* Configuration                                                              */
-/* -------------------------------------------------------------------------- */
+/* Macros ------------------------------------------------------------------- */
 
 #define PERF_MONITOR_TASK_NAME              "perf_monitor"
 #define PERF_MONITOR_TASK_STACK_SIZE_BYTES  (6U * 1024U)
@@ -52,21 +51,17 @@
 #define PERF_DMA_RAM_CAPS \
     (MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA)
 
-/* -------------------------------------------------------------------------- */
-/* Types                                                                      */
-/* -------------------------------------------------------------------------- */
+/* Type Definitions --------------------------------------------------------- */
 
 typedef struct {
     uint32_t used_x10;
     uint32_t idle_x10;
 } performance_monitor_cpu_result_t;
 
-/* -------------------------------------------------------------------------- */
-/* Static data                                                                */
-/* -------------------------------------------------------------------------- */
-
+/* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "PERF_MONITOR";
 
+/* Static Variables --------------------------------------------------------- */
 static TaskHandle_t s_monitor_task_handle = NULL;
 
 /*
@@ -79,9 +74,7 @@ static TaskStatus_t s_start_snapshot[PERF_MONITOR_MAX_TASKS];
 static TaskStatus_t s_end_snapshot[PERF_MONITOR_MAX_TASKS];
 #endif
 
-/* -------------------------------------------------------------------------- */
-/* Helpers                                                                    */
-/* -------------------------------------------------------------------------- */
+/* Static Functions --------------------------------------------------------- */
 
 static bool performance_monitor_is_idle_task(const char *task_name)
 {
@@ -455,10 +448,6 @@ static void performance_monitor_log_task_stack(void)
     );
 }
 
-/* -------------------------------------------------------------------------- */
-/* Monitor task                                                               */
-/* -------------------------------------------------------------------------- */
-
 static void performance_monitor_task(void *argument)
 {
     (void)argument;
@@ -530,9 +519,7 @@ static void performance_monitor_task(void *argument)
     }
 }
 
-/* -------------------------------------------------------------------------- */
-/* Public API                                                                 */
-/* -------------------------------------------------------------------------- */
+/* Functions ---------------------------------------------------------------- */
 
 esp_err_t performance_monitor_start(void)
 {

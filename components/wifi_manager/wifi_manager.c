@@ -1,3 +1,4 @@
+/* Includes ----------------------------------------------------------------- */
 #include "wifi_manager.h"
 
 #include <string.h>
@@ -9,16 +10,10 @@
 
 #include "esp_log.h"
 #include "esp_check.h"
-/* Macros ------------------------------------------------------------------ */
-/* Define event bits, GPIO pins, task stack sizes, priorities, etc. here. */
-
-/* Constants --------------------------------------------------------------- */
-/* Define file-scope const values here. */
+/* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "WIFI_MANAGER";
 
-/* Type Definitions -------------------------------------------------------- */
-/* Define local enums, structs, and typedefs here. */
-
+/* Type Definitions --------------------------------------------------------- */
 /**
  * @brief Internal state owned by wifi_manager.
  *
@@ -48,8 +43,7 @@ typedef struct
     void *status_callback_user_data;
 } wifi_manager_context_t;
 
-/* Static Variables -------------------------------------------------------- */
-/* Define file-scope static variables here. */
+/* Static Variables --------------------------------------------------------- */
 static wifi_manager_context_t s_wifi_manager = {
     .initialized = false,
     .station_netif = NULL,
@@ -81,11 +75,7 @@ static portMUX_TYPE s_status_lock =
     portMUX_INITIALIZER_UNLOCKED;
 
 
-/* Global Variables -------------------------------------------------------- */
-/* Define file-scope Global variables here. */
-
-/* Function Prototypes ----------------------------------------------------- */
-/* Declare static helper functions here. */
+/* Function Prototypes ------------------------------------------------------ */
 static void wifi_manager_event_handler(
     void *handler_argument,
     esp_event_base_t event_base,
@@ -95,8 +85,7 @@ static void wifi_manager_event_handler(
 
 static void wifi_manager_notify_status_changed(void);
 
-/* Static Functions ------------------------------------------------------- */
-/* Implement static helper functions here. */
+/* Static Functions --------------------------------------------------------- */
 static void wifi_manager_notify_status_changed(void)
 {
     wifi_manager_status_t status_snapshot = {0};
@@ -347,9 +336,7 @@ static const char *wifi_manager_rssi_to_quality(int8_t rssi)
     return "WEAK";
 }
 
-/* Functions -------------------------------------------------------------- */
-/* Implement non-static functions here. */
-
+/* Functions ---------------------------------------------------------------- */
 esp_err_t wifi_manager_init(void)
 {
     if(s_wifi_manager.initialized == true)

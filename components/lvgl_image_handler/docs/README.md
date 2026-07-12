@@ -42,14 +42,12 @@ only when `CONFIG_LV_USE_GIF` is enabled.
 
 | API | Role |
 | --- | --- |
-| `lvgl_image_handler_show()` | Show a path using an explicit `lvgl_image_handler_format_t`. |
 | `lvgl_image_handler_show_jpg()` | Decode and show a JPG image. |
 | `lvgl_image_handler_show_png()` | Stream-decode and show a PNG image. |
 | `lvgl_image_handler_show_gif()` | Start a looping animated GIF. |
 | `lvgl_image_handler_clear()` | Delete the active object and release image/GIF resources. |
 | `lvgl_image_handler_has_active_object()` | Report whether an image object is active. |
-| `lvgl_image_handler_get_image_obj()` | Return the active LVGL image object, or `NULL`. |
-| `lvgl_image_handler_apply_scale_and_align()` | Scale an image from 1 to 100 percent and align its visual layout box. |
+| `lvgl_image_handler_example_task()` | Start the built-in PNG/JPG/GIF cycling demonstration. |
 
 Typical usage:
 
@@ -57,16 +55,6 @@ Typical usage:
 ui_manager_lvgl_wait_for_mutex();
 
 esp_err_t ret = lvgl_image_handler_show_png("S:/Hinh.png");
-if (ret == ESP_OK) {
-    lv_obj_t *image = lvgl_image_handler_get_image_obj();
-    ret = lvgl_image_handler_apply_scale_and_align(
-        image,
-        70U,
-        LV_ALIGN_BOTTOM_RIGHT,
-        0,
-        0
-    );
-}
 
 ui_manager_lvgl_release_mutex();
 ```
@@ -77,16 +65,11 @@ ui_manager_lvgl_release_mutex();
   the LVGL task or while holding the `ui_manager_lvgl` mutex.
 - The SD manager must be mounted and `lvgl_sd_fs` must be registered; otherwise
   show calls return `ESP_ERR_INVALID_STATE`.
-- Format is selected by the API/enum, not inferred from the filename extension.
+- Format is selected by the JPG/PNG/GIF API, not inferred from the filename
+  extension.
 - The initial decoded frame is already sized to fit the active screen.
-  `lvgl_image_handler_apply_scale_and_align()` scales that fitted RGB565 frame,
-  not the original source file.
-- Scale percentage must be in the range 1 through 100. The helper changes both
-  the LVGL transform and widget layout size so corner alignment uses the scaled
-  dimensions.
-- The handler owns the pointer returned by `lvgl_image_handler_get_image_obj()`.
-  Do not delete it directly or keep using it after `clear()` or another show
-  call.
+- Format dispatch, active-object access, and example scale/alignment are
+  internal implementation details rather than public component APIs.
 - GIF playback loops internally. A caller that clears or replaces the image
   before the animation duration ends will naturally stop it.
 - Large images still need enough memory for the fitted RGB565 output frame.

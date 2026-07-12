@@ -1,21 +1,20 @@
-
-
-
+/* Includes ----------------------------------------------------------------- */
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 #include "ui_manager_lvgl.h"
 #include "app_gui.h"
 #include "esp_log.h"
-#include "esp_check.h"
 #include "esp_err.h"
 
-#define LVGL_UI_TASK_STACK_SIZE_BYTES   (24U * 1024U)
+/* Macros ------------------------------------------------------------------- */
 #define LVGL_DEMO_TASK_STACK_SIZE_BYTES (4U * 1024U)
 #define LVGL_TASK_PRIORITY              5U
 
-static const char* TAG = "APP_GUI";
+/* Constants ---------------------------------------------------------------- */
+static const char *const TAG = "APP_GUI";
 
+/* Application -------------------------------------------------------------- */
 /**
  * @brief Demo function to create a simple screen with a label displaying "LVGL OK".
  * 
@@ -38,7 +37,7 @@ void app_gui_create_demo_screen(void)
     ui_manager_lvgl_release_mutex();
 }
 
-
+/* Static Functions --------------------------------------------------------- */
 /**
  * @brief Demo function for LVGL while running
  * 
@@ -87,7 +86,7 @@ static void app_gui_running_demo(void* vPrama)
     } 
 }
 
-
+/* Functions ---------------------------------------------------------------- */
 /**
  * @brief Start running demo task
  *

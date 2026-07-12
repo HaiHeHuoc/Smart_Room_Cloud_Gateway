@@ -15,7 +15,6 @@ component via `display_driver_draw_bitmap()`.
 | API | Role |
 | --- | --- |
 | `display_driver_init()` | Initialize backlight GPIO, LCD SPI bus, panel IO, and ST7735 panel. |
-| `display_driver_set_backlight()` | Turn the configured backlight GPIO on or off. |
 | `display_driver_raw_color_test()` | Fill the screen with RGB565 test colors for bring-up. |
 | `display_driver_draw_bitmap()` | Submit a rectangular RGB565 bitmap to the panel. |
 
@@ -42,13 +41,6 @@ if (ret != ESP_OK) {
 }
 ```
 
-Turn the backlight on or off:
-
-```c
-display_driver_set_backlight(true);
-display_driver_set_backlight(false);
-```
-
 Draw bitmap data:
 
 ```c
@@ -61,6 +53,8 @@ display_driver_draw_bitmap(&display_handle, x1, y1, x2, y2, color_data);
 - The draw buffer passed to SPI should be DMA-capable when used for large
   transfers.
 - The driver currently swaps RGB565 byte order for raw color testing.
+- Backlight control is an internal initialization detail and is not exposed as
+  a public API.
 - `display_driver_draw_bitmap()` expects `x_end` and `y_end` to be exclusive,
   matching ESP-IDF LCD panel API style.
 - SPI color transfers are asynchronous. `ui_manager_lvgl` registers the panel

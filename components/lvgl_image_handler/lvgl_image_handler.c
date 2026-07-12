@@ -1,3 +1,4 @@
+/* Includes ----------------------------------------------------------------- */
 #include "lvgl_image_handler.h"
 
 #include "esp_log.h"
@@ -25,8 +26,7 @@
 #include "ui_manager_lvgl.h"
 
 
-/* Macros ------------------------------------------------------------------ */
-/* Define event bits, GPIO pins, task stack sizes, priorities, etc. here. */
+/* Macros ------------------------------------------------------------------- */
 #define PNG_RGBA_BYTES_PER_PIXEL 4U
 #define GIF_MAX_SOURCE_PIXELS (3840ULL * 2160ULL)
 
@@ -34,12 +34,17 @@
 #define DISPLAY_IMAGE_TASK_PRIORITY         5U
 #define TASK_STACK_WARNING_BYTES            (2U * 1024U)
 
-/* Constants --------------------------------------------------------------- */
-/* Define file-scope const values here. */
+/* Constants ---------------------------------------------------------------- */
 static const char* TAG = "LVGL_IMAGE_HANDLER";
 
-/* Type Definitions -------------------------------------------------------- */
-/* Define local enums, structs, and typedefs here. */
+/* Type Definitions --------------------------------------------------------- */
+typedef enum
+{
+    LVGL_IMAGE_HANDLER_FORMAT_JPG = 0,
+    LVGL_IMAGE_HANDLER_FORMAT_PNG,
+    LVGL_IMAGE_HANDLER_FORMAT_GIF,
+} lvgl_image_handler_format_t;
+
 #if LV_USE_GIF
 /*
  * One GIF state owns the decoder, LVGL front frame, ESP-heap back frame, and
@@ -76,8 +81,7 @@ typedef struct {
 } lvgl_image_handler_gif_state_t;
 #endif
 
-/* Static Variables -------------------------------------------------------- */
-/* Define file-scope static variables here. */
+/* Static Variables --------------------------------------------------------- */
 static lv_obj_t *s_active_object = NULL;
 static lv_draw_buf_t *s_active_draw_buf = NULL;
 #if LV_USE_GIF
@@ -85,16 +89,19 @@ static lv_draw_buf_t *s_active_draw_buf = NULL;
 static lvgl_image_handler_gif_state_t *s_active_gif = NULL;
 #endif
 
+/* Function Prototypes ------------------------------------------------------ */
+static esp_err_t lvgl_image_handler_show(
+    const char *path,
+    lvgl_image_handler_format_t format);
+static lv_obj_t *lvgl_image_handler_get_image_obj(void);
+static esp_err_t lvgl_image_handler_apply_scale_and_align(
+    lv_obj_t *image_obj,
+    uint32_t percent,
+    lv_align_t align,
+    int32_t offset_x,
+    int32_t offset_y);
 
-/* Global Variables -------------------------------------------------------- */
-/* Define file-scope Global variables here. */
-
-/* Function Prototypes ----------------------------------------------------- */
-/* Declare static helper functions here. */
-
-/* Static Functions ------------------------------------------------------- */
-/* Implement static helper functions here. */
-
+/* Static Functions --------------------------------------------------------- */
 static void displayimage(void* arg)
 {
     (void)arg;
@@ -1793,10 +1800,9 @@ cleanup:
 #endif
 }
 
-/* Functions -------------------------------------------------------------- */
-/* Implement non-static functions here. */
-esp_err_t lvgl_image_handler_show(const char *path,
-                                  lvgl_image_handler_format_t format)
+static esp_err_t lvgl_image_handler_show(
+    const char *path,
+    lvgl_image_handler_format_t format)
 {
     ESP_RETURN_ON_FALSE(path != NULL,
                         ESP_ERR_INVALID_ARG,
@@ -1834,45 +1840,7 @@ esp_err_t lvgl_image_handler_show(const char *path,
     return ESP_ERR_NOT_SUPPORTED;
 }
 
-esp_err_t lvgl_image_handler_show_jpg(const char *path)
-{
-    return lvgl_image_handler_show(
-        path,
-        LVGL_IMAGE_HANDLER_FORMAT_JPG
-    );
-}
-
-esp_err_t lvgl_image_handler_show_png(const char *path)
-{
-    return lvgl_image_handler_show(
-        path,
-        LVGL_IMAGE_HANDLER_FORMAT_PNG
-    );
-}
-
-esp_err_t lvgl_image_handler_show_gif(const char *path)
-{
-    return lvgl_image_handler_show(
-        path,
-        LVGL_IMAGE_HANDLER_FORMAT_GIF
-    );
-}
-
-esp_err_t lvgl_image_handler_clear(void)
-{
-    lvgl_image_handler_clear_internal();
-
-    ESP_LOGI(TAG, "Active image object cleared");
-
-    return ESP_OK;
-}
-
-bool lvgl_image_handler_has_active_object(void)
-{
-    return (s_active_object != NULL);
-}
-
-lv_obj_t* lvgl_image_handler_get_image_obj(void)
+static lv_obj_t *lvgl_image_handler_get_image_obj(void)
 {
     if(s_active_object == NULL)
     {
@@ -1883,7 +1851,7 @@ lv_obj_t* lvgl_image_handler_get_image_obj(void)
 }
 
 
-esp_err_t lvgl_image_handler_apply_scale_and_align(
+static esp_err_t lvgl_image_handler_apply_scale_and_align(
     lv_obj_t *image_obj,
     uint32_t percent,
     lv_align_t align,
@@ -1990,6 +1958,45 @@ esp_err_t lvgl_image_handler_apply_scale_and_align(
     );
 
     return ESP_OK;
+}
+
+/* Functions ---------------------------------------------------------------- */
+esp_err_t lvgl_image_handler_show_jpg(const char *path)
+{
+    return lvgl_image_handler_show(
+        path,
+        LVGL_IMAGE_HANDLER_FORMAT_JPG
+    );
+}
+
+esp_err_t lvgl_image_handler_show_png(const char *path)
+{
+    return lvgl_image_handler_show(
+        path,
+        LVGL_IMAGE_HANDLER_FORMAT_PNG
+    );
+}
+
+esp_err_t lvgl_image_handler_show_gif(const char *path)
+{
+    return lvgl_image_handler_show(
+        path,
+        LVGL_IMAGE_HANDLER_FORMAT_GIF
+    );
+}
+
+esp_err_t lvgl_image_handler_clear(void)
+{
+    lvgl_image_handler_clear_internal();
+
+    ESP_LOGI(TAG, "Active image object cleared");
+
+    return ESP_OK;
+}
+
+bool lvgl_image_handler_has_active_object(void)
+{
+    return (s_active_object != NULL);
 }
 
 void lvgl_image_handler_example_task(void)

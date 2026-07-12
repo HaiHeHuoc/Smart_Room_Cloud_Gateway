@@ -1,3 +1,4 @@
+/* Includes ----------------------------------------------------------------- */
 #include "sd_card_manager.h"
 
 #include <stdio.h>
@@ -21,21 +22,14 @@
 #include "driver/sdspi_host.h"
 #include "sdmmc_cmd.h"
 
-/* Macros ------------------------------------------------------------------ */
-/* Define event bits, GPIO pins, task stack sizes, priorities, etc. here. */
-
-/* Constants --------------------------------------------------------------- */
-/* Define file-scope const values here. */
-
-/* Type Definitions -------------------------------------------------------- */
-/* Define local enums, structs, and typedefs here. */
+/* Macros ------------------------------------------------------------------- */
 #define SD_MOUNT_MAX_RETRY 5
 #define SD_MOUNT_RETRY_DELAY_MS 1000
 
-/* Static Variables -------------------------------------------------------- */
-/* Define file-scope static variables here. */
-static const char *TAG = "sd_card_manager";
+/* Constants ---------------------------------------------------------------- */
+static const char *const TAG = "sd_card_manager";
 
+/* Static Variables --------------------------------------------------------- */
 /*
  * SD card runtime state.
  *
@@ -47,12 +41,7 @@ static sdmmc_card_t *s_card = NULL;
 static bool s_sd_mounted = false;
 static bool s_spi_bus_initialized = false;
 
-/* Global Variables -------------------------------------------------------- */
-/* Define file-scope Global variables here. */
-
-/* Static Functions ------------------------------------------------------- */
-/* Implement static helper functions here. */
-
+/* Static Functions --------------------------------------------------------- */
 /**
  * @brief Initialize the SPI bus used by the SD card.
  *
@@ -191,8 +180,6 @@ static esp_err_t sd_card_manager_mount_filesystem(void)
     return ESP_OK;
 }
 
-/* Function Prototypes ----------------------------------------------------- */
-/* Declare static helper functions here. */
 static esp_err_t sd_card_manager_list_files_recursive_internal(const char *dir_path,
                                                                uint8_t current_depth,
                                                                uint8_t max_depth)
@@ -284,8 +271,7 @@ static esp_err_t sd_card_manager_list_files_recursive_internal(const char *dir_p
     return ESP_OK;
 }
 
-/* Functions -------------------------------------------------------------- */
-/* Implement non-static functions here. */
+/* Functions ---------------------------------------------------------------- */
 esp_err_t sd_card_manager_init(void)
 {
     ESP_LOGI(TAG, "Start initlize sd_card_manager");

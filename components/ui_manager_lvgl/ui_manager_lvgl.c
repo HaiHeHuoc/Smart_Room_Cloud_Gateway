@@ -1,4 +1,4 @@
-
+/* Includes ----------------------------------------------------------------- */
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -12,9 +12,7 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 
-/* Macros ------------------------------------------------------------------ */
-/* Define event bits, GPIO pins, task stack sizes, priorities, etc. here. */
-
+/* Macros ------------------------------------------------------------------- */
 #define LCD_RORATE_PORTRAIT 0
 #define LCD_RORATE_LANDSCAPE 1
 
@@ -55,15 +53,10 @@
 #endif
 
 
-/* Constants --------------------------------------------------------------- */
-/* Define file-scope const values here. */
-const static char *TAG = "UI_LVGL";
+/* Constants ---------------------------------------------------------------- */
+static const char *const TAG = "UI_LVGL";
 
-/* Type Definitions -------------------------------------------------------- */
-/* Define local enums, structs, and typedefs here. */
-
-/* Static Variables -------------------------------------------------------- */
-/* Define file-scope static variables here. */
+/* Static Variables --------------------------------------------------------- */
 static display_driver_handle_t* s_display_handle = NULL;
 static esp_timer_handle_t s_lvgl_tick_timer = NULL;
 
@@ -78,12 +71,7 @@ static void *s_lvgl_draw_buffer = NULL;
     static void *s_lvgl_rotate_buffer  = NULL;
 #endif
 
-/* Global Variables -------------------------------------------------------- */
-/* Define file-scope Global variables here. */
-
-/* Function Prototypes ----------------------------------------------------- */
-/* Declare static helper functions here. */
-
+/* Function Prototypes ------------------------------------------------------ */
 /**
  * @brief LVGL tick callback function. This function is called periodically by the ESP timer to increment the LVGL tick count.
  * 
@@ -133,40 +121,7 @@ static void ui_manager_lvgl_swap_rgb565_bytes(uint16_t *buffer,
 
 static void ui_manager_lvgl_log_stack_usage(const char *task_name);
 
-/* Static Functions ------------------------------------------------------- */
-/* Implement static helper functions here. */
-
-/**
- * @brief LVGL tick callback function. This function is called periodically by the ESP timer to increment the LVGL tick count.
- * 
- * @param arg 
- */
-static void ui_manager_lvgl_tick_cb(void *arg)
-{
-    lv_tick_inc(LVGL_TICK_PERIOD_MS); // Increment the LVGL tick count by 1 millisecond
-}
-
-static void ui_manager_lvgl_log_stack_usage(const char *task_name)
-{
-    const UBaseType_t minimum_free_stack =
-        uxTaskGetStackHighWaterMark(NULL);
-
-    if (minimum_free_stack < LVGL_STACK_WARNING_BYTES) {
-        ESP_LOGW(TAG,
-                 "%s minimum free stack is low: %u bytes",
-                 task_name,
-                 (unsigned int)minimum_free_stack);
-    }
-    else {
-        ESP_LOGI(TAG,
-                 "%s minimum free stack: %u bytes",
-                 task_name,
-                 (unsigned int)minimum_free_stack);
-    }
-}
-
-/* Functions -------------------------------------------------------------- */
-/* Implement non-static functions here. */
+/* Application -------------------------------------------------------------- */
 
 /**
  * @brief LVGL initialization function. This function initializes the LVGL library, sets up the display, and configures the necessary buffers and callbacks.
@@ -284,6 +239,37 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t* display_handle)
     ESP_LOGI(TAG, "LVGL core and tick timer initialized");
 
     return ret;
+}
+
+/* Static Functions --------------------------------------------------------- */
+
+/**
+ * @brief LVGL tick callback function. This function is called periodically by the ESP timer to increment the LVGL tick count.
+ *
+ * @param arg
+ */
+static void ui_manager_lvgl_tick_cb(void *arg)
+{
+    lv_tick_inc(LVGL_TICK_PERIOD_MS); // Increment the LVGL tick count by 1 millisecond
+}
+
+static void ui_manager_lvgl_log_stack_usage(const char *task_name)
+{
+    const UBaseType_t minimum_free_stack =
+        uxTaskGetStackHighWaterMark(NULL);
+
+    if (minimum_free_stack < LVGL_STACK_WARNING_BYTES) {
+        ESP_LOGW(TAG,
+                 "%s minimum free stack is low: %u bytes",
+                 task_name,
+                 (unsigned int)minimum_free_stack);
+    }
+    else {
+        ESP_LOGI(TAG,
+                 "%s minimum free stack: %u bytes",
+                 task_name,
+                 (unsigned int)minimum_free_stack);
+    }
 }
 
 /**
@@ -471,6 +457,8 @@ static void ui_manager_lvgl_swap_rgb565_bytes(uint16_t *buffer,
         buffer[i] = (color >> 8) | (color << 8); // Swap the bytes
     }
 }
+
+/* Functions ---------------------------------------------------------------- */
 
 /**
  * @brief Wait for the LVGL mutex to become available.

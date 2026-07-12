@@ -1,3 +1,4 @@
+/* Includes ----------------------------------------------------------------- */
 #include "lvgl_sd_fs.h"
 
 #include <stdio.h>
@@ -13,32 +14,18 @@
 
 #include "lvgl.h"
 
-/* Macros ------------------------------------------------------------------ */
-/* Define event bits, GPIO pins, task stack sizes, priorities, etc. here. */
+/* Macros ------------------------------------------------------------------- */
 #define LVGL_SD_FS_LETTER 'S'
 #define LVGL_SD_FS_PATH_MAX_LEN SD_CARD_MANAGER_PATH_MAX_LEN
 
-/* Constants --------------------------------------------------------------- */
-/* Define file-scope const values here. */
-const char *TAG = "LVGL_SD_FS";
+/* Constants ---------------------------------------------------------------- */
+static const char *const TAG = "LVGL_SD_FS";
 
-/* Type Definitions -------------------------------------------------------- */
-/* Define local enums, structs, and typedefs here. */
-
-/* Static Variables -------------------------------------------------------- */
-/* Define file-scope static variables here. */
+/* Static Variables --------------------------------------------------------- */
 static lv_fs_drv_t s_lvgl_sd_fs_drv;
 static bool s_lvgl_sd_fs_registered = false;
 
-/* Global Variables -------------------------------------------------------- */
-/* Define file-scope Global variables here. */
-
-/* Function Prototypes ----------------------------------------------------- */
-/* Declare static helper functions here. */
-
-/* Static Functions ------------------------------------------------------- */
-/* Implement static helper functions here. */
-
+/* Static Functions --------------------------------------------------------- */
 /**
  * @brief Convert an LVGL relative file path into an SD card VFS path.
  *
@@ -342,9 +329,7 @@ static lv_fs_res_t lvgl_sd_fs_tell_cb(lv_fs_drv_t *drv,
     return LV_FS_RES_OK;
 }
 
-/* Functions -------------------------------------------------------------- */
-/* Implement non-static functions here. */
-
+/* Functions ---------------------------------------------------------------- */
 /**
  * @brief Register SD card filesystem driver to LVGL.
  *
