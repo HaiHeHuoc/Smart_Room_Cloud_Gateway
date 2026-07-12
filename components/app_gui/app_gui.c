@@ -132,8 +132,11 @@ static lv_obj_t *app_gui_create_wifi_value_label(
     return label;
 }
 
-static esp_err_t app_gui_create_wifi_screen(void)
+esp_err_t app_gui_create_wifi_screen(void)
 {
+
+    ui_manager_lvgl_wait_for_mutex();
+
     lv_obj_t *screen = lv_screen_active();
     if (screen == NULL) {
         ESP_LOGE(TAG, "No active LVGL screen for Wi-Fi GUI");
@@ -227,6 +230,7 @@ static esp_err_t app_gui_create_wifi_screen(void)
 
     ESP_LOGI(TAG, "Wi-Fi status screen created");
 
+    ui_manager_lvgl_release_mutex();
     return ESP_OK;
 }
 
@@ -408,20 +412,6 @@ esp_err_t app_gui_init(void)
     if (s_wifi_status_queue == NULL) {
         ESP_LOGE(TAG, "Failed to create Wi-Fi GUI status queue");
         return ESP_ERR_NO_MEM;
-    }
-
-    ui_manager_lvgl_wait_for_mutex();
-    const esp_err_t screen_ret = app_gui_create_wifi_screen();
-    ui_manager_lvgl_release_mutex();
-
-    if (screen_ret != ESP_OK) {
-        vQueueDelete(s_wifi_status_queue);
-        s_wifi_status_queue = NULL;
-
-        ESP_LOGE(TAG,
-                 "Failed to create Wi-Fi GUI: %s",
-                 esp_err_to_name(screen_ret));
-        return screen_ret;
     }
 
     ESP_LOGI(TAG, "Application GUI initialized");

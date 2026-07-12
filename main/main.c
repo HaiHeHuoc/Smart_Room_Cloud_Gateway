@@ -156,10 +156,21 @@ void app_main(void)
                         esp_err_to_name(ui_task_ret));
             return;
         }
+        else
+        {
+            esp_err_t screen_ret =  app_gui_create_wifi_screen();
 
-        // lvgl_image_handler_example_task();
+            if (screen_ret != ESP_OK) {
+                ESP_LOGE(TAG,
+                        "Failed to create Wi-Fi GUI: %s",
+                        esp_err_to_name(screen_ret));
+                return;
+            }
+            // lvgl_image_handler_example_task();
+    
+            // app_gui_start_running_demo_task();
+        }
 
-        // app_gui_start_running_demo_task();
     }
 
     ESP_LOGI(TAG, "LVGL display initialized successfully");
@@ -229,14 +240,14 @@ if (connect_ret != ESP_OK) {
     //     NULL
     // );
 
-    xTaskCreate(
-        wifi_disconnect_test_task,
-        "wifi_disconnect_test",
-        3072U,
-        NULL,
-        3U,
-        NULL
-    );
+    // xTaskCreate(
+    //     wifi_disconnect_test_task,
+    //     "wifi_disconnect_test",
+    //     3072U,
+    //     NULL,
+    //     3U,
+    //     NULL
+    // );
 
     while (1)
     {

@@ -77,3 +77,4 @@ void app_gui_create_demo_screen(void);
  */
 esp_err_t app_gui_start_running_demo_task(void);
 
+esp_err_t app_gui_create_wifi_screen(void);
