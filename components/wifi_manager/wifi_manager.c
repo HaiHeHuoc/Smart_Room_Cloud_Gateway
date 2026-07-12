@@ -248,9 +248,9 @@ static void wifi_manager_event_handler(
                         "IP_EVENT_STA_GOT_IP contains no event data"
                     );
 
-                wifi_manager_notify_status_changed();
+                    wifi_manager_notify_status_changed();
 
-                break;
+                    break;
                 }
 
                 /*
@@ -302,10 +302,47 @@ static void wifi_manager_event_handler(
                     ipv4_address
                 );
 
+                wifi_manager_notify_status_changed();
+
                 break;
 
             case IP_EVENT_STA_LOST_IP:
-                ESP_LOGI(TAG, "Event: IP_EVENT_STA_LOST_IP");
+                wifi_manager_state_t resulting_state;
+
+                taskENTER_CRITICAL(&s_status_lock);
+
+                s_wifi_manager.status.has_ipv4_address = false;
+                s_wifi_manager.status.ipv4_address[0] = '\0';
+
+                s_wifi_manager.status.rssi_valid = false;
+                s_wifi_manager.status.rssi_dbm = 0;
+
+                /*
+                * Only wait for a new IP if Wi-Fi has not already
+                * transitioned to DISCONNECTED.
+                */
+                if ((s_wifi_manager.status.state ==
+                    WIFI_MANAGER_STATE_CONNECTED) ||
+                    (s_wifi_manager.status.state ==
+                    WIFI_MANAGER_STATE_WAITING_FOR_IP)) {
+
+                    s_wifi_manager.status.state =
+                        WIFI_MANAGER_STATE_WAITING_FOR_IP;
+                }
+
+                resulting_state =
+                    s_wifi_manager.status.state;
+
+                taskEXIT_CRITICAL(&s_status_lock);
+
+                ESP_LOGW(
+                    TAG,
+                    "Station lost IPv4 address, state=%s",
+                    wifi_manager_state_to_string(resulting_state)
+                );
+
+                wifi_manager_notify_status_changed();
+
                 break;
 
             default:

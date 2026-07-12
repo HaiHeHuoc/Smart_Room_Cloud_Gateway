@@ -34,7 +34,7 @@ typedef struct
 } ui_wifi_status_t;
 
 /**
- * @brief Initialize application GUI resources, including the Wi-Fi status queue.
+ * @brief Initialize the Wi-Fi status queue and create the Wi-Fi status screen.
  *
  * LVGL must already be initialized by ui_manager_lvgl_init().
  *

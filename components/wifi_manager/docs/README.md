@@ -141,11 +141,10 @@ Do not call the scan API from a Wi-Fi/IP event callback or the LVGL task.
 - `wifi_manager_disconnect()` is declared but not implemented.
 - There is no public deinit API.
 - There is no automatic reconnect or retry backoff after disconnection.
-- `IP_EVENT_STA_LOST_IP` is logged but does not currently update state or notify
-  the application.
-- `IP_EVENT_STA_GOT_IP` updates state to `CONNECTED`, but the current handler
-  does not call the registered status callback afterward. Polling
-  `wifi_manager_get_status()` still observes the new state.
+- `IP_EVENT_STA_GOT_IP` updates state to `CONNECTED` and notifies the
+  application callback.
+- `IP_EVENT_STA_LOST_IP` clears the address/RSSI, transitions an associated
+  station to `WAITING_FOR_IP`, and notifies the application callback.
 - Credential validation in `wifi_manager_connect()` needs review: the current
   SSID null/empty condition uses `||`, which can accept an empty SSID and can
   dereference a NULL SSID pointer.

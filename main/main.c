@@ -159,7 +159,7 @@ void app_main(void)
 
         // lvgl_image_handler_example_task();
 
-        app_gui_start_running_demo_task();
+        // app_gui_start_running_demo_task();
     }
 
     ESP_LOGI(TAG, "LVGL display initialized successfully");

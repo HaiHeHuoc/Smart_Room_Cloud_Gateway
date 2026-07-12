@@ -16,6 +16,10 @@ tick timer, and LCD flush integration.
 - Defines `ui_wifi_state_t` and `ui_wifi_status_t`.
 - Provides a non-blocking Wi-Fi status post API suitable for the ESP event-loop
   callback path.
+- Displays Wi-Fi mode, SSID, and IPv4 address on a fixed 160 x 128 landscape
+  screen.
+- Uses state-specific colors and ellipsis for values that exceed the available
+  row width.
 - Provides the existing optional counter/alignment demo task.
 
 ## Initialization Order
@@ -33,7 +37,7 @@ and queued Wi-Fi status updates continue to progress.
 
 | API | Role |
 | --- | --- |
-| `app_gui_init()` | Create GUI-owned resources, including the Wi-Fi status queue. |
+| `app_gui_init()` | Create the Wi-Fi queue and status screen. |
 | `app_gui_start_ui_task()` | Start the main LVGL/application GUI task. |
 | `app_gui_post_wifi_status()` | Overwrite the queue with the newest Wi-Fi status without waiting. |
 | `app_gui_create_demo_screen()` | Create the static `LVGL OK` demo screen. |
@@ -46,11 +50,12 @@ wifi_manager event
     -> application callback maps status to ui_wifi_status_t
     -> app_gui_post_wifi_status()
     -> app_gui UI task receives the newest status
-    -> future Wi-Fi widgets are updated while the LVGL mutex is held
+    -> Mode, SSID, and IP labels update while the LVGL mutex is held
 ```
 
-The current implementation logs received Wi-Fi data. It does not yet bind the
-data to dedicated status widgets.
+The screen maps `IDLE`, `CONNECTING`, `WAITING IP`, `CONNECTED`,
+`DISCONNECTED`, and `FAILED` to readable mode text. The IP row shows `-` until
+an IPv4 address is valid.
 
 ## Important Notes
 
@@ -65,7 +70,7 @@ data to dedicated status widgets.
 
 ## Future Attention
 
-- Replace Wi-Fi status logging with real labels/icons.
-- Replace the moving counter demo with the Phase 2 dashboard.
+- Add RSSI and a compact signal-strength indicator if required.
+- Replace or remove the moving counter demo after Phase 2 validation.
 - Track task handles to prevent duplicate task starts.
 - Add deinit only when application shutdown/restart is required.
