@@ -125,6 +125,9 @@ static lv_obj_t *app_gui_create_wifi_value_label(
     lv_obj_set_style_text_font(label,
                     &lv_font_montserrat_12,
                     LV_PART_MAIN);
+    lv_obj_set_style_text_align(label,
+                                LV_TEXT_ALIGN_RIGHT,
+                                LV_PART_MAIN);
 
     return label;
 }
