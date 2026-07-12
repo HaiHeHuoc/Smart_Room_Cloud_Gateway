@@ -36,9 +36,9 @@ should be controlled through this component or protected by its LVGL mutex.
 | `ui_manager_lvgl_start_UI_task()` | Start the continuously running LVGL handler task. |
 | `ui_manager_lvgl_wait_for_mutex()` | Lock LVGL before direct API access from another task. |
 | `ui_manager_lvgl_release_mutex()` | Unlock LVGL after direct API access. |
-| `ui_manager_lvgl_create_demo_screen()` | Create the static `LVGL OK` demo screen. |
-| `ui_manager_lvgl_running_demo()` | Demo task entry point that updates and moves a counter label. |
-| `ui_manager_lvgl_start_running_demo_task()` | Start the optional demo task. |
+| `app_gui_create_demo_screen()` | Create the static `LVGL OK` demo screen. |
+| `app_gui_running_demo()` | Demo task entry point that updates and moves a counter label. |
+| `app_gui_start_running_demo_task()` | Start the optional demo task. |
 | `lvgl_task_handler()` | Public task entry point used by `ui_manager_lvgl_start_UI_task()`. |
 
 ## How To Use
@@ -59,7 +59,7 @@ ESP_ERROR_CHECK(ui_manager_lvgl_init(&display_handle));
 Create the initial screen:
 
 ```c
-ui_manager_lvgl_create_demo_screen();
+app_gui_create_demo_screen();
 ```
 
 Start the LVGL handler task:

@@ -32,6 +32,9 @@
 /* Wifi manager ------------------------------------------------------------ */
 #include "wifi_manager.h"
 
+/* GUI Manager ------------------------------------------------------------- */
+#include "app_gui.h"
+
 /* Macros ------------------------------------------------------------------ */
 /* Define event bits, GPIO pins, task stack sizes, priorities, etc. here. */
 #define PERFORMANCE_MONITOR 1
@@ -157,7 +160,7 @@ void app_main(void)
 
         // lvgl_image_handler_example_task();
 
-        ui_manager_lvgl_start_running_demo_task();
+        app_gui_start_running_demo_task();
     }
 
     ESP_LOGI(TAG, "LVGL display initialized successfully");
