@@ -34,7 +34,7 @@
 
 /* Macros ------------------------------------------------------------------ */
 /* Define event bits, GPIO pins, task stack sizes, priorities, etc. here. */
-#define PERFORMANCE_MONITOR 0
+#define PERFORMANCE_MONITOR 1
 
 /* Constants --------------------------------------------------------------- */
 /* Define file-scope const values here. */
@@ -60,6 +60,8 @@ static void wifi_disconnect_test_task(void *argument);
 static void app_wifi_status_callback(
     const wifi_manager_status_t *status,
     void *user_data);
+static ui_wifi_state_t app_map_wifi_state(
+    wifi_manager_state_t state);
 
 /* Application ------------------------------------------------------------- */
 void app_main(void)
@@ -87,17 +89,78 @@ void app_main(void)
      * the Wi-Fi manager.
      */
     esp_err_t network_ret =
-        network_platform_init();
-
+    network_platform_init();
+    
     if (network_ret != ESP_OK) {
         ESP_LOGE(
             TAG,
             "Failed to initialize network platform: %s",
             esp_err_to_name(network_ret)
         );
-
+        
         return;
     }
+
+    // Display driver initialization
+    esp_err_t ret = display_driver_init(&display_handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize display driver: %s", esp_err_to_name(ret));
+        return;
+    }
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize display driver: %s", esp_err_to_name(ret));
+        return;
+    }
+
+    // Used to test the display by filling it with known colors. Uncomment to run the test.
+    // ESP_ERROR_CHECK(display_driver_raw_color_test(&display_handle));
+
+    // Initialize LVGL UI manager
+    // Because LVGL core needs lvgl_init inside ui_manager_lvgl_init
+    esp_err_t lvgl_ret = ui_manager_lvgl_init(&display_handle);
+
+
+    // Initilize SD card manager
+    esp_err_t sd_card_ret = sd_card_manager_init();
+    if(sd_card_ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Fail to initialize SD card driver");
+        return;
+    }
+    else
+    {
+        // ESP_LOGI(TAG, "Start test SD card");
+        // ESP_ERROR_CHECK(sd_card_manager_write_test_file());
+        // ESP_ERROR_CHECK(sd_card_manager_read_test_file());
+        // ESP_LOGI(TAG, "testing SD card is done");
+
+        // Scan files inside specific folder
+        // sd_card_manager_list_files(NULL);
+
+        ESP_ERROR_CHECK(lvgl_sd_fs_register());
+    }
+
+    if (lvgl_ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize LVGL UI manager");
+    }
+    else
+    {
+        ESP_LOGI(TAG, "Start LVGL task handler");
+
+        esp_err_t ui_task_ret = ui_manager_lvgl_start_UI_task();
+        if (ui_task_ret != ESP_OK) {
+            ESP_LOGE(TAG,
+                        "Failed to start LVGL UI task: %s",
+                        esp_err_to_name(ui_task_ret));
+            return;
+        }
+
+        // lvgl_image_handler_example_task();
+
+        ui_manager_lvgl_start_running_demo_task();
+    }
+
+    ESP_LOGI(TAG, "LVGL display initialized successfully");
 
     esp_err_t wifi_ret =
         wifi_manager_init();
@@ -151,67 +214,6 @@ if (connect_ret != ESP_OK) {
 
     return;
 }
-
-    // Display driver initialization
-    esp_err_t ret = display_driver_init(&display_handle);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize display driver: %s", esp_err_to_name(ret));
-        return;
-    }
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize display driver: %s", esp_err_to_name(ret));
-        return;
-    }
-
-    // Used to test the display by filling it with known colors. Uncomment to run the test.
-    // ESP_ERROR_CHECK(display_driver_raw_color_test(&display_handle));
-
-    // Initialize LVGL UI manager
-    // Because LVGL core needs lvgl_init inside ui_manager_lvgl_init
-    esp_err_t lvgl_ret = ui_manager_lvgl_init(&display_handle);
-
-
-    // Initilize SD card manager
-    esp_err_t sd_card_ret = sd_card_manager_init();
-    if(sd_card_ret != ESP_OK)
-    {
-        ESP_LOGE(TAG, "Fail to initialize SD card driver");
-        return;
-    }
-    else
-    {
-        // ESP_LOGI(TAG, "Start test SD card");
-        // ESP_ERROR_CHECK(sd_card_manager_write_test_file());
-        // ESP_ERROR_CHECK(sd_card_manager_read_test_file());
-        // ESP_LOGI(TAG, "testing SD card is done");
-
-        // Scan files inside specific folder
-        // sd_card_manager_list_files(NULL);
-
-        ESP_ERROR_CHECK(lvgl_sd_fs_register());
-    }
-
-    if (lvgl_ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize LVGL UI manager");
-    }
-    else
-    {
-        ESP_LOGI(TAG, "Start LVGL task handler");
-
-        esp_err_t ui_task_ret = ui_manager_lvgl_start_UI_task();
-        if (ui_task_ret != ESP_OK) {
-            ESP_LOGE(TAG,
-                     "Failed to start LVGL UI task: %s",
-                     esp_err_to_name(ui_task_ret));
-            return;
-        }
-
-        // lvgl_image_handler_example_task();
-
-        ui_manager_lvgl_start_running_demo_task();
-    }
-
-    ESP_LOGI(TAG, "LVGL display initialized successfully");
 
     // Scan and PrintOut Wifi SSID
     // const esp_err_t scan_ret =
@@ -417,7 +419,32 @@ static void wifi_disconnect_test_task(void *argument)
             ESP_LOGI(TAG, "*------------------------------------------------------------------------------------------*");
         }
 
-        vTaskDelay(pdMS_TO_TICKS(2000));
+        vTaskDelay(pdMS_TO_TICKS(20000));
+    }
+}
+
+static ui_wifi_state_t app_map_wifi_state(
+    wifi_manager_state_t state)
+{
+    switch (state)
+    {
+        case WIFI_MANAGER_STATE_CONNECTING:
+            return UI_WIFI_STATE_CONNECTING;
+
+        case WIFI_MANAGER_STATE_WAITING_FOR_IP:
+            return UI_WIFI_STATE_WAITING_FOR_IP;
+
+        case WIFI_MANAGER_STATE_CONNECTED:
+            return UI_WIFI_STATE_CONNECTED;
+
+        case WIFI_MANAGER_STATE_DISCONNECTED:
+            return UI_WIFI_STATE_DISCONNECTED;
+
+        case WIFI_MANAGER_STATE_FAILED:
+            return UI_WIFI_STATE_FAILED;
+
+        default:
+            return UI_WIFI_STATE_IDLE;
     }
 }
 
@@ -430,6 +457,51 @@ static void app_wifi_status_callback(
     if (status == NULL) {
         return;
     }
+
+    ui_wifi_status_t ui_status = {
+        .state =
+            app_map_wifi_state(status->state),
+
+        .rssi_dbm =
+            status->rssi_dbm,
+
+        .disconnect_reason =
+            status->disconnect_reason,
+
+        .has_ipv4_address =
+            status->has_ipv4_address,
+
+        .rssi_valid =
+            status->rssi_valid,
+    };
+
+    snprintf(
+        ui_status.ssid,
+        sizeof(ui_status.ssid),
+        "%s",
+        status->ssid
+    );
+
+    snprintf(
+        ui_status.ipv4_address,
+        sizeof(ui_status.ipv4_address),
+        "%s",
+        status->ipv4_address
+    );
+
+    const esp_err_t ret =
+        ui_manager_lvgl_post_wifi_status(
+            &ui_status
+        );
+
+    if (ret != ESP_OK) {
+        ESP_LOGW(
+            TAG,
+            "Failed to forward Wi-Fi status to UI: %s",
+            esp_err_to_name(ret)
+        );
+    }
+
 
     ESP_LOGI(TAG, "*------------------------------------------------------------------------------------------*");
     ESP_LOGI(

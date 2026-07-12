@@ -33,6 +33,7 @@
     #endif
 #endif
 
+#define UI_WIFI_STATUS_QUEUE_LENGTH 1U
 
 #define LVGL_RGB565_BYTES_PER_PIXEL  2
 #define LVGL_DRAW_BUFFER_LINES       LCD_LVGL_DRAW_BUF_LINES
@@ -70,6 +71,8 @@ static esp_timer_handle_t s_lvgl_tick_timer = NULL;
 static SemaphoreHandle_t s_lvgl_mutex = NULL;
 static SemaphoreHandle_t s_lvgl_flush_done_sem = NULL;
 static lv_display_t *s_lvgl_display = NULL;
+
+static QueueHandle_t s_wifi_status_queue = NULL;
 
 static void *s_lvgl_draw_buffer = NULL;
 #if LCD_ROTATE == LCD_RORATE_LANDSCAPE
@@ -190,6 +193,17 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t* display_handle)
     s_lvgl_flush_done_sem = xSemaphoreCreateBinary();
     ESP_RETURN_ON_FALSE(s_lvgl_flush_done_sem != NULL, ESP_ERR_NO_MEM, TAG, "Failed to create LVGL flush semaphore");
 
+    s_wifi_status_queue =
+        xQueueCreate(
+            UI_WIFI_STATUS_QUEUE_LENGTH,
+            sizeof(ui_wifi_status_t)
+        );
+
+    if (s_wifi_status_queue == NULL) {
+        ESP_LOGE(TAG, "Failed to create Wi-Fi UI status queue");
+        return ESP_ERR_NO_MEM;
+    }
+
     // Init lvgl core
     lv_init();
 
@@ -281,6 +295,33 @@ void ui_manager_lvgl_task_handler(void)
 {
     // waiting for the LVGL mutex to ensure thread safety
     ui_manager_lvgl_wait_for_mutex();
+
+
+
+    ui_wifi_status_t wifi_status = {0};
+
+    if ((s_wifi_status_queue != NULL) &&
+        (xQueueReceive(
+            s_wifi_status_queue,
+            &wifi_status,
+            0) == pdTRUE)) {
+
+        ESP_LOGI(
+            TAG,
+            "UI received Wi-Fi status: "
+            "state=%d, ssid=%s, ip=%s, rssi=%d",
+            (int)wifi_status.state,
+            wifi_status.ssid[0] != '\0'
+                ? wifi_status.ssid
+                : "<none>",
+            wifi_status.has_ipv4_address
+                ? wifi_status.ipv4_address
+                : "<none>",
+            wifi_status.rssi_valid
+                ? (int)wifi_status.rssi_dbm
+                : 0
+        );
+    }
 
     // Call the LVGL timer handler to process LVGL tasks
     lv_timer_handler();
@@ -606,6 +647,36 @@ esp_err_t ui_manager_lvgl_start_UI_task(void)
     ESP_LOGI(TAG,
              "LVGL UI task started with %u-byte stack",
              (unsigned int)LVGL_UI_TASK_STACK_SIZE_BYTES);
+
+    return ESP_OK;
+}
+
+esp_err_t ui_manager_lvgl_post_wifi_status(
+    const ui_wifi_status_t *status)
+{
+    if (status == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_wifi_status_queue == NULL) {
+        ESP_LOGE(TAG, "Wi-Fi UI queue is not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /*
+     * Queue length = 1:
+     * UI only needs the newest Wi-Fi state.
+     *
+     * No waiting because this function can be called from
+     * the ESP event-loop task through the application callback.
+     */
+    if (xQueueOverwrite(
+            s_wifi_status_queue,
+            status) != pdTRUE) {
+
+        ESP_LOGW(TAG, "Failed to post Wi-Fi status to UI");
+        return ESP_FAIL;
+    }
 
     return ESP_OK;
 }

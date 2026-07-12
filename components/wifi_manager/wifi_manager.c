@@ -173,7 +173,8 @@ static void wifi_manager_event_handler(
 
                 taskEXIT_CRITICAL(&s_status_lock);
 
-                ESP_LOGI(TAG, "Event: WIFI_EVENT_STA_CONNECTED\nwaiting for IPv4 address");
+                ESP_LOGI(TAG, "Event: WIFI_EVENT_STA_CONNECTED");
+                ESP_LOGI(TAG, "Waiting for IPv4 address");
 
                 wifi_manager_notify_status_changed();
 
