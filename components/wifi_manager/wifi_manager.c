@@ -137,7 +137,52 @@ static void wifi_manager_event_handler(
                 break;
 
             case WIFI_EVENT_STA_DISCONNECTED:
+
+                const wifi_event_sta_disconnected_t *event =
+                    (const wifi_event_sta_disconnected_t *)event_data;
+
+                uint16_t disconnect_reason = (uint16_t)WIFI_REASON_UNSPECIFIED;
+
+                if (event != NULL) {
+                    disconnect_reason =
+                        (uint16_t)event->reason;
+                }
+                else {
+                    ESP_LOGE(
+                        TAG,
+                        "WIFI_EVENT_STA_DISCONNECTED has no event data"
+                    );
+                }
+
+                taskENTER_CRITICAL(&s_status_lock);
+
+                s_wifi_manager.status.state =
+                    WIFI_MANAGER_STATE_DISCONNECTED;
+
+                s_wifi_manager.status.disconnect_reason =
+                    disconnect_reason;
+
+                s_wifi_manager.status.has_ipv4_address =
+                    false;
+
+                s_wifi_manager.status.ipv4_address[0] =
+                    '\0';
+
+                s_wifi_manager.status.rssi_valid =
+                    false;
+
+                s_wifi_manager.status.rssi_dbm =
+                    0;
+
+                taskEXIT_CRITICAL(&s_status_lock);
+
                 ESP_LOGI(TAG, "Event: WIFI_EVENT_STA_DISCONNECTED");
+
+                /*
+                * Chưa reconnect tự động tại đây.
+                * Reconnect/backoff thuộc Sprint 8.
+                */
+
                 break;
 
             case WIFI_EVENT_STA_STOP:
@@ -765,20 +810,66 @@ esp_err_t wifi_manager_get_rssi(
         "Wi-Fi manager is not initialized"
     );
 
-    ESP_RETURN_ON_FALSE(s_wifi_manager.status.state == WIFI_MANAGER_STATE_CONNECTED, 
-        ESP_ERR_INVALID_STATE,
-        TAG,
-        "Wi-Fi is not connected"
-    );
+    /*
+     * Check state quickly under the status lock.
+     */
+    bool connected = false;
+
+    taskENTER_CRITICAL(&s_status_lock);
+
+    connected =
+        (s_wifi_manager.status.state ==
+         WIFI_MANAGER_STATE_CONNECTED) &&
+        s_wifi_manager.status.has_ipv4_address;
+
+    taskEXIT_CRITICAL(&s_status_lock);
+
+    if (!connected) {
+        ESP_LOGW(TAG, "Cannot read RSSI while Wi-Fi is disconnected");
+        return ESP_ERR_INVALID_STATE;
+    }
 
     /*
-     * The real esp_wifi_sta_get_rssi() call will be added after the Station
-     * connection flow is working.
+     * Do not call ESP Wi-Fi APIs inside a critical section.
      */
+    int current_rssi = 0;
 
-    ESP_LOGW(TAG, "wifi_manager_get_rssi() is not implemented yet");
+    const esp_err_t ret =
+        esp_wifi_sta_get_rssi(&current_rssi);
 
-    return ESP_ERR_NOT_SUPPORTED;
+    if (ret != ESP_OK) {
+        taskENTER_CRITICAL(&s_status_lock);
+
+        s_wifi_manager.status.rssi_valid = false;
+        s_wifi_manager.status.rssi_dbm = 0;
+
+        taskEXIT_CRITICAL(&s_status_lock);
+
+        ESP_LOGE(
+            TAG,
+            "Failed to read Wi-Fi RSSI: %s",
+            esp_err_to_name(ret)
+        );
+
+        return ret;
+    }
+
+    const int8_t rssi_value =
+        (int8_t)current_rssi;
+
+    taskENTER_CRITICAL(&s_status_lock);
+
+    s_wifi_manager.status.rssi_dbm =
+        rssi_value;
+
+    s_wifi_manager.status.rssi_valid =
+        true;
+
+    taskEXIT_CRITICAL(&s_status_lock);
+
+    *rssi_dbm = rssi_value;
+
+    return ESP_OK;
 }
 
 bool wifi_manager_is_connected(void)
