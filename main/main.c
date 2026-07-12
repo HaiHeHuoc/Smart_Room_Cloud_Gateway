@@ -53,6 +53,7 @@ static display_driver_handle_t display_handle;
 /* Function Prototypes ----------------------------------------------------- */
 /* Declare static helper functions here. */
 static esp_err_t network_platform_init(void);
+static void wifi_status_test_task(void *argument);
 
 /* Application ------------------------------------------------------------- */
 void app_main(void)
@@ -190,8 +191,17 @@ if (connect_ret != ESP_OK) {
     ESP_LOGI(TAG, "LVGL display initialized successfully");
 
     // Scan and PrintOut Wifi SSID
-    const esp_err_t scan_ret =
-            wifi_manager_scan_and_log();
+    // const esp_err_t scan_ret =
+    //         wifi_manager_scan_and_log();
+
+    xTaskCreate(
+        wifi_status_test_task,
+        "wifi_status_test",
+        3072U,
+        NULL,
+        3U,
+        NULL
+    );
 
     while (1)
     {
@@ -294,4 +304,38 @@ static esp_err_t network_platform_init(void)
     ESP_LOGI(TAG, "Network platform initialized");
 
     return ESP_OK;
+}
+
+
+static void wifi_status_test_task(void *argument)
+{
+    (void)argument;
+
+    vTaskDelay(pdMS_TO_TICKS(5000));
+
+    wifi_manager_status_t status = {0};
+
+    const esp_err_t ret =
+        wifi_manager_get_status(&status);
+
+    if (ret == ESP_OK) {
+        ESP_LOGI(
+            TAG,
+            "Wi-Fi status: state=%s, ssid=%s, ip=%s",
+            wifi_manager_state_to_string(status.state),
+            status.ssid,
+            status.has_ipv4_address
+                ? status.ipv4_address
+                : "<none>"
+        );
+    }
+    else {
+        ESP_LOGE(
+            TAG,
+            "Failed to get Wi-Fi status: %s",
+            esp_err_to_name(ret)
+        );
+    }
+
+    vTaskDelete(NULL);
 }

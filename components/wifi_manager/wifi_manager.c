@@ -1,6 +1,7 @@
 #include "wifi_manager.h"
 
 #include <string.h>
+#include <stdio.h>
 
 #include "esp_netif.h"
 #include "esp_wifi.h"
@@ -70,6 +71,15 @@ static wifi_manager_context_t s_wifi_manager = {
     .status_callback_user_data = NULL,
 };
 
+/*
+ * Protect s_wifi_manager.status because:
+ *
+ * - ESP event-loop task writes the status;
+ * - application/UI tasks read the status.
+ */
+static portMUX_TYPE s_status_lock =
+    portMUX_INITIALIZER_UNLOCKED;
+
 
 /* Global Variables -------------------------------------------------------- */
 /* Define file-scope Global variables here. */
@@ -85,6 +95,7 @@ static void wifi_manager_event_handler(
 
 /* Static Functions ------------------------------------------------------- */
 /* Implement static helper functions here. */
+
 static void wifi_manager_event_handler(
     void *handler_argument,
     esp_event_base_t event_base,
@@ -106,7 +117,23 @@ static void wifi_manager_event_handler(
                 break;
 
             case WIFI_EVENT_STA_CONNECTED:
-                ESP_LOGI(TAG, "Event: WIFI_EVENT_STA_CONNECTED");
+                taskENTER_CRITICAL(&s_status_lock);
+
+                    s_wifi_manager.status.state =
+                    WIFI_MANAGER_STATE_WAITING_FOR_IP;
+                    
+                    s_wifi_manager.status.disconnect_reason =
+                    0U;
+                    
+                    s_wifi_manager.status.has_ipv4_address =
+                    false;
+                    
+                    s_wifi_manager.status.ipv4_address[0] =
+                    '\0';
+
+                taskEXIT_CRITICAL(&s_status_lock);
+
+                ESP_LOGI(TAG, "Event: WIFI_EVENT_STA_CONNECTED", "waiting for IPv4 address");
                 break;
 
             case WIFI_EVENT_STA_DISCONNECTED:
@@ -133,7 +160,67 @@ static void wifi_manager_event_handler(
         switch (event_id)
         {
             case IP_EVENT_STA_GOT_IP:
-                ESP_LOGI(TAG, "Event: IP_EVENT_STA_GOT_IP");
+                const ip_event_got_ip_t *got_ip_event =
+                    (const ip_event_got_ip_t *)event_data;
+
+                if (got_ip_event == NULL) {
+                    ESP_LOGE(
+                        TAG,
+                        "IP_EVENT_STA_GOT_IP contains no event data"
+                    );
+
+                    break;
+                }
+
+                /*
+                * Format into a local buffer before entering the critical section.
+                * snprintf() should not run while interrupts/scheduling are restricted.
+                */
+                char ipv4_address[WIFI_MANAGER_IPV4_STRING_SIZE] = {0};
+
+                const int written = snprintf(
+                    ipv4_address,
+                    sizeof(ipv4_address),
+                    IPSTR,
+                    IP2STR(&got_ip_event->ip_info.ip)
+                );
+
+                if ((written <= 0) ||
+                    ((size_t)written >= sizeof(ipv4_address))) {
+
+                    ESP_LOGE(
+                        TAG,
+                        "Failed to format Station IPv4 address"
+                    );
+
+                    break;
+                }
+
+                taskENTER_CRITICAL(&s_status_lock);
+
+                memcpy(
+                    s_wifi_manager.status.ipv4_address,
+                    ipv4_address,
+                    sizeof(s_wifi_manager.status.ipv4_address)
+                );
+
+                s_wifi_manager.status.has_ipv4_address =
+                    true;
+
+                s_wifi_manager.status.state =
+                    WIFI_MANAGER_STATE_CONNECTED;
+
+                s_wifi_manager.status.disconnect_reason =
+                    0U;
+
+                taskEXIT_CRITICAL(&s_status_lock);
+
+                ESP_LOGI(
+                    TAG,
+                    "Event: IP_EVENT_STA_GOT_IP, address=%s",
+                    ipv4_address
+                );
+
                 break;
 
             case IP_EVENT_STA_LOST_IP:
@@ -650,15 +737,15 @@ esp_err_t wifi_manager_get_status(
         "Wi-Fi manager is not initialized"
     );
 
-    /*
-     * A synchronization mechanism will be added when the Wi-Fi event handler
-     * starts modifying the state from the ESP event-loop task.
-     */
+    taskENTER_CRITICAL(&s_status_lock);
+
     memcpy(
         status,
         &s_wifi_manager.status,
         sizeof(*status)
     );
+
+    taskEXIT_CRITICAL(&s_status_lock);
 
     return ESP_OK;
 }
@@ -696,9 +783,25 @@ esp_err_t wifi_manager_get_rssi(
 
 bool wifi_manager_is_connected(void)
 {
-    return s_wifi_manager.initialized && (
-        s_wifi_manager.status.state == WIFI_MANAGER_STATE_CONNECTED
+
+    ESP_RETURN_ON_FALSE(s_wifi_manager.initialized == true, 
+        ESP_ERR_INVALID_STATE,
+        TAG,
+        "Wi-Fi manager is not initialized"
     );
+
+    bool connected = false;
+
+    taskENTER_CRITICAL(&s_status_lock);
+
+    connected =
+        (s_wifi_manager.status.state ==
+         WIFI_MANAGER_STATE_CONNECTED) &&
+        s_wifi_manager.status.has_ipv4_address;
+
+    taskEXIT_CRITICAL(&s_status_lock);
+
+    return connected;
 }
 
 esp_err_t wifi_manager_register_status_callback(
