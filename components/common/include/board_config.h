@@ -91,16 +91,22 @@
 #define SD_CLOCK_KHZ (2 * 1000) // 2 MHz //By defaut unit, it is KHz
 
 /*
- * Maximum number of files that can be opened at the same time.
- * This does NOT limit the total number of files stored on the SD card.
- */
+* Maximum number of files that can be opened at the same time.
+* This does NOT limit the total number of files stored on the SD card.
+*/
 #define SD_MAX_FILES             5
 
 /*
- * FATFS allocation unit / cluster size used when formatting the card.
- * 16 * 1024 = 16 KB.
- * This does NOT limit SD card capacity.
- */
+* FATFS allocation unit / cluster size used when formatting the card.
+* 16 * 1024 = 16 KB.
+* This does NOT limit SD card capacity.
+*/
 #define SD_ALLOCATION_UNIT_SIZE  (16 * 1024)
 
 #define SD_CARD_MANAGER_PATH_MAX_LEN    256
+
+/* =========================================================================
+ * Sensor Manager
+ * ========================================================================= */
+// DHT22
+#define DHT22_PIN_GPIO                  GPIO_NUM_21

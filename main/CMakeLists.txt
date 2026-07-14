@@ -10,6 +10,7 @@ idf_component_register(SRCS "main.c"
         performance_monitor
         wifi_manager
         app_gui
+        sensor_DHT22
 
     PRIV_REQUIRES
         nvs_flash

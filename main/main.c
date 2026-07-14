@@ -36,6 +36,9 @@
 /* GUI Manager ------------------------------------------------------------- */
 #include "app_gui.h"
 
+/* Sensor manager ---------------------------------------------------------- */
+#include "sensor_DHT22.h"
+
 /* Macros ------------------------------------------------------------------- */
 #define PERFORMANCE_MONITOR 0
 
@@ -227,11 +230,14 @@ if (connect_ret != ESP_OK) {
     // Scan and PrintOut Wifi SSID
     // const esp_err_t scan_ret =
     //         wifi_manager_scan_and_log();
+    dht22_sensor_data_t data;
 
     while (1)
     {
+        dht22_sensor_read(&data);
+        ESP_LOGW(TAG, "Temp: %0.2f, Humid: %0.2f", data.temperature_c, data.humidity_percent);
         // ESP_LOGI(TAG, "Main loop running...");
-        vTaskDelay(pdMS_TO_TICKS(2000));
+        vTaskDelay(pdMS_TO_TICKS(5000));
     }
     
 }
