@@ -37,7 +37,8 @@
 #include "app_gui.h"
 
 /* Sensor manager ---------------------------------------------------------- */
-#include "sensor_DHT22.h"
+// #include "sensor_DHT22.h"
+#include "sensor_manager.h"
 
 /* Macros ------------------------------------------------------------------- */
 #define PERFORMANCE_MONITOR 0
@@ -47,6 +48,13 @@ static const char *TAG = "MAIN_APP";
 
 /* Static Variables --------------------------------------------------------- */
 static display_driver_handle_t display_handle;
+static const sensor_manager_config_t SENSOR_MANAGER_CONFIG =
+{
+    .sample_period_ms = 2500U,
+    .stale_timeout_ms = 10000U,
+};
+
+static sensor_manager_status_t s_sensor_data;
 
 /* Function Prototypes ------------------------------------------------------ */
 static esp_err_t network_platform_init(void);
@@ -230,12 +238,21 @@ if (connect_ret != ESP_OK) {
     // Scan and PrintOut Wifi SSID
     // const esp_err_t scan_ret =
     //         wifi_manager_scan_and_log();
-    dht22_sensor_data_t data;
+    // dht22_sensor_data_t data;
+    ESP_ERROR_CHECK(
+    sensor_manager_init(
+        &SENSOR_MANAGER_CONFIG));
+
+    ESP_ERROR_CHECK(
+        sensor_manager_start());
 
     while (1)
     {
-        dht22_sensor_read(&data);
-        ESP_LOGW(TAG, "Temp: %0.2f, Humid: %0.2f", data.temperature_c, data.humidity_percent);
+        sensor_manager_get_status(&s_sensor_data);
+        ESP_LOGW(TAG, "Temp: %0.2f, Humid: %0.2f", 
+            s_sensor_data.temperature_c, 
+            s_sensor_data.humidity_percent
+        );
         // ESP_LOGI(TAG, "Main loop running...");
         vTaskDelay(pdMS_TO_TICKS(5000));
     }

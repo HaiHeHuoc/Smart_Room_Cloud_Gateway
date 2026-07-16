@@ -104,31 +104,39 @@ esp_err_t dht22_sensor_read(
         "Invalid output variable"
     );
 
+    float temperature_c = 0.0f;
+    float humidity_percent = 0.0f;
+
     /* The DHT driver writes humidity first and temperature second. */
     ESP_RETURN_ON_ERROR(
         dht_read_float_data(
             DHT_TYPE_AM2301,
             DHT22_PIN_GPIO,
-            &data->humidity_percent,
-            &data->temperature_c
+            &humidity_percent,
+            &temperature_c
         ),
         TAG,
         "Error when retrieving temperature and humidity data"
     );
 
-    if (!isfinite(data->temperature_c) ||
-        !isfinite(data->humidity_percent) ||
-        data->temperature_c < -40.0f ||
-        data->temperature_c > 80.0f ||
-        data->humidity_percent < 0.0f ||
-        data->humidity_percent > 100.0f)
+    if (!isfinite(temperature_c) ||
+        !isfinite(humidity_percent) ||
+        temperature_c < -40.0f ||
+        temperature_c > 80.0f ||
+        humidity_percent < 0.0f ||
+        humidity_percent > 100.0f)
     {
         ESP_LOGW(
         TAG,
         "Invalid data: temperature=%.1f C, humidity=%.1f %%",
-        data->temperature_c,
-        data->humidity_percent);
+        temperature_c,
+        humidity_percent);
+
+        return ESP_ERR_INVALID_RESPONSE;
     }
+
+    data->humidity_percent = humidity_percent;
+    data->temperature_c = temperature_c;
 
     return ESP_OK;
 }
