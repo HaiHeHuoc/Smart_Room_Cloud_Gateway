@@ -142,7 +142,7 @@ static void wifi_manager_event_handler(
         switch (event_id)
         {
             case WIFI_EVENT_STA_START:
-                ESP_LOGI(TAG, "Event: WIFI_EVENT_STA_START");
+                ESP_LOGD(TAG, "Event: WIFI_EVENT_STA_START");
                 break;
 
             case WIFI_EVENT_STA_CONNECTED:
@@ -163,7 +163,7 @@ static void wifi_manager_event_handler(
                 taskEXIT_CRITICAL(&s_status_lock);
 
                 ESP_LOGI(TAG, "Event: WIFI_EVENT_STA_CONNECTED");
-                ESP_LOGI(TAG, "Waiting for IPv4 address");
+                ESP_LOGD(TAG, "Waiting for IPv4 address");
 
                 wifi_manager_notify_status_changed();
 
@@ -220,7 +220,7 @@ static void wifi_manager_event_handler(
                 break;
 
             case WIFI_EVENT_STA_STOP:
-                ESP_LOGI(TAG, "Event: WIFI_EVENT_STA_STOP");
+                ESP_LOGD(TAG, "Event: WIFI_EVENT_STA_STOP");
                 break;
 
             default:
@@ -988,7 +988,7 @@ esp_err_t wifi_manager_register_status_callback(
 
     taskEXIT_CRITICAL(&s_status_lock);
 
-    ESP_LOGI(
+    ESP_LOGD(
         TAG,
         "Status callback %s",
         callback != NULL

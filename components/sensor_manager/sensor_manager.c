@@ -177,7 +177,7 @@ static void sensor_manager_task(
         {
             sensor_manager_update_success(&data);
 
-            ESP_LOGI(
+            ESP_LOGD(
                 TAG,
                 "Temperature: %.1f C | Humidity: %.1f %%",
                 data.temperature_c,

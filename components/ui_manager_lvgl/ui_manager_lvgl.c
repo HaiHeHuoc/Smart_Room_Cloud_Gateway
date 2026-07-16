@@ -173,10 +173,10 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t* display_handle)
                         "Failed to create LVGL display");
 
                         
-    ESP_LOGI(TAG, "LVGL display created successfully with resolution: %dx%d", LCD_H_RES, LCD_V_RES);
+    ESP_LOGD(TAG, "LVGL display created successfully with resolution: %dx%d", LCD_H_RES, LCD_V_RES);
     
     lv_display_set_color_format(s_lvgl_display, LV_COLOR_FORMAT_RGB565);
-    ESP_LOGI(TAG, "LVGL display color format set to RGB565");
+    ESP_LOGD(TAG, "LVGL display color format set to RGB565");
 
     #if LCD_ROTATE == LCD_RORATE_LANDSCAPE
         lv_display_set_rotation(s_lvgl_display, LCD_ROTATE_ANGLE);
@@ -184,7 +184,7 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t* display_handle)
                         
     lv_display_set_flush_cb(s_lvgl_display, ui_manager_lvgl_flush_cb);
     lv_display_set_flush_wait_cb(s_lvgl_display, ui_manager_lvgl_flush_wait_cb);
-    ESP_LOGI(TAG, "LVGL display flush callback set");
+    ESP_LOGD(TAG, "LVGL display flush callback set");
 
     const esp_lcd_panel_io_callbacks_t io_callbacks = {
         .on_color_trans_done = ui_manager_lvgl_color_trans_done_cb,

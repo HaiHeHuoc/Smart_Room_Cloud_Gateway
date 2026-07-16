@@ -67,7 +67,7 @@ static esp_err_t display_driver_init_spi_bus(void)
         .max_transfer_sz = LCD_MAX_TRANSFER_SIZE
     };
 
-    ESP_LOGI(TAG, "spi bus initializes");
+    ESP_LOGD(TAG, "spi bus initializes");
 
     ESP_RETURN_ON_ERROR(spi_bus_initialize(LCD_SPI_HOST,
                         &bus_config,
@@ -79,7 +79,7 @@ static esp_err_t display_driver_init_spi_bus(void)
 
 static esp_err_t display_driver_set_backlight(bool enable)
 {
-    ESP_LOGI(TAG, "Setting backlight: %s", enable ? "ON" : "OFF");
+    ESP_LOGD(TAG, "Setting backlight: %s", enable ? "ON" : "OFF");
 
     /* Board config decides whether the backlight is active-high or active-low. */
     uint8_t m_u8BacklightState = enable ? LCD_BACKLIGHT_ON_LEVEL : LCD_BACKLIGHT_OFF_LEVEL;
@@ -174,7 +174,7 @@ esp_err_t display_driver_init(display_driver_handle_t *handle)
         .trans_queue_depth = 10
     };
 
-    ESP_LOGI(TAG, "Creating LCD IOs");
+    ESP_LOGD(TAG, "Creating LCD IOs");
 
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_spi(
         LCD_SPI_HOST,
@@ -183,7 +183,7 @@ esp_err_t display_driver_init(display_driver_handle_t *handle)
     ), TAG, "Failed to create LCD IOs, %s", __func__);
 
 
-    ESP_LOGI(TAG, "Create ST7735 panel");
+    ESP_LOGD(TAG, "Create ST7735 panel");
 
     /* Panel config describes how the ST7735 interprets pixel format and reset GPIO. */
     const esp_lcd_panel_dev_config_t panel_config = {
@@ -204,14 +204,14 @@ esp_err_t display_driver_init(display_driver_handle_t *handle)
         , "Fail to create ST7735 panel");
 
     /* Reset and initialize the actual LCD controller before drawing to it. */
-    ESP_LOGI(TAG, "Reset ST7735 panel");
+    ESP_LOGD(TAG, "Reset ST7735 panel");
     ESP_RETURN_ON_ERROR(
         esp_lcd_panel_reset(handle->panel_handle),
         TAG,
         "Failed to reset LCD"
     );
 
-    ESP_LOGI(TAG, "init ST7735 panel");
+    ESP_LOGD(TAG, "init ST7735 panel");
     ESP_RETURN_ON_ERROR(
         esp_lcd_panel_init(handle->panel_handle),
         TAG,
@@ -221,7 +221,7 @@ esp_err_t display_driver_init(display_driver_handle_t *handle)
 
 
     /* Keep the panel enabled before turning on the backlight so the screen wakes cleanly. */
-    ESP_LOGI(TAG, "Turn display on");
+    ESP_LOGD(TAG, "Turn display on");
     ESP_RETURN_ON_ERROR(
         esp_lcd_panel_disp_on_off(handle->panel_handle, true),
         TAG,
@@ -241,7 +241,7 @@ esp_err_t display_driver_raw_color_test(const display_driver_handle_t *handle)
     /* This test fills the whole screen with known RGB565 colors one by one. */
     ESP_RETURN_ON_FALSE(handle != NULL, ESP_ERR_INVALID_ARG, TAG, "Invalid handle pointer");
     
-    ESP_LOGI(TAG, "Performing raw color test on the display");
+    ESP_LOGD(TAG, "Performing raw color test on the display");
 
     ESP_RETURN_ON_FALSE(handle != NULL, ESP_ERR_INVALID_ARG, TAG, "handle is NULL");
     ESP_RETURN_ON_FALSE(handle->panel_handle != NULL, ESP_ERR_INVALID_ARG, TAG, "panel_handle is NULL");

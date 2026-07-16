@@ -284,7 +284,7 @@ static void app_gui_process_wifi_status(void)
 
     app_gui_update_wifi_screen(&wifi_status);
 
-    ESP_LOGI(
+    ESP_LOGD(
         TAG,
         "GUI received Wi-Fi status: "
         "state=%d, ssid=%s, ip=%s, rssi=%d",
@@ -315,7 +315,7 @@ static void app_gui_log_stack_usage(const char *task_name)
                  (unsigned int)minimum_free_stack);
     }
     else {
-        ESP_LOGI(TAG,
+        ESP_LOGD(TAG,
                  "%s minimum free stack: %u bytes",
                  task_name,
                  (unsigned int)minimum_free_stack);

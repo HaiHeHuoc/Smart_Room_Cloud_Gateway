@@ -201,7 +201,7 @@ static void displayimage(void* arg)
                      (unsigned int)minimum_free_stack);
         }
         else {
-            ESP_LOGI(TAG,
+            ESP_LOGD(TAG,
                      "Image task minimum free stack: %u bytes",
                      (unsigned int)minimum_free_stack);
         }
@@ -245,11 +245,11 @@ static void lvgl_image_handler_clear_internal(void)
         && (s_active_gif == NULL)
 #endif
        ) {
-        ESP_LOGI(TAG, "Available to display a new image");
+        ESP_LOGD(TAG, "Available to display a new image");
         return;
     }
 
-    ESP_LOGI(TAG, "Delete the current image");
+    ESP_LOGD(TAG, "Delete the current image");
 
 #if LV_USE_GIF
     lvgl_image_handler_gif_state_t *old_gif = s_active_gif;
@@ -1016,7 +1016,7 @@ static esp_err_t lvgl_image_handler_decode_png_stream_to_frame(
     frame_draw_buf = NULL;
     ret = ESP_OK;
 
-    ESP_LOGI(TAG,
+    ESP_LOGD(TAG,
              "PNG stream: path=%s, source=%lux%lu, frame=%lux%lu, scaled=%lux%lu, row=%u bytes",
              path,
              (unsigned long)source_width,
@@ -1463,7 +1463,7 @@ static esp_err_t lvgl_image_handler_show_static_image_internal(
                                               &scaled_width,
                                               &scaled_height);
 
-    ESP_LOGI(
+    ESP_LOGD(
         TAG,
         "%s: path=%s, source=%lux%lu, frame=%lux%lu, scaled=%lux%lu",
         format_name,
@@ -1821,15 +1821,15 @@ static esp_err_t lvgl_image_handler_show(
 
     switch (format) {
     case LVGL_IMAGE_HANDLER_FORMAT_JPG:
-        ESP_LOGI(TAG, "Show JPG image: %s", path);
+        ESP_LOGD(TAG, "Show JPG image: %s", path);
         return lvgl_image_handler_show_jpg_internal(path);
 
     case LVGL_IMAGE_HANDLER_FORMAT_PNG:
-        ESP_LOGI(TAG, "Show PNG image: %s", path);
+        ESP_LOGD(TAG, "Show PNG image: %s", path);
         return lvgl_image_handler_show_png_internal(path);
 
     case LVGL_IMAGE_HANDLER_FORMAT_GIF:
-        ESP_LOGI(TAG, "Show GIF animation: %s", path);
+        ESP_LOGD(TAG, "Show GIF animation: %s", path);
         return lvgl_image_handler_show_gif_internal(path);
 
     default:
@@ -1946,7 +1946,7 @@ static esp_err_t lvgl_image_handler_apply_scale_and_align(
 
     lv_obj_invalidate(image_obj);
 
-    ESP_LOGI(
+    ESP_LOGD(
         TAG,
         "Image layout: original=%ldx%ld, "
         "scaled=%ldx%ld, scale=%lu/256",

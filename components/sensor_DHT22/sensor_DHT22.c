@@ -66,7 +66,7 @@ static void dht22_bringup_task(void *argument)
         }
         else
         {
-            ESP_LOGI(
+            ESP_LOGD(
                 TAG,
                 "Temperature: %.1f C | Humidity: %.1f %%",
                 data.temperature_c,

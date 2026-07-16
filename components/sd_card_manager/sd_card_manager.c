@@ -76,7 +76,7 @@ static esp_err_t sd_card_manager_init_spi_bus(void)
      * DMA is important because SD card transfers can be larger than simple
      * register-style SPI transactions.
      */
-    ESP_LOGI(TAG, "spi bus initializes");
+    ESP_LOGD(TAG, "spi bus initializes");
 
     ESP_RETURN_ON_ERROR(
         spi_bus_initialize(SD_SPI_HOST, &bus_config, SDSPI_DEFAULT_DMA),
@@ -274,7 +274,7 @@ static esp_err_t sd_card_manager_list_files_recursive_internal(const char *dir_p
 /* Functions ---------------------------------------------------------------- */
 esp_err_t sd_card_manager_init(void)
 {
-    ESP_LOGI(TAG, "Start initlize sd_card_manager");
+    ESP_LOGD(TAG, "Start initlize sd_card_manager");
 
     esp_err_t ret = ESP_FAIL;
     /*
@@ -293,7 +293,7 @@ esp_err_t sd_card_manager_init(void)
 
         if (s_sd_mounted)
         {
-            ESP_LOGI(TAG, "SD card is mounted");
+            ESP_LOGD(TAG, "SD card is mounted");
             return ESP_OK;
         }
 

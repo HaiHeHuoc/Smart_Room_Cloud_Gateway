@@ -164,7 +164,7 @@ static void *lvgl_sd_fs_open_cb(lv_fs_drv_t *drv,
         return NULL;
     }
 
-    ESP_LOGI(TAG, "Opened file: %s", full_path);
+    ESP_LOGD(TAG, "Opened file: %s", full_path);
 
     return file;
 }
@@ -383,7 +383,7 @@ esp_err_t lvgl_sd_fs_register(void)
     s_lvgl_sd_fs_drv.seek_cb = lvgl_sd_fs_seek_cb;
     s_lvgl_sd_fs_drv.tell_cb = lvgl_sd_fs_tell_cb;
 
-    ESP_LOGI(TAG, "Before calling lv_fs_drv_register");
+    ESP_LOGD(TAG, "Before calling lv_fs_drv_register");
 
     /*
      * Register the driver to LVGL.

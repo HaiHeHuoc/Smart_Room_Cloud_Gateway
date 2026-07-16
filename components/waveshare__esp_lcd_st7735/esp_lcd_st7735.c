@@ -105,7 +105,7 @@ esp_err_t esp_lcd_new_panel_st7735(const esp_lcd_panel_io_handle_t io, const esp
     st7735->base.disp_on_off = panel_st7735_disp_on_off;
     *ret_panel = &(st7735->base);
     ESP_LOGD(TAG, "new st7735 panel @%p", st7735);
-    ESP_LOGI(TAG, "LCD panel create success");
+    ESP_LOGD(TAG, "LCD panel create success");
 
     return ESP_OK;
 
@@ -191,7 +191,7 @@ static esp_err_t panel_st7735_init(esp_lcd_panel_t *panel)
 {
     st7735_panel_t *st7735 = __containerof(panel, st7735_panel_t, base);
     esp_lcd_panel_io_handle_t io = st7735->io;
-    ESP_LOGI(TAG, "init st7735 panel @%p", st7735);
+    ESP_LOGD(TAG, "init st7735 panel @%p", st7735);
     // LCD goes into sleep mode and display will be turned off after power on reset, exit sleep mode first
     ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_param(io, LCD_CMD_SLPOUT, NULL, 0), TAG, "send command failed");
     vTaskDelay(pdMS_TO_TICKS(100));
@@ -220,10 +220,10 @@ static esp_err_t panel_st7735_init(esp_lcd_panel_t *panel)
     }
 
     bool is_cmd_overwritten = false;
-    ESP_LOGI(TAG, "Command Count == %d", init_cmds_size);
+    ESP_LOGD(TAG, "Command Count == %d", init_cmds_size);
     for (int i = 0; i < init_cmds_size; i++)
     {
-        ESP_LOGI(TAG, "cmd %02x", init_cmds[i].cmd);
+        ESP_LOGD(TAG, "cmd %02x", init_cmds[i].cmd);
         // Check if the command has been used or conflicts with the internal
         switch (init_cmds[i].cmd)
         {
@@ -248,7 +248,7 @@ static esp_err_t panel_st7735_init(esp_lcd_panel_t *panel)
         ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_param(io, init_cmds[i].cmd, init_cmds[i].data, init_cmds[i].data_bytes), TAG, "send command failed");
         vTaskDelay(pdMS_TO_TICKS(init_cmds[i].delay_ms));
     }
-    ESP_LOGI(TAG, "send init commands success");
+    ESP_LOGD(TAG, "send init commands success");
 
     return ESP_OK;
 }
