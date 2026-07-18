@@ -34,6 +34,7 @@ typedef enum
     UI_WIFI_STATE_CONNECTED,
     UI_WIFI_STATE_DISCONNECTED,
     UI_WIFI_STATE_FAILED,
+    UI_WIFI_STATE_RETRY_WAIT
 } ui_wifi_state_t;
 
 /** @brief Application-owned copy of the Wi-Fi status used by the GUI task. */

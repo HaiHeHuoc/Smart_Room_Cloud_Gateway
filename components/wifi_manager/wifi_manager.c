@@ -4,13 +4,27 @@
 #include <string.h>
 #include <stdio.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "esp_wifi_default.h"
 
 #include "esp_log.h"
 #include "esp_check.h"
+/* Macros ------------------------------------------------------------------- */
+
+#define WIFI_MANAGER_RECONNECT_TASK_NAME           "wifi_reconnect"
+
+#define WIFI_MANAGER_RECONNECT_TASK_STACK_SIZE     4096U
+#define WIFI_MANAGER_RECONNECT_TASK_PRIORITY       4U
+
+#define WIFI_MANAGER_RECONNECT_INITIAL_DELAY_MS    1000U
+#define WIFI_MANAGER_RECONNECT_MAX_DELAY_MS        30000U
+
 /* Constants ---------------------------------------------------------------- */
+
 static const char *const TAG = "WIFI_MANAGER";
 
 /* Type Definitions --------------------------------------------------------- */
@@ -25,16 +39,42 @@ typedef struct
     bool initialized;
 
     /*
-     * ESP-NETIF object representing the Wi-Fi Station interface.
+     * True after wifi_manager_connect() has successfully applied
+     * a Station configuration to the ESP-IDF Wi-Fi driver.
      */
-    esp_netif_t *station_netif;
+    bool credentials_configured;
 
     /*
-     * Handles returned when registering event callbacks.
-     * These handles can later be used to unregister the callbacks.
+     * Controls whether an unexpected disconnection may start
+     * the automatic reconnect flow.
      */
+    bool auto_reconnect_enabled;
+
+    /*
+     * Distinguishes application-requested disconnect from
+     * router/AP/network failures.
+     */
+    bool manual_disconnect_requested;
+
+    /*
+     * Current exponential-backoff delay.
+     */
+    uint32_t reconnect_delay_ms;
+
+    /*
+     * Number of reconnect attempts since the last successful GOT_IP.
+     */
+    uint32_t reconnect_attempt_count;
+
+    esp_netif_t *station_netif;
+
     esp_event_handler_instance_t wifi_event_instance;
     esp_event_handler_instance_t ip_event_instance;
+
+    /*
+     * Created during wifi_manager_init().
+     */
+    TaskHandle_t reconnect_task_handle;
 
     wifi_manager_status_t status;
 
@@ -46,10 +86,22 @@ typedef struct
 /* Static Variables --------------------------------------------------------- */
 static wifi_manager_context_t s_wifi_manager = {
     .initialized = false,
+
+    .credentials_configured = false,
+    .auto_reconnect_enabled = false,
+    .manual_disconnect_requested = false,
+
+    .reconnect_delay_ms =
+        WIFI_MANAGER_RECONNECT_INITIAL_DELAY_MS,
+
+    .reconnect_attempt_count = 0U,
+
     .station_netif = NULL,
 
     .wifi_event_instance = NULL,
     .ip_event_instance = NULL,
+
+    .reconnect_task_handle = NULL,
 
     .status = {
         .state = WIFI_MANAGER_STATE_UNINITIALIZED,
@@ -66,10 +118,18 @@ static wifi_manager_context_t s_wifi_manager = {
 };
 
 /*
- * Protect s_wifi_manager.status because:
+ * Protect shared Wi-Fi manager state accessed by:
  *
- * - ESP event-loop task writes the status;
- * - application/UI tasks read the status.
+ * - ESP event-loop task;
+ * - reconnect task;
+ * - application/UI tasks.
+ *
+ * Protected fields include:
+ *
+ * - status;
+ * - callback pointers;
+ * - reconnect flags and counters;
+ * - reconnect task handle.
  */
 static portMUX_TYPE s_status_lock =
     portMUX_INITIALIZER_UNLOCKED;
@@ -85,7 +145,243 @@ static void wifi_manager_event_handler(
 
 static void wifi_manager_notify_status_changed(void);
 
+static void wifi_manager_reconnect_task(
+    void *argument);
+
+static bool wifi_manager_schedule_reconnect(void);
+
 /* Static Functions --------------------------------------------------------- */
+static bool wifi_manager_schedule_reconnect(void)
+{
+    TaskHandle_t reconnect_task_handle = NULL;
+    bool should_schedule = false;
+
+
+    /*
+     * Read reconnect policy and update state atomically.
+     */
+    taskENTER_CRITICAL(
+        &s_status_lock);
+
+    if (s_wifi_manager.initialized &&
+        s_wifi_manager.credentials_configured &&
+        s_wifi_manager.auto_reconnect_enabled &&
+        !s_wifi_manager.manual_disconnect_requested &&
+        s_wifi_manager.reconnect_task_handle != NULL)
+    {
+        s_wifi_manager.status.state =
+            WIFI_MANAGER_STATE_RETRY_WAIT;
+
+        reconnect_task_handle =
+            s_wifi_manager.reconnect_task_handle;
+
+        should_schedule = true;
+    }
+
+    taskEXIT_CRITICAL(
+        &s_status_lock);
+
+    if (!should_schedule)
+    {
+        return false;
+    }
+
+    /*
+     * Notify application/GUI that Wi-Fi is waiting to retry.
+     */
+    wifi_manager_notify_status_changed();
+
+    /*
+     * ESP event handlers execute from a task context, not from an ISR,
+     * so use the normal task-notification API.
+     */
+    xTaskNotifyGive(
+        reconnect_task_handle);
+
+    ESP_LOGI(
+        TAG,
+        "Automatic Wi-Fi reconnect scheduled");
+
+    return true;
+}
+
+static void wifi_manager_reconnect_task(
+    void *argument)
+{
+    (void)argument;
+
+    ESP_LOGI(
+        TAG,
+        "Wi-Fi reconnect task started");
+
+    while(1)
+    {
+        uint32_t notification_count =
+            ulTaskNotifyTake(
+                pdTRUE,
+                portMAX_DELAY);
+
+        uint32_t reconnect_delay_ms = 0U;
+        bool should_reconnect = false;
+
+        /*
+         * Copy reconnect policy under the lock.
+         *
+         * Do not hold the critical section while delaying,
+         * logging or calling ESP-IDF Wi-Fi APIs.
+         */
+        taskENTER_CRITICAL(
+            &s_status_lock);
+
+        should_reconnect =
+            s_wifi_manager.initialized &&
+            s_wifi_manager.credentials_configured &&
+            s_wifi_manager.auto_reconnect_enabled &&
+            !s_wifi_manager.manual_disconnect_requested &&
+            !s_wifi_manager.status.has_ipv4_address;
+
+        reconnect_delay_ms =
+            s_wifi_manager.reconnect_delay_ms;
+
+        taskEXIT_CRITICAL(
+            &s_status_lock);
+
+
+        if (!should_reconnect)
+        {
+            ESP_LOGI(
+                TAG,
+                "Reconnect attempt skipped");
+
+            continue;
+        }
+
+
+        ESP_LOGI(
+            TAG,
+            "Retrying Wi-Fi connection in %lu ms",
+            (unsigned long)reconnect_delay_ms);
+
+        vTaskDelay(
+            pdMS_TO_TICKS(
+                reconnect_delay_ms));
+
+        uint32_t reconnect_attempt = 0U;
+        uint32_t next_reconnect_delay_ms = 0U;
+
+        taskENTER_CRITICAL(
+            &s_status_lock);
+
+        should_reconnect =
+            s_wifi_manager.initialized &&
+            s_wifi_manager.credentials_configured &&
+            s_wifi_manager.auto_reconnect_enabled &&
+            !s_wifi_manager.manual_disconnect_requested &&
+            !s_wifi_manager.status.has_ipv4_address &&
+            s_wifi_manager.status.state !=
+                WIFI_MANAGER_STATE_CONNECTED;
+
+
+        if (should_reconnect)
+        {
+            s_wifi_manager.reconnect_attempt_count++;
+
+            reconnect_attempt =
+                s_wifi_manager.reconnect_attempt_count;
+
+            s_wifi_manager.status.state =
+                WIFI_MANAGER_STATE_CONNECTING;
+
+            
+            /*
+            * Prepare the delay for the next attempt.
+            *
+            * The current attempt has already waited using the old value.
+            */
+            if (s_wifi_manager.reconnect_delay_ms >=
+                (WIFI_MANAGER_RECONNECT_MAX_DELAY_MS / 2U))
+            {
+                s_wifi_manager.reconnect_delay_ms =
+                    WIFI_MANAGER_RECONNECT_MAX_DELAY_MS;
+            }
+            else
+            {
+                s_wifi_manager.reconnect_delay_ms *= 2U;
+            }
+
+            next_reconnect_delay_ms =
+                s_wifi_manager.reconnect_delay_ms;
+        }
+
+
+        taskEXIT_CRITICAL(
+            &s_status_lock);
+
+        if (!should_reconnect)
+        {
+            ESP_LOGI(
+                TAG,
+                "Reconnect attempt cancelled");
+
+            continue;
+        }
+
+        /*
+         * Report CONNECTING to the GUI/application before invoking
+         * the asynchronous Wi-Fi connection API.
+         */
+        wifi_manager_notify_status_changed();
+
+
+        ESP_LOGI(
+            TAG,
+            "Starting Wi-Fi reconnect attempt %lu, "
+            "next retry delay=%lu ms",
+            (unsigned long)reconnect_attempt,
+            (unsigned long)next_reconnect_delay_ms);
+
+        esp_err_t error =
+            esp_wifi_connect();
+
+        if (error != ESP_OK)
+        {
+            taskENTER_CRITICAL(
+                &s_status_lock);
+
+            s_wifi_manager.status.state =
+                WIFI_MANAGER_STATE_FAILED;
+
+            taskEXIT_CRITICAL(
+                &s_status_lock);
+
+            ESP_LOGW(
+                TAG,
+                "Failed to start Wi-Fi reconnect attempt: %s",
+                esp_err_to_name(error));
+
+            wifi_manager_notify_status_changed();
+
+            /*
+             * Schedule another fixed-delay attempt.
+             *
+             * This is safe from the reconnect task itself:
+             * the notification is consumed during the next loop.
+             */
+            if (!wifi_manager_schedule_reconnect())
+            {
+                ESP_LOGW(
+                    TAG,
+                    "Failed to reschedule Wi-Fi reconnect");
+            }
+        }
+
+
+        ESP_LOGI(
+            TAG,
+            "Reconnect task awakened, notifications=%lu",
+            (unsigned long)notification_count);
+    }
+}
 static void wifi_manager_notify_status_changed(void)
 {
     wifi_manager_status_t status_snapshot = {0};
@@ -170,53 +466,71 @@ static void wifi_manager_event_handler(
                 break;
 
             case WIFI_EVENT_STA_DISCONNECTED:
+                {
+                    const wifi_event_sta_disconnected_t *event =
+                        (const wifi_event_sta_disconnected_t *)event_data;
 
-                const wifi_event_sta_disconnected_t *event =
-                    (const wifi_event_sta_disconnected_t *)event_data;
+                    bool manual_disconnect = false;
 
-                uint16_t disconnect_reason = (uint16_t)WIFI_REASON_UNSPECIFIED;
+                    uint16_t disconnect_reason = (uint16_t)WIFI_REASON_UNSPECIFIED;
 
-                if (event != NULL) {
-                    disconnect_reason =
-                        (uint16_t)event->reason;
+                    if (event != NULL) {
+                        disconnect_reason =
+                            (uint16_t)event->reason;
+                    }
+                    else {
+                        ESP_LOGE(
+                            TAG,
+                            "WIFI_EVENT_STA_DISCONNECTED has no event data"
+                        );
+                    }
+
+                    taskENTER_CRITICAL(&s_status_lock);
+
+                    s_wifi_manager.status.state =
+                        WIFI_MANAGER_STATE_DISCONNECTED;
+
+                    s_wifi_manager.status.disconnect_reason =
+                        disconnect_reason;
+
+                    s_wifi_manager.status.has_ipv4_address =
+                        false;
+
+                    s_wifi_manager.status.ipv4_address[0] =
+                        '\0';
+
+                    s_wifi_manager.status.rssi_valid =
+                        false;
+
+                    s_wifi_manager.status.rssi_dbm =
+                        0;
+
+                    manual_disconnect = s_wifi_manager.manual_disconnect_requested;
+
+                    taskEXIT_CRITICAL(&s_status_lock);
+
+                    ESP_LOGI(TAG, "Event: WIFI_EVENT_STA_DISCONNECTED");
+
+                    wifi_manager_notify_status_changed();
+
+                    /*
+                    * Then move to RETRY_WAIT and wake the reconnect task,
+                    * provided reconnect policy allows it.
+                    */
+                    if (manual_disconnect)
+                    {
+                        ESP_LOGI(
+                            TAG,
+                            "Manual Wi-Fi disconnect completed; "
+                            "automatic reconnect suppressed");
+                    }
+                    else if (!wifi_manager_schedule_reconnect())
+                    {
+                        ESP_LOGI(
+                            TAG,
+                            "Automatic reconnect was not scheduled");
+                    }
                 }
-                else {
-                    ESP_LOGE(
-                        TAG,
-                        "WIFI_EVENT_STA_DISCONNECTED has no event data"
-                    );
-                }
-
-                taskENTER_CRITICAL(&s_status_lock);
-
-                s_wifi_manager.status.state =
-                    WIFI_MANAGER_STATE_DISCONNECTED;
-
-                s_wifi_manager.status.disconnect_reason =
-                    disconnect_reason;
-
-                s_wifi_manager.status.has_ipv4_address =
-                    false;
-
-                s_wifi_manager.status.ipv4_address[0] =
-                    '\0';
-
-                s_wifi_manager.status.rssi_valid =
-                    false;
-
-                s_wifi_manager.status.rssi_dbm =
-                    0;
-
-                taskEXIT_CRITICAL(&s_status_lock);
-
-                ESP_LOGI(TAG, "Event: WIFI_EVENT_STA_DISCONNECTED");
-
-                wifi_manager_notify_status_changed();
-                /*
-                * Chưa reconnect tự động tại đây.
-                * Reconnect/backoff thuộc Sprint 8.
-                */
-
                 break;
 
             case WIFI_EVENT_STA_STOP:
@@ -290,6 +604,12 @@ static void wifi_manager_event_handler(
 
                 s_wifi_manager.status.state =
                     WIFI_MANAGER_STATE_CONNECTED;
+
+                s_wifi_manager.reconnect_delay_ms =
+                    WIFI_MANAGER_RECONNECT_INITIAL_DELAY_MS;
+
+                s_wifi_manager.reconnect_attempt_count =
+                    0U;
 
                 s_wifi_manager.status.disconnect_reason =
                     0U;
@@ -403,6 +723,8 @@ esp_err_t wifi_manager_init(void)
 
         return ESP_FAIL;
     }
+
+    TaskHandle_t reconnect_task_handle = NULL;
 
     /*
      * Initialize the Wi-Fi driver using ESP-IDF's recommended
@@ -542,7 +864,54 @@ esp_err_t wifi_manager_init(void)
 
         return ret;
     }
-    
+
+    BaseType_t task_result =
+    xTaskCreate(
+        wifi_manager_reconnect_task,
+        WIFI_MANAGER_RECONNECT_TASK_NAME,
+        WIFI_MANAGER_RECONNECT_TASK_STACK_SIZE,
+        NULL,
+        WIFI_MANAGER_RECONNECT_TASK_PRIORITY,
+        &reconnect_task_handle);
+
+
+    if (task_result != pdPASS)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to create Wi-Fi reconnect task");
+
+        esp_event_handler_instance_unregister(
+            IP_EVENT,
+            ESP_EVENT_ANY_ID,
+            s_wifi_manager.ip_event_instance);
+
+        s_wifi_manager.ip_event_instance = NULL;
+
+        esp_event_handler_instance_unregister(
+            WIFI_EVENT,
+            ESP_EVENT_ANY_ID,
+            s_wifi_manager.wifi_event_instance);
+
+        s_wifi_manager.wifi_event_instance = NULL;
+
+        const esp_err_t deinit_ret =
+            esp_wifi_deinit();
+
+        if (deinit_ret != ESP_OK)
+        {
+            ESP_LOGW(
+                TAG,
+                "Failed to deinitialize Wi-Fi after task error: %s",
+                esp_err_to_name(deinit_ret));
+        }
+
+        esp_netif_destroy_default_wifi(
+            station_netif);
+
+        return ESP_ERR_NO_MEM;
+    }
+
     ret = esp_wifi_start();
     
     if (ret != ESP_OK) {
@@ -552,6 +921,13 @@ esp_err_t wifi_manager_init(void)
             esp_err_to_name(ret)
         );
         
+        if (reconnect_task_handle != NULL)
+        {
+            vTaskDelete(
+                reconnect_task_handle);
+
+            reconnect_task_handle = NULL;
+        }
         /*
         * Undo IP event registration.
         */
@@ -596,14 +972,23 @@ esp_err_t wifi_manager_init(void)
         /*
          * Commit component state only after all initialization steps succeed.
          */
+        taskENTER_CRITICAL(
+            &s_status_lock);
+
         s_wifi_manager.station_netif =
             station_netif;
-    
+
+        s_wifi_manager.reconnect_task_handle =
+            reconnect_task_handle;
+
         s_wifi_manager.initialized =
             true;
-    
+
         s_wifi_manager.status.state =
             WIFI_MANAGER_STATE_READY;
+
+        taskEXIT_CRITICAL(
+            &s_status_lock);
     
         ESP_LOGI(
             TAG,
@@ -753,6 +1138,63 @@ esp_err_t wifi_manager_connect(
             WIFI_AUTH_OPEN;
     }
 
+
+    taskENTER_CRITICAL(
+        &s_status_lock);
+
+    /*
+    * The ESP-IDF Wi-Fi driver now contains valid Station
+    * credentials in RAM.
+    */
+    s_wifi_manager.credentials_configured =
+        true;
+
+    s_wifi_manager.auto_reconnect_enabled =
+        true;
+
+    s_wifi_manager.manual_disconnect_requested =
+        false;
+
+    s_wifi_manager.reconnect_delay_ms =
+        WIFI_MANAGER_RECONNECT_INITIAL_DELAY_MS;
+
+    s_wifi_manager.reconnect_attempt_count =
+        0U;
+
+    memset(
+        s_wifi_manager.status.ssid,
+        0,
+        sizeof(s_wifi_manager.status.ssid));
+
+    memcpy(
+        s_wifi_manager.status.ssid,
+        config->ssid,
+        ssid_length);
+
+    s_wifi_manager.status.ssid[ssid_length] =
+        '\0';
+
+    s_wifi_manager.status.ipv4_address[0] =
+        '\0';
+
+    s_wifi_manager.status.has_ipv4_address =
+        false;
+
+    s_wifi_manager.status.rssi_valid =
+        false;
+
+    s_wifi_manager.status.rssi_dbm =
+        0;
+
+    s_wifi_manager.status.disconnect_reason =
+        0U;
+
+    s_wifi_manager.status.state =
+        WIFI_MANAGER_STATE_CONNECTING;
+
+    taskEXIT_CRITICAL(
+        &s_status_lock);
+
     /*
      * 4. Apply Station configuration to the Wi-Fi driver.
      */
@@ -812,29 +1254,33 @@ esp_err_t wifi_manager_connect(
     ESP_LOGI(
         TAG,
         "Connecting to Wi-Fi SSID: %s",
-        s_wifi_manager.status.ssid
-    );
+        config->ssid);
 
     /*
      * 6. Start the asynchronous connection process.
      */
     ret = esp_wifi_connect();
 
-    if (ret != ESP_OK) {
+    if (ret != ESP_OK)
+    {
+        taskENTER_CRITICAL(
+            &s_status_lock);
+
         s_wifi_manager.status.state =
             WIFI_MANAGER_STATE_FAILED;
+
+        taskEXIT_CRITICAL(
+            &s_status_lock);
 
         ESP_LOGE(
             TAG,
             "Failed to start Wi-Fi connection: %s",
-            esp_err_to_name(ret)
-        );
+            esp_err_to_name(ret));
 
         wifi_manager_notify_status_changed();
 
         return ret;
     }
-
     wifi_manager_notify_status_changed();
 
     return ESP_OK;
@@ -842,15 +1288,119 @@ esp_err_t wifi_manager_connect(
 
 esp_err_t wifi_manager_disconnect(void)
 {
-    ESP_RETURN_ON_FALSE(s_wifi_manager.initialized == true, 
+    ESP_RETURN_ON_FALSE(
+        s_wifi_manager.initialized,
         ESP_ERR_INVALID_STATE,
         TAG,
-        "Wi-Fi manager is not initialized"
-    );
+        "Wi-Fi manager is not initialized");
 
-    ESP_LOGW(TAG, "wifi_manager_disconnect() is not implemented yet");
+    bool driver_disconnect_required = false;
 
-    return ESP_ERR_NOT_SUPPORTED;
+    /*
+     * Store the application intent before calling esp_wifi_disconnect().
+     *
+     * WIFI_EVENT_STA_DISCONNECTED may arrive asynchronously shortly
+     * after the driver API is called. The event handler must already
+     * know that this was a manual disconnect.
+     */
+    taskENTER_CRITICAL(
+        &s_status_lock);
+
+    s_wifi_manager.manual_disconnect_requested =
+        true;
+
+    s_wifi_manager.auto_reconnect_enabled =
+        false;
+
+    s_wifi_manager.reconnect_delay_ms =
+        WIFI_MANAGER_RECONNECT_INITIAL_DELAY_MS;
+
+    s_wifi_manager.reconnect_attempt_count =
+        0U;
+
+    driver_disconnect_required =
+        s_wifi_manager.status.state ==
+            WIFI_MANAGER_STATE_CONNECTED ||
+        s_wifi_manager.status.state ==
+            WIFI_MANAGER_STATE_WAITING_FOR_IP ||
+        s_wifi_manager.status.state ==
+            WIFI_MANAGER_STATE_CONNECTING;
+
+    /*
+     * If the driver is already offline, there may be no new
+     * DISCONNECTED event. Complete the state transition locally.
+     */
+    if (!driver_disconnect_required)
+    {
+        s_wifi_manager.status.state =
+            WIFI_MANAGER_STATE_DISCONNECTED;
+
+        s_wifi_manager.status.has_ipv4_address =
+            false;
+
+        s_wifi_manager.status.ipv4_address[0] =
+            '\0';
+
+        s_wifi_manager.status.rssi_valid =
+            false;
+
+        s_wifi_manager.status.rssi_dbm =
+            0;
+    }
+
+    taskEXIT_CRITICAL(
+        &s_status_lock);
+
+    if (!driver_disconnect_required)
+    {
+        ESP_LOGI(
+            TAG,
+            "Wi-Fi is already disconnected; "
+            "automatic reconnect disabled");
+
+        wifi_manager_notify_status_changed();
+
+        return ESP_OK;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Manual Wi-Fi disconnect requested");
+
+    esp_err_t error =
+        esp_wifi_disconnect();
+
+    if (error != ESP_OK)
+    {
+        taskENTER_CRITICAL(
+            &s_status_lock);
+
+        /*
+         * Preserve the manual-disconnect policy even when the driver
+         * call fails. The application explicitly requested that the
+         * device remain offline.
+         */
+        s_wifi_manager.status.state =
+            WIFI_MANAGER_STATE_FAILED;
+
+        taskEXIT_CRITICAL(
+            &s_status_lock);
+
+        ESP_LOGE(
+            TAG,
+            "Failed to disconnect Wi-Fi: %s",
+            esp_err_to_name(error));
+
+        wifi_manager_notify_status_changed();
+
+        return error;
+    }
+
+    /*
+     * WIFI_EVENT_STA_DISCONNECTED will finish the asynchronous
+     * status transition.
+     */
+    return ESP_OK;
 }
 
 esp_err_t wifi_manager_get_status(
@@ -1024,6 +1574,9 @@ const char *wifi_manager_state_to_string(
 
         case WIFI_MANAGER_STATE_FAILED:
             return "FAILED";
+
+        case WIFI_MANAGER_STATE_RETRY_WAIT:
+            return "RETRY_WAIT";
 
         default:
             return "UNKNOWN";

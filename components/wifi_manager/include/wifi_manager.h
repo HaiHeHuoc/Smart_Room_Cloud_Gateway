@@ -38,40 +38,14 @@ extern "C" {
  */
 typedef enum
 {
-    /**
-     * @brief wifi_manager_init() has not been called.
-     */
     WIFI_MANAGER_STATE_UNINITIALIZED = 0,
-
-    /**
-     * @brief Wi-Fi driver is initialized and ready.
-     */
     WIFI_MANAGER_STATE_READY,
-
-    /**
-     * @brief Station is trying to associate with the access point.
-     */
     WIFI_MANAGER_STATE_CONNECTING,
-
-    /**
-     * @brief Station is associated and waiting for DHCP/IP.
-     */
     WIFI_MANAGER_STATE_WAITING_FOR_IP,
-
-    /**
-     * @brief Station received an IPv4 address.
-     */
     WIFI_MANAGER_STATE_CONNECTED,
-
-    /**
-     * @brief Station was disconnected from the access point.
-     */
     WIFI_MANAGER_STATE_DISCONNECTED,
-
-    /**
-     * @brief Connection attempt failed.
-     */
     WIFI_MANAGER_STATE_FAILED,
+    WIFI_MANAGER_STATE_RETRY_WAIT,
 } wifi_manager_state_t;
 
 /**
