@@ -254,7 +254,7 @@ esp_err_t display_driver_raw_color_test(const display_driver_handle_t *handle)
     };
 
     for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
-        ESP_LOGI(TAG, "Fill %s", tests[i].name);
+        ESP_LOGD(TAG, "Fill %s", tests[i].name);
 
         /* Draw one solid color, then wait so the result is visible on the LCD. */
         ESP_RETURN_ON_ERROR(

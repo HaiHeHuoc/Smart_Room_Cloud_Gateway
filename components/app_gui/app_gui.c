@@ -134,7 +134,7 @@ static void app_gui_wifi_screen_timeout_cb(lv_timer_t *timer)
             esp_err_to_name(ret));
     }
 
-    ESP_LOGI(TAG, "Wi-Fi screen timeout");
+    ESP_LOGD(TAG, "Wi-Fi screen timeout");
 
     /* Make this timer behave like a reusable one-shot timer. */
     lv_timer_pause(timer);
@@ -409,7 +409,7 @@ esp_err_t app_gui_create_wifi_screen(void)
         app_gui_wifi_state_color(UI_WIFI_STATE_IDLE),
         LV_PART_MAIN);
 
-    ESP_LOGI(TAG, "Wi-Fi status screen created");
+    ESP_LOGD(TAG, "Wi-Fi status screen created");
 
     if (s_wifi_screen_timer == NULL) {
         s_wifi_screen_timer = lv_timer_create(
@@ -536,7 +536,7 @@ esp_err_t app_gui_create_sensor_screen(void)
         LV_PART_MAIN);
 
     (void)app_gui_set_screen_id(APP_GUI_SCREEN_SENSOR);
-    ESP_LOGI(TAG, "Sensor status screen created");
+    ESP_LOGD(TAG, "Sensor status screen created");
 
     ui_manager_lvgl_release_mutex();
     return ESP_OK;
