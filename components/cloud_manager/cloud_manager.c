@@ -64,9 +64,13 @@ static bool s_is_started;
 
 static cloud_manager_status_t s_status;
 static SemaphoreHandle_t s_status_mutex;
+static cloud_manager_status_callback_t s_status_callback;
+static void *s_status_callback_user_data;
 
 /* Function Prototypes ------------------------------------------------------ */
 static int64_t cloud_manager_get_time_ms(void);
+
+static void cloud_manager_notify_status_changed(void);
 
 static void cloud_manager_set_state(
     cloud_manager_state_t new_state);
@@ -100,6 +104,38 @@ static int64_t cloud_manager_get_time_ms(void)
     return esp_timer_get_time() / 1000;
 }
 
+static void cloud_manager_notify_status_changed(void)
+{
+    if (s_status_mutex == NULL)
+    {
+        return;
+    }
+
+    cloud_manager_status_t status_snapshot;
+    cloud_manager_status_callback_t callback = NULL;
+    void *callback_user_data = NULL;
+
+    if (xSemaphoreTake(
+            s_status_mutex,
+            portMAX_DELAY) != pdTRUE)
+    {
+        return;
+    }
+
+    status_snapshot = s_status;
+    callback = s_status_callback;
+    callback_user_data = s_status_callback_user_data;
+
+    xSemaphoreGive(s_status_mutex);
+
+    if (callback != NULL)
+    {
+        callback(
+            &status_snapshot,
+            callback_user_data);
+    }
+}
+
 static void cloud_manager_set_state(
     cloud_manager_state_t new_state)
 {
@@ -129,6 +165,8 @@ static void cloud_manager_set_state(
             "Cloud state changed: %d -> %d",
             old_state,
             new_state);
+
+        cloud_manager_notify_status_changed();
     }
 }
 
@@ -158,6 +196,8 @@ static void cloud_manager_record_upload_success(
         cloud_manager_get_time_ms();
 
     xSemaphoreGive(s_status_mutex);
+
+    cloud_manager_notify_status_changed();
 }
 
 static bool cloud_manager_is_auth_error(
@@ -215,6 +255,8 @@ static void cloud_manager_record_upload_failure(
     }
 
     xSemaphoreGive(s_status_mutex);
+
+    cloud_manager_notify_status_changed();
 }
 
 static esp_err_t cloud_manager_build_authenticated_url(void)
@@ -639,6 +681,9 @@ esp_err_t cloud_manager_init(
     s_status.current_retry_delay_ms =
         CLOUD_MANAGER_RETRY_INITIAL_MS;
 
+    s_status_callback = NULL;
+    s_status_callback_user_data = NULL;
+
     s_is_initialized = true;
 
     ESP_LOGI(
@@ -682,6 +727,32 @@ esp_err_t cloud_manager_start(void)
     ESP_LOGI(
         TAG,
         "Started");
+
+    return ESP_OK;
+}
+
+esp_err_t cloud_manager_register_status_callback(
+    cloud_manager_status_callback_t callback,
+    void *user_data)
+{
+    if (!s_is_initialized ||
+        s_status_mutex == NULL)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (xSemaphoreTake(
+            s_status_mutex,
+            pdMS_TO_TICKS(
+                CLOUD_MANAGER_MUTEX_TIMEOUT_MS)) != pdTRUE)
+    {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    s_status_callback = callback;
+    s_status_callback_user_data = user_data;
+
+    xSemaphoreGive(s_status_mutex);
 
     return ESP_OK;
 }

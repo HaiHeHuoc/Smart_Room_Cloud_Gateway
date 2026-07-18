@@ -3,7 +3,7 @@
 ## Purpose
 
 `app_gui` owns application-facing LVGL screens, the GUI task, and the queues
-used to move Wi-Fi and sensor snapshots into the LVGL context.
+used to move Wi-Fi, sensor, and cloud snapshots into the LVGL context.
 `ui_manager_lvgl` continues to own LVGL initialization, the tick timer, display
 flush integration, and the non-recursive LVGL mutex.
 
@@ -18,6 +18,8 @@ call sequence unchanged. `app_gui.c` is grouped into these responsibilities:
   reusable 10-second screen timer.
 - Sensor UI: temperature/humidity widgets, state formatting, and sensor queue
   processing.
+- Cloud UI: cloud state formatting, retained dashboard status, and cloud queue
+  processing.
 - Demo UI: optional static and moving-label demonstrations.
 
 ## What Is Implemented
@@ -28,9 +30,13 @@ call sequence unchanged. `app_gui.c` is grouped into these responsibilities:
   pending Wi-Fi snapshot is retained.
 - A length-five sensor queue updated without waiting; a full queue causes that
   sample to be dropped.
+- A length-one cloud queue updated with `xQueueOverwrite()`, so transient cloud
+  state changes cannot block the cloud task.
 - Thread-safe tracking of `NONE`, `WIFI`, and `SENSOR` screen IDs.
 - A Wi-Fi screen showing mode, SSID, and IPv4 address.
-- A sensor screen showing temperature, humidity, and data state.
+- A compact 160x128 Smart Room dashboard with a framed header, two-column
+  layout, temperature/humidity readings, Wi-Fi summary, cloud status, and
+  sensor health.
 - A reusable LVGL timer that clears the Wi-Fi screen after 10 seconds without
   a new Wi-Fi event.
 - Stack high-water logging every 60 seconds.
@@ -52,12 +58,13 @@ animations to progress.
 
 | API | Current role |
 | --- | --- |
-| `app_gui_init()` | Create the Wi-Fi and sensor status queues. |
+| `app_gui_init()` | Create the Wi-Fi, sensor, and cloud status queues. |
 | `app_gui_start_ui_task()` | Start the application GUI/LVGL timer task. |
 | `app_gui_create_wifi_screen()` | Build and activate Wi-Fi widgets while internally holding the LVGL mutex. |
 | `app_gui_post_wifi_status()` | Replace the pending Wi-Fi snapshot without waiting. |
 | `app_gui_create_sensor_screen()` | Build and activate sensor widgets while internally holding the LVGL mutex. |
 | `app_gui_post_sensor_status()` | Append a sensor snapshot without waiting. |
+| `app_gui_post_cloud_status()` | Replace the pending cloud snapshot without waiting. |
 | `app_gui_set_screen_id()` | Update only the tracked screen ID. |
 | `app_gui_get_screen_id()` | Read the tracked screen ID under a critical section. |
 | `app_gui_clear_screen()` | Replace the active LVGL root screen; the caller must serialize LVGL access. |
@@ -98,6 +105,35 @@ When sensor data is invalid or stale, the temperature and humidity labels
 display `-`. The same placeholder is displayed immediately when
 `sensor_manager` posts its `-1.0f` failed-read sentinel, even during the
 temporary `DEGRADED` window before the stale timeout expires.
+
+The sensor dashboard is arranged as:
+
+```text
+Smart Room                         WiFi [dot] C [dot]
+----------------------------------------------------
+temperature        | Wi-Fi: Online/Offline/--
+                   | Cloud: Wait/Sync/Online/Retry/Auth/Error
+humidity           | Sensor: OK/Warn/Error/Stale
+```
+
+The Wi-Fi row and header dot use the latest status consumed by the GUI task.
+The Cloud row and header dot use the latest cloud-manager status consumed by
+the GUI task. That retained summary is restored whenever the Sensor screen is
+created again.
+
+## Cloud Flow
+
+```text
+cloud_manager state or upload result changes
+    -> main callback maps cloud_manager_status_t to ui_cloud_status_t
+    -> app_gui_post_cloud_status()
+    -> GUI task receives the newest pending snapshot
+    -> Cloud row and header dot are updated on the Sensor screen
+```
+
+Displayed states are `Wait`, `Sync`, `Online`, `Retry`, `Auth`, and `Error`.
+The Cloud indicator remains `--` only until the first manager status reaches
+the GUI queue.
 
 ## Thread-Safety Contract
 

@@ -104,6 +104,15 @@ static void app_sensor_status_callback(
     const sensor_manager_status_t *status,
     void *user_context);
 
+/** @brief Map a cloud manager state to its application GUI equivalent. */
+static ui_cloud_state_t app_map_cloud_state(
+    cloud_manager_state_t state);
+
+/** @brief Convert and forward cloud manager snapshots to the GUI queue. */
+static void app_cloud_status_callback(
+    const cloud_manager_status_t *status,
+    void *user_context);
+
 /* Application -------------------------------------------------------------- */
 /** @brief Initialize the current application services and run diagnostics. */
 void app_main(void)
@@ -332,6 +341,19 @@ if (connect_ret != ESP_OK) {
         ESP_LOGE(
             TAG,
             "Failed to initialize cloud manager: %s",
+            esp_err_to_name(service_ret));
+        return;
+    }
+
+    service_ret =
+        cloud_manager_register_status_callback(
+            app_cloud_status_callback,
+            NULL);
+
+    if (service_ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Failed to register cloud status callback: %s",
             esp_err_to_name(service_ret));
         return;
     }
@@ -642,6 +664,72 @@ static void app_sensor_status_callback(
         ESP_LOGW(
             TAG,
             "Sensor cloud update dropped: %s",
+            esp_err_to_name(error));
+    }
+}
+
+static ui_cloud_state_t app_map_cloud_state(
+    cloud_manager_state_t state)
+{
+    switch (state)
+    {
+        case CLOUD_MANAGER_STATE_INITIALIZED:
+        case CLOUD_MANAGER_STATE_WAITING_FOR_NETWORK:
+        case CLOUD_MANAGER_STATE_WAITING_FOR_DATA:
+            return UI_CLOUD_STATE_WAITING;
+
+        case CLOUD_MANAGER_STATE_UPLOADING:
+            return UI_CLOUD_STATE_UPLOADING;
+
+        case CLOUD_MANAGER_STATE_ONLINE:
+            return UI_CLOUD_STATE_ONLINE;
+
+        case CLOUD_MANAGER_STATE_RETRY_WAIT:
+            return UI_CLOUD_STATE_RETRY_WAIT;
+
+        case CLOUD_MANAGER_STATE_AUTH_ERROR:
+            return UI_CLOUD_STATE_AUTH_ERROR;
+
+        case CLOUD_MANAGER_STATE_ERROR:
+            return UI_CLOUD_STATE_ERROR;
+
+        case CLOUD_MANAGER_STATE_UNINITIALIZED:
+        default:
+            return UI_CLOUD_STATE_UNKNOWN;
+    }
+}
+
+static void app_cloud_status_callback(
+    const cloud_manager_status_t *status,
+    void *user_context)
+{
+    (void)user_context;
+
+    if (status == NULL)
+    {
+        return;
+    }
+
+    const ui_cloud_status_t ui_status =
+    {
+        .state =
+            app_map_cloud_state(status->state),
+
+        .last_error =
+            status->last_error,
+
+        .last_http_status =
+            status->last_http_status,
+    };
+
+    const esp_err_t error =
+        app_gui_post_cloud_status(&ui_status);
+
+    if (error != ESP_OK)
+    {
+        ESP_LOGD(
+            TAG,
+            "Cloud GUI update dropped: %s",
             esp_err_to_name(error));
     }
 }
