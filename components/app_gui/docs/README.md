@@ -14,6 +14,8 @@ tick timer, and LCD flush integration.
 - Logs GUI task stack high-water status every 60 seconds.
 - Owns a length-one Wi-Fi status queue that always keeps the newest update.
 - Defines `ui_wifi_state_t` and `ui_wifi_status_t`.
+- Tracks the active application screen as `NONE`, `WIFI`, or `SENSOR` using
+  thread-safe set/get APIs.
 - Provides a non-blocking Wi-Fi status post API suitable for the ESP event-loop
   callback path.
 - Displays Wi-Fi mode, SSID, and IPv4 address on a fixed 160 x 128 landscape
@@ -42,6 +44,8 @@ and queued Wi-Fi status updates continue to progress.
 | `app_gui_start_ui_task()` | Start the main LVGL/application GUI task. |
 | `app_gui_create_wifi_screen()` | Create the Wi-Fi status widgets on the active screen while holding the LVGL mutex. |
 | `app_gui_post_wifi_status()` | Overwrite the queue with the newest Wi-Fi status without waiting. |
+| `app_gui_set_screen_id()` | Store the active application screen ID without changing LVGL objects. |
+| `app_gui_get_screen_id()` | Read a thread-safe snapshot of the active application screen ID. |
 | `app_gui_create_demo_screen()` | Create the static `LVGL OK` demo screen. |
 | `app_gui_start_running_demo_task()` | Start the optional moving counter demo task. |
 
@@ -68,6 +72,8 @@ an IPv4 address is valid.
 - `app_gui_post_wifi_status()` does not call LVGL and does not block.
 - `app_gui_create_wifi_screen()` releases the LVGL mutex on success and on all
   current error paths.
+- Screen ID APIs protect only the ID value. LVGL screen creation, loading, and
+  deletion must still run in the GUI task or while holding the LVGL mutex.
 - Only the main app GUI task should call `lv_timer_handler()`.
 - The optional demo task accesses LVGL under the UI manager mutex.
 - There is no deinit/stop API or duplicate-task guard yet.

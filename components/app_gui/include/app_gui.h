@@ -43,7 +43,13 @@ typedef enum
 
 typedef enum
 {
+    /** No application screen is currently active. */
+    APP_GUI_SCREEN_NONE = 0,
+
+    /** Wi-Fi status screen. */
     APP_GUI_SCREEN_WIFI,
+
+    /** Temperature and humidity sensor screen. */
     APP_GUI_SCREEN_SENSOR,
 } app_gui_screen_id_t;
 
@@ -108,3 +114,27 @@ esp_err_t app_gui_create_wifi_screen(void);
 
 esp_err_t app_gui_post_sensor_status(
     const ui_sensor_status_t *status);
+
+/**
+ * @brief Set the ID of the currently active application screen.
+ *
+ * This API updates the tracked screen ID only. It does not create, load, or
+ * delete an LVGL screen. The GUI owner should call it after a screen change
+ * succeeds.
+ *
+ * @param screen_id Screen ID to store.
+ * @return ESP_OK on success, or ESP_ERR_INVALID_ARG for an unknown ID.
+ */
+esp_err_t app_gui_set_screen_id(
+    app_gui_screen_id_t screen_id);
+
+/**
+ * @brief Get a thread-safe snapshot of the active application screen ID.
+ *
+ * @param[out] screen_id Receives the current screen ID.
+ * @return ESP_OK on success, or ESP_ERR_INVALID_ARG if screen_id is NULL.
+ */
+esp_err_t app_gui_get_screen_id(
+    app_gui_screen_id_t *screen_id);
+
+esp_err_t app_gui_clear_screen(void);

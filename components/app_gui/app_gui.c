@@ -6,6 +6,7 @@
 #include "freertos/task.h"
 
 #include "ui_manager_lvgl.h"
+#include "board_config.h"
 #include "app_gui.h"
 #include "esp_log.h"
 #include "esp_err.h"
@@ -13,6 +14,7 @@
 #include "lvgl.h"
 
 /* Macros ------------------------------------------------------------------- */
+#define APP_GUI_WIFI_SCREEN_TIMEOUT_MS 10000U
 #define APP_GUI_WIFI_STATUS_QUEUE_LENGTH 1U
 #define APP_GUI_SENSOR_STATUS_QUEUE_LENGTH 5U
 #define APP_GUI_UI_TASK_STACK_SIZE_BYTES   (24U * 1024U)
@@ -35,6 +37,10 @@ static lv_obj_t *s_wifi_mode_label = NULL;
 static lv_obj_t *s_wifi_ssid_label = NULL;
 static lv_obj_t *s_wifi_ip_label = NULL;
 
+static lv_timer_t *s_wifi_screen_timer = NULL;
+static app_gui_screen_id_t s_current_screen_id = APP_GUI_SCREEN_NONE;
+static portMUX_TYPE s_screen_id_lock = portMUX_INITIALIZER_UNLOCKED;
+
 /* Application -------------------------------------------------------------- */
 /**
  * @brief Demo function to create a simple screen with a label displaying "LVGL OK".
@@ -55,10 +61,51 @@ void app_gui_create_demo_screen(void)
     lv_obj_set_style_text_font(label, LV_FONT_DEFAULT, 0);
     lv_obj_center(label);
 
+    (void)app_gui_set_screen_id(APP_GUI_SCREEN_NONE);
+
     ui_manager_lvgl_release_mutex();
 }
 
 /* Static Functions --------------------------------------------------------- */
+static void app_gui_wifi_screen_timeout_cb(lv_timer_t *timer)
+{
+    app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
+
+    if ((app_gui_get_screen_id(&screen_id) != ESP_OK) ||
+        (screen_id != APP_GUI_SCREEN_WIFI)) {
+        lv_timer_pause(timer);
+        return;
+    }
+
+    ESP_LOGI(TAG, "Wi-Fi screen timeout");
+
+    esp_err_t ret = app_gui_clear_screen();
+    if (ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Failed to clear Wi-Fi screen: %s",
+            esp_err_to_name(ret));
+    }
+
+    /* Make this timer behave like a reusable one-shot timer. */
+    lv_timer_pause(timer);
+}
+
+static void app_gui_restart_wifi_screen_timer(void)
+{
+    if (s_wifi_screen_timer == NULL) {
+        return;
+    }
+
+    lv_timer_set_period(
+        s_wifi_screen_timer,
+        APP_GUI_WIFI_SCREEN_TIMEOUT_MS);
+
+    lv_timer_resume(s_wifi_screen_timer);
+    lv_timer_reset(s_wifi_screen_timer);
+    ESP_LOGD(TAG, "Timer restarted");
+}
+
 static const char *app_gui_wifi_state_to_string(ui_wifi_state_t state)
 {
     switch (state) {
@@ -238,6 +285,17 @@ esp_err_t app_gui_create_wifi_screen(void)
 
     ESP_LOGI(TAG, "Wi-Fi status screen created");
 
+    if (s_wifi_screen_timer == NULL) {
+        s_wifi_screen_timer = lv_timer_create(
+            app_gui_wifi_screen_timeout_cb,
+            APP_GUI_WIFI_SCREEN_TIMEOUT_MS,
+            NULL
+        );
+    }
+
+    (void)app_gui_set_screen_id(APP_GUI_SCREEN_WIFI);
+    app_gui_restart_wifi_screen_timer();
+
     ui_manager_lvgl_release_mutex();
     return ESP_OK;
 }
@@ -250,6 +308,7 @@ static void app_gui_update_wifi_screen(const ui_wifi_status_t *status)
         (s_wifi_ip_label == NULL)) {
         return;
     }
+    ui_manager_lvgl_wait_for_mutex();
 
     lv_label_set_text(
         s_wifi_mode_label,
@@ -271,6 +330,8 @@ static void app_gui_update_wifi_screen(const ui_wifi_status_t *status)
         (status->ipv4_address[0] != '\0')
             ? status->ipv4_address
             : "-");
+
+    ui_manager_lvgl_release_mutex();
 }
 
 static void app_gui_process_sensor_status(void)
@@ -314,6 +375,15 @@ static void app_gui_process_wifi_status(void)
         return;
     }
 
+    app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
+
+    if ((app_gui_get_screen_id(&screen_id) == ESP_OK) &&
+        (screen_id != APP_GUI_SCREEN_WIFI))
+    {
+        app_gui_create_wifi_screen();
+    }
+    
+    app_gui_restart_wifi_screen_timer();
     app_gui_update_wifi_screen(&wifi_status);
 
     ESP_LOGD(
@@ -356,11 +426,11 @@ static void app_gui_log_stack_usage(const char *task_name)
 
 static void app_gui_process_lvgl(void)
 {
-    ui_manager_lvgl_wait_for_mutex();
-
     app_gui_process_sensor_status();
 
     app_gui_process_wifi_status();
+
+    ui_manager_lvgl_wait_for_mutex();
 
     lv_timer_handler();
 
@@ -594,6 +664,75 @@ esp_err_t app_gui_post_sensor_status(
         ESP_LOGE(TAG, "GUI Sensor queue updating TimeOut");
         return ESP_ERR_TIMEOUT;
     }
+
+    return ESP_OK;
+}
+
+esp_err_t app_gui_set_screen_id(
+    app_gui_screen_id_t screen_id)
+{
+    ESP_RETURN_ON_FALSE(
+        (screen_id == APP_GUI_SCREEN_NONE) ||
+        (screen_id == APP_GUI_SCREEN_WIFI) ||
+        (screen_id == APP_GUI_SCREEN_SENSOR),
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "Invalid application screen ID: %d",
+        (int)screen_id
+    );
+
+    taskENTER_CRITICAL(&s_screen_id_lock);
+    s_current_screen_id = screen_id;
+    taskEXIT_CRITICAL(&s_screen_id_lock);
+
+    ESP_LOGD(TAG, "Application screen ID set to %d", (int)screen_id);
+
+    return ESP_OK;
+}
+
+esp_err_t app_gui_get_screen_id(
+    app_gui_screen_id_t *screen_id)
+{
+    ESP_RETURN_ON_FALSE(
+        screen_id != NULL,
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "Screen ID output pointer is NULL"
+    );
+
+    taskENTER_CRITICAL(&s_screen_id_lock);
+    *screen_id = s_current_screen_id;
+    taskEXIT_CRITICAL(&s_screen_id_lock);
+
+    return ESP_OK;
+}
+
+esp_err_t app_gui_clear_screen(void)
+{
+    lv_obj_t* m_currentScreen = lv_screen_active();
+
+    ESP_RETURN_ON_FALSE(m_currentScreen != NULL,
+    ESP_ERR_INVALID_RESPONSE,
+    TAG,
+    "Failed to get current screen");
+
+    lv_obj_t* m_newScreen = lv_obj_create(NULL);
+    ESP_RETURN_ON_FALSE(m_newScreen != NULL,
+    ESP_ERR_INVALID_RESPONSE,
+    TAG,
+    "Failed to create new screent");
+
+    lv_obj_set_size(m_newScreen, LCD_H_RES, LCD_V_RES);
+    lv_obj_center(m_newScreen);
+
+    lv_screen_load(m_newScreen);
+
+    s_wifi_mode_label = NULL;
+    s_wifi_ssid_label = NULL;
+    s_wifi_ip_label = NULL;
+    (void)app_gui_set_screen_id(APP_GUI_SCREEN_NONE);
+
+    lv_obj_del(m_currentScreen);
 
     return ESP_OK;
 }
