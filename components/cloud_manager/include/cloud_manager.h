@@ -37,14 +37,26 @@ typedef enum
 /** @brief Sensor snapshot copied into the cloud manager's latest-value queue. */
 typedef struct
 {
-    /** Temperature in degrees Celsius. */
+    /**
+     * Temperature copied from sensor_manager.
+     *
+     * The value is serialized as supplied, including a finite failure
+     * sentinel. Consumers must also inspect data_valid and data_stale.
+     */
     float temperature_c;
-    /** Relative humidity percentage. */
+
+    /**
+     * Relative humidity copied from sensor_manager.
+     *
+     * The value is serialized as supplied, including a finite failure
+     * sentinel. Consumers must also inspect data_valid and data_stale.
+     */
     float humidity_percent;
 
-    /** Whether the numeric sensor values are valid. */
+    /** Whether sensor_manager has recorded a successful sample. */
     bool data_valid;
-    /** Whether the retained sensor values are stale. */
+
+    /** Whether the latest successful sample has exceeded its stale timeout. */
     bool data_stale;
 
     /** Sensor manager state encoded for the Firebase payload. */
@@ -121,7 +133,9 @@ esp_err_t cloud_manager_start(void);
  * This non-blocking API copies the structure into a queue of length one. It is
  * suitable for the sensor callback and does not perform network I/O.
  *
- * @param[in] telemetry Snapshot to copy. Valid numeric data must be finite.
+ * @param[in] telemetry Snapshot to copy. Numeric values marked valid must be
+ *            finite. The current payload still serializes finite values when
+ *            data_valid is false or data_stale is true.
  * @return ESP_OK on success, ESP_ERR_INVALID_ARG for invalid input,
  *         ESP_ERR_INVALID_STATE before initialization, or ESP_FAIL if the
  *         queue update fails.

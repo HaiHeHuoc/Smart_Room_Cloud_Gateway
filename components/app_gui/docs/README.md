@@ -94,8 +94,10 @@ sensor_manager task
 An active Wi-Fi screen has priority over sensor snapshots. After the Wi-Fi
 timeout clears that screen, a later sensor snapshot can create the sensor
 screen. A subsequent Wi-Fi event brings the Wi-Fi screen forward again.
-When sensor data is stale, the temperature and humidity labels display `-`
-instead of retaining the last-known-good values.
+When sensor data is invalid or stale, the temperature and humidity labels
+display `-`. The same placeholder is displayed immediately when
+`sensor_manager` posts its `-1.0f` failed-read sentinel, even during the
+temporary `DEGRADED` window before the stale timeout expires.
 
 ## Thread-Safety Contract
 
@@ -118,6 +120,8 @@ instead of retaining the last-known-good values.
 - The sensor queue processes one queued snapshot per GUI iteration rather than
   collapsing directly to the newest snapshot.
 - RSSI and disconnect reason are transported but not displayed.
+- Failed sensor readings currently depend on the private `-1.0f` producer/UI
+  convention in addition to `data_valid` and `data_stale`.
 - `app_gui_clear_screen()` relies on its caller to satisfy the LVGL ownership
   contract.
 - The optional demo task is retained for development only. It stops itself if
