@@ -13,6 +13,7 @@ idf_component_register(SRCS "main.c"
         sensor_DHT22
         sensor_manager
         cloud_manager
+        firebase_auth
 
     PRIV_REQUIRES
         nvs_flash

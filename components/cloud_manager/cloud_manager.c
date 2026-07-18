@@ -7,34 +7,39 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
-#include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 
+#include "firebase_auth.h"
 #include "wifi_manager.h"
 
 /* Macros ------------------------------------------------------------------- */
-#define CLOUD_MANAGER_TASK_NAME               "cloud_manager"
-#define CLOUD_MANAGER_TASK_STACK_SIZE         8192U
-#define CLOUD_MANAGER_TASK_PRIORITY           4U
+#define CLOUD_MANAGER_TASK_NAME                    "cloud_manager"
+#define CLOUD_MANAGER_TASK_STACK_SIZE              12288U
+#define CLOUD_MANAGER_TASK_PRIORITY                4U
 
-#define CLOUD_MANAGER_TELEMETRY_QUEUE_LENGTH    1U
-#define CLOUD_MANAGER_TELEMETRY_THRESHOLD       10U
+#define CLOUD_MANAGER_TELEMETRY_QUEUE_LENGTH       1U
 
-#define CLOUD_MANAGER_HTTP_TIMEOUT_MS         15000U
-#define CLOUD_MANAGER_JSON_BUFFER_SIZE        320U
-#define CLOUD_MANAGER_URL_BUFFER_SIZE         256U
+#define CLOUD_MANAGER_HTTP_TIMEOUT_MS              15000U
+#define CLOUD_MANAGER_JSON_BUFFER_SIZE             320U
+#define CLOUD_MANAGER_URL_BUFFER_SIZE              256U
+#define CLOUD_MANAGER_AUTH_URL_BUFFER_SIZE          \
+    (CLOUD_MANAGER_URL_BUFFER_SIZE +                \
+     FIREBASE_AUTH_ID_TOKEN_BUFFER_SIZE + 64U)
+#define CLOUD_MANAGER_HTTP_TX_BUFFER_SIZE            \
+    (CLOUD_MANAGER_AUTH_URL_BUFFER_SIZE + 256U)
 
-#define CLOUD_MANAGER_MIN_PUBLISH_PERIOD_MS   1000U
+#define CLOUD_MANAGER_MIN_PUBLISH_PERIOD_MS        1000U
 
-#define CLOUD_MANAGER_RETRY_INITIAL_MS        5000U
-#define CLOUD_MANAGER_RETRY_MAX_MS           60000U
-#define CLOUD_MANAGER_NETWORK_CHECK_MS        1000U
-#define CLOUD_MANAGER_MUTEX_TIMEOUT_MS        100U
+#define CLOUD_MANAGER_RETRY_INITIAL_MS             5000U
+#define CLOUD_MANAGER_RETRY_MAX_MS                 60000U
+#define CLOUD_MANAGER_NETWORK_CHECK_MS             1000U
+#define CLOUD_MANAGER_MUTEX_TIMEOUT_MS             100U
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "CLOUD_MANAGER";
@@ -42,7 +47,14 @@ static const char *const TAG = "CLOUD_MANAGER";
 /* Static Variables --------------------------------------------------------- */
 static cloud_manager_config_t s_config;
 
-static char s_firebase_lastest_url[CLOUD_MANAGER_URL_BUFFER_SIZE];
+static char s_firebase_latest_url[
+    CLOUD_MANAGER_URL_BUFFER_SIZE];
+
+static char s_firebase_id_token[
+    FIREBASE_AUTH_ID_TOKEN_BUFFER_SIZE];
+
+static char s_authenticated_url[
+    CLOUD_MANAGER_AUTH_URL_BUFFER_SIZE];
 
 static QueueHandle_t s_telemetry_queue;
 static TaskHandle_t s_cloud_task_handle;
@@ -54,13 +66,6 @@ static cloud_manager_status_t s_status;
 static SemaphoreHandle_t s_status_mutex;
 
 /* Function Prototypes ------------------------------------------------------ */
-static esp_err_t cloud_manager_publish_telemetry(
-    const cloud_sensor_telemetry_t *telemetry,
-    int *http_status_out);
-
-static void cloud_manager_task(
-    void *argument);
-
 static int64_t cloud_manager_get_time_ms(void);
 
 static void cloud_manager_set_state(
@@ -79,6 +84,15 @@ static bool cloud_manager_is_auth_error(
 
 static bool cloud_manager_is_retryable_http_error(
     int http_status);
+
+static esp_err_t cloud_manager_build_authenticated_url(void);
+
+static esp_err_t cloud_manager_publish_telemetry(
+    const cloud_sensor_telemetry_t *telemetry,
+    int *http_status_out);
+
+static void cloud_manager_task(
+    void *argument);
 
 /* Static Functions --------------------------------------------------------- */
 static int64_t cloud_manager_get_time_ms(void)
@@ -188,26 +202,48 @@ static void cloud_manager_record_upload_failure(
             CLOUD_MANAGER_STATE_AUTH_ERROR;
     }
     else if (http_status == 0 ||
-             cloud_manager_is_retryable_http_error(http_status))
+             cloud_manager_is_retryable_http_error(
+                 http_status))
     {
-        /*
-         * http_status == 0 usually means DNS, TCP, TLS,
-         * timeout or another transport-layer failure.
-         */
         s_status.state =
             CLOUD_MANAGER_STATE_RETRY_WAIT;
     }
     else
     {
-        /*
-         * Examples: HTTP 400 or 404.
-         * These usually indicate URL, JSON or configuration errors.
-         */
         s_status.state =
             CLOUD_MANAGER_STATE_ERROR;
     }
 
     xSemaphoreGive(s_status_mutex);
+}
+
+static esp_err_t cloud_manager_build_authenticated_url(void)
+{
+    esp_err_t auth_result =
+        firebase_auth_get_valid_id_token(
+            s_firebase_id_token,
+            sizeof(s_firebase_id_token));
+
+    if (auth_result != ESP_OK)
+    {
+        return auth_result;
+    }
+
+    int url_length =
+        snprintf(
+            s_authenticated_url,
+            sizeof(s_authenticated_url),
+            "%s?auth=%s&print=silent",
+            s_config.firebase_latest_url,
+            s_firebase_id_token);
+
+    if (url_length < 0 ||
+        url_length >= (int)sizeof(s_authenticated_url))
+    {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    return ESP_OK;
 }
 
 static esp_err_t cloud_manager_publish_telemetry(
@@ -221,6 +257,29 @@ static esp_err_t cloud_manager_publish_telemetry(
     }
 
     *http_status_out = 0;
+
+    esp_err_t result =
+        cloud_manager_build_authenticated_url();
+
+    if (result != ESP_OK)
+    {
+        firebase_auth_status_t auth_status;
+
+        if (firebase_auth_get_status(
+                &auth_status) == ESP_OK &&
+            auth_status.state ==
+                FIREBASE_AUTH_STATE_CREDENTIAL_ERROR)
+        {
+            *http_status_out = 401;
+        }
+
+        ESP_LOGW(
+            TAG,
+            "Firebase Authentication failed: %s",
+            esp_err_to_name(result));
+
+        return result;
+    }
 
     char payload[CLOUD_MANAGER_JSON_BUFFER_SIZE];
 
@@ -249,16 +308,21 @@ static esp_err_t cloud_manager_publish_telemetry(
     if (payload_length < 0 ||
         payload_length >= (int)sizeof(payload))
     {
-        ESP_LOGE(TAG, "Telemetry JSON buffer is too small");
+        ESP_LOGE(
+            TAG,
+            "Telemetry JSON buffer is too small");
+
         return ESP_ERR_INVALID_SIZE;
     }
 
     esp_http_client_config_t http_config =
     {
-        .url = s_config.firebase_latest_url,
+        .url = s_authenticated_url,
         .method = HTTP_METHOD_PUT,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .timeout_ms = CLOUD_MANAGER_HTTP_TIMEOUT_MS,
+        /* The request line contains the Firebase ID token query string. */
+        .buffer_size_tx = CLOUD_MANAGER_HTTP_TX_BUFFER_SIZE,
         .keep_alive_enable = true,
     };
 
@@ -267,65 +331,70 @@ static esp_err_t cloud_manager_publish_telemetry(
 
     if (client == NULL)
     {
-        ESP_LOGE(TAG, "Failed to initialize HTTP client");
+        ESP_LOGE(
+            TAG,
+            "Failed to initialize HTTP client");
+
         return ESP_ERR_NO_MEM;
     }
 
-    esp_err_t result =
+    result =
         esp_http_client_set_header(
             client,
             "Content-Type",
             "application/json");
 
-    if (result != ESP_OK)
+    if (result == ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
-            "Failed to set HTTP header: %s",
-            esp_err_to_name(result));
-
-        esp_http_client_cleanup(client);
-        return result;
+        result =
+            esp_http_client_set_post_field(
+                client,
+                payload,
+                payload_length);
     }
 
-    result =
-        esp_http_client_set_post_field(
-            client,
-            payload,
-            payload_length);
-
-    if (result != ESP_OK)
+    if (result == ESP_OK)
     {
-        ESP_LOGE(
+        ESP_LOGI(
             TAG,
-            "Failed to set HTTP payload: %s",
-            esp_err_to_name(result));
+            "Publishing telemetry: T=%.1f C, H=%.1f %%",
+            telemetry->temperature_c,
+            telemetry->humidity_percent);
 
-        esp_http_client_cleanup(client);
-        return result;
+        result =
+            esp_http_client_perform(client);
     }
-
-    ESP_LOGI(
-        TAG,
-        "Publishing telemetry: T=%.1f C, H=%.1f %%",
-        telemetry->temperature_c,
-        telemetry->humidity_percent);
-
-    result = esp_http_client_perform(client);
 
     int http_status =
         esp_http_client_get_status_code(client);
 
+    /*
+     * Firebase may return an authentication challenge that ESP HTTP Client
+     * cannot process as Basic/Digest auth. Preserve the semantic auth error.
+     */
+    if (result == ESP_ERR_NOT_SUPPORTED &&
+        http_status == 0)
+    {
+        http_status = 401;
+    }
+
     *http_status_out = http_status;
+
+    if (http_status == 401)
+    {
+        firebase_auth_invalidate_id_token();
+    }
+
+    esp_http_client_cleanup(client);
 
     if (result != ESP_OK)
     {
         ESP_LOGW(
             TAG,
-            "Firebase request failed: %s",
-            esp_err_to_name(result));
+            "Firebase request failed: %s, HTTP=%d",
+            esp_err_to_name(result),
+            http_status);
 
-        esp_http_client_cleanup(client);
         return result;
     }
 
@@ -333,8 +402,6 @@ static esp_err_t cloud_manager_publish_telemetry(
         TAG,
         "Firebase HTTP status: %d",
         http_status);
-
-    esp_http_client_cleanup(client);
 
     if (http_status < 200 ||
         http_status >= 300)
@@ -347,10 +414,9 @@ static esp_err_t cloud_manager_publish_telemetry(
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "Telemetry published successfully");
-
     return ESP_OK;
 }
+
 static void cloud_manager_task(
     void *argument)
 {
@@ -374,10 +440,6 @@ static void cloud_manager_task(
     {
         cloud_sensor_telemetry_t received_telemetry;
 
-        /*
-         * Drain the queue. It currently has length one, but this loop
-         * preserves the latest value if the implementation changes later.
-         */
         while (xQueueReceive(
                    s_telemetry_queue,
                    &received_telemetry,
@@ -410,10 +472,6 @@ static void cloud_manager_task(
             cloud_manager_set_state(
                 CLOUD_MANAGER_STATE_WAITING_FOR_NETWORK);
 
-            /*
-             * Do not increase upload failure counters because no
-             * Firebase request was attempted.
-             */
             next_delay_ms =
                 CLOUD_MANAGER_NETWORK_CHECK_MS;
         }
@@ -461,10 +519,6 @@ static void cloud_manager_task(
                     http_status,
                     (unsigned long)retry_delay_ms);
 
-                /*
-                 * Keep pending_telemetry so it can be retried.
-                 * A newer queue value will replace it in the next loop.
-                 */
                 next_delay_ms =
                     retry_delay_ms;
 
@@ -487,6 +541,7 @@ static void cloud_manager_task(
             pdMS_TO_TICKS(next_delay_ms));
     }
 }
+
 /* Functions ---------------------------------------------------------------- */
 esp_err_t cloud_manager_init(
     const cloud_manager_config_t *config)
@@ -495,49 +550,6 @@ esp_err_t cloud_manager_init(
         config->firebase_latest_url == NULL)
     {
         return ESP_ERR_INVALID_ARG;
-    }
-
-    s_status_mutex =
-        xSemaphoreCreateMutex();
-
-    if (s_status_mutex == NULL)
-    {
-        ESP_LOGE(
-            TAG,
-            "Failed to create status mutex");
-
-        return ESP_ERR_NO_MEM;
-    }
-
-    memset(
-        &s_status,
-        0,
-        sizeof(s_status));
-
-    s_status.state =
-        CLOUD_MANAGER_STATE_INITIALIZED;
-
-    s_status.last_error = ESP_OK;
-    s_status.last_http_status = 0;
-
-    s_status.current_retry_delay_ms =
-        CLOUD_MANAGER_RETRY_INITIAL_MS;
-
-    s_telemetry_queue =
-        xQueueCreate(
-            CLOUD_MANAGER_TELEMETRY_QUEUE_LENGTH,
-            sizeof(cloud_sensor_telemetry_t));
-
-    if (s_telemetry_queue == NULL)
-    {
-        vSemaphoreDelete(s_status_mutex);
-        s_status_mutex = NULL;
-
-        ESP_LOGE(
-            TAG,
-            "Failed to create telemetry queue");
-
-        return ESP_ERR_NO_MEM;
     }
 
     if (s_is_initialized)
@@ -560,23 +572,38 @@ esp_err_t cloud_manager_init(
         strlen(config->firebase_latest_url);
 
     if (url_length == 0U ||
-        url_length >= sizeof(s_firebase_lastest_url))
+        url_length >= sizeof(s_firebase_latest_url) ||
+        strchr(config->firebase_latest_url, '?') != NULL)
     {
-        ESP_LOGE(TAG, "Invalid Firebase URL length");
+        ESP_LOGE(
+            TAG,
+            "Firebase URL must be a base .json URL without query parameters");
+
         return ESP_ERR_INVALID_ARG;
     }
 
-
     memcpy(
-        s_firebase_lastest_url,
+        s_firebase_latest_url,
         config->firebase_latest_url,
         url_length + 1U);
 
     s_config.firebase_latest_url =
-        s_firebase_lastest_url;
+        s_firebase_latest_url;
 
     s_config.publish_period_ms =
         config->publish_period_ms;
+
+    s_status_mutex =
+        xSemaphoreCreateMutex();
+
+    if (s_status_mutex == NULL)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to create status mutex");
+
+        return ESP_ERR_NO_MEM;
+    }
 
     s_telemetry_queue =
         xQueueCreate(
@@ -585,13 +612,33 @@ esp_err_t cloud_manager_init(
 
     if (s_telemetry_queue == NULL)
     {
-        ESP_LOGE(TAG, "Failed to create telemetry queue");
+        vSemaphoreDelete(s_status_mutex);
+        s_status_mutex = NULL;
+
+        ESP_LOGE(
+            TAG,
+            "Failed to create telemetry queue");
+
         return ESP_ERR_NO_MEM;
     }
 
+    memset(
+        &s_status,
+        0,
+        sizeof(s_status));
+
+    s_status.state =
+        CLOUD_MANAGER_STATE_INITIALIZED;
+
+    s_status.last_error = ESP_OK;
+    s_status.current_retry_delay_ms =
+        CLOUD_MANAGER_RETRY_INITIAL_MS;
+
     s_is_initialized = true;
 
-    ESP_LOGI(TAG, "Initialized");
+    ESP_LOGI(
+        TAG,
+        "Initialized");
 
     return ESP_OK;
 }
@@ -620,32 +667,23 @@ esp_err_t cloud_manager_start(void)
         s_is_started = false;
         s_cloud_task_handle = NULL;
 
-        ESP_LOGE(TAG, "Failed to create cloud task");
+        ESP_LOGE(
+            TAG,
+            "Failed to create cloud task");
 
         return ESP_ERR_NO_MEM;
     }
 
-    ESP_LOGI(TAG, "Started");
+    ESP_LOGI(
+        TAG,
+        "Started");
 
     return ESP_OK;
 }
 
-
 esp_err_t cloud_manager_post_sensor_telemetry(
     const cloud_sensor_telemetry_t *telemetry)
 {
-    static uint8_t m_ui8Counter = 0;
-    m_ui8Counter++;
-    if(m_ui8Counter > CLOUD_MANAGER_TELEMETRY_THRESHOLD)
-    {
-        m_ui8Counter = 0;
-    }
-    else
-    {
-        ESP_LOGI(TAG, "Under threshold: %d", m_ui8Counter);
-        return ESP_OK;
-    }
-
     if (telemetry == NULL)
     {
         return ESP_ERR_INVALID_ARG;
@@ -664,10 +702,7 @@ esp_err_t cloud_manager_post_sensor_telemetry(
         return ESP_ERR_INVALID_ARG;
     }
 
-    /*
-     * telemetry already points to the struct that must be copied.
-     * Do not pass &telemetry here because that would copy the pointer.
-     */
+    /* Queue length is one: always retain the latest telemetry snapshot. */
     if (xQueueOverwrite(
             s_telemetry_queue,
             telemetry) != pdPASS)

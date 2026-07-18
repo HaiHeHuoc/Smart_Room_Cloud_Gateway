@@ -39,6 +39,16 @@ dependencies:
     - esp32s2
     - esp32s3
     version: 1.4.0
+  espressif/cjson:
+    component_hash: e788323270d90738662d66fffa910bfe1fba019bba087f01557e70c40485b469
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.7.19~2
   espressif/libpng:
     component_hash: 30b1f2f8ddf13754b3e21d7ac134b3cc8f02957bb01d0c6deb5e9a68080d69d5
     dependencies:
@@ -82,10 +92,11 @@ dependencies:
     version: 1.0.1
 direct_dependencies:
 - esp-idf-lib/dht
+- espressif/cjson
 - espressif/libpng
 - idf
 - lvgl/lvgl
 - waveshare/esp_lcd_st7735
-manifest_hash: 245258d0971621962362e305bd7b32f1414798d420366728189547d071180859
+manifest_hash: fa51cfd27f9bbc63b338720df5e5ee0ad96bda9855d6c1995a323ec10ba93d58
 target: esp32s3
 version: 3.0.0

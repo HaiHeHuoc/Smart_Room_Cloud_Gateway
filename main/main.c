@@ -42,6 +42,8 @@
 /* cloud_manager ----------------------------------------------------------- */
 #include "cloud_manager.h"
 
+#include "firebase_auth.h"
+
 /* Macros ------------------------------------------------------------------- */
 #define PERFORMANCE_MONITOR 0
 
@@ -68,6 +70,15 @@ static const cloud_manager_config_t CLOUD_MANAGER_CONFIG =
         "devices/esp32s3-001/latest.json",
 
     .publish_period_ms = 10000U,
+};
+
+static const firebase_auth_config_t FIREBASE_AUTH_CONFIG =
+{
+    .api_key = FIREBASE_API_KEY,
+    .email = FIREBASE_DEVICE_EMAIL,
+    .password = FIREBASE_DEVICE_PASSWORD,
+    .expected_uid = FIREBASE_DEVICE_UID,
+    .refresh_margin_seconds = 300U,
 };
 
 /* Function Prototypes ------------------------------------------------------ */
@@ -269,6 +280,10 @@ if (connect_ret != ESP_OK) {
 
     ESP_ERROR_CHECK(
         sensor_manager_start());
+
+    ESP_ERROR_CHECK(
+        firebase_auth_init(
+            &FIREBASE_AUTH_CONFIG));
 
     ESP_ERROR_CHECK(
         cloud_manager_init(

@@ -1,13 +1,16 @@
 #pragma once
 
+/* Includes ----------------------------------------------------------------- */
+#include <stdbool.h>
 #include <stdint.h>
 
-#include <esp_err.h>
+#include "esp_err.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+/* Type Definitions --------------------------------------------------------- */
 typedef enum
 {
     CLOUD_MANAGER_STATE_UNINITIALIZED = 0,
@@ -53,10 +56,14 @@ typedef struct
 
 typedef struct
 {
+    /* Base URL only. Do not append auth or print query parameters here. */
     const char *firebase_latest_url;
+
+    /* Minimum interval between successful cloud uploads. */
     uint32_t publish_period_ms;
 } cloud_manager_config_t;
 
+/* Functions ---------------------------------------------------------------- */
 esp_err_t cloud_manager_init(
     const cloud_manager_config_t *config);
 
