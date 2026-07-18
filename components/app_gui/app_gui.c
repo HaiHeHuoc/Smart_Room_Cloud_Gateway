@@ -26,6 +26,8 @@
 #define APP_GUI_WIFI_VALUE_WIDTH_PX          100
 #define APP_GUI_WIFI_VALUE_HEIGHT_PX          18
 #define APP_GUI_WIFI_IP_VALUE_WIDTH_PX        120
+#define APP_GUI_SENSOR_VALUE_WIDTH_PX          92
+#define APP_GUI_SENSOR_VALUE_HEIGHT_PX         18
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "APP_GUI";
@@ -36,6 +38,10 @@ static QueueHandle_t s_gui_event_queue = NULL;
 static lv_obj_t *s_wifi_mode_label = NULL;
 static lv_obj_t *s_wifi_ssid_label = NULL;
 static lv_obj_t *s_wifi_ip_label = NULL;
+
+static lv_obj_t *s_sensor_temperature_label = NULL;
+static lv_obj_t *s_sensor_humidity_label = NULL;
+static lv_obj_t *s_sensor_state_label = NULL;
 
 static lv_timer_t *s_wifi_screen_timer = NULL;
 static app_gui_screen_id_t s_current_screen_id = APP_GUI_SCREEN_NONE;
@@ -89,6 +95,8 @@ static void app_gui_wifi_screen_timeout_cb(lv_timer_t *timer)
 
     /* Make this timer behave like a reusable one-shot timer. */
     lv_timer_pause(timer);
+
+    app_gui_create_sensor_screen();
 }
 
 static void app_gui_restart_wifi_screen_timer(void)
@@ -152,6 +160,44 @@ static lv_color_t app_gui_wifi_state_color(ui_wifi_state_t state)
     }
 }
 
+static const char *app_gui_sensor_state_to_string(
+    ui_sensor_state_t state)
+{
+    switch (state) {
+        case UI_SENSOR_STATE_READY:
+            return "READY";
+
+        case UI_SENSOR_STATE_DEGRADED:
+            return "DEGRADED";
+
+        case UI_SENSOR_STATE_ERROR:
+            return "ERROR";
+
+        case UI_SENSOR_STATE_INITIALIZING:
+        default:
+            return "INITIALIZING";
+    }
+}
+
+static lv_color_t app_gui_sensor_state_color(
+    ui_sensor_state_t state)
+{
+    switch (state) {
+        case UI_SENSOR_STATE_READY:
+            return lv_color_hex(0x49C978);
+
+        case UI_SENSOR_STATE_DEGRADED:
+            return lv_color_hex(0xFFC857);
+
+        case UI_SENSOR_STATE_ERROR:
+            return lv_color_hex(0xF06464);
+
+        case UI_SENSOR_STATE_INITIALIZING:
+        default:
+            return lv_color_hex(0x4DB6E5);
+    }
+}
+
 static lv_obj_t *app_gui_create_wifi_value_label(
     lv_obj_t *screen,
     int32_t y,
@@ -182,6 +228,35 @@ static lv_obj_t *app_gui_create_wifi_value_label(
     return label;
 }
 
+static lv_obj_t *app_gui_create_sensor_value_label(
+    lv_obj_t *screen,
+    int32_t y,
+    const char *initial_text)
+{
+    lv_obj_t *label = lv_label_create(screen);
+    if (label == NULL) {
+        return NULL;
+    }
+
+    lv_label_set_text(label, initial_text);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_DOTS);
+    lv_obj_set_size(label,
+                    APP_GUI_SENSOR_VALUE_WIDTH_PX,
+                    APP_GUI_SENSOR_VALUE_HEIGHT_PX);
+    lv_obj_set_pos(label, 60, y);
+    lv_obj_set_style_text_color(label,
+                                lv_color_hex(0xF2F5F7),
+                                LV_PART_MAIN);
+    lv_obj_set_style_text_font(label,
+                               &lv_font_montserrat_12,
+                               LV_PART_MAIN);
+    lv_obj_set_style_text_align(label,
+                                LV_TEXT_ALIGN_RIGHT,
+                                LV_PART_MAIN);
+
+    return label;
+}
+
 esp_err_t app_gui_create_wifi_screen(void)
 {
 
@@ -195,6 +270,14 @@ esp_err_t app_gui_create_wifi_screen(void)
     }
 
     lv_obj_clean(screen);
+    s_wifi_mode_label = NULL;
+    s_wifi_ssid_label = NULL;
+    s_wifi_ip_label = NULL;
+    s_sensor_temperature_label = NULL;
+    s_sensor_humidity_label = NULL;
+    s_sensor_state_label = NULL;
+    (void)app_gui_set_screen_id(APP_GUI_SCREEN_NONE);
+
     lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_bg_color(screen,
                               lv_color_hex(0x101619),
@@ -249,9 +332,9 @@ esp_err_t app_gui_create_wifi_screen(void)
 
         lv_label_set_text(field, field_labels[index].text);
         lv_obj_set_pos(field, 8, field_labels[index].y);
-        lv_obj_set_style_text_font(title,
-                            &lv_font_montserrat_20,
-                            LV_PART_MAIN);
+        lv_obj_set_style_text_font(field,
+                                   &lv_font_montserrat_12,
+                                   LV_PART_MAIN);
         lv_obj_set_style_text_color(field,
                                     lv_color_hex(0x8C989F),
                                     LV_PART_MAIN);
@@ -300,15 +383,135 @@ esp_err_t app_gui_create_wifi_screen(void)
     return ESP_OK;
 }
 
+esp_err_t app_gui_create_sensor_screen(void)
+{
+    ui_manager_lvgl_wait_for_mutex();
+
+    lv_obj_t *screen = lv_screen_active();
+    if (screen == NULL) {
+        ESP_LOGE(TAG, "No active LVGL screen for sensor GUI");
+        ui_manager_lvgl_release_mutex();
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    lv_obj_clean(screen);
+    s_wifi_mode_label = NULL;
+    s_wifi_ssid_label = NULL;
+    s_wifi_ip_label = NULL;
+    s_sensor_temperature_label = NULL;
+    s_sensor_humidity_label = NULL;
+    s_sensor_state_label = NULL;
+    (void)app_gui_set_screen_id(APP_GUI_SCREEN_NONE);
+
+    if (s_wifi_screen_timer != NULL) {
+        lv_timer_pause(s_wifi_screen_timer);
+    }
+
+    lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(screen,
+                              lv_color_hex(0x101619),
+                              LV_PART_MAIN);
+
+    lv_obj_t *title = lv_label_create(screen);
+    if (title == NULL) {
+        ui_manager_lvgl_release_mutex();
+        return ESP_ERR_NO_MEM;
+    }
+
+    lv_label_set_text(title, "SENSOR STATUS");
+    lv_obj_set_pos(title, 8, 5);
+    lv_obj_set_style_text_font(title,
+                               &lv_font_montserrat_18,
+                               LV_PART_MAIN);
+    lv_obj_set_style_text_color(title,
+                                lv_color_hex(0xF2F5F7),
+                                LV_PART_MAIN);
+
+    lv_obj_t *divider = lv_obj_create(screen);
+    if (divider == NULL) {
+        ui_manager_lvgl_release_mutex();
+        return ESP_ERR_NO_MEM;
+    }
+
+    lv_obj_remove_style_all(divider);
+    lv_obj_set_size(divider, 144, 1);
+    lv_obj_set_pos(divider, 8, 30);
+    lv_obj_set_style_bg_opa(divider, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(divider,
+                              lv_color_hex(0x344047),
+                              LV_PART_MAIN);
+
+    static const struct {
+        const char *text;
+        int32_t y;
+    } field_labels[] = {
+        {"TEMP",   39},
+        {"HUMID",  66},
+        {"STATUS", 93},
+    };
+
+    for (size_t index = 0U;
+         index < (sizeof(field_labels) / sizeof(field_labels[0]));
+         ++index) {
+        lv_obj_t *field = lv_label_create(screen);
+        if (field == NULL) {
+            ui_manager_lvgl_release_mutex();
+            return ESP_ERR_NO_MEM;
+        }
+
+        lv_label_set_text(field, field_labels[index].text);
+        lv_obj_set_pos(field, 8, field_labels[index].y);
+        lv_obj_set_style_text_font(field,
+                                   &lv_font_montserrat_12,
+                                   LV_PART_MAIN);
+        lv_obj_set_style_text_color(field,
+                                    lv_color_hex(0x8C989F),
+                                    LV_PART_MAIN);
+    }
+
+    s_sensor_temperature_label =
+        app_gui_create_sensor_value_label(screen, 39, "-");
+    s_sensor_humidity_label =
+        app_gui_create_sensor_value_label(screen, 66, "-");
+    s_sensor_state_label =
+        app_gui_create_sensor_value_label(screen, 93, "INITIALIZING");
+
+    if ((s_sensor_temperature_label == NULL) ||
+        (s_sensor_humidity_label == NULL) ||
+        (s_sensor_state_label == NULL)) {
+        s_sensor_temperature_label = NULL;
+        s_sensor_humidity_label = NULL;
+        s_sensor_state_label = NULL;
+        ui_manager_lvgl_release_mutex();
+        return ESP_ERR_NO_MEM;
+    }
+
+    lv_obj_set_style_text_color(
+        s_sensor_state_label,
+        app_gui_sensor_state_color(UI_SENSOR_STATE_INITIALIZING),
+        LV_PART_MAIN);
+
+    (void)app_gui_set_screen_id(APP_GUI_SCREEN_SENSOR);
+    ESP_LOGI(TAG, "Sensor status screen created");
+
+    ui_manager_lvgl_release_mutex();
+    return ESP_OK;
+}
+
 static void app_gui_update_wifi_screen(const ui_wifi_status_t *status)
 {
-    if ((status == NULL) ||
-        (s_wifi_mode_label == NULL) ||
-        (s_wifi_ssid_label == NULL) ||
-        (s_wifi_ip_label == NULL)) {
+    if (status == NULL) {
         return;
     }
+
     ui_manager_lvgl_wait_for_mutex();
+
+    if ((s_wifi_mode_label == NULL) ||
+        (s_wifi_ssid_label == NULL) ||
+        (s_wifi_ip_label == NULL)) {
+        ui_manager_lvgl_release_mutex();
+        return;
+    }
 
     lv_label_set_text(
         s_wifi_mode_label,
@@ -334,10 +537,70 @@ static void app_gui_update_wifi_screen(const ui_wifi_status_t *status)
     ui_manager_lvgl_release_mutex();
 }
 
+static void app_gui_update_sensor_screen(
+    const ui_sensor_status_t *status)
+{
+    if (status == NULL) {
+        return;
+    }
+
+    ui_manager_lvgl_wait_for_mutex();
+
+    if ((s_sensor_temperature_label == NULL) ||
+        (s_sensor_humidity_label == NULL) ||
+        (s_sensor_state_label == NULL)) {
+        ui_manager_lvgl_release_mutex();
+        return;
+    }
+
+    if (status->data_valid) {
+        char temperature_text[16] = {0};
+        char humidity_text[16] = {0};
+
+        (void)snprintf(
+            temperature_text,
+            sizeof(temperature_text),
+            "%.1f C",
+            status->temperature_c);
+        (void)snprintf(
+            humidity_text,
+            sizeof(humidity_text),
+            "%.1f %%",
+            status->humidity_percent);
+
+        lv_label_set_text(
+            s_sensor_temperature_label,
+            temperature_text);
+        lv_label_set_text(
+            s_sensor_humidity_label,
+            humidity_text);
+    }
+    else {
+        lv_label_set_text(s_sensor_temperature_label, "-");
+        lv_label_set_text(s_sensor_humidity_label, "-");
+    }
+
+    const ui_sensor_state_t displayed_state =
+        status->data_stale
+            ? UI_SENSOR_STATE_DEGRADED
+            : status->state;
+
+    lv_label_set_text(
+        s_sensor_state_label,
+        status->data_stale
+            ? "STALE"
+            : app_gui_sensor_state_to_string(status->state));
+    lv_obj_set_style_text_color(
+        s_sensor_state_label,
+        app_gui_sensor_state_color(displayed_state),
+        LV_PART_MAIN);
+
+    ui_manager_lvgl_release_mutex();
+}
+
 static void app_gui_process_sensor_status(void)
 {
-    // ui_wifi_status_t wifi_status = {0};
-    ui_sensor_status_t sensor_status;
+    ui_sensor_status_t sensor_status = {0};
 
     if ((s_gui_event_queue == NULL) ||
         (xQueueReceive(
@@ -347,7 +610,28 @@ static void app_gui_process_sensor_status(void)
         return;
     }
 
-    // app_gui_update_sensor_screen(&sensor_status);
+    app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
+
+    if (app_gui_get_screen_id(&screen_id) == ESP_OK) {
+        if (screen_id != APP_GUI_SCREEN_SENSOR) {
+            app_gui_clear_screen();
+            const esp_err_t ret = app_gui_create_sensor_screen();
+            if (ret != ESP_OK) {
+                ESP_LOGE(
+                    TAG,
+                    "Failed to create sensor screen: %s",
+                    esp_err_to_name(ret));
+            }
+            else {
+                screen_id = APP_GUI_SCREEN_SENSOR;
+            }
+        }
+
+        if (screen_id == APP_GUI_SCREEN_SENSOR) {
+            app_gui_update_sensor_screen(&sensor_status);
+        }
+    }
+
     ESP_LOGD(
         TAG,
         "GUI received sensor status: \
@@ -380,6 +664,7 @@ static void app_gui_process_wifi_status(void)
     if ((app_gui_get_screen_id(&screen_id) == ESP_OK) &&
         (screen_id != APP_GUI_SCREEN_WIFI))
     {
+        app_gui_clear_screen();
         app_gui_create_wifi_screen();
     }
     
@@ -730,6 +1015,9 @@ esp_err_t app_gui_clear_screen(void)
     s_wifi_mode_label = NULL;
     s_wifi_ssid_label = NULL;
     s_wifi_ip_label = NULL;
+    s_sensor_temperature_label = NULL;
+    s_sensor_humidity_label = NULL;
+    s_sensor_state_label = NULL;
     (void)app_gui_set_screen_id(APP_GUI_SCREEN_NONE);
 
     lv_obj_del(m_currentScreen);

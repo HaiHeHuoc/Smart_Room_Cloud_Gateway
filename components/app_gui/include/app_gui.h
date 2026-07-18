@@ -110,8 +110,33 @@ void app_gui_create_demo_screen(void);
  */
 esp_err_t app_gui_start_running_demo_task(void);
 
+/**
+ * @brief Create and activate the Wi-Fi status screen.
+ *
+ * @return ESP_OK on success, ESP_ERR_INVALID_STATE if LVGL has no active
+ *         screen, or ESP_ERR_NO_MEM if a widget cannot be created.
+ */
 esp_err_t app_gui_create_wifi_screen(void);
 
+/**
+ * @brief Create and activate the temperature and humidity sensor screen.
+ *
+ * Sensor status updates posted through app_gui_post_sensor_status() are
+ * applied by the GUI task while this screen is active.
+ *
+ * @return ESP_OK on success, ESP_ERR_INVALID_STATE if LVGL has no active
+ *         screen, or ESP_ERR_NO_MEM if a widget cannot be created.
+ */
+esp_err_t app_gui_create_sensor_screen(void);
+
+/**
+ * @brief Post a sensor status snapshot to the GUI task without waiting.
+ *
+ * @param status Sensor status to copy into the GUI queue.
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG if status is NULL,
+ *         ESP_ERR_INVALID_STATE before app_gui_init(), or ESP_ERR_TIMEOUT
+ *         when the queue is full.
+ */
 esp_err_t app_gui_post_sensor_status(
     const ui_sensor_status_t *status);
 
