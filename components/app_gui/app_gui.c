@@ -36,6 +36,8 @@ static const char *const TAG = "APP_GUI";
 /* GUI task communication and active-screen tracking. */
 static QueueHandle_t s_wifi_status_queue = NULL;
 static QueueHandle_t s_sensor_status_queue = NULL;
+static TaskHandle_t s_ui_task_handle = NULL;
+static TaskHandle_t s_demo_task_handle = NULL;
 static app_gui_screen_id_t s_current_screen_id = APP_GUI_SCREEN_NONE;
 static portMUX_TYPE s_screen_id_lock = portMUX_INITIALIZER_UNLOCKED;
 
@@ -81,10 +83,21 @@ void app_gui_create_demo_screen(void)
     ui_manager_lvgl_wait_for_mutex();
 
     lv_obj_t *screen = lv_screen_active();
+    if (screen == NULL) {
+        ESP_LOGE(TAG, "No active LVGL screen for demo GUI");
+        ui_manager_lvgl_release_mutex();
+        return;
+    }
 
     lv_obj_set_style_bg_color(screen, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
 
     lv_obj_t *label = lv_label_create(screen);
+    if (label == NULL) {
+        ESP_LOGE(TAG, "Failed to create demo label");
+        ui_manager_lvgl_release_mutex();
+        return;
+    }
+
     lv_label_set_text(label, "LVGL OK");
     lv_obj_set_style_text_color(label, lv_color_hex(0x00FF00), 0);
     lv_obj_set_style_text_font(label, LV_FONT_DEFAULT, 0);
@@ -806,10 +819,26 @@ static void app_gui_running_demo(void *parameter)
     LV_ALIGN_BOTTOM_RIGHT,
     };
 
-    ui_manager_lvgl_wait_for_mutex(); 
-    lv_obj_t *screen = lv_screen_active(); 
+    ui_manager_lvgl_wait_for_mutex();
+    lv_obj_t *screen = lv_screen_active();
+    if (screen == NULL) {
+        ESP_LOGE(TAG, "No active LVGL screen for running demo");
+        ui_manager_lvgl_release_mutex();
+        s_demo_task_handle = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
     lv_obj_set_style_bg_color(screen, lv_color_hex(0xFFFFFF), LV_PART_MAIN); // Set background color to white 
-    lv_obj_t *label = lv_label_create(screen); 
+    lv_obj_t *label = lv_label_create(screen);
+    if (label == NULL) {
+        ESP_LOGE(TAG, "Failed to create running demo label");
+        ui_manager_lvgl_release_mutex();
+        s_demo_task_handle = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
     lv_label_set_text(label, "LVGL OK"); 
     lv_obj_set_style_text_color(label, lv_color_hex(0xFF0000), 0);
     lv_obj_set_style_text_font(label, LV_FONT_DEFAULT, 0); 
@@ -823,6 +852,14 @@ static void app_gui_running_demo(void *parameter)
         vTaskDelay(pdMS_TO_TICKS(500)); 
         // Delay for 1 second 
         ui_manager_lvgl_wait_for_mutex();
+        if (!lv_obj_is_valid(label)) {
+            ESP_LOGW(TAG, "Running demo stopped because its label was deleted");
+            ui_manager_lvgl_release_mutex();
+            s_demo_task_handle = NULL;
+            vTaskDelete(NULL);
+            return;
+        }
+
         char text[20]; counter = (counter + 1) % 100; 
         // Increment counter and wrap around at 100 
         snprintf(text, sizeof(text), "Counter: %d", counter); 
@@ -878,16 +915,22 @@ esp_err_t app_gui_start_ui_task(void)
         return ESP_ERR_INVALID_STATE;
     }
 
+    if (s_ui_task_handle != NULL) {
+        ESP_LOGW(TAG, "Application GUI task is already running");
+        return ESP_ERR_INVALID_STATE;
+    }
+
     BaseType_t task_ret = xTaskCreate(
         app_gui_ui_task,
         "app_gui_ui",
         APP_GUI_UI_TASK_STACK_SIZE_BYTES,
         NULL,
         APP_GUI_TASK_PRIORITY,
-        NULL
+        &s_ui_task_handle
     );
 
     if (task_ret != pdPASS) {
+        s_ui_task_handle = NULL;
         ESP_LOGE(TAG,
                  "Failed to create application GUI task with %u-byte stack",
                  (unsigned int)APP_GUI_UI_TASK_STACK_SIZE_BYTES);
@@ -909,16 +952,22 @@ esp_err_t app_gui_start_running_demo_task(void)
         return ESP_ERR_INVALID_STATE;
     }
 
+    if (s_demo_task_handle != NULL) {
+        ESP_LOGW(TAG, "LVGL demo task is already running");
+        return ESP_ERR_INVALID_STATE;
+    }
+
     BaseType_t task_ret = xTaskCreate(
         app_gui_running_demo,
         "lvgl_demo",
         APP_GUI_DEMO_TASK_STACK_SIZE_BYTES,
         NULL,
         APP_GUI_TASK_PRIORITY,
-        NULL
+        &s_demo_task_handle
     );
 
     if (task_ret != pdPASS) {
+        s_demo_task_handle = NULL;
         ESP_LOGE(TAG,
                  "Failed to create LVGL demo task with %u-byte stack",
                  (unsigned int)APP_GUI_DEMO_TASK_STACK_SIZE_BYTES);

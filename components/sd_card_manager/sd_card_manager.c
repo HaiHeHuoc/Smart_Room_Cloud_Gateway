@@ -41,6 +41,14 @@ static sdmmc_card_t *s_card = NULL;
 static bool s_sd_mounted = false;
 static bool s_spi_bus_initialized = false;
 
+/* Function Prototypes ------------------------------------------------------ */
+static esp_err_t sd_card_manager_init_spi_bus(void);
+static esp_err_t sd_card_manager_mount_filesystem(void);
+static esp_err_t sd_card_manager_list_files_recursive_internal(
+    const char *dir_path,
+    uint8_t current_depth,
+    uint8_t max_depth);
+
 /* Static Functions --------------------------------------------------------- */
 /**
  * @brief Initialize the SPI bus used by the SD card.

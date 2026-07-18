@@ -126,6 +126,10 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t *display_handle)
     // Validate the display handle and its panel handle before proceeding
     ESP_RETURN_ON_FALSE(display_handle != NULL, ESP_ERR_INVALID_ARG, TAG, "Invalid display handle pointer");
     ESP_RETURN_ON_FALSE(display_handle->panel_handle != NULL, ESP_ERR_INVALID_ARG, TAG, "Invalid panel handle pointer");
+    ESP_RETURN_ON_FALSE(s_lvgl_mutex == NULL,
+                        ESP_ERR_INVALID_STATE,
+                        TAG,
+                        "LVGL UI manager is already initialized");
 
     ESP_LOGI(TAG, "Initialize LVGL UI manager");
     s_display_handle = display_handle; // Store the display handle for later use
@@ -386,7 +390,12 @@ static void ui_manager_lvgl_swap_rgb565_bytes(uint16_t *buffer,
  */
 void ui_manager_lvgl_wait_for_mutex(void)
 {
-    xSemaphoreTake(s_lvgl_mutex, portMAX_DELAY);
+    if (s_lvgl_mutex == NULL) {
+        ESP_LOGE(TAG, "Cannot acquire LVGL mutex before initialization");
+        return;
+    }
+
+    (void)xSemaphoreTake(s_lvgl_mutex, portMAX_DELAY);
 }
 
 /**
@@ -395,5 +404,10 @@ void ui_manager_lvgl_wait_for_mutex(void)
  */
 void ui_manager_lvgl_release_mutex(void)
 {
-    xSemaphoreGive(s_lvgl_mutex);
+    if (s_lvgl_mutex == NULL) {
+        ESP_LOGE(TAG, "Cannot release LVGL mutex before initialization");
+        return;
+    }
+
+    (void)xSemaphoreGive(s_lvgl_mutex);
 }

@@ -174,7 +174,14 @@ void app_main(void)
         // Scan files inside specific folder
         // sd_card_manager_list_files(NULL);
 
-        ESP_ERROR_CHECK(lvgl_sd_fs_register());
+        esp_err_t fs_ret = lvgl_sd_fs_register();
+        if (fs_ret != ESP_OK) {
+            ESP_LOGE(
+                TAG,
+                "Failed to register LVGL SD filesystem: %s",
+                esp_err_to_name(fs_ret));
+            return;
+        }
     }
 
     if (lvgl_ret != ESP_OK) {
@@ -269,28 +276,74 @@ if (connect_ret != ESP_OK) {
 
     return;
 }
-    ESP_ERROR_CHECK(
-    sensor_manager_init(
-        &SENSOR_MANAGER_CONFIG));
+    esp_err_t service_ret =
+        sensor_manager_init(
+            &SENSOR_MANAGER_CONFIG);
 
-    ESP_ERROR_CHECK(
-    sensor_manager_register_callback(
-        app_sensor_status_callback,
-        NULL));
+    if (service_ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Failed to initialize sensor manager: %s",
+            esp_err_to_name(service_ret));
+        return;
+    }
 
-    ESP_ERROR_CHECK(
-        sensor_manager_start());
+    service_ret =
+        sensor_manager_register_callback(
+            app_sensor_status_callback,
+            NULL);
 
-    ESP_ERROR_CHECK(
+    if (service_ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Failed to register sensor callback: %s",
+            esp_err_to_name(service_ret));
+        return;
+    }
+
+    service_ret = sensor_manager_start();
+
+    if (service_ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Failed to start sensor manager: %s",
+            esp_err_to_name(service_ret));
+        return;
+    }
+
+    service_ret =
         firebase_auth_init(
-            &FIREBASE_AUTH_CONFIG));
+            &FIREBASE_AUTH_CONFIG);
 
-    ESP_ERROR_CHECK(
+    if (service_ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Failed to initialize Firebase Authentication: %s",
+            esp_err_to_name(service_ret));
+        return;
+    }
+
+    service_ret =
         cloud_manager_init(
-            &CLOUD_MANAGER_CONFIG));
+            &CLOUD_MANAGER_CONFIG);
 
-    ESP_ERROR_CHECK(
-        cloud_manager_start());
+    if (service_ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Failed to initialize cloud manager: %s",
+            esp_err_to_name(service_ret));
+        return;
+    }
+
+    service_ret = cloud_manager_start();
+
+    if (service_ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Failed to start cloud manager: %s",
+            esp_err_to_name(service_ret));
+        return;
+    }
 
     while (1)
     {

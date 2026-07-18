@@ -96,7 +96,8 @@ esp_err_t app_gui_init(void);
  * app_gui_init() and ui_manager_lvgl_init() must be called first.
  *
  * @return ESP_OK on success, ESP_ERR_INVALID_STATE if app_gui_init() has not
- *         completed, or ESP_ERR_NO_MEM if task creation fails.
+ *         completed or the task is already running, or ESP_ERR_NO_MEM if task
+ *         creation fails.
  */
 esp_err_t app_gui_start_ui_task(void);
 
@@ -199,7 +200,8 @@ void app_gui_create_demo_screen(void);
 /**
  * @brief Start the optional moving-label demonstration task.
  *
- * @return ESP_OK on success, ESP_ERR_INVALID_STATE before app_gui_init(), or
- *         ESP_ERR_NO_MEM if task creation fails.
+ * @return ESP_OK on success, ESP_ERR_INVALID_STATE before app_gui_init() or
+ *         when the demo task is already running, or ESP_ERR_NO_MEM if task
+ *         creation fails.
  */
 esp_err_t app_gui_start_running_demo_task(void);

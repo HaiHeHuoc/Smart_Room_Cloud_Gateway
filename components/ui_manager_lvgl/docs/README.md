@@ -87,16 +87,18 @@ ui_manager_lvgl_release_mutex();
 - `ui_manager_lvgl_wait_for_mutex()` waits indefinitely. Only call it after
   successful `ui_manager_lvgl_init()`, keep the locked section short, and
   always pair it with `ui_manager_lvgl_release_mutex()`.
+- Calls that acquire or release the mutex before initialization are logged and
+  ignored instead of passing a NULL handle to FreeRTOS.
 - `ui_manager_lvgl` does not own a generic UI callback queue. Application
   tasks that call LVGL directly must use the manager mutex.
 - Wi-Fi status queueing and the 24 KB LVGL timer task are owned by `app_gui`,
   not this component.
-- Initialization failures after partial allocation do not currently release
-  already-created mutexes, semaphores, buffers, or timers; retrying init in the
-  same boot is unsupported.
+- A second initialization attempt returns `ESP_ERR_INVALID_STATE` once the
+  mutex has been created. Initialization failures after partial allocation do
+  not currently release already-created resources, so retrying in the same
+  boot remains unsupported.
 
 ## Future Attention
 
-- Add init/deinit guards if the manager must support repeated initialization.
 - Add cleanup for partial initialization failures and a deinit path if display
   shutdown or restart becomes necessary.

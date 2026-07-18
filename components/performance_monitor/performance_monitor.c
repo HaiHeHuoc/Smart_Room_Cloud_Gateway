@@ -51,15 +51,14 @@
 #define PERF_DMA_RAM_CAPS \
     (MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA)
 
-/* Type Definitions --------------------------------------------------------- */
+/* Constants ---------------------------------------------------------------- */
+static const char *const TAG = "PERF_MONITOR";
 
+/* Type Definitions --------------------------------------------------------- */
 typedef struct {
     uint32_t used_x10;
     uint32_t idle_x10;
 } performance_monitor_cpu_result_t;
-
-/* Constants ---------------------------------------------------------------- */
-static const char *const TAG = "PERF_MONITOR";
 
 /* Static Variables --------------------------------------------------------- */
 static TaskHandle_t s_monitor_task_handle = NULL;
@@ -73,6 +72,30 @@ static TaskHandle_t s_monitor_task_handle = NULL;
 static TaskStatus_t s_start_snapshot[PERF_MONITOR_MAX_TASKS];
 static TaskStatus_t s_end_snapshot[PERF_MONITOR_MAX_TASKS];
 #endif
+
+/* Function Prototypes ------------------------------------------------------ */
+static bool performance_monitor_is_idle_task(
+    const char *task_name);
+
+#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+static const TaskStatus_t *performance_monitor_find_task(
+    const TaskStatus_t *tasks,
+    UBaseType_t task_count,
+    TaskHandle_t task_handle);
+static esp_err_t performance_monitor_measure_cpu(
+    TickType_t measurement_ticks,
+    performance_monitor_cpu_result_t *result);
+#endif
+
+static void performance_monitor_log_cpu(
+    const performance_monitor_cpu_result_t *cpu);
+static void performance_monitor_log_heap_region(
+    const char *name,
+    uint32_t capabilities);
+static void performance_monitor_log_memory(void);
+static void performance_monitor_log_app_flash(void);
+static void performance_monitor_log_task_stack(void);
+static void performance_monitor_task(void *argument);
 
 /* Static Functions --------------------------------------------------------- */
 

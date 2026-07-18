@@ -25,6 +25,35 @@ static const char *const TAG = "LVGL_SD_FS";
 static lv_fs_drv_t s_lvgl_sd_fs_drv;
 static bool s_lvgl_sd_fs_registered = false;
 
+/* Function Prototypes ------------------------------------------------------ */
+static bool lvgl_sd_fs_build_full_path(
+    const char *lvgl_path,
+    char *out_path,
+    size_t out_path_size);
+static bool lvgl_sd_fs_ready_cb(lv_fs_drv_t *drv);
+static void *lvgl_sd_fs_open_cb(
+    lv_fs_drv_t *drv,
+    const char *path,
+    lv_fs_mode_t mode);
+static lv_fs_res_t lvgl_sd_fs_close_cb(
+    lv_fs_drv_t *drv,
+    void *file_p);
+static lv_fs_res_t lvgl_sd_fs_read_cb(
+    lv_fs_drv_t *drv,
+    void *file_p,
+    void *buf,
+    uint32_t btr,
+    uint32_t *br);
+static lv_fs_res_t lvgl_sd_fs_seek_cb(
+    lv_fs_drv_t *drv,
+    void *file_p,
+    uint32_t pos,
+    lv_fs_whence_t whence);
+static lv_fs_res_t lvgl_sd_fs_tell_cb(
+    lv_fs_drv_t *drv,
+    void *file_p,
+    uint32_t *pos_p);
+
 /* Static Functions --------------------------------------------------------- */
 /**
  * @brief Convert an LVGL relative file path into an SD card VFS path.
