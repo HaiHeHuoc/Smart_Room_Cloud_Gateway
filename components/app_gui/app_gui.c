@@ -33,33 +33,56 @@
 static const char *const TAG = "APP_GUI";
 
 /* Static Variables --------------------------------------------------------- */
+/* GUI task communication and active-screen tracking. */
 static QueueHandle_t s_wifi_status_queue = NULL;
-static QueueHandle_t s_gui_event_queue = NULL;
+static QueueHandle_t s_sensor_status_queue = NULL;
+static app_gui_screen_id_t s_current_screen_id = APP_GUI_SCREEN_NONE;
+static portMUX_TYPE s_screen_id_lock = portMUX_INITIALIZER_UNLOCKED;
+
+/* Wi-Fi object references are valid only while the Wi-Fi screen is active. */
 static lv_obj_t *s_wifi_mode_label = NULL;
 static lv_obj_t *s_wifi_ssid_label = NULL;
 static lv_obj_t *s_wifi_ip_label = NULL;
+static lv_timer_t *s_wifi_screen_timer = NULL;
 
+/* Sensor object references are valid only while the sensor screen is active. */
 static lv_obj_t *s_sensor_temperature_label = NULL;
 static lv_obj_t *s_sensor_humidity_label = NULL;
 static lv_obj_t *s_sensor_state_label = NULL;
 
-static lv_timer_t *s_wifi_screen_timer = NULL;
-static app_gui_screen_id_t s_current_screen_id = APP_GUI_SCREEN_NONE;
-static portMUX_TYPE s_screen_id_lock = portMUX_INITIALIZER_UNLOCKED;
+/* Function Prototypes ------------------------------------------------------ */
+static void app_gui_wifi_screen_timeout_cb(lv_timer_t *timer);
+static void app_gui_restart_wifi_screen_timer(void);
+static const char *app_gui_wifi_state_to_string(ui_wifi_state_t state);
+static lv_color_t app_gui_wifi_state_color(ui_wifi_state_t state);
+static const char *app_gui_sensor_state_to_string(ui_sensor_state_t state);
+static lv_color_t app_gui_sensor_state_color(ui_sensor_state_t state);
+static lv_obj_t *app_gui_create_wifi_value_label(
+    lv_obj_t *screen,
+    int32_t y,
+    const char *initial_text);
+static lv_obj_t *app_gui_create_sensor_value_label(
+    lv_obj_t *screen,
+    int32_t y,
+    const char *initial_text);
+static void app_gui_update_wifi_screen(const ui_wifi_status_t *status);
+static void app_gui_update_sensor_screen(const ui_sensor_status_t *status);
+static void app_gui_process_sensor_status(void);
+static void app_gui_process_wifi_status(void);
+static void app_gui_log_stack_usage(const char *task_name);
+static void app_gui_process_lvgl(void);
+static void app_gui_ui_task(void *param);
+static void app_gui_running_demo(void *parameter);
 
 /* Application -------------------------------------------------------------- */
-/**
- * @brief Demo function to create a simple screen with a label displaying "LVGL OK".
- * 
- */
 void app_gui_create_demo_screen(void)
 {
-    // waiting for the LVGL mutex to ensure thread safety
+    /* All LVGL object access is serialized through the UI manager mutex. */
     ui_manager_lvgl_wait_for_mutex();
 
     lv_obj_t *screen = lv_screen_active();
 
-    lv_obj_set_style_bg_color(screen, lv_color_hex(0xFFFFFF), LV_PART_MAIN); // Set background color to white
+    lv_obj_set_style_bg_color(screen, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
 
     lv_obj_t *label = lv_label_create(screen);
     lv_label_set_text(label, "LVGL OK");
@@ -73,8 +96,14 @@ void app_gui_create_demo_screen(void)
 }
 
 /* Static Functions --------------------------------------------------------- */
+/* Wi-Fi Screen Helpers ----------------------------------------------------- */
 static void app_gui_wifi_screen_timeout_cb(lv_timer_t *timer)
 {
+    /*
+     * LVGL invokes this callback from lv_timer_handler(), while the app GUI
+     * task already owns the LVGL mutex. app_gui_clear_screen() must therefore
+     * not attempt to lock that non-recursive mutex again.
+     */
     app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
 
     if ((app_gui_get_screen_id(&screen_id) != ESP_OK) ||
@@ -159,6 +188,7 @@ static lv_color_t app_gui_wifi_state_color(ui_wifi_state_t state)
     }
 }
 
+/* Sensor Screen Helpers --------------------------------------------------- */
 static const char *app_gui_sensor_state_to_string(
     ui_sensor_state_t state)
 {
@@ -256,6 +286,7 @@ static lv_obj_t *app_gui_create_sensor_value_label(
     return label;
 }
 
+/* Wi-Fi Screen Construction ----------------------------------------------- */
 esp_err_t app_gui_create_wifi_screen(void)
 {
 
@@ -382,6 +413,7 @@ esp_err_t app_gui_create_wifi_screen(void)
     return ESP_OK;
 }
 
+/* Sensor Screen Construction ---------------------------------------------- */
 esp_err_t app_gui_create_sensor_screen(void)
 {
     ui_manager_lvgl_wait_for_mutex();
@@ -497,6 +529,7 @@ esp_err_t app_gui_create_sensor_screen(void)
     return ESP_OK;
 }
 
+/* Wi-Fi Screen Update ------------------------------------------------------ */
 static void app_gui_update_wifi_screen(const ui_wifi_status_t *status)
 {
     if (status == NULL) {
@@ -536,6 +569,7 @@ static void app_gui_update_wifi_screen(const ui_wifi_status_t *status)
     ui_manager_lvgl_release_mutex();
 }
 
+/* Sensor Screen Update ---------------------------------------------------- */
 static void app_gui_update_sensor_screen(
     const ui_sensor_status_t *status)
 {
@@ -597,13 +631,14 @@ static void app_gui_update_sensor_screen(
     ui_manager_lvgl_release_mutex();
 }
 
+/* Sensor Queue Processing ------------------------------------------------- */
 static void app_gui_process_sensor_status(void)
 {
     ui_sensor_status_t sensor_status = {0};
 
-    if ((s_gui_event_queue == NULL) ||
+    if ((s_sensor_status_queue == NULL) ||
         (xQueueReceive(
-            s_gui_event_queue,
+            s_sensor_status_queue,
             &sensor_status,
             0) != pdTRUE)) {
         return;
@@ -646,6 +681,7 @@ static void app_gui_process_sensor_status(void)
     );
 }
 
+/* Wi-Fi Queue Processing -------------------------------------------------- */
 static void app_gui_process_wifi_status(void)
 {
     ui_wifi_status_t wifi_status = {0};
@@ -689,6 +725,7 @@ static void app_gui_process_wifi_status(void)
     
 }
 
+/* GUI Task Core ----------------------------------------------------------- */
 static void app_gui_log_stack_usage(const char *task_name)
 {
     const UBaseType_t minimum_free_stack =
@@ -710,6 +747,7 @@ static void app_gui_log_stack_usage(const char *task_name)
 
 static void app_gui_process_lvgl(void)
 {
+    /* Queue handlers do not wait; LVGL timers are then serviced once. */
     app_gui_process_sensor_status();
 
     app_gui_process_wifi_status();
@@ -741,14 +779,10 @@ static void app_gui_ui_task(void *param)
     }
 }
 
-/**
- * @brief Demo function for LVGL while running
- * 
- * @param vPrama 
- */
-static void app_gui_running_demo(void* vPrama)
+/* Demo Task --------------------------------------------------------------- */
+static void app_gui_running_demo(void *parameter)
 {
-    (void)vPrama;
+    (void)parameter;
 
     const lv_align_t state[9] = {   
     LV_ALIGN_TOP_LEFT,
@@ -790,6 +824,7 @@ static void app_gui_running_demo(void* vPrama)
 }
 
 /* Functions ---------------------------------------------------------------- */
+/* Lifecycle ---------------------------------------------------------------- */
 esp_err_t app_gui_init(void)
 {
     if (s_wifi_status_queue != NULL) {
@@ -809,13 +844,13 @@ esp_err_t app_gui_init(void)
         "Failed to create Wi-Fi GUI status queue"
     );
 
-    s_gui_event_queue =
+    s_sensor_status_queue =
         xQueueCreate(
             APP_GUI_SENSOR_STATUS_QUEUE_LENGTH,
             sizeof(ui_sensor_status_t)
         );
 
-    ESP_RETURN_ON_FALSE(s_gui_event_queue != NULL,
+    ESP_RETURN_ON_FALSE(s_sensor_status_queue != NULL,
         ESP_ERR_INVALID_ARG,
         TAG,
         "Failed to create Sensor GUI status queue"
@@ -856,12 +891,7 @@ esp_err_t app_gui_start_ui_task(void)
     return ESP_OK;
 }
 
-/**
- * @brief Start running demo task
- *
- * @return ESP_OK on success, ESP_ERR_INVALID_STATE if app_gui is not
- *         initialized, or ESP_ERR_NO_MEM if task creation fails.
- */
+/* Demo API ----------------------------------------------------------------- */
 esp_err_t app_gui_start_running_demo_task(void)
 {
     if (s_wifi_status_queue == NULL) {
@@ -891,8 +921,7 @@ esp_err_t app_gui_start_running_demo_task(void)
 
     return ESP_OK;
 }
-
-
+/* Status Queue API --------------------------------------------------------- */
 esp_err_t app_gui_post_wifi_status(
     const ui_wifi_status_t *status)
 {
@@ -931,13 +960,13 @@ esp_err_t app_gui_post_sensor_status(
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (s_gui_event_queue == NULL)
+    if (s_sensor_status_queue == NULL)
     {
         return ESP_ERR_INVALID_STATE;
     }
 
     if (xQueueSend(
-            s_gui_event_queue,
+            s_sensor_status_queue,
             status,
             0) != pdPASS)
     {
@@ -952,6 +981,7 @@ esp_err_t app_gui_post_sensor_status(
     return ESP_OK;
 }
 
+/* Screen State API --------------------------------------------------------- */
 esp_err_t app_gui_set_screen_id(
     app_gui_screen_id_t screen_id)
 {
@@ -991,9 +1021,13 @@ esp_err_t app_gui_get_screen_id(
     return ESP_OK;
 }
 
+/* Screen Lifecycle API ----------------------------------------------------- */
 esp_err_t app_gui_clear_screen(void)
 {
-
+    /*
+     * This function intentionally does not acquire the LVGL mutex. Callers
+     * must already serialize LVGL access as documented in app_gui.h.
+     */
     lv_obj_t* m_currentScreen = lv_screen_active();
 
     ESP_RETURN_ON_FALSE(m_currentScreen != NULL,

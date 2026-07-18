@@ -2,29 +2,38 @@
 
 ## Purpose
 
-`app_gui` owns application-facing LVGL tasks, screens, and UI data queues.
-`ui_manager_lvgl` remains responsible for LVGL/display initialization, mutex,
-tick timer, and LCD flush integration.
+`app_gui` owns application-facing LVGL screens, the GUI task, and the queues
+used to move Wi-Fi and sensor snapshots into the LVGL context.
+`ui_manager_lvgl` continues to own LVGL initialization, the tick timer, display
+flush integration, and the non-recursive LVGL mutex.
+
+## Source Organization
+
+The implementation remains in one source file to keep the existing state and
+call sequence unchanged. `app_gui.c` is grouped into these responsibilities:
+
+- GUI core: queues, active screen ID, GUI task, stack monitoring, and LVGL
+  timer handling.
+- Wi-Fi UI: Wi-Fi widgets, state formatting, update processing, and the
+  reusable 10-second screen timer.
+- Sensor UI: temperature/humidity widgets, state formatting, and sensor queue
+  processing.
+- Demo UI: optional static and moving-label demonstrations.
 
 ## What Is Implemented
 
-- Owns the 24 KB application GUI task that calls `lv_timer_handler()` every
-  33 ms.
-- Locks the LVGL mutex while processing queued UI data and LVGL timers.
-- Logs GUI task stack high-water status every 60 seconds.
-- Owns a length-one Wi-Fi status queue that always keeps the newest update.
-- Defines `ui_wifi_state_t` and `ui_wifi_status_t`.
-- Tracks the active application screen as `NONE`, `WIFI`, or `SENSOR` using
-  thread-safe set/get APIs.
-- Provides a non-blocking Wi-Fi status post API suitable for the ESP event-loop
-  callback path.
-- Displays Wi-Fi mode, SSID, and IPv4 address on a fixed 160 x 128 landscape
-  screen.
-- Displays DHT22 temperature, humidity, and sensor state on a matching sensor
-  screen. Stale data remains visible and is marked as `STALE`.
-- Uses state-specific colors and ellipsis for values that exceed the available
-  row width.
-- Provides the existing optional counter/alignment demo task.
+- A 24 KB GUI task that runs every 33 ms and is the only project task that
+  calls `lv_timer_handler()`.
+- A length-one Wi-Fi queue updated with `xQueueOverwrite()`, so only the newest
+  pending Wi-Fi snapshot is retained.
+- A length-five sensor queue updated without waiting; a full queue causes that
+  sample to be dropped.
+- Thread-safe tracking of `NONE`, `WIFI`, and `SENSOR` screen IDs.
+- A Wi-Fi screen showing mode, SSID, and IPv4 address.
+- A sensor screen showing temperature, humidity, and data state.
+- A reusable LVGL timer that clears the Wi-Fi screen after 10 seconds without
+  a new Wi-Fi event.
+- Stack high-water logging every 60 seconds.
 
 ## Initialization Order
 
@@ -35,70 +44,83 @@ ESP_ERROR_CHECK(app_gui_start_ui_task());
 ESP_ERROR_CHECK(app_gui_create_wifi_screen());
 ```
 
-The main GUI task must run continuously so LVGL timers, rendering, animations,
-and queued Wi-Fi status updates continue to progress.
+The GUI task must keep running for queued updates, LVGL timers, rendering, and
+animations to progress.
 
 ## Public API
 
-| API | Role |
+| API | Current role |
 | --- | --- |
-| `app_gui_init()` | Create the Wi-Fi status queue. |
-| `app_gui_start_ui_task()` | Start the main LVGL/application GUI task. |
-| `app_gui_create_wifi_screen()` | Create the Wi-Fi status widgets on the active screen while holding the LVGL mutex. |
-| `app_gui_create_sensor_screen()` | Create the sensor status widgets and mark the Sensor screen active. |
-| `app_gui_post_wifi_status()` | Overwrite the queue with the newest Wi-Fi status without waiting. |
-| `app_gui_post_sensor_status()` | Queue a sensor status snapshot without waiting. |
-| `app_gui_set_screen_id()` | Store the active application screen ID without changing LVGL objects. |
-| `app_gui_get_screen_id()` | Read a thread-safe snapshot of the active application screen ID. |
-| `app_gui_create_demo_screen()` | Create the static `LVGL OK` demo screen. |
-| `app_gui_start_running_demo_task()` | Start the optional moving counter demo task. |
+| `app_gui_init()` | Create the Wi-Fi and sensor status queues. |
+| `app_gui_start_ui_task()` | Start the application GUI/LVGL timer task. |
+| `app_gui_create_wifi_screen()` | Build and activate Wi-Fi widgets while internally holding the LVGL mutex. |
+| `app_gui_post_wifi_status()` | Replace the pending Wi-Fi snapshot without waiting. |
+| `app_gui_create_sensor_screen()` | Build and activate sensor widgets while internally holding the LVGL mutex. |
+| `app_gui_post_sensor_status()` | Append a sensor snapshot without waiting. |
+| `app_gui_set_screen_id()` | Update only the tracked screen ID. |
+| `app_gui_get_screen_id()` | Read the tracked screen ID under a critical section. |
+| `app_gui_clear_screen()` | Replace the active LVGL root screen; the caller must serialize LVGL access. |
+| `app_gui_create_demo_screen()` | Create the static `LVGL OK` demo. |
+| `app_gui_start_running_demo_task()` | Start the optional moving-label demo task. |
 
-## Wi-Fi Update Flow
+## Wi-Fi Flow
 
 ```text
 wifi_manager event
-    -> application callback maps status to ui_wifi_status_t
+    -> main callback maps wifi_manager_status_t to ui_wifi_status_t
     -> app_gui_post_wifi_status()
-    -> app_gui UI task receives the newest status
-    -> Mode, SSID, and IP labels update while the LVGL mutex is held
+    -> GUI task receives the newest pending snapshot
+    -> Wi-Fi screen is created if necessary
+    -> 10-second timer is restarted
+    -> Mode, SSID, and IP labels are updated
 ```
 
-The screen maps `IDLE`, `CONNECTING`, `WAITING IP`, `CONNECTED`,
-`DISCONNECTED`, and `FAILED` to readable mode text. The IP row shows `-` until
-an IPv4 address is valid.
+The timer callback runs from `lv_timer_handler()` while the GUI task owns the
+LVGL mutex. It clears only an active Wi-Fi screen, pauses itself, and leaves the
+tracked screen ID as `NONE`.
 
-## Sensor Update Flow
+## Sensor Flow
 
 ```text
-sensor_manager callback
+sensor_manager task
+    -> main callback maps sensor_manager_status_t to ui_sensor_status_t
     -> app_gui_post_sensor_status()
-    -> app_gui UI task receives the sensor snapshot
-    -> Sensor screen updates temperature, humidity, and state
+    -> GUI task receives one pending snapshot
+    -> Sensor screen is created only when the active ID is NONE
+    -> Temperature, humidity, and state labels are updated
 ```
 
-Sensor updates do not replace an active Wi-Fi screen. After the Wi-Fi timeout
-clears that screen to `NONE`, the next sensor snapshot creates and updates the
-Sensor screen. A new Wi-Fi event can bring the Wi-Fi screen to the foreground
-again.
+An active Wi-Fi screen has priority over sensor snapshots. After the Wi-Fi
+timeout clears that screen, a later sensor snapshot can create the sensor
+screen. A subsequent Wi-Fi event brings the Wi-Fi screen forward again.
 
-## Important Notes
+## Thread-Safety Contract
 
-- `app_gui_init()` must run after `ui_manager_lvgl_init()` and before either
-  task-start API.
-- The queue length is one by design. Intermediate Wi-Fi transitions may be
-  replaced if producers are faster than the GUI task; the latest state wins.
-- `app_gui_post_wifi_status()` does not call LVGL and does not block.
-- `app_gui_create_wifi_screen()` releases the LVGL mutex on success and on all
-  current error paths.
-- Screen ID APIs protect only the ID value. LVGL screen creation, loading, and
-  deletion must still run in the GUI task or while holding the LVGL mutex.
-- Only the main app GUI task should call `lv_timer_handler()`.
-- The optional demo task accesses LVGL under the UI manager mutex.
-- There is no deinit/stop API or duplicate-task guard yet.
+- Status post APIs never call LVGL and return without waiting.
+- Screen creation and internal label-update functions acquire the LVGL mutex.
+- `app_gui_clear_screen()` deliberately does not acquire the mutex. Call it
+  only while already holding the mutex, from the mutex-protected LVGL timer
+  callback path, or from another path that exclusively owns LVGL access.
+- The LVGL mutex is non-recursive. A timer callback running inside
+  `lv_timer_handler()` must not lock it again.
+- Screen ID locking protects only the enum value, not LVGL objects.
+- Callback producers must copy status through the queue and must not call LVGL
+  directly.
+
+## Current Limitations
+
+- There is no stop/deinit API or duplicate-task guard.
+- The sensor queue processes one queued snapshot per GUI iteration rather than
+  collapsing directly to the newest snapshot.
+- RSSI and disconnect reason are transported but not displayed.
+- `app_gui_clear_screen()` relies on its caller to satisfy the LVGL ownership
+  contract.
+- The optional demo task is retained for development only.
 
 ## Future Attention
 
-- Add RSSI and a compact signal-strength indicator if required.
-- Replace or remove the moving counter demo after Phase 2 validation.
-- Track task handles to prevent duplicate task starts.
-- Add deinit only when application shutdown/restart is required.
+- Centralize every screen transition inside one explicit GUI command queue.
+- Add a stop/deinit path only when runtime shutdown is required.
+- Decide whether sensor updates should preserve history or overwrite older
+  pending snapshots.
+- Add RSSI presentation when it is useful to the product UI.

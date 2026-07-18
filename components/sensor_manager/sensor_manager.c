@@ -1,3 +1,4 @@
+/* Includes ----------------------------------------------------------------- */
 #include "sensor_manager.h"
 
 #include <string.h>
@@ -13,44 +14,41 @@
 
 #include "sensor_DHT22.h"
 
-#define SENSOR_MANAGER_TASK_NAME "sensor_manager"
+/* Macros ------------------------------------------------------------------- */
+#define SENSOR_MANAGER_TASK_NAME               "sensor_manager"
 #define SENSOR_MANAGER_TASK_STACK_SIZE         3072U
 #define SENSOR_MANAGER_TASK_PRIORITY           4U
-
 #define SENSOR_MANAGER_INITIAL_DELAY_MS        2000U
 #define SENSOR_MANAGER_MIN_SAMPLE_PERIOD_MS    2000U
 #define SENSOR_MANAGER_MUTEX_TIMEOUT_MS        100U
 
-const char* TAG = "SENSOR_MANAGER";
+/* Constants ---------------------------------------------------------------- */
+static const char *const TAG = "SENSOR_MANAGER";
 
+/* Static Variables --------------------------------------------------------- */
+/* The mutex protects status and callback snapshot reads after task start. */
 static sensor_manager_config_t s_config;
 static sensor_manager_status_t s_status;
-
 static SemaphoreHandle_t s_status_mutex;
 static TaskHandle_t s_task_handle;
-
 static bool s_is_initialized;
 static bool s_is_running;
-
-static int64_t sensor_manager_get_time_ms(void);
-
-static bool sensor_manager_is_data_stale_locked(
-    int64_t current_time_ms);
-
-static void sensor_manager_update_success(
-    const dht22_sensor_data_t *data);
-
-static void sensor_manager_update_failure(
-    esp_err_t error);
-
-static void sensor_manager_task(
-    void *argument);
-
 static sensor_manager_status_callback_t s_status_callback;
 static void *s_callback_context;
 
+/* Function Prototypes ------------------------------------------------------ */
+static int64_t sensor_manager_get_time_ms(void);
+static bool sensor_manager_is_data_stale_locked(
+    int64_t current_time_ms);
+static void sensor_manager_update_success(
+    const dht22_sensor_data_t *data);
+static void sensor_manager_update_failure(
+    esp_err_t error);
+static void sensor_manager_task(
+    void *argument);
 static void sensor_manager_notify_status_changed(void);
 
+/* Static Functions --------------------------------------------------------- */
 static int64_t sensor_manager_get_time_ms(void)
 {
     return esp_timer_get_time() / 1000;
@@ -245,6 +243,7 @@ static void sensor_manager_notify_status_changed(void)
     }
 }
 
+/* Functions ---------------------------------------------------------------- */
 esp_err_t sensor_manager_register_callback(
     sensor_manager_status_callback_t callback,
     void *user_context)

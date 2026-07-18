@@ -21,7 +21,7 @@
 #define DHT22_INITIAL_DELAY_MS          2000
 
 /* Constants ---------------------------------------------------------------- */
-static const char *TAG = "DHT22 Sensor";
+static const char *const TAG = "DHT22 Sensor";
 
 /* Function Prototypes ------------------------------------------------------ */
 static void dht22_bringup_task(void *argument);
@@ -127,10 +127,10 @@ esp_err_t dht22_sensor_read(
         humidity_percent > 100.0f)
     {
         ESP_LOGW(
-        TAG,
-        "Invalid data: temperature=%.1f C, humidity=%.1f %%",
-        temperature_c,
-        humidity_percent);
+            TAG,
+            "Invalid data: temperature=%.1f C, humidity=%.1f %%",
+            temperature_c,
+            humidity_percent);
 
         return ESP_ERR_INVALID_RESPONSE;
     }

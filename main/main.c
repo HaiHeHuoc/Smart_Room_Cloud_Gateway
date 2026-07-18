@@ -44,38 +44,49 @@
 #define PERFORMANCE_MONITOR 0
 
 /* Constants ---------------------------------------------------------------- */
-static const char *TAG = "MAIN_APP";
+static const char *const TAG = "MAIN_APP";
 
 /* Static Variables --------------------------------------------------------- */
+/* The UI manager borrows this handle for the lifetime of the application. */
 static display_driver_handle_t display_handle;
+
+/* DHT22 timing respects the sensor's minimum interval between reads. */
 static const sensor_manager_config_t SENSOR_MANAGER_CONFIG =
 {
     .sample_period_ms = 2500U,
     .stale_timeout_ms = 10000U,
 };
 
+/* Latest status copy used by the temporary main-loop diagnostic log. */
 static sensor_manager_status_t s_sensor_data;
 
 /* Function Prototypes ------------------------------------------------------ */
+/** @brief Initialize NVS, ESP-NETIF, and the default event loop once. */
 static esp_err_t network_platform_init(void);
 
+/** @brief Convert and forward Wi-Fi manager events to the GUI queue. */
 static void app_wifi_status_callback(
     const wifi_manager_status_t *status,
     void *user_data);
+
+/** @brief Map a Wi-Fi manager state to its application GUI equivalent. */
 static ui_wifi_state_t app_map_wifi_state(
     wifi_manager_state_t state);
 
+/** @brief Map a sensor manager state to its application GUI equivalent. */
 static ui_sensor_state_t app_map_sensor_state(
     sensor_manager_state_t state);
 
+/** @brief Convert and forward sensor manager snapshots to the GUI queue. */
 static void app_sensor_status_callback(
     const sensor_manager_status_t *status,
     void *user_context);
 
 /* Application -------------------------------------------------------------- */
+/** @brief Initialize the current application services and run diagnostics. */
 void app_main(void)
 {
-    // Project information
+    /* Project identity is emitted first to make firmware logs traceable. */
     ESP_LOGI(TAG, "PROJECT: %s", APP_PROJECT_NAME);
     ESP_LOGI(TAG, "VERSION: %s", APP_PROJECT_VER);
     ESP_LOGI(TAG, "BUILD DATE: %s", APP_PROJECT_VER_DATE);
