@@ -13,8 +13,8 @@ esp_err_t lvgl_image_handler_show_png(const char *path);
 /**
  * @brief Start a looping animated GIF from the LVGL SD filesystem.
  *
- * @return ESP_ERR_NOT_SUPPORTED when LV_USE_GIF is disabled; otherwise the
- *         an input, state, allocation, or decoder error.
+ * @return ESP_ERR_NOT_SUPPORTED when LV_USE_GIF is disabled; otherwise an
+ *         input, state, allocation, or decoder error.
  */
 esp_err_t lvgl_image_handler_show_gif(const char *path);
 

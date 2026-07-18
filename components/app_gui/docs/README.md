@@ -97,7 +97,8 @@ screen. A subsequent Wi-Fi event brings the Wi-Fi screen forward again.
 ## Thread-Safety Contract
 
 - Status post APIs never call LVGL and return without waiting.
-- Screen creation and internal label-update functions acquire the LVGL mutex.
+- Screen creation, internal label updates, and queue-driven screen/timer
+  transitions acquire the LVGL mutex.
 - `app_gui_clear_screen()` deliberately does not acquire the mutex. Call it
   only while already holding the mutex, from the mutex-protected LVGL timer
   callback path, or from another path that exclusively owns LVGL access.

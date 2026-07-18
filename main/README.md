@@ -36,6 +36,7 @@ application GUI task.
 ## Current Configuration
 
 - `PERFORMANCE_MONITOR` is disabled at compile time.
+- The component manifest requires ESP-IDF 6.0 or newer.
 - Sensor sampling uses a 2500 ms period and a 10000 ms stale timeout.
 - Wi-Fi credentials are currently development values supplied directly in
   `main.c`; move them to provisioning or local build configuration before
@@ -53,6 +54,11 @@ application GUI task.
   intentionally left unchanged.
 - There is no coordinated shutdown path because the firmware currently runs
   continuously after startup.
+- LVGL initialization is checked only after SD setup. If LVGL initialization
+  fails, the current startup path logs the failure but continues to Wi-Fi and
+  sensor initialization.
+- The five-second diagnostic loop currently logs its sensor snapshot without
+  checking the return value from `sensor_manager_get_status()`.
 
 ## Build
 
@@ -74,3 +80,5 @@ idf.py -p <PORT> flash monitor
 - Replace the main-loop sensor warning log with the final application control
   flow when Phase 3 is complete.
 - Add explicit recovery policy for component initialization failures.
+- Decide whether the diagnostic loop should suppress output when a sensor
+  snapshot cannot be read.

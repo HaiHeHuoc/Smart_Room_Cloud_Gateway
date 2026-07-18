@@ -63,12 +63,19 @@ display_driver_draw_bitmap(&display_handle, x1, y1, x2, y2, color_data);
   same LCD SPI host somewhere else.
 - The current implementation has no deinit path and is not designed for a
   second call to `display_driver_init()`.
+- The optional raw color test currently queues asynchronous transfers using one
+  temporary DMA buffer. Keep it disabled until transfer-completion ownership is
+  added for that test path.
+- Initialization errors after SPI or panel resources are created do not yet
+  roll those resources back.
 
 ## Future Attention
 
 - Add a deinit function if the project later needs display shutdown or power
   management.
-- Clean up duplicate includes in `display_driver.c`.
+- Add transfer-completion synchronization to the raw color test before using it
+  outside controlled display bring-up.
+- Add rollback for partially completed initialization.
 - Consider guarding SPI bus initialization if the display driver can be called
   more than once.
 - Keep LVGL-specific logic out of this component; LVGL belongs in

@@ -91,9 +91,12 @@ ui_manager_lvgl_release_mutex();
   tasks that call LVGL directly must use the manager mutex.
 - Wi-Fi status queueing and the 24 KB LVGL timer task are owned by `app_gui`,
   not this component.
+- Initialization failures after partial allocation do not currently release
+  already-created mutexes, semaphores, buffers, or timers; retrying init in the
+  same boot is unsupported.
 
 ## Future Attention
 
-- Check `s_lvgl_display != NULL` before calling `lv_display_set_buffers()`.
 - Add init/deinit guards if the manager must support repeated initialization.
-- Add a deinit path if display shutdown or restart becomes necessary.
+- Add cleanup for partial initialization failures and a deinit path if display
+  shutdown or restart becomes necessary.

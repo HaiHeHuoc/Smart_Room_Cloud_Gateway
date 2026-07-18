@@ -127,10 +127,6 @@ void app_main(void)
         ESP_LOGE(TAG, "Failed to initialize display driver: %s", esp_err_to_name(ret));
         return;
     }
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize display driver: %s", esp_err_to_name(ret));
-        return;
-    }
 
     // Used to test the display by filling it with known colors. Uncomment to run the test.
     // ESP_ERROR_CHECK(display_driver_raw_color_test(&display_handle));

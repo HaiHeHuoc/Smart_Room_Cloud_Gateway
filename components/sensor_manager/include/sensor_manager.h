@@ -5,7 +5,7 @@
 
 #include "esp_err.h"
 
-#ifdef _cplusplus
+#ifdef __cplusplus
 extern "C"
 {
 #endif
@@ -146,6 +146,6 @@ esp_err_t sensor_manager_register_callback(
     sensor_manager_status_callback_t callback,
     void *user_context);
 
-#ifdef _cplusplus
+#ifdef __cplusplus
 }
 #endif

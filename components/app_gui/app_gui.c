@@ -648,7 +648,10 @@ static void app_gui_process_sensor_status(void)
 
     if (app_gui_get_screen_id(&screen_id) == ESP_OK) {
         if (screen_id == APP_GUI_SCREEN_NONE) {
-            app_gui_clear_screen();
+            ui_manager_lvgl_wait_for_mutex();
+            (void)app_gui_clear_screen();
+            ui_manager_lvgl_release_mutex();
+
             const esp_err_t ret = app_gui_create_sensor_screen();
             if (ret != ESP_OK) {
                 ESP_LOGE(
@@ -699,11 +702,18 @@ static void app_gui_process_wifi_status(void)
     if ((app_gui_get_screen_id(&screen_id) == ESP_OK) &&
         (screen_id != APP_GUI_SCREEN_WIFI))
     {
-        app_gui_clear_screen();
-        app_gui_create_wifi_screen();
+        ui_manager_lvgl_wait_for_mutex();
+        (void)app_gui_clear_screen();
+        ui_manager_lvgl_release_mutex();
+
+        (void)app_gui_create_wifi_screen();
     }
-    
+
+    /* LVGL timer operations follow the same mutex contract as LVGL objects. */
+    ui_manager_lvgl_wait_for_mutex();
     app_gui_restart_wifi_screen_timer();
+    ui_manager_lvgl_release_mutex();
+
     app_gui_update_wifi_screen(&wifi_status);
 
     ESP_LOGD(

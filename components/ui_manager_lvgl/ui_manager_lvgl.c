@@ -119,7 +119,7 @@ static void ui_manager_lvgl_swap_rgb565_bytes(uint16_t *buffer,
  * @param display_handle 
  * @return esp_err_t 
  */
-esp_err_t ui_manager_lvgl_init(display_driver_handle_t* display_handle)
+esp_err_t ui_manager_lvgl_init(display_driver_handle_t *display_handle)
 {
     esp_err_t ret = ESP_OK;
 
@@ -161,16 +161,16 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t* display_handle)
 
     s_lvgl_display = lv_display_create(LCD_H_RES, LCD_V_RES);
 
-    lv_display_set_buffers(s_lvgl_display,
-                        s_lvgl_draw_buffer,
-                        NULL,
-                        LVGL_DRAW_BUFFER_SIZE,
-                        LV_DISPLAY_RENDER_MODE_PARTIAL);
-
     ESP_RETURN_ON_FALSE(s_lvgl_display != NULL,
                         ESP_ERR_NO_MEM,
                         TAG,
                         "Failed to create LVGL display");
+
+    lv_display_set_buffers(s_lvgl_display,
+                           s_lvgl_draw_buffer,
+                           NULL,
+                           LVGL_DRAW_BUFFER_SIZE,
+                           LV_DISPLAY_RENDER_MODE_PARTIAL);
 
                         
     ESP_LOGD(TAG, "LVGL display created successfully with resolution: %dx%d", LCD_H_RES, LCD_V_RES);

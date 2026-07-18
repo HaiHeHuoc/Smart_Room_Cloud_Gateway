@@ -78,6 +78,9 @@ FILE *file = fopen("/sdcard/example.txt", "w");
   scanned.
 - `fclose()` is important after writes because it flushes buffered data to the
   filesystem.
+- The current bring-up helpers do not inspect `fprintf()`, `fclose()`, or final
+  read-stream errors, so their success result confirms the basic path rather
+  than every storage operation.
 - SD card speed is intentionally low for bring-up. Increase it only after the
   hardware wiring is stable.
 
@@ -87,5 +90,6 @@ FILE *file = fopen("/sdcard/example.txt", "w");
 - Add generic file read/write/list result APIs after the data format is known.
 - Add better error reporting for common mount failures such as missing card,
   wrong wiring, unsupported format, or unstable power.
+- Propagate stdio write, close, and read errors from the bring-up helpers.
 - Consider adding card-detect GPIO if the hardware supports it.
 - Revisit SD clock speed after repeated write/read tests are stable.

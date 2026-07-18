@@ -62,8 +62,8 @@ ui_manager_lvgl_release_mutex();
 
 ## Important Notes
 
-- These APIs create, modify, or delete LVGL objects and timers. Call them from
-  the LVGL task or while holding the `ui_manager_lvgl` mutex.
+- Public APIs create, modify, delete, or inspect shared LVGL image state. Call
+  them from the LVGL task or while holding the `ui_manager_lvgl` mutex.
 - The SD manager must be mounted and `lvgl_sd_fs` must be registered; otherwise
   show calls return `ESP_ERR_INVALID_STATE`.
 - Format is selected by the JPG/PNG/GIF API, not inferred from the filename
