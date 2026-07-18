@@ -3,32 +3,36 @@
 ## Purpose
 
 `wifi_manager` owns the ESP32-S3 Wi-Fi Station driver and its connection
-status. It creates the default Station network interface, handles Wi-Fi/IP
-events, starts connections with application-provided credentials, exposes
-status snapshots and RSSI, and can report nearby access points to the serial
-log.
+status. It creates the default Station network interface, applies credentials,
+handles Wi-Fi/IP events, performs bounded automatic reconnect, and exposes
+thread-safe status snapshots to the application and GUI.
 
-This is the Phase 2 implementation. Credentials are supplied by the
-application and stored by the Wi-Fi driver in RAM. NVS credential ownership,
-BLE provisioning, automatic reconnect, and connection backoff are not part of
-this component yet.
+Credentials are supplied by the application and stored by the ESP-IDF Wi-Fi
+driver in RAM through `WIFI_STORAGE_RAM`. Provisioning and persistent
+credential ownership remain outside this component.
 
 ## What Is Implemented
 
-- Creates the default ESP-NETIF Wi-Fi Station interface.
 - Initializes and starts the ESP-IDF Wi-Fi driver in Station mode.
-- Uses `WIFI_STORAGE_RAM`, so credentials are not persisted by this component.
+- Creates the default ESP-NETIF Station interface.
 - Registers handlers for all `WIFI_EVENT` and `IP_EVENT` events.
 - Tracks SSID, state, IPv4 address, RSSI validity, and disconnect reason.
-- Copies status under a FreeRTOS critical-section lock.
+- Protects shared status and reconnect state with a FreeRTOS critical section.
 - Supports one application status callback with optional user data.
-- Reads connected AP RSSI using `esp_wifi_sta_get_rssi()`.
-- Performs a blocking active scan and logs SSID, channel, RSSI, and quality.
-- Cleans up partially initialized Wi-Fi resources when initialization fails.
+- Performs automatic reconnect using a dedicated task and task notifications.
+- Uses exponential retry delays of 1, 2, 4, 8, 16, then at most 30 seconds.
+- Resets retry delay and attempt count after `IP_EVENT_STA_GOT_IP`.
+- Supports manual disconnect and suppresses automatic reconnect afterward.
+- Applies a 30-second connection/DHCP timeout to every initial or automatic
+  call to `esp_wifi_connect()`.
+- Reads connected AP RSSI with `esp_wifi_sta_get_rssi()`.
+- Performs a blocking active scan and logs nearby access points.
+- Cleans up partially initialized Wi-Fi, event, task, timer, and netif
+  resources when initialization fails.
 
 ## State Model
 
-The current state progression is:
+Normal startup follows:
 
 ```text
 UNINITIALIZED
@@ -38,20 +42,93 @@ UNINITIALIZED
     -> CONNECTED
 ```
 
-Other transitions:
+Reconnect follows:
 
 ```text
-CONNECTING -> FAILED       when esp_wifi_connect() cannot start
-any active state -> DISCONNECTED on WIFI_EVENT_STA_DISCONNECTED
+CONNECTING or WAITING_FOR_IP
+    -> DISCONNECTED
+    -> RETRY_WAIT
+    -> CONNECTING
 ```
 
-`CONNECTED` means the Station has received an IPv4 address, not only that it
-has associated with an access point.
+If `esp_wifi_connect()` fails synchronously, the current attempt moves to
+`FAILED`. An automatic reconnect attempt then re-enters the existing retry
+flow. `CONNECTED` means the Station has obtained an IPv4 address; association
+alone is represented by `WAITING_FOR_IP`.
+
+The ESP-IDF reason from `WIFI_EVENT_STA_DISCONNECTED` is preserved in
+`wifi_manager_status_t.disconnect_reason`. A connection timeout does not add a
+synthetic public reason code; the subsequent driver disconnect event remains
+the source of the reason.
+
+## Connection And DHCP Timeout
+
+One private one-shot `esp_timer` covers each complete connection attempt:
+
+```text
+arm 30-second timer
+    -> esp_wifi_connect()
+    -> access-point association
+    -> DHCP wait
+    -> IP_EVENT_STA_GOT_IP stops timer
+```
+
+The timer is armed for both the initial connection and every automatic retry.
+It is canceled when the attempt obtains an IPv4 address, disconnects, is
+manually canceled, or fails synchronously.
+
+The timer callback intentionally does very little. It stores a protected
+timeout flag and attempt generation, then notifies the existing reconnect task.
+It does not call Wi-Fi APIs, invoke the application callback, block, or perform
+recovery itself.
+
+The reconnect task rechecks all timeout conditions under the component lock.
+For a current timed-out attempt it logs a warning and calls
+`esp_wifi_disconnect()` outside the lock. Normally the resulting
+`WIFI_EVENT_STA_DISCONNECTED` schedules the existing exponential-backoff retry.
+If the driver reports that the attempt cannot be aborted, the reconnect task
+schedules the same retry path directly.
+
+### Race Protection
+
+Each attempt has an internal generation number and absolute deadline. These
+values prevent a delayed timer callback from attempt N from aborting attempt
+N+1. The timeout flag is accepted only while all of these remain true:
+
+- the manager and credentials are valid;
+- automatic reconnect is enabled;
+- manual disconnect has not been requested;
+- no IPv4 address is present;
+- the same generation is still active;
+- state is `CONNECTING` or `WAITING_FOR_IP`;
+- the stored deadline has expired.
+
+`GOT_IP`, disconnect, and manual disconnect invalidate the active attempt under
+the same lock. If timeout recovery has already claimed the attempt, a racing
+`GOT_IP` event is ignored so the abort can finish without briefly publishing a
+false `CONNECTED` state. Duplicate task notifications are harmless because the
+task rechecks state, generation, and policy before starting another attempt.
+
+## Retry And Manual Disconnect
+
+Unexpected `WIFI_EVENT_STA_DISCONNECTED` transitions through `DISCONNECTED`,
+publishes that status, then moves to `RETRY_WAIT` and wakes the reconnect task.
+The task delays using the current backoff value, rechecks policy, reports
+`CONNECTING`, and starts the next timed attempt.
+
+`wifi_manager_disconnect()` records manual intent before calling the driver,
+disables automatic reconnect, cancels the active timeout, and prevents a task
+waiting in backoff from starting another attempt. If timeout recovery already
+owns the driver abort, manual disconnect joins that in-progress operation
+instead of issuing a duplicate disconnect call.
+
+A later successful call to `wifi_manager_connect()` supplies credentials again,
+clears manual-disconnect intent, resets backoff to one second, and enables
+automatic reconnect.
 
 ## Initialization Order
 
-The application must initialize shared ESP-IDF network infrastructure before
-calling `wifi_manager_init()`:
+The shared ESP-IDF network platform must exist before `wifi_manager_init()`:
 
 ```c
 ESP_ERROR_CHECK(nvs_flash_init());
@@ -60,21 +137,19 @@ ESP_ERROR_CHECK(esp_event_loop_create_default());
 ESP_ERROR_CHECK(wifi_manager_init());
 ```
 
-In this project those first three operations are currently owned by
-`network_platform_init()` in `main.c`.
+In this project the first three operations are owned by
+`network_platform_init()`.
 
 ## Basic Usage
 
-Register the status callback before starting the connection if the application
-must observe the initial `CONNECTING` state:
+Register the status callback before connecting if the application must observe
+the first `CONNECTING` state:
 
 ```c
 ESP_ERROR_CHECK(
     wifi_manager_register_status_callback(
         app_wifi_status_callback,
-        NULL
-    )
-);
+        NULL));
 
 const wifi_manager_sta_config_t config = {
     .ssid = "YOUR_SSID",
@@ -84,32 +159,30 @@ const wifi_manager_sta_config_t config = {
 ESP_ERROR_CHECK(wifi_manager_connect(&config));
 ```
 
-The config structure and its strings only need to remain valid for the duration
-of `wifi_manager_connect()`. The function copies them into ESP-IDF's Station
-configuration. A NULL, empty, oversized, or unterminated SSID is rejected with
-`ESP_ERR_INVALID_ARG`. Password length is checked with the same bounded-read
-rule; an empty password remains valid for an open network.
+The config and its strings only need to remain valid for the duration of
+`wifi_manager_connect()`. The component copies them into ESP-IDF's Station
+configuration. An empty password is valid for an open network.
 
 ## Public API
 
 | API | Current behavior |
 | --- | --- |
-| `wifi_manager_init()` | Initialize and start the Station manager once. |
-| `wifi_manager_connect()` | Validate/copy credentials and begin asynchronous connection. |
-| `wifi_manager_disconnect()` | Currently returns `ESP_ERR_NOT_SUPPORTED`. |
+| `wifi_manager_init()` | Initialize the Station driver, timer, event handlers, and reconnect task once. |
+| `wifi_manager_connect()` | Validate/copy credentials and begin a timed asynchronous connection. |
+| `wifi_manager_disconnect()` | Disconnect manually and suppress automatic reconnect. |
 | `wifi_manager_get_status()` | Copy a locked snapshot of current manager status. |
 | `wifi_manager_get_rssi()` | Read and cache RSSI while connected with IPv4. |
-| `wifi_manager_is_connected()` | Report whether state is `CONNECTED` and IPv4 is valid; returns `false` before initialization. |
+| `wifi_manager_is_connected()` | Return true only while state is `CONNECTED` with valid IPv4. |
 | `wifi_manager_register_status_callback()` | Register, replace, or unregister the single callback. |
-| `wifi_manager_state_to_string()` | Convert a state enum to constant readable text. |
+| `wifi_manager_state_to_string()` | Convert a state enum to readable constant text. |
 | `wifi_manager_scan_and_log()` | Block while scanning and print AP results. |
+
+No timeout-specific public state or API is exposed.
 
 ## Status Callback And LVGL
 
-The callback may run synchronously from `wifi_manager_connect()` or from the
-ESP event-loop task. It must return quickly and must not call LVGL directly.
-
-The project uses this flow:
+The callback can run synchronously from component APIs or from the ESP event
+loop task. It must return quickly and must not call LVGL directly.
 
 ```text
 ESP Wi-Fi/IP event
@@ -117,66 +190,50 @@ ESP Wi-Fi/IP event
     -> application status callback
     -> app_gui_post_wifi_status()
     -> FreeRTOS queue
-    -> app_gui task receives and processes status under LVGL coordination
+    -> app_gui task updates LVGL under its existing synchronization
 ```
 
-The callback receives a temporary status snapshot. Copy any required values
-before returning; do not retain the `status` pointer.
-
-Only one callback is stored. Registering another callback replaces the existing
-one. Passing `NULL` unregisters it.
-
-## RSSI And Scan
-
-`wifi_manager_get_rssi()` is valid only after the Station has an IPv4 address.
-RSSI is expressed in dBm; values closer to zero indicate a stronger signal.
-
-`wifi_manager_scan_and_log()` performs an active all-channel scan with hidden
-SSIDs enabled. It blocks the calling task until scanning finishes, dynamically
-allocates the AP result array, prints each result, and then releases both the
-application buffer and driver-owned scan list.
-
-Do not call the scan API from a Wi-Fi/IP event callback or the LVGL task.
-
-## Important Current Limitations
-
-- `wifi_manager_disconnect()` is declared but not implemented.
-- There is no public deinit API.
-- There is no automatic reconnect or retry backoff after disconnection.
-- `IP_EVENT_STA_GOT_IP` updates state to `CONNECTED` and notifies the
-  application callback.
-- `IP_EVENT_STA_LOST_IP` clears the address/RSSI, transitions an associated
-  station to `WAITING_FOR_IP`, and notifies the application callback.
-- Some status writes in connect/init paths are not protected by
-  `s_status_lock`; event-loop reads/writes should be reviewed as concurrency
-  grows.
-- Development credentials are currently supplied directly by `main.c`; move
-  them to local build configuration or provisioning before publishing code.
-- No connection timeout moves a long-running `CONNECTING` or
-  `WAITING_FOR_IP` state to `FAILED`.
+The callback receives a temporary status snapshot. Copy required values before
+returning and do not retain the pointer.
 
 ## Expected Logs
 
-Typical successful startup includes:
+Successful startup includes messages similar to:
 
 ```text
 I (...) WIFI_MANAGER: Wi-Fi manager initialized: mode=STATION, storage=RAM
 I (...) WIFI_MANAGER: Connecting to Wi-Fi SSID: ...
 I (...) WIFI_MANAGER: Event: WIFI_EVENT_STA_CONNECTED
-I (...) WIFI_MANAGER: Waiting for IPv4 address
 I (...) WIFI_MANAGER: Event: IP_EVENT_STA_GOT_IP, address=...
 ```
 
-On disconnection, the ESP-IDF reason code is stored in
-`wifi_manager_status_t.disconnect_reason` and the state becomes
-`WIFI_MANAGER_STATE_DISCONNECTED`.
+A timeout produces a warning similar to:
 
-## Future Attention
+```text
+W (...) WIFI_MANAGER: Wi-Fi connection/DHCP timed out after 30000 ms, generation=...
+```
 
-- Implement disconnect and a symmetric deinit path.
-- Protect all shared status mutations consistently.
-- Add bounded reconnect with backoff and a connection timeout.
-- Move credential persistence to the future configuration/NVS owner.
-- Add BLE provisioning without keeping BLE active after successful setup.
-- Replace scan logging with a structured result API only when the UI needs AP
-  selection.
+The subsequent disconnect and retry use the normal state callback and backoff
+logs. Stale timeout callbacks are debug-level diagnostics.
+
+## RSSI And Scan
+
+`wifi_manager_get_rssi()` is valid only after the Station has an IPv4 address.
+RSSI is expressed in dBm; values closer to zero indicate stronger signal.
+
+`wifi_manager_scan_and_log()` performs a blocking active all-channel scan with
+hidden SSIDs enabled. Do not call it from a Wi-Fi/IP event callback or the LVGL
+task.
+
+## Important Limitations And Future Attention
+
+- The 30-second timeout is private and currently fixed at compile time.
+- There is no public deinitialization API.
+- Credentials still come from application configuration rather than a
+  provisioning/NVS owner.
+- `IP_EVENT_STA_LOST_IP` keeps the associated station in `WAITING_FOR_IP`; it
+  does not start a new connection-attempt timer by itself.
+- Runtime validation on hardware is still required for unreachable AP, wrong
+  password, association without DHCP, repeated timeout/retry cycles, successful
+  recovery, and manual disconnect during timeout or backoff.
+- BLE provisioning and a structured scan-result API remain future work.

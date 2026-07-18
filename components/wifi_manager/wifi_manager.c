@@ -8,6 +8,7 @@
 #include "freertos/task.h"
 
 #include "esp_netif.h"
+#include "esp_timer.h"
 #include "esp_wifi.h"
 #include "esp_wifi_default.h"
 
@@ -22,6 +23,9 @@
 
 #define WIFI_MANAGER_RECONNECT_INITIAL_DELAY_MS    1000U
 #define WIFI_MANAGER_RECONNECT_MAX_DELAY_MS        30000U
+
+#define WIFI_MANAGER_CONNECTION_TIMEOUT_MS         30000U
+#define WIFI_MANAGER_MS_TO_US                      1000ULL
 
 /* Constants ---------------------------------------------------------------- */
 
@@ -76,6 +80,24 @@ typedef struct
      */
     TaskHandle_t reconnect_task_handle;
 
+    /*
+     * One-shot watchdog for one complete Station connection attempt:
+     * esp_wifi_connect() -> association -> DHCP -> GOT_IP.
+     */
+    esp_timer_handle_t connection_timeout_timer;
+
+    /*
+     * Attempt identity and deadline prevent a delayed timer callback from an
+     * older attempt from aborting a newer connection attempt.
+     */
+    uint32_t connection_attempt_generation;
+    uint32_t connection_timeout_generation;
+    int64_t connection_attempt_deadline_us;
+
+    bool connection_attempt_active;
+    bool connection_timeout_pending;
+    bool connection_timeout_abort_in_progress;
+
     wifi_manager_status_t status;
 
     wifi_manager_status_callback_t status_callback;
@@ -103,6 +125,14 @@ static wifi_manager_context_t s_wifi_manager = {
 
     .reconnect_task_handle = NULL,
 
+    .connection_timeout_timer = NULL,
+    .connection_attempt_generation = 0U,
+    .connection_timeout_generation = 0U,
+    .connection_attempt_deadline_us = 0,
+    .connection_attempt_active = false,
+    .connection_timeout_pending = false,
+    .connection_timeout_abort_in_progress = false,
+
     .status = {
         .state = WIFI_MANAGER_STATE_UNINITIALIZED,
         .ssid = {0},
@@ -129,7 +159,7 @@ static wifi_manager_context_t s_wifi_manager = {
  * - status;
  * - callback pointers;
  * - reconnect flags and counters;
- * - reconnect task handle.
+ * - reconnect task and connection-attempt timeout state.
  */
 static portMUX_TYPE s_status_lock =
     portMUX_INITIALIZER_UNLOCKED;
@@ -150,7 +180,364 @@ static void wifi_manager_reconnect_task(
 
 static bool wifi_manager_schedule_reconnect(void);
 
+static void wifi_manager_connection_timeout_callback(
+    void *argument);
+
+static esp_err_t wifi_manager_start_connection_attempt(void);
+
+static void wifi_manager_cancel_connection_attempt_locked(void);
+
+static esp_err_t wifi_manager_stop_connection_timeout_timer(void);
+
+static bool wifi_manager_process_connection_timeout(void);
+
 /* Static Functions --------------------------------------------------------- */
+static void wifi_manager_cancel_connection_attempt_locked(void)
+{
+    s_wifi_manager.connection_attempt_active = false;
+    s_wifi_manager.connection_timeout_pending = false;
+    s_wifi_manager.connection_timeout_generation = 0U;
+    s_wifi_manager.connection_attempt_deadline_us = 0;
+}
+
+static esp_err_t wifi_manager_stop_connection_timeout_timer(void)
+{
+    esp_timer_handle_t timer = NULL;
+
+    taskENTER_CRITICAL(&s_status_lock);
+    timer = s_wifi_manager.connection_timeout_timer;
+    taskEXIT_CRITICAL(&s_status_lock);
+
+    if (timer == NULL)
+    {
+        return ESP_OK;
+    }
+
+    const esp_err_t error = esp_timer_stop(timer);
+
+    /* Stopping an already stopped one-shot timer is an expected race. */
+    if (error == ESP_ERR_INVALID_STATE)
+    {
+        return ESP_OK;
+    }
+
+    return error;
+}
+
+static void wifi_manager_connection_timeout_callback(
+    void *argument)
+{
+    (void)argument;
+
+    TaskHandle_t reconnect_task_handle = NULL;
+    const int64_t now_us = esp_timer_get_time();
+
+    taskENTER_CRITICAL(&s_status_lock);
+
+    const bool connection_state_active =
+        s_wifi_manager.status.state == WIFI_MANAGER_STATE_CONNECTING ||
+        s_wifi_manager.status.state == WIFI_MANAGER_STATE_WAITING_FOR_IP;
+
+    if (s_wifi_manager.initialized &&
+        s_wifi_manager.connection_attempt_active &&
+        !s_wifi_manager.connection_timeout_pending &&
+        !s_wifi_manager.connection_timeout_abort_in_progress &&
+        !s_wifi_manager.status.has_ipv4_address &&
+        connection_state_active &&
+        now_us >= s_wifi_manager.connection_attempt_deadline_us)
+    {
+        s_wifi_manager.connection_timeout_pending = true;
+        s_wifi_manager.connection_timeout_generation =
+            s_wifi_manager.connection_attempt_generation;
+
+        reconnect_task_handle =
+            s_wifi_manager.reconnect_task_handle;
+    }
+
+    taskEXIT_CRITICAL(&s_status_lock);
+
+    /* The timer runs in ESP_TIMER_TASK context, not in an ISR. */
+    if (reconnect_task_handle != NULL)
+    {
+        xTaskNotifyGive(reconnect_task_handle);
+    }
+}
+
+static esp_err_t wifi_manager_start_connection_attempt(void)
+{
+    esp_timer_handle_t timer = NULL;
+    uint32_t attempt_generation = 0U;
+
+    taskENTER_CRITICAL(&s_status_lock);
+
+    const bool can_start =
+        s_wifi_manager.initialized &&
+        s_wifi_manager.credentials_configured &&
+        s_wifi_manager.auto_reconnect_enabled &&
+        !s_wifi_manager.manual_disconnect_requested &&
+        !s_wifi_manager.status.has_ipv4_address &&
+        !s_wifi_manager.connection_attempt_active &&
+        !s_wifi_manager.connection_timeout_abort_in_progress &&
+        s_wifi_manager.status.state == WIFI_MANAGER_STATE_CONNECTING &&
+        s_wifi_manager.connection_timeout_timer != NULL;
+
+    timer = s_wifi_manager.connection_timeout_timer;
+
+    taskEXIT_CRITICAL(&s_status_lock);
+
+    if (!can_start)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t error = wifi_manager_stop_connection_timeout_timer();
+
+    if (error != ESP_OK)
+    {
+        return error;
+    }
+
+    const int64_t now_us = esp_timer_get_time();
+
+    taskENTER_CRITICAL(&s_status_lock);
+
+    const bool still_can_start =
+        s_wifi_manager.initialized &&
+        s_wifi_manager.credentials_configured &&
+        s_wifi_manager.auto_reconnect_enabled &&
+        !s_wifi_manager.manual_disconnect_requested &&
+        !s_wifi_manager.status.has_ipv4_address &&
+        !s_wifi_manager.connection_attempt_active &&
+        !s_wifi_manager.connection_timeout_abort_in_progress &&
+        s_wifi_manager.status.state == WIFI_MANAGER_STATE_CONNECTING;
+
+    if (still_can_start)
+    {
+        s_wifi_manager.connection_attempt_generation++;
+
+        /* Keep zero reserved as the "no timeout pending" value. */
+        if (s_wifi_manager.connection_attempt_generation == 0U)
+        {
+            s_wifi_manager.connection_attempt_generation = 1U;
+        }
+
+        attempt_generation =
+            s_wifi_manager.connection_attempt_generation;
+
+        s_wifi_manager.connection_attempt_active = true;
+        s_wifi_manager.connection_timeout_pending = false;
+        s_wifi_manager.connection_timeout_generation = 0U;
+        s_wifi_manager.connection_attempt_deadline_us =
+            now_us +
+            ((int64_t)WIFI_MANAGER_CONNECTION_TIMEOUT_MS *
+             (int64_t)WIFI_MANAGER_MS_TO_US);
+    }
+
+    taskEXIT_CRITICAL(&s_status_lock);
+
+    if (!still_can_start)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    error = esp_timer_start_once(
+        timer,
+        (uint64_t)WIFI_MANAGER_CONNECTION_TIMEOUT_MS *
+            WIFI_MANAGER_MS_TO_US);
+
+    if (error != ESP_OK)
+    {
+        taskENTER_CRITICAL(&s_status_lock);
+
+        if (s_wifi_manager.connection_attempt_generation ==
+            attempt_generation)
+        {
+            wifi_manager_cancel_connection_attempt_locked();
+        }
+
+        taskEXIT_CRITICAL(&s_status_lock);
+
+        return error;
+    }
+
+    /*
+     * Manual disconnect or another terminal event may have won while the
+     * timer was being armed. Never start a canceled attempt.
+     */
+    taskENTER_CRITICAL(&s_status_lock);
+
+    const bool attempt_still_active =
+        s_wifi_manager.connection_attempt_active &&
+        s_wifi_manager.connection_attempt_generation ==
+            attempt_generation &&
+        !s_wifi_manager.manual_disconnect_requested &&
+        !s_wifi_manager.status.has_ipv4_address;
+
+    taskEXIT_CRITICAL(&s_status_lock);
+
+    if (!attempt_still_active)
+    {
+        (void)wifi_manager_stop_connection_timeout_timer();
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    error = esp_wifi_connect();
+
+    if (error != ESP_OK)
+    {
+        taskENTER_CRITICAL(&s_status_lock);
+
+        if (s_wifi_manager.connection_attempt_generation ==
+            attempt_generation)
+        {
+            wifi_manager_cancel_connection_attempt_locked();
+        }
+
+        taskEXIT_CRITICAL(&s_status_lock);
+
+        (void)wifi_manager_stop_connection_timeout_timer();
+    }
+
+    return error;
+}
+
+static bool wifi_manager_process_connection_timeout(void)
+{
+    bool timeout_was_pending = false;
+    bool timeout_is_current = false;
+    uint32_t timeout_generation = 0U;
+    const int64_t now_us = esp_timer_get_time();
+
+    taskENTER_CRITICAL(&s_status_lock);
+
+    timeout_was_pending =
+        s_wifi_manager.connection_timeout_pending;
+
+    if (timeout_was_pending)
+    {
+        timeout_generation =
+            s_wifi_manager.connection_timeout_generation;
+
+        const bool connection_state_active =
+            s_wifi_manager.status.state == WIFI_MANAGER_STATE_CONNECTING ||
+            s_wifi_manager.status.state == WIFI_MANAGER_STATE_WAITING_FOR_IP;
+
+        timeout_is_current =
+            s_wifi_manager.initialized &&
+            s_wifi_manager.credentials_configured &&
+            s_wifi_manager.auto_reconnect_enabled &&
+            !s_wifi_manager.manual_disconnect_requested &&
+            !s_wifi_manager.status.has_ipv4_address &&
+            s_wifi_manager.connection_attempt_active &&
+            !s_wifi_manager.connection_timeout_abort_in_progress &&
+            connection_state_active &&
+            timeout_generation ==
+                s_wifi_manager.connection_attempt_generation &&
+            now_us >= s_wifi_manager.connection_attempt_deadline_us;
+
+        s_wifi_manager.connection_timeout_pending = false;
+        s_wifi_manager.connection_timeout_generation = 0U;
+
+        if (timeout_is_current)
+        {
+            s_wifi_manager.connection_attempt_active = false;
+            s_wifi_manager.connection_attempt_deadline_us = 0;
+            s_wifi_manager.connection_timeout_abort_in_progress = true;
+        }
+    }
+
+    taskEXIT_CRITICAL(&s_status_lock);
+
+    if (!timeout_was_pending)
+    {
+        return false;
+    }
+
+    if (!timeout_is_current)
+    {
+        ESP_LOGD(
+            TAG,
+            "Ignored stale Wi-Fi connection timeout, generation=%lu",
+            (unsigned long)timeout_generation);
+
+        return false;
+    }
+
+    (void)wifi_manager_stop_connection_timeout_timer();
+
+    ESP_LOGW(
+        TAG,
+        "Wi-Fi connection/DHCP timed out after %lu ms, generation=%lu",
+        (unsigned long)WIFI_MANAGER_CONNECTION_TIMEOUT_MS,
+        (unsigned long)timeout_generation);
+
+    /*
+     * A normal DISCONNECTED event may have completed between claiming the
+     * timeout and reaching this task context. Avoid an unnecessary second
+     * driver disconnect in that case.
+     */
+    taskENTER_CRITICAL(&s_status_lock);
+
+    const bool abort_still_required =
+        s_wifi_manager.connection_timeout_abort_in_progress;
+
+    taskEXIT_CRITICAL(&s_status_lock);
+
+    if (!abort_still_required)
+    {
+        return true;
+    }
+
+    const esp_err_t error = esp_wifi_disconnect();
+
+    if (error == ESP_OK)
+    {
+        /* WIFI_EVENT_STA_DISCONNECTED owns the normal retry scheduling. */
+        return true;
+    }
+
+    bool manual_disconnect = false;
+
+    taskENTER_CRITICAL(&s_status_lock);
+
+    s_wifi_manager.connection_timeout_abort_in_progress = false;
+
+    manual_disconnect =
+        s_wifi_manager.manual_disconnect_requested;
+
+    if (manual_disconnect)
+    {
+        s_wifi_manager.status.state =
+            WIFI_MANAGER_STATE_DISCONNECTED;
+        s_wifi_manager.status.has_ipv4_address = false;
+        s_wifi_manager.status.ipv4_address[0] = '\0';
+        s_wifi_manager.status.rssi_valid = false;
+        s_wifi_manager.status.rssi_dbm = 0;
+    }
+
+    taskEXIT_CRITICAL(&s_status_lock);
+
+    ESP_LOGW(
+        TAG,
+        "Could not abort timed-out Wi-Fi attempt: %s",
+        esp_err_to_name(error));
+
+    if (manual_disconnect)
+    {
+        wifi_manager_notify_status_changed();
+        return true;
+    }
+
+    if (!wifi_manager_schedule_reconnect())
+    {
+        ESP_LOGW(
+            TAG,
+            "Timed-out Wi-Fi attempt could not schedule reconnect");
+    }
+
+    return true;
+}
+
 static bool wifi_manager_schedule_reconnect(void)
 {
     TaskHandle_t reconnect_task_handle = NULL;
@@ -167,6 +554,9 @@ static bool wifi_manager_schedule_reconnect(void)
         s_wifi_manager.credentials_configured &&
         s_wifi_manager.auto_reconnect_enabled &&
         !s_wifi_manager.manual_disconnect_requested &&
+        !s_wifi_manager.status.has_ipv4_address &&
+        !s_wifi_manager.connection_attempt_active &&
+        !s_wifi_manager.connection_timeout_abort_in_progress &&
         s_wifi_manager.reconnect_task_handle != NULL)
     {
         s_wifi_manager.status.state =
@@ -221,6 +611,16 @@ static void wifi_manager_reconnect_task(
                 pdTRUE,
                 portMAX_DELAY);
 
+        /*
+         * Timeout notifications share this task with regular reconnect
+         * notifications, but timeout recovery must first abort the currently
+         * active driver attempt.
+         */
+        if (wifi_manager_process_connection_timeout())
+        {
+            continue;
+        }
+
         uint32_t reconnect_delay_ms = 0U;
         bool should_reconnect = false;
 
@@ -238,7 +638,11 @@ static void wifi_manager_reconnect_task(
             s_wifi_manager.credentials_configured &&
             s_wifi_manager.auto_reconnect_enabled &&
             !s_wifi_manager.manual_disconnect_requested &&
-            !s_wifi_manager.status.has_ipv4_address;
+            !s_wifi_manager.status.has_ipv4_address &&
+            !s_wifi_manager.connection_attempt_active &&
+            !s_wifi_manager.connection_timeout_abort_in_progress &&
+            s_wifi_manager.status.state ==
+                WIFI_MANAGER_STATE_RETRY_WAIT;
 
         reconnect_delay_ms =
             s_wifi_manager.reconnect_delay_ms;
@@ -278,8 +682,10 @@ static void wifi_manager_reconnect_task(
             s_wifi_manager.auto_reconnect_enabled &&
             !s_wifi_manager.manual_disconnect_requested &&
             !s_wifi_manager.status.has_ipv4_address &&
-            s_wifi_manager.status.state !=
-                WIFI_MANAGER_STATE_CONNECTED;
+            !s_wifi_manager.connection_attempt_active &&
+            !s_wifi_manager.connection_timeout_abort_in_progress &&
+            s_wifi_manager.status.state ==
+                WIFI_MANAGER_STATE_RETRY_WAIT;
 
 
         if (should_reconnect)
@@ -341,18 +747,39 @@ static void wifi_manager_reconnect_task(
             (unsigned long)next_reconnect_delay_ms);
 
         esp_err_t error =
-            esp_wifi_connect();
+            wifi_manager_start_connection_attempt();
 
         if (error != ESP_OK)
         {
+            bool retry_allowed = false;
+
             taskENTER_CRITICAL(
                 &s_status_lock);
 
-            s_wifi_manager.status.state =
-                WIFI_MANAGER_STATE_FAILED;
+            retry_allowed =
+                s_wifi_manager.initialized &&
+                s_wifi_manager.credentials_configured &&
+                s_wifi_manager.auto_reconnect_enabled &&
+                !s_wifi_manager.manual_disconnect_requested &&
+                !s_wifi_manager.status.has_ipv4_address;
+
+            if (retry_allowed)
+            {
+                s_wifi_manager.status.state =
+                    WIFI_MANAGER_STATE_FAILED;
+            }
 
             taskEXIT_CRITICAL(
                 &s_status_lock);
+
+            if (!retry_allowed)
+            {
+                ESP_LOGD(
+                    TAG,
+                    "Wi-Fi reconnect attempt was canceled");
+
+                continue;
+            }
 
             ESP_LOGW(
                 TAG,
@@ -362,7 +789,7 @@ static void wifi_manager_reconnect_task(
             wifi_manager_notify_status_changed();
 
             /*
-             * Schedule another fixed-delay attempt.
+             * Schedule another attempt using the existing backoff delay.
              *
              * This is safe from the reconnect task itself:
              * the notification is consumed during the next loop.
@@ -471,6 +898,7 @@ static void wifi_manager_event_handler(
                         (const wifi_event_sta_disconnected_t *)event_data;
 
                     bool manual_disconnect = false;
+                    bool stop_connection_timer = false;
 
                     uint16_t disconnect_reason = (uint16_t)WIFI_REASON_UNSPECIFIED;
 
@@ -507,7 +935,29 @@ static void wifi_manager_event_handler(
 
                     manual_disconnect = s_wifi_manager.manual_disconnect_requested;
 
+                    stop_connection_timer =
+                        s_wifi_manager.connection_timeout_timer != NULL;
+
+                    wifi_manager_cancel_connection_attempt_locked();
+                    s_wifi_manager.connection_timeout_abort_in_progress =
+                        false;
+
                     taskEXIT_CRITICAL(&s_status_lock);
+
+                    if (stop_connection_timer)
+                    {
+                        const esp_err_t timer_error =
+                            wifi_manager_stop_connection_timeout_timer();
+
+                        if (timer_error != ESP_OK)
+                        {
+                            ESP_LOGD(
+                                TAG,
+                                "Failed to stop connection timer on "
+                                "disconnect: %s",
+                                esp_err_to_name(timer_error));
+                        }
+                    }
 
                     ESP_LOGI(TAG, "Event: WIFI_EVENT_STA_DISCONNECTED");
 
@@ -591,30 +1041,64 @@ static void wifi_manager_event_handler(
                     break;
                 }
 
+                bool got_ip_accepted = false;
+
                 taskENTER_CRITICAL(&s_status_lock);
 
-                memcpy(
-                    s_wifi_manager.status.ipv4_address,
-                    ipv4_address,
-                    sizeof(s_wifi_manager.status.ipv4_address)
-                );
+                /*
+                 * Whichever side first owns the lock wins the GOT_IP versus
+                 * timeout/manual-disconnect race. A claimed abort must finish
+                 * instead of briefly publishing a false CONNECTED state.
+                 */
+                if (!s_wifi_manager.manual_disconnect_requested &&
+                    !s_wifi_manager.connection_timeout_abort_in_progress)
+                {
+                    memcpy(
+                        s_wifi_manager.status.ipv4_address,
+                        ipv4_address,
+                        sizeof(s_wifi_manager.status.ipv4_address)
+                    );
 
-                s_wifi_manager.status.has_ipv4_address =
-                    true;
+                    s_wifi_manager.status.has_ipv4_address =
+                        true;
 
-                s_wifi_manager.status.state =
-                    WIFI_MANAGER_STATE_CONNECTED;
+                    s_wifi_manager.status.state =
+                        WIFI_MANAGER_STATE_CONNECTED;
 
-                s_wifi_manager.reconnect_delay_ms =
-                    WIFI_MANAGER_RECONNECT_INITIAL_DELAY_MS;
+                    s_wifi_manager.reconnect_delay_ms =
+                        WIFI_MANAGER_RECONNECT_INITIAL_DELAY_MS;
 
-                s_wifi_manager.reconnect_attempt_count =
-                    0U;
+                    s_wifi_manager.reconnect_attempt_count =
+                        0U;
 
-                s_wifi_manager.status.disconnect_reason =
-                    0U;
+                    s_wifi_manager.status.disconnect_reason =
+                        0U;
+
+                    wifi_manager_cancel_connection_attempt_locked();
+                    got_ip_accepted = true;
+                }
 
                 taskEXIT_CRITICAL(&s_status_lock);
+
+                if (!got_ip_accepted)
+                {
+                    ESP_LOGD(
+                        TAG,
+                        "Ignored IPv4 event while disconnect is in progress");
+
+                    break;
+                }
+
+                const esp_err_t timer_error =
+                    wifi_manager_stop_connection_timeout_timer();
+
+                if (timer_error != ESP_OK)
+                {
+                    ESP_LOGD(
+                        TAG,
+                        "Failed to stop connection timer on GOT_IP: %s",
+                        esp_err_to_name(timer_error));
+                }
 
                 ESP_LOGI(
                     TAG,
@@ -725,6 +1209,7 @@ esp_err_t wifi_manager_init(void)
     }
 
     TaskHandle_t reconnect_task_handle = NULL;
+    esp_timer_handle_t connection_timeout_timer = NULL;
 
     /*
      * Initialize the Wi-Fi driver using ESP-IDF's recommended
@@ -865,6 +1350,44 @@ esp_err_t wifi_manager_init(void)
         return ret;
     }
 
+    const esp_timer_create_args_t timeout_timer_args = {
+        .callback = wifi_manager_connection_timeout_callback,
+        .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "wifi_connect_timeout",
+    };
+
+    ret = esp_timer_create(
+        &timeout_timer_args,
+        &connection_timeout_timer);
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to create Wi-Fi connection timeout timer: %s",
+            esp_err_to_name(ret));
+
+        esp_event_handler_instance_unregister(
+            IP_EVENT,
+            ESP_EVENT_ANY_ID,
+            s_wifi_manager.ip_event_instance);
+
+        s_wifi_manager.ip_event_instance = NULL;
+
+        esp_event_handler_instance_unregister(
+            WIFI_EVENT,
+            ESP_EVENT_ANY_ID,
+            s_wifi_manager.wifi_event_instance);
+
+        s_wifi_manager.wifi_event_instance = NULL;
+
+        esp_wifi_deinit();
+        esp_netif_destroy_default_wifi(station_netif);
+
+        return ret;
+    }
+
     BaseType_t task_result =
     xTaskCreate(
         wifi_manager_reconnect_task,
@@ -880,6 +1403,19 @@ esp_err_t wifi_manager_init(void)
         ESP_LOGE(
             TAG,
             "Failed to create Wi-Fi reconnect task");
+
+        const esp_err_t timer_delete_error =
+            esp_timer_delete(connection_timeout_timer);
+
+        if (timer_delete_error != ESP_OK)
+        {
+            ESP_LOGW(
+                TAG,
+                "Failed to delete connection timer after task error: %s",
+                esp_err_to_name(timer_delete_error));
+        }
+
+        connection_timeout_timer = NULL;
 
         esp_event_handler_instance_unregister(
             IP_EVENT,
@@ -927,6 +1463,22 @@ esp_err_t wifi_manager_init(void)
                 reconnect_task_handle);
 
             reconnect_task_handle = NULL;
+        }
+
+        if (connection_timeout_timer != NULL)
+        {
+            const esp_err_t timer_delete_error =
+                esp_timer_delete(connection_timeout_timer);
+
+            if (timer_delete_error != ESP_OK)
+            {
+                ESP_LOGW(
+                    TAG,
+                    "Failed to delete connection timer after start error: %s",
+                    esp_err_to_name(timer_delete_error));
+            }
+
+            connection_timeout_timer = NULL;
         }
         /*
         * Undo IP event registration.
@@ -980,6 +1532,16 @@ esp_err_t wifi_manager_init(void)
 
         s_wifi_manager.reconnect_task_handle =
             reconnect_task_handle;
+
+        s_wifi_manager.connection_timeout_timer =
+            connection_timeout_timer;
+
+        s_wifi_manager.connection_attempt_generation = 0U;
+        s_wifi_manager.connection_timeout_generation = 0U;
+        s_wifi_manager.connection_attempt_deadline_us = 0;
+        s_wifi_manager.connection_attempt_active = false;
+        s_wifi_manager.connection_timeout_pending = false;
+        s_wifi_manager.connection_timeout_abort_in_progress = false;
 
         s_wifi_manager.initialized =
             true;
@@ -1259,7 +1821,7 @@ esp_err_t wifi_manager_connect(
     /*
      * 6. Start the asynchronous connection process.
      */
-    ret = esp_wifi_connect();
+    ret = wifi_manager_start_connection_attempt();
 
     if (ret != ESP_OK)
     {
@@ -1295,6 +1857,7 @@ esp_err_t wifi_manager_disconnect(void)
         "Wi-Fi manager is not initialized");
 
     bool driver_disconnect_required = false;
+    bool timeout_abort_in_progress = false;
 
     /*
      * Store the application intent before calling esp_wifi_disconnect().
@@ -1318,19 +1881,26 @@ esp_err_t wifi_manager_disconnect(void)
     s_wifi_manager.reconnect_attempt_count =
         0U;
 
+    timeout_abort_in_progress =
+        s_wifi_manager.connection_timeout_abort_in_progress;
+
+    wifi_manager_cancel_connection_attempt_locked();
+
     driver_disconnect_required =
-        s_wifi_manager.status.state ==
-            WIFI_MANAGER_STATE_CONNECTED ||
-        s_wifi_manager.status.state ==
-            WIFI_MANAGER_STATE_WAITING_FOR_IP ||
-        s_wifi_manager.status.state ==
-            WIFI_MANAGER_STATE_CONNECTING;
+        !timeout_abort_in_progress &&
+        (s_wifi_manager.status.state ==
+             WIFI_MANAGER_STATE_CONNECTED ||
+         s_wifi_manager.status.state ==
+             WIFI_MANAGER_STATE_WAITING_FOR_IP ||
+         s_wifi_manager.status.state ==
+             WIFI_MANAGER_STATE_CONNECTING);
 
     /*
      * If the driver is already offline, there may be no new
      * DISCONNECTED event. Complete the state transition locally.
      */
-    if (!driver_disconnect_required)
+    if (!driver_disconnect_required &&
+        !timeout_abort_in_progress)
     {
         s_wifi_manager.status.state =
             WIFI_MANAGER_STATE_DISCONNECTED;
@@ -1350,6 +1920,26 @@ esp_err_t wifi_manager_disconnect(void)
 
     taskEXIT_CRITICAL(
         &s_status_lock);
+
+    const esp_err_t timer_error =
+        wifi_manager_stop_connection_timeout_timer();
+
+    if (timer_error != ESP_OK)
+    {
+        ESP_LOGD(
+            TAG,
+            "Failed to stop connection timer on manual disconnect: %s",
+            esp_err_to_name(timer_error));
+    }
+
+    if (timeout_abort_in_progress)
+    {
+        ESP_LOGD(
+            TAG,
+            "Manual disconnect joined timeout abort already in progress");
+
+        return ESP_OK;
+    }
 
     if (!driver_disconnect_required)
     {
