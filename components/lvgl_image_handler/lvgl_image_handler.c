@@ -117,7 +117,7 @@ static void displayimage(void* arg)
         switch (index%3)
         {
         case 0:
-            ESP_LOGI(TAG,"Displaying PNG image");
+            ESP_LOGD(TAG,"Displaying PNG image");
             image_ret =
                 lvgl_image_handler_show_png("S:/Hinh.png");
 
@@ -141,7 +141,7 @@ static void displayimage(void* arg)
             break;
 
         case 1:
-            ESP_LOGI(TAG,"Displaying JPG image");
+            ESP_LOGD(TAG,"Displaying JPG image");
             image_ret =
                 lvgl_image_handler_show_jpg("S:/Hinh.jpg");
 
@@ -161,7 +161,7 @@ static void displayimage(void* arg)
             break;
 
         case 2:
-            ESP_LOGI(TAG,"Displaying GIF image");
+            ESP_LOGD(TAG,"Displaying GIF image");
             image_ret =
                 lvgl_image_handler_show_gif("S:/Hinh.gif");
 
@@ -1989,7 +1989,7 @@ esp_err_t lvgl_image_handler_clear(void)
 {
     lvgl_image_handler_clear_internal();
 
-    ESP_LOGI(TAG, "Active image object cleared");
+    ESP_LOGD(TAG, "Active image object cleared");
 
     return ESP_OK;
 }

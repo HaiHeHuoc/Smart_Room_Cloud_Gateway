@@ -131,7 +131,7 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t *display_handle)
                         TAG,
                         "LVGL UI manager is already initialized");
 
-    ESP_LOGI(TAG, "Initialize LVGL UI manager");
+    ESP_LOGD(TAG, "Initializing LVGL UI manager");
     s_display_handle = display_handle; // Store the display handle for later use
 
     // Create a mutex for LVGL operations to ensure thread safety

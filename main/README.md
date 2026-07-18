@@ -74,13 +74,15 @@ After Wi-Fi receives an IP address and sensor data becomes available:
 
 ```text
 I (...) FIREBASE_AUTH: Firebase Authentication sign-in successful
-I (...) CLOUD_MANAGER: Publishing telemetry: T=... C, H=... %
-I (...) CLOUD_MANAGER: Firebase HTTP status: 204
-I (...) CLOUD_MANAGER: Telemetry published successfully
+D (...) CLOUD_MANAGER: Publishing telemetry: T=... C, H=... %
+D (...) CLOUD_MANAGER: Firebase HTTP status: 204
+D (...) CLOUD_MANAGER: Telemetry published successfully
 ```
 
 Firebase may return HTTP 200 instead of 204 depending on response options; all
-HTTP 2xx statuses are accepted.
+HTTP 2xx statuses are accepted. The periodic request details are visible only
+when the `CLOUD_MANAGER` log level allows debug output; failures remain warning
+or error logs at the default level.
 
 ## Build
 

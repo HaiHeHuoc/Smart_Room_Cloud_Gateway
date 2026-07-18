@@ -197,7 +197,7 @@ void app_main(void)
             return;
         }
 
-        ESP_LOGI(TAG, "Start LVGL task handler");
+        ESP_LOGD(TAG, "Starting LVGL task handler");
 
         esp_err_t ui_task_ret = app_gui_start_ui_task();
         if (ui_task_ret != ESP_OK) {
@@ -524,8 +524,8 @@ static void app_wifi_status_callback(
     }
 
 
-    ESP_LOGI(TAG, "*------------------------------------------------------------------------------------------*");
-    ESP_LOGI(
+    ESP_LOGD(TAG, "*------------------------------------------------------------------------------------------*");
+    ESP_LOGD(
         TAG,
         "Wi-Fi callback: state=%s, ssid=%s, ip=%s, reason=%u",
         wifi_manager_state_to_string(status->state),
@@ -537,7 +537,7 @@ static void app_wifi_status_callback(
             : "<none>",
         (unsigned int)status->disconnect_reason
     );
-    ESP_LOGI(TAG, "*------------------------------------------------------------------------------------------*");
+    ESP_LOGD(TAG, "*------------------------------------------------------------------------------------------*");
 }
 
 static ui_sensor_state_t app_map_sensor_state(

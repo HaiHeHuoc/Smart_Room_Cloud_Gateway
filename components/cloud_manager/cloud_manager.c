@@ -124,7 +124,7 @@ static void cloud_manager_set_state(
 
     if (old_state != new_state)
     {
-        ESP_LOGI(
+        ESP_LOGD(
             TAG,
             "Cloud state changed: %d -> %d",
             old_state,
@@ -355,7 +355,7 @@ static esp_err_t cloud_manager_publish_telemetry(
 
     if (result == ESP_OK)
     {
-        ESP_LOGI(
+        ESP_LOGD(
             TAG,
             "Publishing telemetry: T=%.1f C, H=%.1f %%",
             telemetry->temperature_c,
@@ -398,7 +398,7 @@ static esp_err_t cloud_manager_publish_telemetry(
         return result;
     }
 
-    ESP_LOGI(
+    ESP_LOGD(
         TAG,
         "Firebase HTTP status: %d",
         http_status);
@@ -431,7 +431,7 @@ static void cloud_manager_task(
     uint32_t next_delay_ms =
         s_config.publish_period_ms;
 
-    ESP_LOGI(
+    ESP_LOGD(
         TAG,
         "Cloud task started, publish period=%lu ms",
         (unsigned long)s_config.publish_period_ms);
@@ -492,7 +492,7 @@ static void cloud_manager_task(
                 cloud_manager_record_upload_success(
                     http_status);
 
-                ESP_LOGI(
+                ESP_LOGD(
                     TAG,
                     "Telemetry published successfully");
 

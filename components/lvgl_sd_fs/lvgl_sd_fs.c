@@ -379,7 +379,7 @@ esp_err_t lvgl_sd_fs_register(void)
         return ESP_OK;
     }
 
-    ESP_LOGI(TAG, "Start Register SD card filesystem driver to LVGL");
+    ESP_LOGD(TAG, "Registering SD card filesystem driver with LVGL");
 
     ESP_RETURN_ON_FALSE(sd_card_manager_is_mounted(),
                         ESP_ERR_INVALID_STATE,
