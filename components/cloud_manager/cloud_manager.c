@@ -8,10 +8,12 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include "wifi_manager.h"
 
@@ -29,6 +31,11 @@
 
 #define CLOUD_MANAGER_MIN_PUBLISH_PERIOD_MS   1000U
 
+#define CLOUD_MANAGER_RETRY_INITIAL_MS        5000U
+#define CLOUD_MANAGER_RETRY_MAX_MS           60000U
+#define CLOUD_MANAGER_NETWORK_CHECK_MS        1000U
+#define CLOUD_MANAGER_MUTEX_TIMEOUT_MS        100U
+
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "CLOUD_MANAGER";
 
@@ -43,21 +50,177 @@ static TaskHandle_t s_cloud_task_handle;
 static bool s_is_initialized;
 static bool s_is_started;
 
+static cloud_manager_status_t s_status;
+static SemaphoreHandle_t s_status_mutex;
+
 /* Function Prototypes ------------------------------------------------------ */
 static esp_err_t cloud_manager_publish_telemetry(
-    const cloud_sensor_telemetry_t *telemetry);
+    const cloud_sensor_telemetry_t *telemetry,
+    int *http_status_out);
 
 static void cloud_manager_task(
     void *argument);
 
+static int64_t cloud_manager_get_time_ms(void);
+
+static void cloud_manager_set_state(
+    cloud_manager_state_t new_state);
+
+static void cloud_manager_record_upload_success(
+    int http_status);
+
+static void cloud_manager_record_upload_failure(
+    esp_err_t error,
+    int http_status,
+    uint32_t retry_delay_ms);
+
+static bool cloud_manager_is_auth_error(
+    int http_status);
+
+static bool cloud_manager_is_retryable_http_error(
+    int http_status);
+
 /* Static Functions --------------------------------------------------------- */
-static esp_err_t cloud_manager_publish_telemetry(
-    const cloud_sensor_telemetry_t *telemetry)
+static int64_t cloud_manager_get_time_ms(void)
 {
-    if (telemetry == NULL)
+    return esp_timer_get_time() / 1000;
+}
+
+static void cloud_manager_set_state(
+    cloud_manager_state_t new_state)
+{
+    if (s_status_mutex == NULL)
+    {
+        return;
+    }
+
+    cloud_manager_state_t old_state;
+
+    if (xSemaphoreTake(
+            s_status_mutex,
+            portMAX_DELAY) != pdTRUE)
+    {
+        return;
+    }
+
+    old_state = s_status.state;
+    s_status.state = new_state;
+
+    xSemaphoreGive(s_status_mutex);
+
+    if (old_state != new_state)
+    {
+        ESP_LOGI(
+            TAG,
+            "Cloud state changed: %d -> %d",
+            old_state,
+            new_state);
+    }
+}
+
+static void cloud_manager_record_upload_success(
+    int http_status)
+{
+    if (xSemaphoreTake(
+            s_status_mutex,
+            portMAX_DELAY) != pdTRUE)
+    {
+        return;
+    }
+
+    s_status.state =
+        CLOUD_MANAGER_STATE_ONLINE;
+
+    s_status.last_error = ESP_OK;
+    s_status.last_http_status = http_status;
+
+    s_status.successful_upload_count++;
+    s_status.consecutive_failure_count = 0U;
+
+    s_status.current_retry_delay_ms =
+        CLOUD_MANAGER_RETRY_INITIAL_MS;
+
+    s_status.last_success_time_ms =
+        cloud_manager_get_time_ms();
+
+    xSemaphoreGive(s_status_mutex);
+}
+
+static bool cloud_manager_is_auth_error(
+    int http_status)
+{
+    return http_status == 401 ||
+           http_status == 403;
+}
+
+static bool cloud_manager_is_retryable_http_error(
+    int http_status)
+{
+    return http_status == 408 ||
+           http_status == 429 ||
+           http_status >= 500;
+}
+
+static void cloud_manager_record_upload_failure(
+    esp_err_t error,
+    int http_status,
+    uint32_t retry_delay_ms)
+{
+    if (xSemaphoreTake(
+            s_status_mutex,
+            portMAX_DELAY) != pdTRUE)
+    {
+        return;
+    }
+
+    s_status.last_error = error;
+    s_status.last_http_status = http_status;
+
+    s_status.failed_upload_count++;
+    s_status.consecutive_failure_count++;
+
+    s_status.current_retry_delay_ms =
+        retry_delay_ms;
+
+    if (cloud_manager_is_auth_error(http_status))
+    {
+        s_status.state =
+            CLOUD_MANAGER_STATE_AUTH_ERROR;
+    }
+    else if (http_status == 0 ||
+             cloud_manager_is_retryable_http_error(http_status))
+    {
+        /*
+         * http_status == 0 usually means DNS, TCP, TLS,
+         * timeout or another transport-layer failure.
+         */
+        s_status.state =
+            CLOUD_MANAGER_STATE_RETRY_WAIT;
+    }
+    else
+    {
+        /*
+         * Examples: HTTP 400 or 404.
+         * These usually indicate URL, JSON or configuration errors.
+         */
+        s_status.state =
+            CLOUD_MANAGER_STATE_ERROR;
+    }
+
+    xSemaphoreGive(s_status_mutex);
+}
+
+static esp_err_t cloud_manager_publish_telemetry(
+    const cloud_sensor_telemetry_t *telemetry,
+    int *http_status_out)
+{
+    if (telemetry == NULL ||
+        http_status_out == NULL)
     {
         return ESP_ERR_INVALID_ARG;
     }
+
+    *http_status_out = 0;
 
     char payload[CLOUD_MANAGER_JSON_BUFFER_SIZE];
 
@@ -150,6 +313,11 @@ static esp_err_t cloud_manager_publish_telemetry(
 
     result = esp_http_client_perform(client);
 
+    int http_status =
+        esp_http_client_get_status_code(client);
+
+    *http_status_out = http_status;
+
     if (result != ESP_OK)
     {
         ESP_LOGW(
@@ -160,9 +328,6 @@ static esp_err_t cloud_manager_publish_telemetry(
         esp_http_client_cleanup(client);
         return result;
     }
-
-    int http_status =
-        esp_http_client_get_status_code(client);
 
     ESP_LOGI(
         TAG,
@@ -186,84 +351,142 @@ static esp_err_t cloud_manager_publish_telemetry(
 
     return ESP_OK;
 }
-
 static void cloud_manager_task(
     void *argument)
 {
     (void)argument;
 
     cloud_sensor_telemetry_t pending_telemetry = {0};
-
     bool has_pending_telemetry = false;
 
-    TickType_t last_wake_time =
-            xTaskGetTickCount();
+    uint32_t retry_delay_ms =
+        CLOUD_MANAGER_RETRY_INITIAL_MS;
 
-    TickType_t publish_period_ticks =
-        pdMS_TO_TICKS(
-            s_config.publish_period_ms);
+    uint32_t next_delay_ms =
+        s_config.publish_period_ms;
 
     ESP_LOGI(
         TAG,
         "Cloud task started, publish period=%lu ms",
         (unsigned long)s_config.publish_period_ms);
 
-    while(true)
+    while (true)
     {
         cloud_sensor_telemetry_t received_telemetry;
 
-        if (xQueueReceive(
-                s_telemetry_queue,
-                &received_telemetry,
-                0) == pdTRUE)
+        /*
+         * Drain the queue. It currently has length one, but this loop
+         * preserves the latest value if the implementation changes later.
+         */
+        while (xQueueReceive(
+                   s_telemetry_queue,
+                   &received_telemetry,
+                   0) == pdTRUE)
         {
-            pending_telemetry = received_telemetry;
+            pending_telemetry =
+                received_telemetry;
+
             has_pending_telemetry = true;
         }
 
-
-        if (has_pending_telemetry)
+        if (!has_pending_telemetry)
         {
-            if (!wifi_manager_is_connected())
+            if (wifi_manager_is_connected())
             {
-                /*
-                 * Keep the local pending snapshot. Do not perform HTTPS
-                 * until network connectivity returns.
-                 */
-                ESP_LOGW(
-                    TAG,
-                    "Waiting for network connectivity");
+                cloud_manager_set_state(
+                    CLOUD_MANAGER_STATE_WAITING_FOR_DATA);
             }
             else
             {
-                esp_err_t error =
-                    cloud_manager_publish_telemetry(
-                        &pending_telemetry);
+                cloud_manager_set_state(
+                    CLOUD_MANAGER_STATE_WAITING_FOR_NETWORK);
+            }
 
-                if (error == ESP_OK)
+            next_delay_ms =
+                CLOUD_MANAGER_NETWORK_CHECK_MS;
+        }
+        else if (!wifi_manager_is_connected())
+        {
+            cloud_manager_set_state(
+                CLOUD_MANAGER_STATE_WAITING_FOR_NETWORK);
+
+            /*
+             * Do not increase upload failure counters because no
+             * Firebase request was attempted.
+             */
+            next_delay_ms =
+                CLOUD_MANAGER_NETWORK_CHECK_MS;
+        }
+        else
+        {
+            cloud_manager_set_state(
+                CLOUD_MANAGER_STATE_UPLOADING);
+
+            int http_status = 0;
+
+            esp_err_t error =
+                cloud_manager_publish_telemetry(
+                    &pending_telemetry,
+                    &http_status);
+
+            if (error == ESP_OK)
+            {
+                cloud_manager_record_upload_success(
+                    http_status);
+
+                ESP_LOGI(
+                    TAG,
+                    "Telemetry published successfully");
+
+                has_pending_telemetry = false;
+
+                retry_delay_ms =
+                    CLOUD_MANAGER_RETRY_INITIAL_MS;
+
+                next_delay_ms =
+                    s_config.publish_period_ms;
+            }
+            else
+            {
+                cloud_manager_record_upload_failure(
+                    error,
+                    http_status,
+                    retry_delay_ms);
+
+                ESP_LOGW(
+                    TAG,
+                    "Upload failed: error=%s, HTTP=%d, "
+                    "retry in %lu ms",
+                    esp_err_to_name(error),
+                    http_status,
+                    (unsigned long)retry_delay_ms);
+
+                /*
+                 * Keep pending_telemetry so it can be retried.
+                 * A newer queue value will replace it in the next loop.
+                 */
+                next_delay_ms =
+                    retry_delay_ms;
+
+                if (retry_delay_ms <
+                    CLOUD_MANAGER_RETRY_MAX_MS)
                 {
-                    has_pending_telemetry = false;
-                }
-                else
-                {
-                    /*
-                     * Keep the pending snapshot and retry on the next
-                     * publish period. A newer queue value may replace it.
-                     */
-                    ESP_LOGW(
-                        TAG,
-                        "Telemetry remains pending: %s",
-                        esp_err_to_name(error));
+                    uint32_t doubled_delay_ms =
+                        retry_delay_ms * 2U;
+
+                    retry_delay_ms =
+                        doubled_delay_ms >
+                        CLOUD_MANAGER_RETRY_MAX_MS
+                            ? CLOUD_MANAGER_RETRY_MAX_MS
+                            : doubled_delay_ms;
                 }
             }
         }
 
-        vTaskDelayUntil(
-            &last_wake_time,
-        publish_period_ticks);
+        vTaskDelay(
+            pdMS_TO_TICKS(next_delay_ms));
     }
 }
-
 /* Functions ---------------------------------------------------------------- */
 esp_err_t cloud_manager_init(
     const cloud_manager_config_t *config)
@@ -272,6 +495,49 @@ esp_err_t cloud_manager_init(
         config->firebase_latest_url == NULL)
     {
         return ESP_ERR_INVALID_ARG;
+    }
+
+    s_status_mutex =
+        xSemaphoreCreateMutex();
+
+    if (s_status_mutex == NULL)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to create status mutex");
+
+        return ESP_ERR_NO_MEM;
+    }
+
+    memset(
+        &s_status,
+        0,
+        sizeof(s_status));
+
+    s_status.state =
+        CLOUD_MANAGER_STATE_INITIALIZED;
+
+    s_status.last_error = ESP_OK;
+    s_status.last_http_status = 0;
+
+    s_status.current_retry_delay_ms =
+        CLOUD_MANAGER_RETRY_INITIAL_MS;
+
+    s_telemetry_queue =
+        xQueueCreate(
+            CLOUD_MANAGER_TELEMETRY_QUEUE_LENGTH,
+            sizeof(cloud_sensor_telemetry_t));
+
+    if (s_telemetry_queue == NULL)
+    {
+        vSemaphoreDelete(s_status_mutex);
+        s_status_mutex = NULL;
+
+        ESP_LOGE(
+            TAG,
+            "Failed to create telemetry queue");
+
+        return ESP_ERR_NO_MEM;
     }
 
     if (s_is_initialized)
@@ -408,6 +674,35 @@ esp_err_t cloud_manager_post_sensor_telemetry(
     {
         return ESP_FAIL;
     }
+
+    return ESP_OK;
+}
+
+esp_err_t cloud_manager_get_status(
+    cloud_manager_status_t *status)
+{
+    if (status == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!s_is_initialized ||
+        s_status_mutex == NULL)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (xSemaphoreTake(
+            s_status_mutex,
+            pdMS_TO_TICKS(
+                CLOUD_MANAGER_MUTEX_TIMEOUT_MS)) != pdTRUE)
+    {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    *status = s_status;
+
+    xSemaphoreGive(s_status_mutex);
 
     return ESP_OK;
 }

@@ -8,4 +8,6 @@ idf_component_register(
         esp_http_client
         mbedtls
         log
+        freertos
+        esp_timer
 )
