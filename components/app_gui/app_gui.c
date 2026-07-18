@@ -586,7 +586,7 @@ static void app_gui_update_sensor_screen(
         return;
     }
 
-    if (status->data_valid) {
+    if (status->data_valid && !status->data_stale) {
         char temperature_text[16] = {0};
         char humidity_text[16] = {0};
 

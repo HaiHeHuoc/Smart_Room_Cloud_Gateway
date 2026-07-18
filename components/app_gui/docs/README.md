@@ -93,6 +93,8 @@ sensor_manager task
 An active Wi-Fi screen has priority over sensor snapshots. After the Wi-Fi
 timeout clears that screen, a later sensor snapshot can create the sensor
 screen. A subsequent Wi-Fi event brings the Wi-Fi screen forward again.
+When sensor data is stale, the temperature and humidity labels display `-`
+instead of retaining the last-known-good values.
 
 ## Thread-Safety Contract
 

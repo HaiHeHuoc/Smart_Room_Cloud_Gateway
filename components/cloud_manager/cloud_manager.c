@@ -230,7 +230,7 @@ static void cloud_manager_task(
                  * Keep the local pending snapshot. Do not perform HTTPS
                  * until network connectivity returns.
                  */
-                ESP_LOGD(
+                ESP_LOGW(
                     TAG,
                     "Waiting for network connectivity");
             }
