@@ -83,7 +83,6 @@ static void app_gui_wifi_screen_timeout_cb(lv_timer_t *timer)
         return;
     }
 
-    ESP_LOGI(TAG, "Wi-Fi screen timeout");
 
     esp_err_t ret = app_gui_clear_screen();
     if (ret != ESP_OK) {
@@ -93,10 +92,10 @@ static void app_gui_wifi_screen_timeout_cb(lv_timer_t *timer)
             esp_err_to_name(ret));
     }
 
+    ESP_LOGI(TAG, "Wi-Fi screen timeout");
+
     /* Make this timer behave like a reusable one-shot timer. */
     lv_timer_pause(timer);
-
-    app_gui_create_sensor_screen();
 }
 
 static void app_gui_restart_wifi_screen_timer(void)
@@ -613,7 +612,7 @@ static void app_gui_process_sensor_status(void)
     app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
 
     if (app_gui_get_screen_id(&screen_id) == ESP_OK) {
-        if (screen_id != APP_GUI_SCREEN_SENSOR) {
+        if (screen_id == APP_GUI_SCREEN_NONE) {
             app_gui_clear_screen();
             const esp_err_t ret = app_gui_create_sensor_screen();
             if (ret != ESP_OK) {
@@ -994,6 +993,7 @@ esp_err_t app_gui_get_screen_id(
 
 esp_err_t app_gui_clear_screen(void)
 {
+
     lv_obj_t* m_currentScreen = lv_screen_active();
 
     ESP_RETURN_ON_FALSE(m_currentScreen != NULL,
@@ -1021,6 +1021,5 @@ esp_err_t app_gui_clear_screen(void)
     (void)app_gui_set_screen_id(APP_GUI_SCREEN_NONE);
 
     lv_obj_del(m_currentScreen);
-
     return ESP_OK;
 }
