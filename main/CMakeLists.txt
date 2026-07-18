@@ -12,7 +12,9 @@ idf_component_register(SRCS "main.c"
         app_gui
         sensor_DHT22
         sensor_manager
-        firebase_bringup
+        cloud_manager
+
+        firebase_bringup #Remove later
 
     PRIV_REQUIRES
         nvs_flash

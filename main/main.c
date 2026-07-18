@@ -39,11 +39,13 @@
 /* Sensor manager ---------------------------------------------------------- */
 #include "sensor_manager.h"
 
-/* FireBase bringup test --------------------------------------------------- */
+/* cloud_manager ----------------------------------------------------------- */
 #include "firebase_bringup.h"
+#include "cloud_manager.h"
 
 /* Macros ------------------------------------------------------------------- */
 #define PERFORMANCE_MONITOR 0
+#define FIREBASE_URL "https://esp32-smart-room-gateway-default-rtdb.asia-southeast1.firebasedatabase.app/devices/esp32s3-001/latest.json"""
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "MAIN_APP";
@@ -59,8 +61,16 @@ static const sensor_manager_config_t SENSOR_MANAGER_CONFIG =
     .stale_timeout_ms = 10000U,
 };
 
-/* Latest status copy used by the temporary main-loop diagnostic log. */
-static sensor_manager_status_t s_sensor_data;
+// Cloud configuration
+static const cloud_manager_config_t CLOUD_MANAGER_CONFIG =
+{
+    .firebase_latest_url =
+        "https://esp32-smart-room-gateway-default-rtdb."
+        "asia-southeast1.firebasedatabase.app/"
+        "devices/esp32s3-001/latest.json",
+
+    .publish_period_ms = 10000U,
+};
 
 /* Function Prototypes ------------------------------------------------------ */
 /** @brief Initialize NVS, ESP-NETIF, and the default event loop once. */
@@ -251,24 +261,24 @@ if (connect_ret != ESP_OK) {
 
     return;
 }
-else
-{
-    BaseType_t task_result =
-        xTaskCreate(
-            firebase_bringup_task,
-            "firebase_test",
-            8192,
-            NULL,
-            4,
-            NULL);
+// else
+// {
+//     BaseType_t task_result =
+//         xTaskCreate(
+//             firebase_bringup_task,
+//             "firebase_test",
+//             8192,
+//             NULL,
+//             4,
+//             NULL);
 
-    if (task_result != pdPASS)
-    {
-        ESP_LOGE(
-            TAG,
-            "Failed to create Firebase test task");
-    }
-}
+//     if (task_result != pdPASS)
+//     {
+//         ESP_LOGE(
+//             TAG,
+//             "Failed to create Firebase test task");
+//     }
+// }
 
     ESP_ERROR_CHECK(
     sensor_manager_init(
@@ -281,6 +291,13 @@ else
 
     ESP_ERROR_CHECK(
         sensor_manager_start());
+
+    ESP_ERROR_CHECK(
+        cloud_manager_init(
+            &CLOUD_MANAGER_CONFIG));
+
+    ESP_ERROR_CHECK(
+        cloud_manager_start());
 
     while (1)
     {
@@ -540,6 +557,42 @@ static void app_sensor_status_callback(
         ESP_LOGD(
             TAG,
             "Sensor GUI update dropped: %s",
+            esp_err_to_name(error));
+    }
+
+    const cloud_sensor_telemetry_t telemetry =
+    {
+        .temperature_c =
+            status->temperature_c,
+
+        .humidity_percent =
+            status->humidity_percent,
+
+        .data_valid =
+            status->data_valid,
+
+        .data_stale =
+            status->data_stale,
+
+        .sensor_state =
+            (int32_t)status->state,
+
+        .last_error =
+            status->last_error,
+
+        .sample_uptime_ms =
+            status->last_success_time_ms,
+    };
+
+    error =
+        cloud_manager_post_sensor_telemetry(
+            &telemetry);
+
+    if (error != ESP_OK)
+    {
+        ESP_LOGW(
+            TAG,
+            "Sensor cloud update dropped: %s",
             esp_err_to_name(error));
     }
 }
