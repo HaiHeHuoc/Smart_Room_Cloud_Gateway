@@ -267,11 +267,6 @@ if (connect_ret != ESP_OK) {
 
     while (1)
     {
-        sensor_manager_get_status(&s_sensor_data);
-        ESP_LOGW(TAG, "Temp: %0.2f, Humid: %0.2f", 
-            s_sensor_data.temperature_c, 
-            s_sensor_data.humidity_percent
-        );
         // ESP_LOGI(TAG, "Main loop running...");
         vTaskDelay(pdMS_TO_TICKS(5000));
     }
