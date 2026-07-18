@@ -40,12 +40,10 @@
 #include "sensor_manager.h"
 
 /* cloud_manager ----------------------------------------------------------- */
-#include "firebase_bringup.h"
 #include "cloud_manager.h"
 
 /* Macros ------------------------------------------------------------------- */
 #define PERFORMANCE_MONITOR 0
-#define FIREBASE_URL "https://esp32-smart-room-gateway-default-rtdb.asia-southeast1.firebasedatabase.app/devices/esp32s3-001/latest.json"""
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "MAIN_APP";
@@ -94,7 +92,6 @@ static void app_sensor_status_callback(
     const sensor_manager_status_t *status,
     void *user_context);
 
-static void firebase_bringup_task(void *argument);
 /* Application -------------------------------------------------------------- */
 /** @brief Initialize the current application services and run diagnostics. */
 void app_main(void)
@@ -261,25 +258,6 @@ if (connect_ret != ESP_OK) {
 
     return;
 }
-// else
-// {
-//     BaseType_t task_result =
-//         xTaskCreate(
-//             firebase_bringup_task,
-//             "firebase_test",
-//             8192,
-//             NULL,
-//             4,
-//             NULL);
-
-//     if (task_result != pdPASS)
-//     {
-//         ESP_LOGE(
-//             TAG,
-//             "Failed to create Firebase test task");
-//     }
-// }
-
     ESP_ERROR_CHECK(
     sensor_manager_init(
         &SENSOR_MANAGER_CONFIG));
@@ -306,7 +284,6 @@ if (connect_ret != ESP_OK) {
     }
     
 }
-
 /* Static Functions --------------------------------------------------------- */
 static esp_err_t network_platform_init(void)
 {
@@ -595,41 +572,4 @@ static void app_sensor_status_callback(
             "Sensor cloud update dropped: %s",
             esp_err_to_name(error));
     }
-}
-
-static void firebase_bringup_task(void *argument)
-{
-    (void)argument;
-
-    /*
-     * Temporary polling for bring-up only.
-     * Replace the function name if the existing Wi-Fi API differs.
-     */
-    while (!wifi_manager_is_connected())
-    {
-        vTaskDelay(pdMS_TO_TICKS(500));
-    }
-
-    ESP_LOGI(
-        TAG,
-        "Wi-Fi connected, starting Firebase test");
-
-    esp_err_t err =
-        firebase_bringup_put_test();
-
-    if (err == ESP_OK)
-    {
-        ESP_LOGI(
-            TAG,
-            "Firebase bring-up passed");
-    }
-    else
-    {
-        ESP_LOGE(
-            TAG,
-            "Firebase bring-up failed: %s",
-            esp_err_to_name(err));
-    }
-
-    vTaskDelete(NULL);
 }

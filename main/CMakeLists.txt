@@ -14,8 +14,6 @@ idf_component_register(SRCS "main.c"
         sensor_manager
         cloud_manager
 
-        firebase_bringup #Remove later
-
     PRIV_REQUIRES
         nvs_flash
         esp_netif
