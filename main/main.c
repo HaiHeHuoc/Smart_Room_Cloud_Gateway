@@ -37,8 +37,10 @@
 #include "app_gui.h"
 
 /* Sensor manager ---------------------------------------------------------- */
-// #include "sensor_DHT22.h"
 #include "sensor_manager.h"
+
+/* FireBase bringup test --------------------------------------------------- */
+#include "firebase_bringup.h"
 
 /* Macros ------------------------------------------------------------------- */
 #define PERFORMANCE_MONITOR 0
@@ -82,6 +84,7 @@ static void app_sensor_status_callback(
     const sensor_manager_status_t *status,
     void *user_context);
 
+static void firebase_bringup_task(void *argument);
 /* Application -------------------------------------------------------------- */
 /** @brief Initialize the current application services and run diagnostics. */
 void app_main(void)
@@ -248,11 +251,25 @@ if (connect_ret != ESP_OK) {
 
     return;
 }
+else
+{
+    BaseType_t task_result =
+        xTaskCreate(
+            firebase_bringup_task,
+            "firebase_test",
+            8192,
+            NULL,
+            4,
+            NULL);
 
-    // Scan and PrintOut Wifi SSID
-    // const esp_err_t scan_ret =
-    //         wifi_manager_scan_and_log();
-    // dht22_sensor_data_t data;
+    if (task_result != pdPASS)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to create Firebase test task");
+    }
+}
+
     ESP_ERROR_CHECK(
     sensor_manager_init(
         &SENSOR_MANAGER_CONFIG));
@@ -525,4 +542,41 @@ static void app_sensor_status_callback(
             "Sensor GUI update dropped: %s",
             esp_err_to_name(error));
     }
+}
+
+static void firebase_bringup_task(void *argument)
+{
+    (void)argument;
+
+    /*
+     * Temporary polling for bring-up only.
+     * Replace the function name if the existing Wi-Fi API differs.
+     */
+    while (!wifi_manager_is_connected())
+    {
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Wi-Fi connected, starting Firebase test");
+
+    esp_err_t err =
+        firebase_bringup_put_test();
+
+    if (err == ESP_OK)
+    {
+        ESP_LOGI(
+            TAG,
+            "Firebase bring-up passed");
+    }
+    else
+    {
+        ESP_LOGE(
+            TAG,
+            "Firebase bring-up failed: %s",
+            esp_err_to_name(err));
+    }
+
+    vTaskDelete(NULL);
 }
