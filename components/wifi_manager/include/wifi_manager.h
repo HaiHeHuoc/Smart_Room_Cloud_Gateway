@@ -162,6 +162,7 @@ typedef void (*wifi_manager_status_callback_t)(
  *     - creates the default Station network interface;
  *     - initializes the ESP-IDF Wi-Fi driver;
  *     - registers Wi-Fi and IP event handlers;
+ *     - creates the reconnect task and connection-timeout timer;
  *     - sets Station mode;
  *     - leaves the manager in WIFI_MANAGER_STATE_READY.
  *
@@ -176,7 +177,7 @@ esp_err_t wifi_manager_init(void);
 
 
 /**
- * @brief Configure credentials and begin connecting to an access point.
+ * @brief Configure credentials and begin a timed connection to an access point.
  *
  * This first Sprint 2 implementation uses hardcoded credentials supplied
  * by the application. NVS-based credentials will be introduced in Sprint 5.
@@ -195,6 +196,9 @@ esp_err_t wifi_manager_connect(
 
 /**
  * @brief Disconnect the station from the current access point.
+ *
+ * Automatic reconnect remains disabled until wifi_manager_connect() is called
+ * again with a valid Station configuration.
  *
  * @return
  *      - ESP_OK on success
