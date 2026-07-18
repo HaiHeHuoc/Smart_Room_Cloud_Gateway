@@ -173,6 +173,9 @@ static const char *app_gui_wifi_state_to_string(ui_wifi_state_t state)
         case UI_WIFI_STATE_FAILED:
             return "FAILED";
 
+        case UI_WIFI_STATE_RETRY_WAIT:
+            return "RECONNECTING";
+
         case UI_WIFI_STATE_IDLE:
         default:
             return "IDLE";

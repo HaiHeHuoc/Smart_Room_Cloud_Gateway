@@ -42,6 +42,7 @@
 /* cloud_manager ----------------------------------------------------------- */
 #include "cloud_manager.h"
 
+/* firebase auth ----------------------------------------------------------- */
 #include "firebase_auth.h"
 
 /* Macros ------------------------------------------------------------------- */
@@ -463,6 +464,9 @@ static ui_wifi_state_t app_map_wifi_state(
 
         case WIFI_MANAGER_STATE_FAILED:
             return UI_WIFI_STATE_FAILED;
+
+        case WIFI_MANAGER_STATE_RETRY_WAIT:
+            return UI_WIFI_STATE_RETRY_WAIT;
 
         default:
             return UI_WIFI_STATE_IDLE;
