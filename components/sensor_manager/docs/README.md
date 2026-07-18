@@ -67,7 +67,8 @@ started.
 The callback executes in the sensor manager task. It receives a temporary
 stack snapshot, so the pointer must not be retained. Application callbacks
 should return quickly; the current project maps the snapshot and posts it to
-`app_gui` without touching LVGL directly.
+`app_gui`, then posts a second copied representation to `cloud_manager`. The
+callback does not touch LVGL or perform network I/O directly.
 
 The internal mutex is released before application callback code runs. This
 prevents callback code from blocking status readers while it processes a

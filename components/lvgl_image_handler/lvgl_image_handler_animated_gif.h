@@ -10,10 +10,12 @@
  */
 #pragma once
 
+/* Includes ----------------------------------------------------------------- */
 #include <stdint.h>
 
 #include "lvgl.h"
 
+/* Macros ------------------------------------------------------------------- */
 /* Prevent the wrapped gif.c file from loading its fixed-width header. */
 #define __ANIMATEDGIF__
 
@@ -34,6 +36,8 @@
     (LZW_BUF_SIZE + (2 << MAX_CODE_SIZE) + (PIXEL_LAST * 2) + MAX_WIDTH)
 #define LZW_HIGHWATER_TURBO ((LZW_BUF_SIZE_TURBO * 14) / 16)
 
+/* Type Definitions --------------------------------------------------------- */
+/** Palette output layouts supported by the bundled AnimatedGIF decoder. */
 enum {
     GIF_PALETTE_RGB565_LE = 0,
     GIF_PALETTE_RGB565_BE,
@@ -43,11 +47,13 @@ enum {
     GIF_PALETTE_1BPP_OLED
 };
 
+/** Whether the draw callback receives raw or decoder-composited pixels. */
 enum {
     GIF_DRAW_RAW = 0,
     GIF_DRAW_COOKED
 };
 
+/** Result codes returned by the bundled AnimatedGIF decoder. */
 enum {
     GIF_SUCCESS = 0,
     GIF_DECODE_ERROR,
@@ -61,6 +67,7 @@ enum {
     GIF_ERROR_MEMORY
 };
 
+/** Decoder file state backed by an LVGL filesystem handle. */
 typedef struct gif_file_tag {
     int32_t iPos;
     int32_t iSize;
@@ -68,6 +75,7 @@ typedef struct gif_file_tag {
     lv_fs_file_t fHandle;
 } GIFFILE;
 
+/** Summary information collected while scanning a GIF stream. */
 typedef struct gif_info_tag {
     int32_t iFrameCount;
     int32_t iDuration;
@@ -75,6 +83,7 @@ typedef struct gif_info_tag {
     int32_t iMinDelay;
 } GIFINFO;
 
+/** Scanline and frame metadata passed to the component draw callback. */
 typedef struct gif_draw_tag {
     int iX;
     int iY;
@@ -94,6 +103,7 @@ typedef struct gif_draw_tag {
     uint8_t ucIsGlobalPalette;
 } GIFDRAW;
 
+/** Decoder callbacks used to bridge AnimatedGIF to LVGL filesystem access. */
 typedef int32_t (GIF_READ_CALLBACK)(GIFFILE *file,
                                     uint8_t *buffer,
                                     int32_t length);
@@ -104,6 +114,7 @@ typedef void (GIF_CLOSE_CALLBACK)(lv_fs_file_t *handle);
 typedef void *(GIF_ALLOC_CALLBACK)(uint32_t size);
 typedef void (GIF_FREE_CALLBACK)(void *buffer);
 
+/** Complete decoder state; owned by one active GIF playback instance. */
 typedef struct gif_image_tag {
     uint16_t iWidth;
     uint16_t iHeight;
@@ -150,7 +161,8 @@ typedef struct gif_image_tag {
     unsigned char ucLineBuf[MAX_WIDTH];
 } GIFIMAGE;
 
-/* Keep the wrapped decoder symbols private to this component. */
+/* Wrapped Symbol Mapping --------------------------------------------------- */
+/* Keep decoder symbols private to this component and avoid LVGL collisions. */
 #define GIF_openRAM lvgl_image_handler_animated_gif_open_ram
 #define GIF_openFile lvgl_image_handler_animated_gif_open_file
 #define GIF_close lvgl_image_handler_animated_gif_close
@@ -164,26 +176,41 @@ typedef struct gif_image_tag {
 #define GIF_getLastError lvgl_image_handler_animated_gif_get_last_error
 #define GIF_getLoopCount lvgl_image_handler_animated_gif_get_loop_count
 
+/* Function Prototypes ------------------------------------------------------ */
+/** Open an in-memory GIF stream and install its draw callback. */
 int GIF_openRAM(GIFIMAGE *gif,
                 uint8_t *data,
                 int data_size,
                 GIF_DRAW_CALLBACK *draw_cb);
+/** Open a GIF through the LVGL filesystem adapter. */
 int GIF_openFile(GIFIMAGE *gif,
                  const char *filename,
                  GIF_DRAW_CALLBACK *draw_cb);
+/** Close the current stream and release decoder-owned resources. */
 void GIF_close(GIFIMAGE *gif);
+/** Initialize decoder state for the requested palette layout. */
 void GIF_begin(GIFIMAGE *gif, unsigned char palette_type);
+/** Seek the open GIF stream back to its first frame. */
 void GIF_reset(GIFIMAGE *gif);
+/** Decode and draw one frame, returning its display delay in milliseconds. */
 int GIF_playFrame(GIFIMAGE *gif,
                   int *delay_ms,
                   void *user_data);
+/** Return the logical GIF canvas width. */
 int GIF_getCanvasWidth(GIFIMAGE *gif);
+/** Return the logical GIF canvas height. */
 int GIF_getCanvasHeight(GIFIMAGE *gif);
+/** Copy the GIF comment into caller-provided storage. */
 int GIF_getComment(GIFIMAGE *gif, char *destination);
+/** Scan the stream and populate frame/duration metadata. */
 int GIF_getInfo(GIFIMAGE *gif, GIFINFO *info);
+/** Return the decoder's latest GIF error code. */
 int GIF_getLastError(GIFIMAGE *gif);
+/** Return the loop count declared by the GIF stream. */
 int GIF_getLoopCount(GIFIMAGE *gif);
 
+/* Decoder Compatibility Macros -------------------------------------------- */
+/* These names and layouts must match the bundled upstream gif.c source. */
 #define REGISTER_WIDTH 32
 
 #ifdef ALLOWS_UNALIGNED

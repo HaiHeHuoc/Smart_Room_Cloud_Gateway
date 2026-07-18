@@ -132,18 +132,28 @@ Authenticated Firebase PUT successful
 
 ## Firmware integration status
 
-`cloud_manager` currently publishes to `firebase_latest_url` and reports HTTP
-401/403 responses as authentication errors. The authenticated PowerShell test
-is the reference for the future firmware authentication implementation.
+The firmware now implements the verified flow through two components:
 
-Before enforcing UID-based database rules for the ESP32 firmware, the firmware
-must also implement:
+- `firebase_auth` performs Email/Password sign-in, validates the configured
+  UID, caches tokens, and refreshes the ID token before expiration.
+- `cloud_manager` obtains a valid ID token and sends telemetry to
+  `latest.json?auth=<ID_TOKEN>&print=silent`.
 
-- Email/Password sign-in or another supported device authentication flow.
-- Secure handling of the ID token and refresh token.
-- ID token refresh before or after expiration.
-- Authenticated Realtime Database URLs or equivalent authorization headers.
-- Recovery from Wi-Fi loss, authentication failure, and expired tokens.
+`cloud_manager` reports HTTP 401/403 as authentication errors, invalidates an
+ID token after HTTP 401, retains pending telemetry across failures, and retries
+transport/retryable HTTP failures with bounded backoff.
+
+Component implementation notes are in:
+
+```text
+components/firebase_auth/docs/README.md
+components/cloud_manager/docs/README.md
+```
+
+The device email/password are still development configuration compiled into
+the firmware. Move them to provisioning or protected local configuration
+before production use. Do not print or commit passwords, ID tokens, or refresh
+tokens.
 
 Do not store Firebase administrator secrets, service-account private keys, or
 other privileged server credentials in ESP32 firmware.

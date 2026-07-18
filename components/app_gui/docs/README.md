@@ -34,6 +34,7 @@ call sequence unchanged. `app_gui.c` is grouped into these responsibilities:
 - A reusable LVGL timer that clears the Wi-Fi screen after 10 seconds without
   a new Wi-Fi event.
 - Stack high-water logging every 60 seconds.
+- Guards against starting a second GUI task or a second demo task.
 
 ## Initialization Order
 
@@ -112,13 +113,15 @@ instead of retaining the last-known-good values.
 
 ## Current Limitations
 
-- There is no stop/deinit API or duplicate-task guard.
+- There is no stop/deinit API. Task handles are retained only to prevent
+  duplicate task creation.
 - The sensor queue processes one queued snapshot per GUI iteration rather than
   collapsing directly to the newest snapshot.
 - RSSI and disconnect reason are transported but not displayed.
 - `app_gui_clear_screen()` relies on its caller to satisfy the LVGL ownership
   contract.
-- The optional demo task is retained for development only.
+- The optional demo task is retained for development only. It stops itself if
+  another screen transition deletes its label.
 
 ## Future Attention
 

@@ -15,6 +15,8 @@ types, and board/device configuration, not feature logic.
 - Provides SD card SPI configuration.
 - Provides `APP_PROJECT_NAME`, `APP_PROJECT_VER`, and
   `APP_PROJECT_VER_DATE`.
+- Provides development Firebase Web API key, device email/password, and
+  expected UID macros used to build `firebase_auth_config_t`.
 - Exposes GPIO pin mapping through one shared board config header.
 - Exposes display resolution, LCD SPI speed, backlight level, transfer size,
   and LVGL draw buffer line count.
@@ -38,6 +40,9 @@ Include the application metadata header when reporting firmware identity:
 ESP_LOGI(TAG, "%s v%s", APP_PROJECT_NAME, APP_PROJECT_VER);
 ```
 
+`main.c` also uses the Firebase development macros from `app_common.h` when
+constructing `FIREBASE_AUTH_CONFIG`.
+
 Typical users:
 
 - `display_driver` uses LCD SPI pins, resolution, backlight GPIO, and transfer
@@ -60,6 +65,9 @@ Typical users:
   drivers.
 - `APP_PROJECT_VER_DATE` is a string constant; it is not generated from the
   build time.
+- Firebase device credentials in `app_common.h` are compiled into both the
+  firmware binary and normal source history. Do not publish them; move the
+  password to provisioning or protected local configuration before production.
 
 ## Future Attention
 
@@ -69,3 +77,5 @@ Typical users:
 - If board variants appear later, split config by board revision or use
   menuconfig options.
 - Avoid adding Wi-Fi, BLE, cloud, or application workflow logic here.
+- Move sensitive device credentials out of this shared header when the
+  provisioning/configuration owner is implemented.

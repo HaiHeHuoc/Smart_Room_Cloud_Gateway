@@ -17,5 +17,4 @@ idf_component_register(
         log
         freertos
         esp_timer
-        firebase_auth
 )
