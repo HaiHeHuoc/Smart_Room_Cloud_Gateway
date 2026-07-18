@@ -17,7 +17,7 @@
 #define DHT22_BRINGUP_TASK_NAME         "DHT22 task test"
 #define DHT22_BRINGUP_TASK_STACK_SIZE   2048
 #define DHT22_BRINGUP_TASK_PRIORITY     5
-#define DHT22_SAMPLE_PERIOD_MS          2500
+#define DHT22_SAMPLE_PERIOD_MS          2000
 #define DHT22_INITIAL_DELAY_MS          2000
 
 /* Constants ---------------------------------------------------------------- */

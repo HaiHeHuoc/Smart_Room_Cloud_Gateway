@@ -40,7 +40,7 @@ failure count.
 
 ```c
 const sensor_manager_config_t config = {
-    .sample_period_ms = 2500U,
+    .sample_period_ms = 2000U,
     .stale_timeout_ms = 10000U,
 };
 

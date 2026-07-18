@@ -37,7 +37,7 @@ application GUI task.
 
 - `PERFORMANCE_MONITOR` is disabled at compile time.
 - The component manifest requires ESP-IDF 6.0 or newer.
-- Sensor sampling uses a 2500 ms period and a 10000 ms stale timeout.
+- Sensor sampling uses a 2000 ms period and a 10000 ms stale timeout.
 - Wi-Fi credentials are currently development values supplied directly in
   `main.c`; move them to provisioning or local build configuration before
   publishing firmware.

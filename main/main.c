@@ -53,7 +53,7 @@ static display_driver_handle_t display_handle;
 /* DHT22 timing respects the sensor's minimum interval between reads. */
 static const sensor_manager_config_t SENSOR_MANAGER_CONFIG =
 {
-    .sample_period_ms = 2500U,
+    .sample_period_ms = 2000U,
     .stale_timeout_ms = 10000U,
 };
 

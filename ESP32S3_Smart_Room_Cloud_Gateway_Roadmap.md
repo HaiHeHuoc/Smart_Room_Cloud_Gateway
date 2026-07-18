@@ -360,11 +360,11 @@ RSSI : -55 dBm
 
 ### Tasks
 
-- [ ] Implement `sensor_manager`.
-- [ ] Read DHT22 every 2 seconds.
-- [ ] Validate sensor value range.
-- [ ] Send sensor data event to app controller.
-- [ ] Update LVGL labels through UI event.
+- [x] Implement `sensor_manager`.
+- [x] Read DHT22 every 2 seconds.
+- [x] Validate sensor value range.
+- [x] Send sensor data event to the application layer.
+- [x] Update LVGL labels through the GUI queue.
 
 ### Example UI
 
@@ -376,10 +376,18 @@ Sensor: OK
 
 ### Done Criteria
 
-- [ ] Sensor data is read periodically.
-- [ ] Invalid readings are handled gracefully.
-- [ ] UI updates without flicker or crash.
-- [ ] Sensor task does not call LVGL directly.
+- [x] Sensor data is read periodically.
+- [x] Invalid readings are handled gracefully.
+- [ ] UI updates without flicker or crash. Hardware acceptance pending.
+- [x] Sensor task does not call LVGL directly.
+
+### Hardware Acceptance Procedure
+
+1. Flash and monitor the current firmware on the target board.
+2. Observe the sensor screen for at least 60 seconds.
+3. Confirm temperature, humidity, and state update about every 2 seconds.
+4. Confirm there is no visible flicker, watchdog timeout, crash, or reboot.
+5. Mark the remaining criterion complete and change Sprint 3 to `Completed`.
 
 ### Learning Topics
 
@@ -722,7 +730,7 @@ Use this section to track daily/weekly progress.
 | 0 | Project setup | Not started |  |  |  |
 | 1 | LCD + LVGL bring-up | Not started |  |  |  |
 | 2 | Wi-Fi + LVGL status | Not started |  |  |  |
-| 3 | Sensor + UI update | Not started |  |  |  |
+| 3 | Sensor + UI update | Ready for acceptance |  |  | Build passes; LCD observation pending. |
 | 4 | Firebase upload | Not started |  |  |  |
 | 5 | NVS config storage | Not started |  |  |  |
 | 6 | BLE provisioning | Not started |  |  |  |

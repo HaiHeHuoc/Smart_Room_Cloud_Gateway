@@ -41,7 +41,7 @@ state, statistics, and GUI notification.
 ## Important Notes
 
 - DHT22 requires a relatively slow sampling period. The current manager uses
-  2500 ms and rejects configurations below 2000 ms.
+  2000 ms and rejects configurations below 2000 ms.
 - The sensor pin comes from `DHT22_PIN_GPIO` in `board_config.h`.
 - A communication failure is returned from the underlying DHT driver.
 - A finite but out-of-range sample returns `ESP_ERR_INVALID_RESPONSE`.
