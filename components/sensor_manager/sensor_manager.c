@@ -46,6 +46,11 @@ static void sensor_manager_update_failure(
 static void sensor_manager_task(
     void *argument);
 
+static sensor_manager_status_callback_t s_status_callback;
+static void *s_callback_context;
+
+static void sensor_manager_notify_status_changed(void);
+
 static int64_t sensor_manager_get_time_ms(void)
 {
     return esp_timer_get_time() / 1000;
@@ -193,6 +198,8 @@ static void sensor_manager_task(
                 esp_err_to_name(error));
         }
 
+        sensor_manager_notify_status_changed();
+
         /*
          * Keep a stable sample schedule without accumulating
          * the sensor-read execution time as drift.
@@ -201,6 +208,62 @@ static void sensor_manager_task(
             &last_wake_time,
             sample_period_ticks);
     }
+}
+
+static void sensor_manager_notify_status_changed(void)
+{
+    sensor_manager_status_t status_snapshot;
+    sensor_manager_status_callback_t callback;
+    void *callback_context;
+
+    if (xSemaphoreTake(
+            s_status_mutex,
+            pdMS_TO_TICKS(
+                SENSOR_MANAGER_MUTEX_TIMEOUT_MS)) != pdTRUE)
+    {
+        ESP_LOGW(
+            TAG,
+            "Failed to acquire status mutex for notification");
+
+        return;
+    }
+
+    status_snapshot = s_status;
+    callback = s_status_callback;
+    callback_context = s_callback_context;
+
+    xSemaphoreGive(s_status_mutex);
+
+    /*
+     * Never invoke application code while holding the manager mutex.
+     */
+    if (callback != NULL)
+    {
+        callback(
+            &status_snapshot,
+            callback_context);
+    }
+}
+
+esp_err_t sensor_manager_register_callback(
+    sensor_manager_status_callback_t callback,
+    void *user_context)
+{
+    ESP_RETURN_ON_FALSE(callback != NULL,
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "Callback function is NULL");
+
+    ESP_RETURN_ON_FALSE(!(!s_is_initialized || s_is_running),
+        ESP_ERR_INVALID_STATE,
+        TAG,
+        "Register callback before running and after initialization");
+
+    s_status_callback = callback;
+    s_callback_context = user_context;
+
+
+    return ESP_OK;
 }
 
 esp_err_t sensor_manager_start(void)

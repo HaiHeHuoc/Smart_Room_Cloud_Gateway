@@ -54,6 +54,14 @@ esp_err_t sensor_manager_start(void);
 esp_err_t sensor_manager_get_status(
     sensor_manager_status_t *status);
 
+typedef void (*sensor_manager_status_callback_t)(
+    const sensor_manager_status_t *status,
+    void *user_context);
+
+esp_err_t sensor_manager_register_callback(
+    sensor_manager_status_callback_t callback,
+    void *user_context);
+
 #ifdef _cplusplus
 }
 #endif

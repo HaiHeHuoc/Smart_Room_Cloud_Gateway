@@ -9,10 +9,12 @@
 #include "app_gui.h"
 #include "esp_log.h"
 #include "esp_err.h"
+#include "esp_check.h"
 #include "lvgl.h"
 
 /* Macros ------------------------------------------------------------------- */
 #define APP_GUI_WIFI_STATUS_QUEUE_LENGTH 1U
+#define APP_GUI_SENSOR_STATUS_QUEUE_LENGTH 5U
 #define APP_GUI_UI_TASK_STACK_SIZE_BYTES   (24U * 1024U)
 #define APP_GUI_DEMO_TASK_STACK_SIZE_BYTES (4U * 1024U)
 #define APP_GUI_TASK_PRIORITY              5U
@@ -28,6 +30,7 @@ static const char *const TAG = "APP_GUI";
 
 /* Static Variables --------------------------------------------------------- */
 static QueueHandle_t s_wifi_status_queue = NULL;
+static QueueHandle_t s_gui_event_queue = NULL;
 static lv_obj_t *s_wifi_mode_label = NULL;
 static lv_obj_t *s_wifi_ssid_label = NULL;
 static lv_obj_t *s_wifi_ip_label = NULL;
@@ -270,6 +273,35 @@ static void app_gui_update_wifi_screen(const ui_wifi_status_t *status)
             : "-");
 }
 
+static void app_gui_process_sensor_status(void)
+{
+    // ui_wifi_status_t wifi_status = {0};
+    ui_sensor_status_t sensor_status;
+
+    if ((s_gui_event_queue == NULL) ||
+        (xQueueReceive(
+            s_gui_event_queue,
+            &sensor_status,
+            0) != pdTRUE)) {
+        return;
+    }
+
+    // app_gui_update_sensor_screen(&sensor_status);
+    ESP_LOGD(
+        TAG,
+        "GUI received sensor status: \
+        state=%d, temperature=%.1f C, \
+        humidity=%.1f, valid=%d, \
+        stale=%d, error=%s",
+        (int)sensor_status.state,
+        sensor_status.temperature_c,
+        sensor_status.humidity_percent,
+        (int)sensor_status.data_valid,
+        (int)sensor_status.data_stale,
+        esp_err_to_name(sensor_status.last_error)
+    );
+}
+
 static void app_gui_process_wifi_status(void)
 {
     ui_wifi_status_t wifi_status = {0};
@@ -326,7 +358,10 @@ static void app_gui_process_lvgl(void)
 {
     ui_manager_lvgl_wait_for_mutex();
 
+    app_gui_process_sensor_status();
+
     app_gui_process_wifi_status();
+
     lv_timer_handler();
 
     ui_manager_lvgl_release_mutex();
@@ -414,10 +449,23 @@ esp_err_t app_gui_init(void)
             sizeof(ui_wifi_status_t)
         );
 
-    if (s_wifi_status_queue == NULL) {
-        ESP_LOGE(TAG, "Failed to create Wi-Fi GUI status queue");
-        return ESP_ERR_NO_MEM;
-    }
+    ESP_RETURN_ON_FALSE(s_wifi_status_queue != NULL,
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "Failed to create Wi-Fi GUI status queue"
+    );
+
+    s_gui_event_queue =
+        xQueueCreate(
+            APP_GUI_SENSOR_STATUS_QUEUE_LENGTH,
+            sizeof(ui_sensor_status_t)
+        );
+
+    ESP_RETURN_ON_FALSE(s_gui_event_queue != NULL,
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "Failed to create Sensor GUI status queue"
+    );
 
     ESP_LOGI(TAG, "Application GUI initialized");
 
@@ -516,6 +564,35 @@ esp_err_t app_gui_post_wifi_status(
 
         ESP_LOGW(TAG, "Failed to post Wi-Fi status to UI");
         return ESP_FAIL;
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t app_gui_post_sensor_status(
+    const ui_sensor_status_t *status)
+{
+    if (status == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_gui_event_queue == NULL)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (xQueueSend(
+            s_gui_event_queue,
+            status,
+            0) != pdPASS)
+    {
+        /*
+         * Sensor data is periodic, so dropping one update is acceptable.
+         * The next sample will deliver a newer snapshot.
+         */
+        ESP_LOGE(TAG, "GUI Sensor queue updating TimeOut");
+        return ESP_ERR_TIMEOUT;
     }
 
     return ESP_OK;

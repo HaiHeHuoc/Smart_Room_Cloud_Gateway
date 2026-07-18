@@ -33,6 +33,33 @@ typedef struct
     bool rssi_valid;
 } ui_wifi_status_t;
 
+typedef enum
+{
+    UI_SENSOR_STATE_INITIALIZING = 0,
+    UI_SENSOR_STATE_READY,
+    UI_SENSOR_STATE_DEGRADED,
+    UI_SENSOR_STATE_ERROR
+} ui_sensor_state_t;
+
+typedef enum
+{
+    APP_GUI_SCREEN_WIFI,
+    APP_GUI_SCREEN_SENSOR,
+} app_gui_screen_id_t;
+
+typedef struct
+{
+    ui_sensor_state_t state;
+
+    float temperature_c;
+    float humidity_percent;
+
+    bool data_valid;
+    bool data_stale;
+
+    esp_err_t last_error;
+} ui_sensor_status_t;
+
 /**
  * @brief Initialize the Wi-Fi status queue and create the Wi-Fi status screen.
  *
@@ -78,3 +105,6 @@ void app_gui_create_demo_screen(void);
 esp_err_t app_gui_start_running_demo_task(void);
 
 esp_err_t app_gui_create_wifi_screen(void);
+
+esp_err_t app_gui_post_sensor_status(
+    const ui_sensor_status_t *status);

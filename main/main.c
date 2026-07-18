@@ -65,6 +65,13 @@ static void app_wifi_status_callback(
 static ui_wifi_state_t app_map_wifi_state(
     wifi_manager_state_t state);
 
+static ui_sensor_state_t app_map_sensor_state(
+    sensor_manager_state_t state);
+
+static void app_sensor_status_callback(
+    const sensor_manager_status_t *status,
+    void *user_context);
+
 /* Application -------------------------------------------------------------- */
 void app_main(void)
 {
@@ -242,6 +249,11 @@ if (connect_ret != ESP_OK) {
     ESP_ERROR_CHECK(
     sensor_manager_init(
         &SENSOR_MANAGER_CONFIG));
+
+    ESP_ERROR_CHECK(
+    sensor_manager_register_callback(
+        app_sensor_status_callback,
+        NULL));
 
     ESP_ERROR_CHECK(
         sensor_manager_start());
@@ -445,4 +457,70 @@ static void app_wifi_status_callback(
         (unsigned int)status->disconnect_reason
     );
     ESP_LOGI(TAG, "*------------------------------------------------------------------------------------------*");
+}
+
+static ui_sensor_state_t app_map_sensor_state(
+    sensor_manager_state_t state)
+{
+    switch (state)
+    {
+        case SENSOR_MANAGER_STATE_READY:
+            return UI_SENSOR_STATE_READY;
+
+        case SENSOR_MANAGER_STATE_DEGRADED:
+            return UI_SENSOR_STATE_DEGRADED;
+
+        case SENSOR_MANAGER_STATE_ERROR:
+            return UI_SENSOR_STATE_ERROR;
+
+        case SENSOR_MANAGER_STATE_UNINITIALIZED:
+        case SENSOR_MANAGER_STATE_INITIALIZED:
+        case SENSOR_MANAGER_STATE_RUNNING:
+        default:
+            return UI_SENSOR_STATE_INITIALIZING;
+    }
+}
+
+static void app_sensor_status_callback(
+    const sensor_manager_status_t *status,
+    void *user_context)
+{
+    (void)user_context;
+
+    if (status == NULL)
+    {
+        return;
+    }
+
+    ui_sensor_status_t ui_status =
+    {
+        .state =
+            app_map_sensor_state(status->state),
+
+        .temperature_c =
+            status->temperature_c,
+
+        .humidity_percent =
+            status->humidity_percent,
+
+        .data_valid =
+            status->data_valid,
+
+        .data_stale =
+            status->data_stale,
+
+        .last_error =
+            status->last_error,
+    };
+
+    esp_err_t error =
+        app_gui_post_sensor_status(&ui_status);
+
+    if (error != ESP_OK)
+    {
+        ESP_LOGD(
+            TAG,
+            "Sensor GUI update dropped: %s",
+            esp_err_to_name(error));
+    }
 }
