@@ -17,6 +17,7 @@
 #define APP_GUI_WIFI_SCREEN_TIMEOUT_MS 10000U
 #define APP_GUI_WIFI_STATUS_QUEUE_LENGTH 1U
 #define APP_GUI_SENSOR_STATUS_QUEUE_LENGTH 5U
+#define APP_GUI_CLOUD_STATUS_QUEUE_LENGTH 1U
 #define APP_GUI_UI_TASK_STACK_SIZE_BYTES   (24U * 1024U)
 #define APP_GUI_DEMO_TASK_STACK_SIZE_BYTES (4U * 1024U)
 #define APP_GUI_TASK_PRIORITY              5U
@@ -32,6 +33,15 @@
 /* sensor_manager publishes this sentinel after a failed DHT22 read. */
 #define APP_GUI_SENSOR_FAILED_VALUE             (-1.0f)
 
+/* Logical landscape layout after LVGL rotates the 128x160 panel. */
+#define APP_GUI_DASHBOARD_WIDTH_PX              160
+#define APP_GUI_DASHBOARD_HEIGHT_PX             128
+#define APP_GUI_DASHBOARD_HEADER_HEIGHT_PX       25
+#define APP_GUI_DASHBOARD_COLUMN_X_PX            78
+#define APP_GUI_DASHBOARD_MARGIN_PX               4
+#define APP_GUI_DASHBOARD_RIGHT_X_PX             82
+#define APP_GUI_DASHBOARD_RIGHT_WIDTH_PX         76
+
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "APP_GUI";
 
@@ -39,10 +49,15 @@ static const char *const TAG = "APP_GUI";
 /* GUI task communication and active-screen tracking. */
 static QueueHandle_t s_wifi_status_queue = NULL;
 static QueueHandle_t s_sensor_status_queue = NULL;
+static QueueHandle_t s_cloud_status_queue = NULL;
 static TaskHandle_t s_ui_task_handle = NULL;
 static TaskHandle_t s_demo_task_handle = NULL;
 static app_gui_screen_id_t s_current_screen_id = APP_GUI_SCREEN_NONE;
 static portMUX_TYPE s_screen_id_lock = portMUX_INITIALIZER_UNLOCKED;
+static bool s_latest_wifi_status_available = false;
+static bool s_latest_wifi_online = false;
+static bool s_latest_cloud_status_available = false;
+static ui_cloud_state_t s_latest_cloud_state = UI_CLOUD_STATE_UNKNOWN;
 
 /* Wi-Fi object references are valid only while the Wi-Fi screen is active. */
 static lv_obj_t *s_wifi_mode_label = NULL;
@@ -54,6 +69,8 @@ static lv_timer_t *s_wifi_screen_timer = NULL;
 static lv_obj_t *s_sensor_temperature_label = NULL;
 static lv_obj_t *s_sensor_humidity_label = NULL;
 static lv_obj_t *s_sensor_state_label = NULL;
+static lv_obj_t *s_sensor_cloud_label = NULL;
+static lv_obj_t *s_sensor_cloud_dot = NULL;
 
 /* Function Prototypes ------------------------------------------------------ */
 static void app_gui_wifi_screen_timeout_cb(lv_timer_t *timer);
@@ -62,6 +79,19 @@ static const char *app_gui_wifi_state_to_string(ui_wifi_state_t state);
 static lv_color_t app_gui_wifi_state_color(ui_wifi_state_t state);
 static const char *app_gui_sensor_state_to_string(ui_sensor_state_t state);
 static lv_color_t app_gui_sensor_state_color(ui_sensor_state_t state);
+static const char *app_gui_cloud_state_to_string(ui_cloud_state_t state);
+static lv_color_t app_gui_cloud_state_color(ui_cloud_state_t state);
+static lv_obj_t *app_gui_create_dashboard_rule(
+    lv_obj_t *screen,
+    int32_t x,
+    int32_t y,
+    int32_t width,
+    int32_t height);
+static lv_obj_t *app_gui_create_dashboard_dot(
+    lv_obj_t *screen,
+    int32_t x,
+    int32_t y,
+    lv_color_t color);
 static lv_obj_t *app_gui_create_wifi_value_label(
     lv_obj_t *screen,
     int32_t y,
@@ -72,8 +102,10 @@ static lv_obj_t *app_gui_create_sensor_value_label(
     const char *initial_text);
 static void app_gui_update_wifi_screen(const ui_wifi_status_t *status);
 static void app_gui_update_sensor_screen(const ui_sensor_status_t *status);
+static void app_gui_update_cloud_status(const ui_cloud_status_t *status);
 static void app_gui_process_sensor_status(void);
 static void app_gui_process_wifi_status(void);
+static void app_gui_process_cloud_status(void);
 static void app_gui_log_stack_usage(const char *task_name);
 static void app_gui_process_lvgl(void);
 static void app_gui_ui_task(void *param);
@@ -213,17 +245,17 @@ static const char *app_gui_sensor_state_to_string(
 {
     switch (state) {
         case UI_SENSOR_STATE_READY:
-            return "READY";
+            return "Sensor: OK";
 
         case UI_SENSOR_STATE_DEGRADED:
-            return "DEGRADED";
+            return "Sensor: Warn";
 
         case UI_SENSOR_STATE_ERROR:
-            return "ERROR";
+            return "Sensor: Error";
 
         case UI_SENSOR_STATE_INITIALIZING:
         default:
-            return "INITIALIZING";
+            return "Sensor: --";
     }
 }
 
@@ -244,6 +276,103 @@ static lv_color_t app_gui_sensor_state_color(
         default:
             return lv_color_hex(0x4DB6E5);
     }
+}
+
+static const char *app_gui_cloud_state_to_string(
+    ui_cloud_state_t state)
+{
+    switch (state) {
+        case UI_CLOUD_STATE_ONLINE:
+            return "Cloud: Online";
+
+        case UI_CLOUD_STATE_UPLOADING:
+            return "Cloud: Sync";
+
+        case UI_CLOUD_STATE_WAITING:
+            return "Cloud: Wait";
+
+        case UI_CLOUD_STATE_RETRY_WAIT:
+            return "Cloud: Retry";
+
+        case UI_CLOUD_STATE_AUTH_ERROR:
+            return "Cloud: Auth";
+
+        case UI_CLOUD_STATE_ERROR:
+            return "Cloud: Error";
+
+        case UI_CLOUD_STATE_UNKNOWN:
+        default:
+            return "Cloud: --";
+    }
+}
+
+static lv_color_t app_gui_cloud_state_color(
+    ui_cloud_state_t state)
+{
+    switch (state) {
+        case UI_CLOUD_STATE_ONLINE:
+            return lv_color_hex(0x49C978);
+
+        case UI_CLOUD_STATE_UPLOADING:
+            return lv_color_hex(0x4DB6E5);
+
+        case UI_CLOUD_STATE_WAITING:
+        case UI_CLOUD_STATE_RETRY_WAIT:
+            return lv_color_hex(0xFFC857);
+
+        case UI_CLOUD_STATE_AUTH_ERROR:
+        case UI_CLOUD_STATE_ERROR:
+            return lv_color_hex(0xF06464);
+
+        case UI_CLOUD_STATE_UNKNOWN:
+        default:
+            return lv_color_hex(0x7B858A);
+    }
+}
+
+static lv_obj_t *app_gui_create_dashboard_rule(
+    lv_obj_t *screen,
+    int32_t x,
+    int32_t y,
+    int32_t width,
+    int32_t height)
+{
+    lv_obj_t *rule = lv_obj_create(screen);
+    if (rule == NULL) {
+        return NULL;
+    }
+
+    lv_obj_remove_style_all(rule);
+    lv_obj_set_size(rule, width, height);
+    lv_obj_set_pos(rule, x, y);
+    lv_obj_set_style_bg_opa(rule, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(
+        rule,
+        lv_color_hex(0xDDE4E6),
+        LV_PART_MAIN);
+
+    return rule;
+}
+
+static lv_obj_t *app_gui_create_dashboard_dot(
+    lv_obj_t *screen,
+    int32_t x,
+    int32_t y,
+    lv_color_t color)
+{
+    lv_obj_t *dot = lv_obj_create(screen);
+    if (dot == NULL) {
+        return NULL;
+    }
+
+    lv_obj_remove_style_all(dot);
+    lv_obj_set_size(dot, 5, 5);
+    lv_obj_set_pos(dot, x, y);
+    lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(dot, color, LV_PART_MAIN);
+
+    return dot;
 }
 
 static lv_obj_t *app_gui_create_wifi_value_label(
@@ -325,6 +454,8 @@ esp_err_t app_gui_create_wifi_screen(void)
     s_sensor_temperature_label = NULL;
     s_sensor_humidity_label = NULL;
     s_sensor_state_label = NULL;
+    s_sensor_cloud_label = NULL;
+    s_sensor_cloud_dot = NULL;
     (void)app_gui_set_screen_id(APP_GUI_SCREEN_NONE);
 
     lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
@@ -451,6 +582,8 @@ esp_err_t app_gui_create_sensor_screen(void)
     s_sensor_temperature_label = NULL;
     s_sensor_humidity_label = NULL;
     s_sensor_state_label = NULL;
+    s_sensor_cloud_label = NULL;
+    s_sensor_cloud_dot = NULL;
     (void)app_gui_set_screen_id(APP_GUI_SCREEN_NONE);
 
     if (s_wifi_screen_timer != NULL) {
@@ -459,8 +592,40 @@ esp_err_t app_gui_create_sensor_screen(void)
 
     lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_bg_color(screen,
-                              lv_color_hex(0x101619),
+                              lv_color_hex(0x202223),
                               LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(screen, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(
+        screen,
+        lv_color_hex(0xDDE4E6),
+        LV_PART_MAIN);
+    lv_obj_set_style_radius(screen, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(screen, 0, LV_PART_MAIN);
+
+    bool wifi_status_available = false;
+    bool wifi_online = false;
+    bool cloud_status_available = false;
+    ui_cloud_state_t cloud_state = UI_CLOUD_STATE_UNKNOWN;
+
+    taskENTER_CRITICAL(&s_screen_id_lock);
+    wifi_status_available = s_latest_wifi_status_available;
+    wifi_online = s_latest_wifi_online;
+    cloud_status_available = s_latest_cloud_status_available;
+    cloud_state = s_latest_cloud_state;
+    taskEXIT_CRITICAL(&s_screen_id_lock);
+
+    const lv_color_t inactive_color = lv_color_hex(0x7B858A);
+    const lv_color_t wifi_color =
+        !wifi_status_available
+            ? inactive_color
+            : (wifi_online
+                ? lv_color_hex(0x49C978)
+                : lv_color_hex(0xF06464));
+    const lv_color_t cloud_color =
+        cloud_status_available
+            ? app_gui_cloud_state_color(cloud_state)
+            : inactive_color;
 
     lv_obj_t *title = lv_label_create(screen);
     if (title == NULL) {
@@ -468,73 +633,162 @@ esp_err_t app_gui_create_sensor_screen(void)
         return ESP_ERR_NO_MEM;
     }
 
-    lv_label_set_text(title, "SENSOR STATUS");
-    lv_obj_set_pos(title, 8, 5);
+    lv_label_set_text(title, "Smart Room");
+    lv_obj_set_pos(title, 7, 7);
     lv_obj_set_style_text_font(title,
-                               &lv_font_montserrat_18,
+                               &lv_font_montserrat_10,
                                LV_PART_MAIN);
     lv_obj_set_style_text_color(title,
-                                lv_color_hex(0xF2F5F7),
-                                LV_PART_MAIN);
+                               lv_color_hex(0xF2F5F7),
+                               LV_PART_MAIN);
 
-    lv_obj_t *divider = lv_obj_create(screen);
-    if (divider == NULL) {
+    lv_obj_t *wifi_header = lv_label_create(screen);
+    lv_obj_t *cloud_header = lv_label_create(screen);
+    lv_obj_t *header_rule = app_gui_create_dashboard_rule(
+        screen,
+        1,
+        APP_GUI_DASHBOARD_HEADER_HEIGHT_PX - 1,
+        APP_GUI_DASHBOARD_WIDTH_PX - 2,
+        1);
+    lv_obj_t *column_rule = app_gui_create_dashboard_rule(
+        screen,
+        APP_GUI_DASHBOARD_COLUMN_X_PX,
+        APP_GUI_DASHBOARD_HEADER_HEIGHT_PX,
+        1,
+        APP_GUI_DASHBOARD_HEIGHT_PX -
+            APP_GUI_DASHBOARD_HEADER_HEIGHT_PX - 1);
+    lv_obj_t *wifi_dot = app_gui_create_dashboard_dot(
+        screen,
+        128,
+        10,
+        wifi_color);
+    s_sensor_cloud_dot = app_gui_create_dashboard_dot(
+        screen,
+        151,
+        10,
+        cloud_color);
+
+    if ((wifi_header == NULL) ||
+        (cloud_header == NULL) ||
+        (header_rule == NULL) ||
+        (column_rule == NULL) ||
+        (wifi_dot == NULL) ||
+        (s_sensor_cloud_dot == NULL)) {
         ui_manager_lvgl_release_mutex();
         return ESP_ERR_NO_MEM;
     }
 
-    lv_obj_remove_style_all(divider);
-    lv_obj_set_size(divider, 144, 1);
-    lv_obj_set_pos(divider, 8, 30);
-    lv_obj_set_style_bg_opa(divider, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(divider,
-                              lv_color_hex(0x344047),
-                              LV_PART_MAIN);
+    lv_label_set_text(wifi_header, "WiFi");
+    lv_obj_set_pos(wifi_header, 102, 7);
+    lv_obj_set_style_text_font(
+        wifi_header,
+        &lv_font_montserrat_10,
+        LV_PART_MAIN);
+    lv_obj_set_style_text_color(
+        wifi_header,
+        lv_color_hex(0xF2F5F7),
+        LV_PART_MAIN);
 
-    static const struct {
-        const char *text;
-        int32_t y;
-    } field_labels[] = {
-        {"TEMP",   39},
-        {"HUMID",  66},
-        {"STATUS", 93},
-    };
-
-    for (size_t index = 0U;
-         index < (sizeof(field_labels) / sizeof(field_labels[0]));
-         ++index) {
-        lv_obj_t *field = lv_label_create(screen);
-        if (field == NULL) {
-            ui_manager_lvgl_release_mutex();
-            return ESP_ERR_NO_MEM;
-        }
-
-        lv_label_set_text(field, field_labels[index].text);
-        lv_obj_set_pos(field, 8, field_labels[index].y);
-        lv_obj_set_style_text_font(field,
-                                   &lv_font_montserrat_12,
-                                   LV_PART_MAIN);
-        lv_obj_set_style_text_color(field,
-                                    lv_color_hex(0x8C989F),
-                                    LV_PART_MAIN);
-    }
+    lv_label_set_text(cloud_header, "C");
+    lv_obj_set_pos(cloud_header, 141, 7);
+    lv_obj_set_style_text_font(
+        cloud_header,
+        &lv_font_montserrat_10,
+        LV_PART_MAIN);
+    lv_obj_set_style_text_color(
+        cloud_header,
+        lv_color_hex(0xF2F5F7),
+        LV_PART_MAIN);
 
     s_sensor_temperature_label =
-        app_gui_create_sensor_value_label(screen, 39, "-");
+        app_gui_create_sensor_value_label(screen, 47, "-");
     s_sensor_humidity_label =
-        app_gui_create_sensor_value_label(screen, 66, "-");
+        app_gui_create_sensor_value_label(screen, 91, "-");
+    lv_obj_t *sensor_wifi_label =
+        app_gui_create_sensor_value_label(
+            screen,
+            38,
+            !wifi_status_available
+                ? "Wi-Fi: --"
+                : (wifi_online
+                    ? "Wi-Fi: Online"
+                    : "Wi-Fi: Offline"));
+    s_sensor_cloud_label =
+        app_gui_create_sensor_value_label(
+            screen,
+            68,
+            cloud_status_available
+                ? app_gui_cloud_state_to_string(cloud_state)
+                : "Cloud: --");
     s_sensor_state_label =
-        app_gui_create_sensor_value_label(screen, 93, "INITIALIZING");
+        app_gui_create_sensor_value_label(screen, 98, "Sensor: --");
 
     if ((s_sensor_temperature_label == NULL) ||
         (s_sensor_humidity_label == NULL) ||
+        (sensor_wifi_label == NULL) ||
+        (s_sensor_cloud_label == NULL) ||
         (s_sensor_state_label == NULL)) {
         s_sensor_temperature_label = NULL;
         s_sensor_humidity_label = NULL;
         s_sensor_state_label = NULL;
+        s_sensor_cloud_label = NULL;
+        s_sensor_cloud_dot = NULL;
         ui_manager_lvgl_release_mutex();
         return ESP_ERR_NO_MEM;
     }
+
+    lv_obj_t *left_values[] = {
+        s_sensor_temperature_label,
+        s_sensor_humidity_label,
+    };
+
+    for (size_t index = 0U;
+         index < (sizeof(left_values) / sizeof(left_values[0]));
+         ++index) {
+        lv_obj_set_x(
+            left_values[index],
+            APP_GUI_DASHBOARD_MARGIN_PX);
+        lv_obj_set_width(
+            left_values[index],
+            APP_GUI_DASHBOARD_COLUMN_X_PX -
+                (2 * APP_GUI_DASHBOARD_MARGIN_PX));
+        lv_obj_set_style_text_align(
+            left_values[index],
+            LV_TEXT_ALIGN_CENTER,
+            LV_PART_MAIN);
+    }
+
+    lv_obj_t *right_values[] = {
+        sensor_wifi_label,
+        s_sensor_cloud_label,
+        s_sensor_state_label,
+    };
+
+    for (size_t index = 0U;
+         index < (sizeof(right_values) / sizeof(right_values[0]));
+         ++index) {
+        lv_obj_set_x(right_values[index], APP_GUI_DASHBOARD_RIGHT_X_PX);
+        lv_obj_set_width(
+            right_values[index],
+            APP_GUI_DASHBOARD_RIGHT_WIDTH_PX);
+        lv_obj_set_style_text_font(
+            right_values[index],
+            &lv_font_montserrat_10,
+            LV_PART_MAIN);
+        lv_obj_set_style_text_align(
+            right_values[index],
+            LV_TEXT_ALIGN_LEFT,
+            LV_PART_MAIN);
+    }
+
+    lv_obj_set_style_text_color(
+        sensor_wifi_label,
+        wifi_color,
+        LV_PART_MAIN);
+    lv_obj_set_style_text_color(
+        s_sensor_cloud_label,
+        cloud_color,
+        LV_PART_MAIN);
 
     lv_obj_set_style_text_color(
         s_sensor_state_label,
@@ -614,7 +868,7 @@ static void app_gui_update_sensor_screen(
             (void)snprintf(
                 temperature_text,
                 sizeof(temperature_text),
-                "%.1f C",
+                "%.1f " "\xC2\xB0" "C",
                 status->temperature_c);
         }
         else
@@ -630,7 +884,7 @@ static void app_gui_update_sensor_screen(
             (void)snprintf(
                 humidity_text,
                 sizeof(humidity_text),
-                "%.1f %%",
+                "%.0f %%RH",
                 status->humidity_percent);
         }
         else
@@ -661,12 +915,43 @@ static void app_gui_update_sensor_screen(
     lv_label_set_text(
         s_sensor_state_label,
         status->data_stale
-            ? "STALE"
+            ? "Sensor: Stale"
             : app_gui_sensor_state_to_string(status->state));
     lv_obj_set_style_text_color(
         s_sensor_state_label,
         app_gui_sensor_state_color(displayed_state),
         LV_PART_MAIN);
+
+    ui_manager_lvgl_release_mutex();
+}
+
+/* Cloud Status Update ----------------------------------------------------- */
+static void app_gui_update_cloud_status(
+    const ui_cloud_status_t *status)
+{
+    if (status == NULL) {
+        return;
+    }
+
+    ui_manager_lvgl_wait_for_mutex();
+
+    if ((s_sensor_cloud_label != NULL) &&
+        (s_sensor_cloud_dot != NULL)) {
+        const lv_color_t state_color =
+            app_gui_cloud_state_color(status->state);
+
+        lv_label_set_text(
+            s_sensor_cloud_label,
+            app_gui_cloud_state_to_string(status->state));
+        lv_obj_set_style_text_color(
+            s_sensor_cloud_label,
+            state_color,
+            LV_PART_MAIN);
+        lv_obj_set_style_bg_color(
+            s_sensor_cloud_dot,
+            state_color,
+            LV_PART_MAIN);
+    }
 
     ui_manager_lvgl_release_mutex();
 }
@@ -724,6 +1009,39 @@ static void app_gui_process_sensor_status(void)
     );
 }
 
+/* Cloud Queue Processing ------------------------------------------------- */
+static void app_gui_process_cloud_status(void)
+{
+    ui_cloud_status_t cloud_status = {0};
+
+    if ((s_cloud_status_queue == NULL) ||
+        (xQueueReceive(
+            s_cloud_status_queue,
+            &cloud_status,
+            0) != pdTRUE)) {
+        return;
+    }
+
+    taskENTER_CRITICAL(&s_screen_id_lock);
+    s_latest_cloud_status_available = true;
+    s_latest_cloud_state = cloud_status.state;
+    taskEXIT_CRITICAL(&s_screen_id_lock);
+
+    app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
+
+    if ((app_gui_get_screen_id(&screen_id) == ESP_OK) &&
+        (screen_id == APP_GUI_SCREEN_SENSOR)) {
+        app_gui_update_cloud_status(&cloud_status);
+    }
+
+    ESP_LOGD(
+        TAG,
+        "GUI received cloud status: state=%d, error=%s, HTTP=%d",
+        (int)cloud_status.state,
+        esp_err_to_name(cloud_status.last_error),
+        cloud_status.last_http_status);
+}
+
 /* Wi-Fi Queue Processing -------------------------------------------------- */
 static void app_gui_process_wifi_status(void)
 {
@@ -736,6 +1054,14 @@ static void app_gui_process_wifi_status(void)
             0) != pdTRUE)) {
         return;
     }
+
+    /* Retain only the summary needed by the compact sensor dashboard. */
+    taskENTER_CRITICAL(&s_screen_id_lock);
+    s_latest_wifi_status_available = true;
+    s_latest_wifi_online =
+        wifi_status.state == UI_WIFI_STATE_CONNECTED &&
+        wifi_status.has_ipv4_address;
+    taskEXIT_CRITICAL(&s_screen_id_lock);
 
     app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
 
@@ -799,6 +1125,8 @@ static void app_gui_process_lvgl(void)
 {
     /* Queue handlers do not wait; LVGL timers are then serviced once. */
     app_gui_process_sensor_status();
+
+    app_gui_process_cloud_status();
 
     app_gui_process_wifi_status();
 
@@ -928,6 +1256,18 @@ esp_err_t app_gui_init(void)
         ESP_ERR_INVALID_ARG,
         TAG,
         "Failed to create Sensor GUI status queue"
+    );
+
+    s_cloud_status_queue =
+        xQueueCreate(
+            APP_GUI_CLOUD_STATUS_QUEUE_LENGTH,
+            sizeof(ui_cloud_status_t)
+        );
+
+    ESP_RETURN_ON_FALSE(s_cloud_status_queue != NULL,
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "Failed to create Cloud GUI status queue"
     );
 
     ESP_LOGI(TAG, "Application GUI initialized");
@@ -1067,6 +1407,27 @@ esp_err_t app_gui_post_sensor_status(
     return ESP_OK;
 }
 
+esp_err_t app_gui_post_cloud_status(
+    const ui_cloud_status_t *status)
+{
+    if (status == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_cloud_status_queue == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (xQueueOverwrite(
+            s_cloud_status_queue,
+            status) != pdTRUE) {
+        ESP_LOGW(TAG, "Failed to post Cloud status to UI");
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
+}
+
 /* Screen State API --------------------------------------------------------- */
 esp_err_t app_gui_set_screen_id(
     app_gui_screen_id_t screen_id)
@@ -1138,6 +1499,8 @@ esp_err_t app_gui_clear_screen(void)
     s_sensor_temperature_label = NULL;
     s_sensor_humidity_label = NULL;
     s_sensor_state_label = NULL;
+    s_sensor_cloud_label = NULL;
+    s_sensor_cloud_dot = NULL;
     (void)app_gui_set_screen_id(APP_GUI_SCREEN_NONE);
 
     lv_obj_del(m_currentScreen);

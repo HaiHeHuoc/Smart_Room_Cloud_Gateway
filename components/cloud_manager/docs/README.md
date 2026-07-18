@@ -25,6 +25,8 @@ remain owned by `sensor_manager` and `app_gui`.
   `print=silent` is used.
 - Retry backoff starting at 5 seconds and capped at 60 seconds.
 - Thread-safe status snapshots and upload counters.
+- A single status callback invoked after releasing the status mutex, suitable
+  for forwarding copied snapshots to the application GUI queue.
 - A transmit buffer sized for the long request line containing the ID token.
 
 ## Initialization And Use
@@ -35,6 +37,9 @@ cloud task:
 ```c
 ESP_ERROR_CHECK(firebase_auth_init(&auth_config));
 ESP_ERROR_CHECK(cloud_manager_init(&cloud_config));
+ESP_ERROR_CHECK(cloud_manager_register_status_callback(
+    app_cloud_status_callback,
+    NULL));
 ESP_ERROR_CHECK(cloud_manager_start());
 ```
 
@@ -72,6 +77,7 @@ esp_err_t ret = cloud_manager_post_sensor_telemetry(&telemetry);
 | --- | --- |
 | `cloud_manager_init()` | Validate/copy configuration and create the queue and status mutex. |
 | `cloud_manager_start()` | Start the single cloud upload task. |
+| `cloud_manager_register_status_callback()` | Register or remove the single non-blocking status callback. |
 | `cloud_manager_post_sensor_telemetry()` | Replace pending data with the newest finite telemetry snapshot. |
 | `cloud_manager_get_status()` | Copy cloud state, counters, latest HTTP status, and retry delay. |
 
@@ -85,6 +91,7 @@ sensor callback
     -> firebase_auth_get_valid_id_token()
     -> HTTPS PUT latest.json?auth=<token>&print=silent
     -> status/counters/backoff update
+    -> status callback forwards a copied snapshot after mutex release
 ```
 
 Successful payloads currently contain:
@@ -127,6 +134,8 @@ replaces it before the next attempt.
 
 - Network I/O runs only in the cloud task, never in the sensor callback.
 - `cloud_manager_post_sensor_telemetry()` is non-blocking.
+- The status callback runs in the cloud task context. It must remain short and
+  must not perform LVGL operations; `main` forwards it through the GUI queue.
 - The authenticated URL can exceed ESP HTTP Client's default 512-byte TX
   buffer. The component explicitly sizes `buffer_size_tx` for the token URL.
 - ID-token and authenticated-URL buffers are static; the HTTP TX buffer exists
@@ -148,7 +157,6 @@ ID tokens, or refresh tokens in firmware or source control.
 
 - Move device email/password out of shared source and into provisioning or
   protected local configuration.
-- Add a cloud status screen only through the existing GUI queue/task model.
 - Add schema validation rules after the final telemetry format is stable.
 - Decide whether invalid/stale temperature and humidity should remain numeric,
   become JSON `null`, or move into a separate last-known-good field.

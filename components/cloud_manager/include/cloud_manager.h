@@ -93,6 +93,19 @@ typedef struct
     int64_t last_success_time_ms;
 } cloud_manager_status_t;
 
+/**
+ * @brief Receive a copied cloud status snapshot after a state/result change.
+ *
+ * The callback runs in the cloud task context after the status mutex has been
+ * released. Keep it non-blocking and copy or queue any data needed later.
+ *
+ * @param[in] status Temporary status snapshot valid only during the callback.
+ * @param[in] user_data Opaque pointer supplied during registration.
+ */
+typedef void (*cloud_manager_status_callback_t)(
+    const cloud_manager_status_t *status,
+    void *user_data);
+
 /** @brief Firebase endpoint and successful-upload pacing configuration. */
 typedef struct
 {
@@ -126,6 +139,22 @@ esp_err_t cloud_manager_init(
  *         when already started, or ESP_ERR_NO_MEM if task creation fails.
  */
 esp_err_t cloud_manager_start(void);
+
+/**
+ * @brief Register or remove the cloud status callback.
+ *
+ * Only one callback is retained. Register after cloud_manager_init() and
+ * before cloud_manager_start() when the initial task states are required.
+ * Passing NULL unregisters the current callback.
+ *
+ * @param[in] callback Callback to retain, or NULL to unregister.
+ * @param[in] user_data Opaque pointer passed to callback.
+ * @return ESP_OK on success, ESP_ERR_INVALID_STATE before initialization, or
+ *         ESP_ERR_TIMEOUT if the status mutex cannot be acquired.
+ */
+esp_err_t cloud_manager_register_status_callback(
+    cloud_manager_status_callback_t callback,
+    void *user_data);
 
 /**
  * @brief Replace pending telemetry with the newest sensor snapshot.

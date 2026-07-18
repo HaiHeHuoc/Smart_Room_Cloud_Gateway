@@ -84,6 +84,28 @@ typedef struct
     esp_err_t last_error;
 } ui_sensor_status_t;
 
+/* Cloud UI Types ---------------------------------------------------------- */
+
+/** @brief Cloud states rendered by the Smart Room dashboard. */
+typedef enum
+{
+    UI_CLOUD_STATE_UNKNOWN = 0,
+    UI_CLOUD_STATE_WAITING,
+    UI_CLOUD_STATE_UPLOADING,
+    UI_CLOUD_STATE_ONLINE,
+    UI_CLOUD_STATE_RETRY_WAIT,
+    UI_CLOUD_STATE_AUTH_ERROR,
+    UI_CLOUD_STATE_ERROR
+} ui_cloud_state_t;
+
+/** @brief Cloud status snapshot copied into the GUI queue. */
+typedef struct
+{
+    ui_cloud_state_t state;
+    esp_err_t last_error;
+    int last_http_status;
+} ui_cloud_status_t;
+
 /* Lifecycle API ----------------------------------------------------------- */
 
 /**
@@ -139,11 +161,14 @@ esp_err_t app_gui_post_wifi_status(
 /* Sensor Screen API ------------------------------------------------------- */
 
 /**
- * @brief Create and activate the temperature and humidity sensor screen.
+ * @brief Create and activate the compact Smart Room sensor dashboard.
  *
- * This function acquires and releases the LVGL mutex internally. Sensor
- * status updates posted through app_gui_post_sensor_status() are applied by
- * the GUI task while this screen is active.
+ * The landscape dashboard contains a header, Wi-Fi/cloud indicators,
+ * temperature and humidity values, and Wi-Fi/cloud/sensor status rows. This
+ * function acquires and releases the LVGL mutex internally. Sensor updates
+ * posted through app_gui_post_sensor_status() are applied by the GUI task.
+ * Cloud updates posted through app_gui_post_cloud_status() follow the same
+ * queue-driven GUI-task ownership model.
  *
  * @return ESP_OK on success, ESP_ERR_INVALID_STATE if LVGL has no active
  *         screen, or ESP_ERR_NO_MEM if a widget cannot be created.
@@ -160,6 +185,20 @@ esp_err_t app_gui_create_sensor_screen(void);
  */
 esp_err_t app_gui_post_sensor_status(
     const ui_sensor_status_t *status);
+
+/**
+ * @brief Replace the pending cloud status without waiting.
+ *
+ * This function copies the snapshot into a queue of length one and never calls
+ * LVGL. It is safe to call from the cloud manager status callback.
+ *
+ * @param[in] status Cloud status snapshot to copy.
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG for NULL,
+ *         ESP_ERR_INVALID_STATE before app_gui_init(), or ESP_FAIL when the
+ *         queue update fails.
+ */
+esp_err_t app_gui_post_cloud_status(
+    const ui_cloud_status_t *status);
 
 /* Screen Management API --------------------------------------------------- */
 
