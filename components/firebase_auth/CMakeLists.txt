@@ -1,6 +1,6 @@
 idf_component_register(
     SRCS
-        "cloud_manager.c"
+        "firebase_auth.c"
 
     INCLUDE_DIRS
         "include"
@@ -9,13 +9,10 @@ idf_component_register(
         esp_common
 
     PRIV_REQUIRES
-        common
-        firebase_auth
-        wifi_manager
         esp_http_client
-        mbedtls
-        log
-        freertos
         esp_timer
-        firebase_auth
+        mbedtls
+        freertos
+        log
+        cjson
 )

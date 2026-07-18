@@ -9,3 +9,7 @@
 /** Release date string; this value is not generated from the build time. */
 #define APP_PROJECT_VER_DATE "2024-06-10"
 
+#define FIREBASE_API_KEY             "REVOKED_FIREBASE_API_KEY"
+#define FIREBASE_DEVICE_EMAIL        "tranlonghai21@gmail.com"
+#define FIREBASE_DEVICE_PASSWORD     "Musaking888"
+#define FIREBASE_DEVICE_UID          "0leuYu7fCMRnM8w5bvv8VzquPgV2"
