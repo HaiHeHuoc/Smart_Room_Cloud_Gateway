@@ -102,6 +102,13 @@ Successful payloads currently contain:
 }
 ```
 
+Temperature and humidity are serialized exactly as posted. A failed sensor
+read currently reaches Firebase as the finite `-1.0` sentinel together with
+`last_error`; `sensor_valid` and `sensor_stale` remain separate metadata based
+on the sensor manager's successful-sample history. Firebase consumers must
+inspect those metadata fields and must not treat every numeric value as a valid
+physical measurement.
+
 ## State And Retry Behavior
 
 - `WAITING_FOR_NETWORK`: telemetry is pending but Wi-Fi has no IPv4 address.
@@ -125,6 +132,8 @@ replaces it before the next attempt.
 - ID-token and authenticated-URL buffers are static; the HTTP TX buffer exists
   only for the lifetime of each HTTP client.
 - There is no stop/deinit API. Initialization and task start are one-shot.
+- Invalid/stale telemetry is not converted to JSON `null` and is not omitted;
+  finite sentinel values are uploaded as supplied.
 
 ## Firebase Setup
 
@@ -141,4 +150,6 @@ ID tokens, or refresh tokens in firmware or source control.
   protected local configuration.
 - Add a cloud status screen only through the existing GUI queue/task model.
 - Add schema validation rules after the final telemetry format is stable.
+- Decide whether invalid/stale temperature and humidity should remain numeric,
+  become JSON `null`, or move into a separate last-known-good field.
 - Add stop/deinit only if runtime service shutdown becomes necessary.

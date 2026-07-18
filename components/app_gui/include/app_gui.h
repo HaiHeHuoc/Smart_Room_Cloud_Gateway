@@ -68,12 +68,19 @@ typedef struct
 {
     ui_sensor_state_t state;
 
+    /** Temperature copied from sensor_manager; -1.0f marks a failed read. */
     float temperature_c;
+
+    /** Humidity copied from sensor_manager; -1.0f marks a failed read. */
     float humidity_percent;
 
+    /** Whether sensor_manager has recorded at least one successful sample. */
     bool data_valid;
+
+    /** Whether the latest successful sample has exceeded its stale timeout. */
     bool data_stale;
 
+    /** Result of the most recent sensor read. */
     esp_err_t last_error;
 } ui_sensor_status_t;
 

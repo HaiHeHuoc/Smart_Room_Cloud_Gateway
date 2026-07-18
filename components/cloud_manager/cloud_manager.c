@@ -283,6 +283,11 @@ static esp_err_t cloud_manager_publish_telemetry(
 
     char payload[CLOUD_MANAGER_JSON_BUFFER_SIZE];
 
+    /*
+     * Numeric readings are serialized exactly as posted. sensor_valid and
+     * sensor_stale are separate data-quality metadata for Firebase clients;
+     * this component does not replace a finite failure sentinel with null.
+     */
     int payload_length =
         snprintf(
             payload,

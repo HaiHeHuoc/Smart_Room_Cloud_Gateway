@@ -27,10 +27,13 @@ typedef enum
     /** The latest read succeeded and the data is current. */
     SENSOR_MANAGER_STATE_READY,
 
-    /** A read failed, but the last-known-good sample is still usable. */
+    /**
+     * A read failed, but the latest successful sample has not become stale.
+     * Numeric fields still carry the failed-read sentinel for this snapshot.
+     */
     SENSOR_MANAGER_STATE_DEGRADED,
 
-    /** No usable sample is available, or the retained sample is stale. */
+    /** No successful sample exists, or the latest success is stale. */
     SENSOR_MANAGER_STATE_ERROR
 } sensor_manager_state_t;
 
@@ -53,16 +56,26 @@ typedef struct
     /** Current manager state. */
     sensor_manager_state_t state;
 
-    /** Last-known-good temperature in degrees Celsius. */
+    /**
+     * Current published temperature in degrees Celsius.
+     *
+     * The implementation publishes -1.0f immediately after a failed read.
+     * Check last_error, data_valid, and data_stale before consuming the value.
+     */
     float temperature_c;
 
-    /** Last-known-good relative humidity percentage. */
+    /**
+     * Current published relative humidity percentage.
+     *
+     * The implementation publishes -1.0f immediately after a failed read.
+     * Check last_error, data_valid, and data_stale before consuming the value.
+     */
     float humidity_percent;
 
-    /** True after at least one valid DHT22 sample has been stored. */
+    /** True after at least one successful DHT22 sample has been recorded. */
     bool data_valid;
 
-    /** True when no valid sample exists or the retained sample is too old. */
+    /** True when no successful sample exists or the last success is too old. */
     bool data_stale;
 
     /** Result of the latest sensor read. */

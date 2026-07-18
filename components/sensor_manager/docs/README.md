@@ -3,9 +3,10 @@
 ## Purpose
 
 `sensor_manager` owns periodic DHT22 sampling and converts raw read results into
-a thread-safe application status snapshot. It preserves the latest valid
-sample across temporary failures and notifies one application callback after
-each read attempt.
+a thread-safe application status snapshot. It publishes a numeric failure
+sentinel immediately after an unsuccessful read, retains the timestamp of the
+latest successful sample for stale-state classification, and notifies one
+application callback after each read attempt.
 
 ## What Is Implemented
 
@@ -18,7 +19,8 @@ each read attempt.
 - Protects status and callback snapshot reads with a mutex; callback
   registration is restricted to the pre-start lifecycle window.
 - Tracks successful, failed, and consecutive failed read counts.
-- Preserves the last-known-good values after a read failure.
+- Publishes `-1.0f` for temperature and humidity after a read failure.
+- Retains the latest successful-sample timestamp for degraded/stale decisions.
 - Reports `READY`, `DEGRADED`, or `ERROR` based on data availability and age.
 - Invokes the application callback after releasing the internal mutex.
 
@@ -29,8 +31,8 @@ UNINITIALIZED
     -> INITIALIZED
     -> RUNNING
     -> READY       after a successful read
-    -> DEGRADED    after a failure while retained data is still current
-    -> ERROR       when no valid data exists or retained data is stale
+    -> DEGRADED    after a failure while the latest success is still recent
+    -> ERROR       when no successful data exists or the latest success is stale
 ```
 
 A later successful read returns the state to `READY` and resets the consecutive
@@ -78,10 +80,13 @@ snapshot.
 
 - A successful read stores new values, sets `data_valid`, clears `data_stale`,
   records `ESP_OK`, and enters `READY`.
-- A failed read keeps the old temperature and humidity values.
-- Retained data becomes `DEGRADED` while it is younger than the configured
-  stale timeout.
-- Missing or old retained data enters `ERROR` and sets `data_stale`.
+- A failed read publishes `-1.0f` for temperature and humidity and records the
+  driver error.
+- A failure becomes `DEGRADED` while the latest successful sample is younger
+  than the configured stale timeout.
+- Missing or old successful data enters `ERROR` and sets `data_stale`.
+- `data_valid` records whether any successful sample exists; it does not make
+  the `-1.0f` failure sentinel a valid physical reading.
 - Staleness is currently recalculated when a read fails; `get_status()` does
   not independently age the snapshot at read time.
 
@@ -92,6 +97,9 @@ snapshot.
 - Lifecycle flags assume initialization/start are controlled by one
   application context.
 - The task handle is retained but not yet exposed or used for shutdown.
+- `-1.0f` is also a physically possible temperature. Consumers must use
+  `last_error`, `data_valid`, and `data_stale`, not the numeric sentinel alone,
+  when deciding whether data is usable.
 
 ## Expected Logs
 

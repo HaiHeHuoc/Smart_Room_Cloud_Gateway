@@ -29,6 +29,9 @@
 #define APP_GUI_SENSOR_VALUE_WIDTH_PX          92
 #define APP_GUI_SENSOR_VALUE_HEIGHT_PX         18
 
+/* sensor_manager publishes this sentinel after a failed DHT22 read. */
+#define APP_GUI_SENSOR_FAILED_VALUE             (-1.0f)
+
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "APP_GUI";
 
@@ -606,16 +609,37 @@ static void app_gui_update_sensor_screen(
         char temperature_text[16] = {0};
         char humidity_text[16] = {0};
 
-        (void)snprintf(
-            temperature_text,
-            sizeof(temperature_text),
-            "%.1f C",
-            status->temperature_c);
-        (void)snprintf(
-            humidity_text,
-            sizeof(humidity_text),
-            "%.1f %%",
-            status->humidity_percent);
+        if (status->temperature_c != APP_GUI_SENSOR_FAILED_VALUE)
+        {
+            (void)snprintf(
+                temperature_text,
+                sizeof(temperature_text),
+                "%.1f C",
+                status->temperature_c);
+        }
+        else
+        {
+            (void)snprintf(
+                temperature_text,
+                sizeof(temperature_text),
+                "-");
+        }
+
+        if (status->humidity_percent != APP_GUI_SENSOR_FAILED_VALUE)
+        {
+            (void)snprintf(
+                humidity_text,
+                sizeof(humidity_text),
+                "%.1f %%",
+                status->humidity_percent);
+        }
+        else
+        {
+            (void)snprintf(
+                humidity_text,
+                sizeof(humidity_text),
+                "-");
+        }
 
         lv_label_set_text(
             s_sensor_temperature_label,

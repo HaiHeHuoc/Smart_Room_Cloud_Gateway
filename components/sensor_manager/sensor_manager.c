@@ -22,6 +22,9 @@
 #define SENSOR_MANAGER_MIN_SAMPLE_PERIOD_MS    2000U
 #define SENSOR_MANAGER_MUTEX_TIMEOUT_MS        100U
 
+/* Published numeric sentinel used immediately after a failed sensor read. */
+#define SENSOR_MANAGER_FAILED_VALUE             (-1.0f)
+
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "SENSOR_MANAGER";
 
@@ -123,6 +126,14 @@ static void sensor_manager_update_failure(
 
     s_status.last_error = error;
 
+    /*
+     * Clear the publishable readings immediately. The validity and stale-age
+     * fields below still describe whether a successful historical sample
+     * exists and how old that sample is.
+     */
+    s_status.temperature_c = SENSOR_MANAGER_FAILED_VALUE;
+    s_status.humidity_percent = SENSOR_MANAGER_FAILED_VALUE;
+
     s_status.failed_read_count++;
     s_status.consecutive_failure_count++;
 
@@ -130,10 +141,7 @@ static void sensor_manager_update_failure(
         sensor_manager_is_data_stale_locked(
             current_time_ms);
 
-    /*
-     * Do not overwrite temperature or humidity.
-     * Preserve the last-known-good sample.
-     */
+    /* Classify the failure using the age of the latest successful sample. */
     if (!s_status.data_valid ||
         s_status.data_stale)
     {
