@@ -3,6 +3,7 @@
 /* Includes ----------------------------------------------------------------- */
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 
 #include "esp_err.h"
 
@@ -22,6 +23,20 @@ extern "C"
 #endif
 
     /* Type Definitions --------------------------------------------------------- */
+typedef enum
+{
+    CONFIG_MANAGER_DATA_TYPE_U8 = 0,
+    CONFIG_MANAGER_DATA_TYPE_I8,
+    CONFIG_MANAGER_DATA_TYPE_U16,
+    CONFIG_MANAGER_DATA_TYPE_I16,
+    CONFIG_MANAGER_DATA_TYPE_U32,
+    CONFIG_MANAGER_DATA_TYPE_I32,
+    CONFIG_MANAGER_DATA_TYPE_U64,
+    CONFIG_MANAGER_DATA_TYPE_I64,
+    CONFIG_MANAGER_DATA_TYPE_STRING,
+    CONFIG_MANAGER_DATA_TYPE_BLOB,
+} config_manager_data_type_t;
+
     typedef struct
     {
         char ssid[CONFIG_MANAGER_WIFI_SSID_BUFFER_SIZE];
@@ -38,6 +53,24 @@ extern "C"
         config_manager_wifi_config_t *config);
 
     esp_err_t config_manager_clear_wifi(void);
+
+    esp_err_t config_manager_has_wifi_config(
+    bool *has_config);
+
+esp_err_t config_manager_save_custom_data(
+    const char *key,
+    const void *value,
+    size_t value_size,
+    config_manager_data_type_t type);
+
+esp_err_t config_manager_load_custom_data(
+    const char *key,
+    void *out_value,
+    size_t *inout_size,
+    config_manager_data_type_t type);
+
+esp_err_t config_manager_clear_custom_data(
+    const char *key);
 #ifdef __cplusplus
 }
 #endif

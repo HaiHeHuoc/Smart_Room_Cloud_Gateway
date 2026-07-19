@@ -12,7 +12,7 @@
 
 #include "nvs.h"
 
-const char *TAG = "CONFIG_MANAGER";
+static const char *TAG = "CONFIG_MANAGER";
 
 static SemaphoreHandle_t s_config_mutex = NULL;
 static bool s_initialized = false;
@@ -26,6 +26,15 @@ static bool s_initialized = false;
 #define CONFIG_MANAGER_NVS_KEY_WIFI_PASS "wifi_pass"
 
 #define CONFIG_MANAGER_CURRENT_VERSION 1U
+
+#define CONFIG_MANAGER_CUSTOM_NVS_NAMESPACE "custom_cfg"
+
+#define CONFIG_MANAGER_NVS_KEY_MAX_LEN 15U
+
+#define CONFIG_MANAGER_NVS_KEY_BUFFER_SIZE \
+    (CONFIG_MANAGER_NVS_KEY_MAX_LEN + 1U)
+
+#define CONFIG_MANAGER_CUSTOM_BLOB_MAX_SIZE 512U
 
 static esp_err_t config_manager_lock(void);
 static void config_manager_unlock(void);
@@ -147,10 +156,11 @@ esp_err_t config_manager_save_wifi(
     bool mutex_locked = false;
     bool handle_opened = false;
 
-    if (config == NULL)
-    {
-        return ESP_ERR_INVALID_ARG;
-    }
+    ESP_RETURN_ON_FALSE(
+        config != NULL,
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "Invalid argument");
 
     memcpy(
         &snapshot,
@@ -218,6 +228,11 @@ esp_err_t config_manager_save_wifi(
         goto cleanup;
     }
 
+    if (handle_opened)
+    {
+        nvs_close(handle);
+    }
+
     ESP_LOGI(TAG, "Wi-Fi configuration saved");
     if (mutex_locked)
     {
@@ -237,12 +252,1065 @@ cleanup:
     {
         config_manager_unlock();
     }
-    ESP_LOGE(
-        TAG,
-        "Failed to save Wi-Fi configuration: %s",
-        esp_err_to_name(err));
 
     memset(&snapshot, 0, sizeof(snapshot));
+
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to save Wi-Fi configuration: %s",
+            esp_err_to_name(err));
+    }
+
+    return err;
+}
+
+esp_err_t config_manager_load_wifi(
+    config_manager_wifi_config_t *config)
+{
+    ESP_RETURN_ON_FALSE(
+        config != NULL,
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "Invalid argument");
+
+    memset(config, 0, sizeof(*config));
+
+    esp_err_t err = ESP_OK;
+
+    config_manager_wifi_config_t snapshot = {0};
+
+    nvs_handle_t handle = 0;
+
+    bool mutex_locked = false;
+    bool handle_opened = false;
+
+    uint32_t stored_version = 0U;
+
+    err = config_manager_lock();
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    mutex_locked = true;
+
+    err = nvs_open(
+        CONFIG_MANAGER_NVS_NAMESPACE,
+        NVS_READONLY,
+        &handle);
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    handle_opened = true;
+
+    err = nvs_get_u32(
+        handle,
+        CONFIG_MANAGER_NVS_KEY_VERSION,
+        &stored_version);
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    if (stored_version != CONFIG_MANAGER_CURRENT_VERSION)
+    {
+        err = ESP_ERR_NOT_SUPPORTED;
+        goto cleanup;
+    }
+
+    size_t ssid_size = sizeof(snapshot.ssid);
+
+    err = nvs_get_str(
+        handle,
+        CONFIG_MANAGER_NVS_KEY_WIFI_SSID,
+        snapshot.ssid,
+        &ssid_size);
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    size_t password_size = sizeof(snapshot.password);
+
+    err = nvs_get_str(
+        handle,
+        CONFIG_MANAGER_NVS_KEY_WIFI_PASS,
+        snapshot.password,
+        &password_size);
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    err = config_manager_validate_wifi_config(&snapshot);
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    memcpy(
+        config,
+        &snapshot,
+        sizeof(*config));
+
+cleanup:
+
+    if (handle_opened)
+    {
+        nvs_close(handle);
+    }
+
+    if (mutex_locked)
+    {
+        config_manager_unlock();
+    }
+
+    memset(&snapshot, 0, sizeof(snapshot));
+
+    if (err != ESP_OK)
+    {
+        memset(config, 0, sizeof(*config));
+    }
+
+    return err;
+}
+esp_err_t config_manager_clear_wifi(void)
+{
+    esp_err_t err = ESP_OK;
+    nvs_handle_t handle = 0;
+
+    bool mutex_locked = false;
+    bool handle_opened = false;
+    bool config_changed = false;
+
+    err = config_manager_lock();
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    mutex_locked = true;
+
+    err = nvs_open(
+        CONFIG_MANAGER_NVS_NAMESPACE,
+        NVS_READWRITE,
+        &handle);
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    handle_opened = true;
+
+    err = nvs_erase_key(
+        handle,
+        CONFIG_MANAGER_NVS_KEY_WIFI_SSID);
+
+    if (err == ESP_OK)
+    {
+        config_changed = true;
+    }
+    else if (err != ESP_ERR_NVS_NOT_FOUND)
+    {
+        goto cleanup;
+    }
+
+    err = nvs_erase_key(
+        handle,
+        CONFIG_MANAGER_NVS_KEY_WIFI_PASS);
+
+    if (err == ESP_OK)
+    {
+        config_changed = true;
+    }
+    else if (err != ESP_ERR_NVS_NOT_FOUND)
+    {
+        goto cleanup;
+    }
+
+    /*
+     * Nếu cả hai key đều không tồn tại,
+     * trạng thái cuối cùng vẫn đúng: Wi-Fi config đã được clear.
+     */
+    err = ESP_OK;
+
+    if (config_changed)
+    {
+        err = nvs_commit(handle);
+
+        if (err != ESP_OK)
+        {
+            goto cleanup;
+        }
+    }
+
+cleanup:
+
+    if (handle_opened)
+    {
+        nvs_close(handle);
+    }
+
+    if (mutex_locked)
+    {
+        config_manager_unlock();
+    }
+
+    return err;
+}
+
+esp_err_t config_manager_has_wifi_config(
+    bool *has_config)
+{
+    if (has_config == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *has_config = false;
+
+    config_manager_wifi_config_t config = {0};
+
+    esp_err_t err = config_manager_load_wifi(&config);
+
+    if (err == ESP_OK)
+    {
+        *has_config = true;
+    }
+    else if (err == ESP_ERR_NVS_NOT_FOUND)
+    {
+        err = ESP_OK;
+    }
+
+    memset(&config, 0, sizeof(config));
+
+    return err;
+}
+
+esp_err_t config_manager_load_custom_data(
+    const char *key,
+    void *out_value,
+    size_t *inout_size,
+    config_manager_data_type_t type)
+{
+    esp_err_t err = ESP_OK;
+
+    nvs_handle_t handle = 0;
+    bool mutex_locked = false;
+    bool handle_opened = false;
+
+    /*
+     * Validate common arguments.
+     */
+    if (key == NULL || inout_size == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const size_t key_len = strnlen(
+        key,
+        CONFIG_MANAGER_NVS_KEY_BUFFER_SIZE);
+
+    if (key_len == 0U ||
+        key_len == CONFIG_MANAGER_NVS_KEY_BUFFER_SIZE)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /*
+     * Validate output buffer size for fixed-size integer types.
+     *
+     * STRING and BLOB permit out_value == NULL so that the caller
+     * can query the required buffer size.
+     */
+    switch (type)
+    {
+        case CONFIG_MANAGER_DATA_TYPE_U8:
+            if (out_value == NULL)
+            {
+                return ESP_ERR_INVALID_ARG;
+            }
+
+            if (*inout_size != sizeof(uint8_t))
+            {
+                *inout_size = sizeof(uint8_t);
+                return ESP_ERR_INVALID_SIZE;
+            }
+            break;
+
+        case CONFIG_MANAGER_DATA_TYPE_I8:
+            if (out_value == NULL)
+            {
+                return ESP_ERR_INVALID_ARG;
+            }
+
+            if (*inout_size != sizeof(int8_t))
+            {
+                *inout_size = sizeof(int8_t);
+                return ESP_ERR_INVALID_SIZE;
+            }
+            break;
+
+        case CONFIG_MANAGER_DATA_TYPE_U16:
+            if (out_value == NULL)
+            {
+                return ESP_ERR_INVALID_ARG;
+            }
+
+            if (*inout_size != sizeof(uint16_t))
+            {
+                *inout_size = sizeof(uint16_t);
+                return ESP_ERR_INVALID_SIZE;
+            }
+            break;
+
+        case CONFIG_MANAGER_DATA_TYPE_I16:
+            if (out_value == NULL)
+            {
+                return ESP_ERR_INVALID_ARG;
+            }
+
+            if (*inout_size != sizeof(int16_t))
+            {
+                *inout_size = sizeof(int16_t);
+                return ESP_ERR_INVALID_SIZE;
+            }
+            break;
+
+        case CONFIG_MANAGER_DATA_TYPE_U32:
+            if (out_value == NULL)
+            {
+                return ESP_ERR_INVALID_ARG;
+            }
+
+            if (*inout_size != sizeof(uint32_t))
+            {
+                *inout_size = sizeof(uint32_t);
+                return ESP_ERR_INVALID_SIZE;
+            }
+            break;
+
+        case CONFIG_MANAGER_DATA_TYPE_I32:
+            if (out_value == NULL)
+            {
+                return ESP_ERR_INVALID_ARG;
+            }
+
+            if (*inout_size != sizeof(int32_t))
+            {
+                *inout_size = sizeof(int32_t);
+                return ESP_ERR_INVALID_SIZE;
+            }
+            break;
+
+        case CONFIG_MANAGER_DATA_TYPE_U64:
+            if (out_value == NULL)
+            {
+                return ESP_ERR_INVALID_ARG;
+            }
+
+            if (*inout_size != sizeof(uint64_t))
+            {
+                *inout_size = sizeof(uint64_t);
+                return ESP_ERR_INVALID_SIZE;
+            }
+            break;
+
+        case CONFIG_MANAGER_DATA_TYPE_I64:
+            if (out_value == NULL)
+            {
+                return ESP_ERR_INVALID_ARG;
+            }
+
+            if (*inout_size != sizeof(int64_t))
+            {
+                *inout_size = sizeof(int64_t);
+                return ESP_ERR_INVALID_SIZE;
+            }
+            break;
+
+        case CONFIG_MANAGER_DATA_TYPE_STRING:
+        case CONFIG_MANAGER_DATA_TYPE_BLOB:
+            /*
+             * out_value == NULL:
+             * query required size only.
+             *
+             * out_value != NULL:
+             * caller must provide a non-zero buffer size.
+             */
+            if (out_value != NULL && *inout_size == 0U)
+            {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            break;
+
+        default:
+            return ESP_ERR_INVALID_ARG;
+    }
+
+    err = config_manager_lock();
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    mutex_locked = true;
+
+    err = nvs_open(
+        CONFIG_MANAGER_CUSTOM_NVS_NAMESPACE,
+        NVS_READONLY,
+        &handle);
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    handle_opened = true;
+
+    /*
+     * Read the value using the matching NVS getter.
+     *
+     * Integer values are first read into a local variable and copied
+     * to the caller only after nvs_get_*() succeeds. This keeps the
+     * caller's output unchanged when the read operation fails.
+     */
+    switch (type)
+    {
+        case CONFIG_MANAGER_DATA_TYPE_U8:
+        {
+            uint8_t value = 0U;
+
+            err = nvs_get_u8(handle, key, &value);
+
+            if (err == ESP_OK)
+            {
+                memcpy(out_value, &value, sizeof(value));
+                *inout_size = sizeof(value);
+            }
+            break;
+        }
+
+        case CONFIG_MANAGER_DATA_TYPE_I8:
+        {
+            int8_t value = 0;
+
+            err = nvs_get_i8(handle, key, &value);
+
+            if (err == ESP_OK)
+            {
+                memcpy(out_value, &value, sizeof(value));
+                *inout_size = sizeof(value);
+            }
+            break;
+        }
+
+        case CONFIG_MANAGER_DATA_TYPE_U16:
+        {
+            uint16_t value = 0U;
+
+            err = nvs_get_u16(handle, key, &value);
+
+            if (err == ESP_OK)
+            {
+                memcpy(out_value, &value, sizeof(value));
+                *inout_size = sizeof(value);
+            }
+            break;
+        }
+
+        case CONFIG_MANAGER_DATA_TYPE_I16:
+        {
+            int16_t value = 0;
+
+            err = nvs_get_i16(handle, key, &value);
+
+            if (err == ESP_OK)
+            {
+                memcpy(out_value, &value, sizeof(value));
+                *inout_size = sizeof(value);
+            }
+            break;
+        }
+
+        case CONFIG_MANAGER_DATA_TYPE_U32:
+        {
+            uint32_t value = 0U;
+
+            err = nvs_get_u32(handle, key, &value);
+
+            if (err == ESP_OK)
+            {
+                memcpy(out_value, &value, sizeof(value));
+                *inout_size = sizeof(value);
+            }
+            break;
+        }
+
+        case CONFIG_MANAGER_DATA_TYPE_I32:
+        {
+            int32_t value = 0;
+
+            err = nvs_get_i32(handle, key, &value);
+
+            if (err == ESP_OK)
+            {
+                memcpy(out_value, &value, sizeof(value));
+                *inout_size = sizeof(value);
+            }
+            break;
+        }
+
+        case CONFIG_MANAGER_DATA_TYPE_U64:
+        {
+            uint64_t value = 0U;
+
+            err = nvs_get_u64(handle, key, &value);
+
+            if (err == ESP_OK)
+            {
+                memcpy(out_value, &value, sizeof(value));
+                *inout_size = sizeof(value);
+            }
+            break;
+        }
+
+        case CONFIG_MANAGER_DATA_TYPE_I64:
+        {
+            int64_t value = 0;
+
+            err = nvs_get_i64(handle, key, &value);
+
+            if (err == ESP_OK)
+            {
+                memcpy(out_value, &value, sizeof(value));
+                *inout_size = sizeof(value);
+            }
+            break;
+        }
+
+        case CONFIG_MANAGER_DATA_TYPE_STRING:
+            err = nvs_get_str(
+                handle,
+                key,
+                (char *)out_value,
+                inout_size);
+            break;
+
+        case CONFIG_MANAGER_DATA_TYPE_BLOB:
+            err = nvs_get_blob(
+                handle,
+                key,
+                out_value,
+                inout_size);
+            break;
+
+        default:
+            /*
+             * Already validated above. This is a defensive fallback.
+             */
+            err = ESP_ERR_INVALID_ARG;
+            break;
+    }
+
+cleanup:
+
+    if (handle_opened)
+    {
+        nvs_close(handle);
+    }
+
+    if (mutex_locked)
+    {
+        config_manager_unlock();
+    }
+
+    return err;
+}
+
+esp_err_t config_manager_save_custom_data(
+    const char *key,
+    const void *value,
+    size_t value_size,
+    config_manager_data_type_t type)
+{
+    esp_err_t err = ESP_OK;
+
+    nvs_handle_t handle = 0;
+
+    bool mutex_locked = false;
+    bool handle_opened = false;
+
+    /*
+     * Validate common arguments.
+     */
+    if (key == NULL || value == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const size_t key_len = strnlen(
+        key,
+        CONFIG_MANAGER_NVS_KEY_BUFFER_SIZE);
+
+    /*
+     * Empty key or key longer than the NVS limit.
+     */
+    if (key_len == 0U ||
+        key_len == CONFIG_MANAGER_NVS_KEY_BUFFER_SIZE)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /*
+     * Validate the declared value size against the selected type.
+     */
+    switch (type)
+    {
+        case CONFIG_MANAGER_DATA_TYPE_U8:
+            if (value_size != sizeof(uint8_t))
+            {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            break;
+
+        case CONFIG_MANAGER_DATA_TYPE_I8:
+            if (value_size != sizeof(int8_t))
+            {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            break;
+
+        case CONFIG_MANAGER_DATA_TYPE_U16:
+            if (value_size != sizeof(uint16_t))
+            {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            break;
+
+        case CONFIG_MANAGER_DATA_TYPE_I16:
+            if (value_size != sizeof(int16_t))
+            {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            break;
+
+        case CONFIG_MANAGER_DATA_TYPE_U32:
+            if (value_size != sizeof(uint32_t))
+            {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            break;
+
+        case CONFIG_MANAGER_DATA_TYPE_I32:
+            if (value_size != sizeof(int32_t))
+            {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            break;
+
+        case CONFIG_MANAGER_DATA_TYPE_U64:
+            if (value_size != sizeof(uint64_t))
+            {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            break;
+
+        case CONFIG_MANAGER_DATA_TYPE_I64:
+            if (value_size != sizeof(int64_t))
+            {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            break;
+
+        case CONFIG_MANAGER_DATA_TYPE_STRING:
+        {
+            if (value_size == 0U)
+            {
+                return ESP_ERR_INVALID_SIZE;
+            }
+
+            /*
+             * Verify that the string contains a null terminator
+             * within the caller-declared buffer size.
+             */
+            const size_t string_len = strnlen(
+                (const char *)value,
+                value_size);
+
+            if (string_len == value_size)
+            {
+                return ESP_ERR_INVALID_ARG;
+            }
+
+            break;
+        }
+
+        case CONFIG_MANAGER_DATA_TYPE_BLOB:
+            if (value_size == 0U ||
+                value_size > CONFIG_MANAGER_CUSTOM_BLOB_MAX_SIZE)
+            {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            break;
+
+        default:
+            return ESP_ERR_INVALID_ARG;
+    }
+
+    /*
+     * Serialize the complete NVS write transaction.
+     */
+    err = config_manager_lock();
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    mutex_locked = true;
+
+    err = nvs_open(
+        CONFIG_MANAGER_CUSTOM_NVS_NAMESPACE,
+        NVS_READWRITE,
+        &handle);
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    handle_opened = true;
+
+    /*
+     * Use memcpy for integer types instead of directly dereferencing
+     * the void pointer. This also avoids unaligned pointer access.
+     */
+    switch (type)
+    {
+        case CONFIG_MANAGER_DATA_TYPE_U8:
+        {
+            uint8_t stored_value = 0U;
+
+            memcpy(
+                &stored_value,
+                value,
+                sizeof(stored_value));
+
+            err = nvs_set_u8(
+                handle,
+                key,
+                stored_value);
+            break;
+        }
+
+        case CONFIG_MANAGER_DATA_TYPE_I8:
+        {
+            int8_t stored_value = 0;
+
+            memcpy(
+                &stored_value,
+                value,
+                sizeof(stored_value));
+
+            err = nvs_set_i8(
+                handle,
+                key,
+                stored_value);
+            break;
+        }
+
+        case CONFIG_MANAGER_DATA_TYPE_U16:
+        {
+            uint16_t stored_value = 0U;
+
+            memcpy(
+                &stored_value,
+                value,
+                sizeof(stored_value));
+
+            err = nvs_set_u16(
+                handle,
+                key,
+                stored_value);
+            break;
+        }
+
+        case CONFIG_MANAGER_DATA_TYPE_I16:
+        {
+            int16_t stored_value = 0;
+
+            memcpy(
+                &stored_value,
+                value,
+                sizeof(stored_value));
+
+            err = nvs_set_i16(
+                handle,
+                key,
+                stored_value);
+            break;
+        }
+
+        case CONFIG_MANAGER_DATA_TYPE_U32:
+        {
+            uint32_t stored_value = 0U;
+
+            memcpy(
+                &stored_value,
+                value,
+                sizeof(stored_value));
+
+            err = nvs_set_u32(
+                handle,
+                key,
+                stored_value);
+            break;
+        }
+
+        case CONFIG_MANAGER_DATA_TYPE_I32:
+        {
+            int32_t stored_value = 0;
+
+            memcpy(
+                &stored_value,
+                value,
+                sizeof(stored_value));
+
+            err = nvs_set_i32(
+                handle,
+                key,
+                stored_value);
+            break;
+        }
+
+        case CONFIG_MANAGER_DATA_TYPE_U64:
+        {
+            uint64_t stored_value = 0U;
+
+            memcpy(
+                &stored_value,
+                value,
+                sizeof(stored_value));
+
+            err = nvs_set_u64(
+                handle,
+                key,
+                stored_value);
+            break;
+        }
+
+        case CONFIG_MANAGER_DATA_TYPE_I64:
+        {
+            int64_t stored_value = 0;
+
+            memcpy(
+                &stored_value,
+                value,
+                sizeof(stored_value));
+
+            err = nvs_set_i64(
+                handle,
+                key,
+                stored_value);
+            break;
+        }
+
+        case CONFIG_MANAGER_DATA_TYPE_STRING:
+            err = nvs_set_str(
+                handle,
+                key,
+                (const char *)value);
+            break;
+
+        case CONFIG_MANAGER_DATA_TYPE_BLOB:
+            err = nvs_set_blob(
+                handle,
+                key,
+                value,
+                value_size);
+            break;
+
+        default:
+            /*
+             * Defensive fallback. The type was already validated.
+             */
+            err = ESP_ERR_INVALID_ARG;
+            break;
+    }
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    /*
+     * nvs_set_* only stages the modification.
+     * Commit makes it persistent in flash.
+     */
+    err = nvs_commit(handle);
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Custom configuration saved: key=%s",
+        key);
+
+cleanup:
+
+    if (handle_opened)
+    {
+        nvs_close(handle);
+    }
+
+    if (mutex_locked)
+    {
+        config_manager_unlock();
+    }
+
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to save custom configuration: key=%s, error=%s",
+            key,
+            esp_err_to_name(err));
+    }
+
+    return err;
+}
+
+esp_err_t config_manager_clear_custom_data(
+    const char *key)
+{
+    esp_err_t err = ESP_OK;
+
+    nvs_handle_t handle = 0;
+
+    bool mutex_locked = false;
+    bool handle_opened = false;
+    bool data_changed = false;
+
+    /*
+     * Validate key.
+     */
+    if (key == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const size_t key_len = strnlen(
+        key,
+        CONFIG_MANAGER_NVS_KEY_BUFFER_SIZE);
+
+    if (key_len == 0U ||
+        key_len == CONFIG_MANAGER_NVS_KEY_BUFFER_SIZE)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /*
+     * Serialize the complete NVS operation.
+     */
+    err = config_manager_lock();
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    mutex_locked = true;
+
+    err = nvs_open(
+        CONFIG_MANAGER_CUSTOM_NVS_NAMESPACE,
+        NVS_READWRITE,
+        &handle);
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    handle_opened = true;
+
+    err = nvs_erase_key(
+        handle,
+        key);
+
+    if (err == ESP_OK)
+    {
+        data_changed = true;
+    }
+    else if (err == ESP_ERR_NVS_NOT_FOUND)
+    {
+        /*
+         * Idempotent behavior:
+         * the requested key is already absent.
+         */
+        err = ESP_OK;
+    }
+    else
+    {
+        goto cleanup;
+    }
+
+    /*
+     * Commit only when an entry was actually erased.
+     */
+    if (data_changed)
+    {
+        err = nvs_commit(handle);
+
+        if (err != ESP_OK)
+        {
+            goto cleanup;
+        }
+    }
+
+cleanup:
+
+    if (handle_opened)
+    {
+        nvs_close(handle);
+    }
+
+    if (mutex_locked)
+    {
+        config_manager_unlock();
+    }
+
+    if (err == ESP_OK)
+    {
+        ESP_LOGI(
+            TAG,
+            "Custom configuration cleared: key=%s",
+            key);
+    }
+    else
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to clear custom configuration: key=%s, error=%s",
+            key,
+            esp_err_to_name(err));
+    }
 
     return err;
 }

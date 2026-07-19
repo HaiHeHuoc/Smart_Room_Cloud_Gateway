@@ -56,6 +56,16 @@ static char s_firebase_id_token[
 static char s_authenticated_url[
     CLOUD_MANAGER_AUTH_URL_BUFFER_SIZE];
 
+/* Static because the reusable HTTP client retains the request-body pointer. */
+static char s_telemetry_payload[
+    CLOUD_MANAGER_JSON_BUFFER_SIZE];
+
+/* Owned exclusively by the cloud task after cloud_manager_start(). */
+static esp_http_client_handle_t s_http_client;
+
+static char s_http_client_url[
+    CLOUD_MANAGER_AUTH_URL_BUFFER_SIZE];
+
 static QueueHandle_t s_telemetry_queue;
 static TaskHandle_t s_cloud_task_handle;
 
@@ -90,6 +100,13 @@ static bool cloud_manager_is_retryable_http_error(
     int http_status);
 
 static esp_err_t cloud_manager_build_authenticated_url(void);
+
+static void cloud_manager_reset_http_client(void);
+
+static esp_err_t cloud_manager_prepare_http_client(void);
+
+static void cloud_manager_log_transport_failure(
+    esp_err_t error);
 
 static esp_err_t cloud_manager_publish_telemetry(
     const cloud_sensor_telemetry_t *telemetry,
@@ -288,6 +305,128 @@ static esp_err_t cloud_manager_build_authenticated_url(void)
     return ESP_OK;
 }
 
+static void cloud_manager_reset_http_client(void)
+{
+    if (s_http_client != NULL)
+    {
+        esp_err_t cleanup_result =
+            esp_http_client_cleanup(s_http_client);
+
+        if (cleanup_result != ESP_OK)
+        {
+            ESP_LOGD(
+                TAG,
+                "HTTP client cleanup returned: %s",
+                esp_err_to_name(cleanup_result));
+        }
+
+        s_http_client = NULL;
+    }
+
+    s_http_client_url[0] = '\0';
+}
+
+static esp_err_t cloud_manager_prepare_http_client(void)
+{
+    if (s_http_client == NULL)
+    {
+        esp_http_client_config_t http_config =
+        {
+            .url = s_authenticated_url,
+            .method = HTTP_METHOD_PUT,
+            .crt_bundle_attach = esp_crt_bundle_attach,
+            .timeout_ms = CLOUD_MANAGER_HTTP_TIMEOUT_MS,
+            /* The request line contains the Firebase ID token query string. */
+            .buffer_size_tx = CLOUD_MANAGER_HTTP_TX_BUFFER_SIZE,
+            .keep_alive_enable = true,
+        };
+
+        s_http_client =
+            esp_http_client_init(&http_config);
+
+        if (s_http_client == NULL)
+        {
+            ESP_LOGE(
+                TAG,
+                "Failed to initialize HTTP client");
+
+            return ESP_ERR_NO_MEM;
+        }
+
+        esp_err_t result =
+            esp_http_client_set_header(
+                s_http_client,
+                "Content-Type",
+                "application/json");
+
+        if (result != ESP_OK)
+        {
+            cloud_manager_reset_http_client();
+            return result;
+        }
+
+        memcpy(
+            s_http_client_url,
+            s_authenticated_url,
+            strlen(s_authenticated_url) + 1U);
+
+        return ESP_OK;
+    }
+
+    if (strcmp(
+            s_http_client_url,
+            s_authenticated_url) == 0)
+    {
+        return ESP_OK;
+    }
+
+    esp_err_t result =
+        esp_http_client_set_url(
+            s_http_client,
+            s_authenticated_url);
+
+    if (result != ESP_OK)
+    {
+        cloud_manager_reset_http_client();
+        return result;
+    }
+
+    memcpy(
+        s_http_client_url,
+        s_authenticated_url,
+        strlen(s_authenticated_url) + 1U);
+
+    return ESP_OK;
+}
+
+static void cloud_manager_log_transport_failure(
+    esp_err_t error)
+{
+    if (s_http_client == NULL)
+    {
+        return;
+    }
+
+    int tls_error = 0;
+    int tls_flags = 0;
+    const int socket_errno =
+        esp_http_client_get_errno(s_http_client);
+
+    (void)esp_http_client_get_and_clear_last_tls_error(
+        s_http_client,
+        &tls_error,
+        &tls_flags);
+
+    ESP_LOGW(
+        TAG,
+        "HTTP transport error=%s, socket_errno=%d, "
+        "tls_error=0x%x, tls_flags=0x%x; resetting client",
+        esp_err_to_name(error),
+        socket_errno,
+        (unsigned int)tls_error,
+        (unsigned int)tls_flags);
+}
+
 static esp_err_t cloud_manager_publish_telemetry(
     const cloud_sensor_telemetry_t *telemetry,
     int *http_status_out)
@@ -323,8 +462,6 @@ static esp_err_t cloud_manager_publish_telemetry(
         return result;
     }
 
-    char payload[CLOUD_MANAGER_JSON_BUFFER_SIZE];
-
     /*
      * Numeric readings are serialized exactly as posted. sensor_valid and
      * sensor_stale are separate data-quality metadata for Firebase clients;
@@ -332,8 +469,8 @@ static esp_err_t cloud_manager_publish_telemetry(
      */
     int payload_length =
         snprintf(
-            payload,
-            sizeof(payload),
+            s_telemetry_payload,
+            sizeof(s_telemetry_payload),
             "{"
                 "\"temperature_c\":%.1f,"
                 "\"humidity_percent\":%.1f,"
@@ -353,7 +490,7 @@ static esp_err_t cloud_manager_publish_telemetry(
             (long long)telemetry->sample_uptime_ms);
 
     if (payload_length < 0 ||
-        payload_length >= (int)sizeof(payload))
+        payload_length >= (int)sizeof(s_telemetry_payload))
     {
         ESP_LOGE(
             TAG,
@@ -362,41 +499,14 @@ static esp_err_t cloud_manager_publish_telemetry(
         return ESP_ERR_INVALID_SIZE;
     }
 
-    esp_http_client_config_t http_config =
-    {
-        .url = s_authenticated_url,
-        .method = HTTP_METHOD_PUT,
-        .crt_bundle_attach = esp_crt_bundle_attach,
-        .timeout_ms = CLOUD_MANAGER_HTTP_TIMEOUT_MS,
-        /* The request line contains the Firebase ID token query string. */
-        .buffer_size_tx = CLOUD_MANAGER_HTTP_TX_BUFFER_SIZE,
-        .keep_alive_enable = true,
-    };
-
-    esp_http_client_handle_t client =
-        esp_http_client_init(&http_config);
-
-    if (client == NULL)
-    {
-        ESP_LOGE(
-            TAG,
-            "Failed to initialize HTTP client");
-
-        return ESP_ERR_NO_MEM;
-    }
-
-    result =
-        esp_http_client_set_header(
-            client,
-            "Content-Type",
-            "application/json");
+    result = cloud_manager_prepare_http_client();
 
     if (result == ESP_OK)
     {
         result =
             esp_http_client_set_post_field(
-                client,
-                payload,
+                s_http_client,
+                s_telemetry_payload,
                 payload_length);
     }
 
@@ -409,20 +519,33 @@ static esp_err_t cloud_manager_publish_telemetry(
             telemetry->humidity_percent);
 
         result =
-            esp_http_client_perform(client);
+            esp_http_client_perform(s_http_client);
+    }
+
+    int response_status = 0;
+
+    if (s_http_client != NULL)
+    {
+        response_status =
+            esp_http_client_get_status_code(
+                s_http_client);
     }
 
     int http_status =
-        esp_http_client_get_status_code(client);
+        result == ESP_OK
+            ? response_status
+            : 0;
 
     /*
      * Firebase may return an authentication challenge that ESP HTTP Client
      * cannot process as Basic/Digest auth. Preserve the semantic auth error.
      */
-    if (result == ESP_ERR_NOT_SUPPORTED &&
-        http_status == 0)
+    if (result == ESP_ERR_NOT_SUPPORTED)
     {
-        http_status = 401;
+        http_status =
+            response_status == 403
+                ? 403
+                : 401;
     }
 
     *http_status_out = http_status;
@@ -432,10 +555,11 @@ static esp_err_t cloud_manager_publish_telemetry(
         firebase_auth_invalidate_id_token();
     }
 
-    esp_http_client_cleanup(client);
-
     if (result != ESP_OK)
     {
+        cloud_manager_log_transport_failure(result);
+        cloud_manager_reset_http_client();
+
         ESP_LOGW(
             TAG,
             "Firebase request failed: %s, HTTP=%d",
@@ -457,6 +581,16 @@ static esp_err_t cloud_manager_publish_telemetry(
             TAG,
             "Firebase rejected telemetry: HTTP %d",
             http_status);
+
+        if (http_status == 0)
+        {
+            ESP_LOGW(
+                TAG,
+                "HTTP request completed without a response status; "
+                "resetting client");
+
+            cloud_manager_reset_http_client();
+        }
 
         return ESP_FAIL;
     }
@@ -507,6 +641,8 @@ static void cloud_manager_task(
             }
             else
             {
+                cloud_manager_reset_http_client();
+
                 cloud_manager_set_state(
                     CLOUD_MANAGER_STATE_WAITING_FOR_NETWORK);
             }
@@ -516,6 +652,8 @@ static void cloud_manager_task(
         }
         else if (!wifi_manager_is_connected())
         {
+            cloud_manager_reset_http_client();
+
             cloud_manager_set_state(
                 CLOUD_MANAGER_STATE_WAITING_FOR_NETWORK);
 
@@ -683,6 +821,9 @@ esp_err_t cloud_manager_init(
 
     s_status_callback = NULL;
     s_status_callback_user_data = NULL;
+
+    s_http_client = NULL;
+    s_http_client_url[0] = '\0';
 
     s_is_initialized = true;
 
