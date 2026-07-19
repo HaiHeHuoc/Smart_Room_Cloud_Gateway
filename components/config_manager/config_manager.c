@@ -1,22 +1,18 @@
 /* Includes ----------------------------------------------------------------- */
 #include "config_manager.h"
 
+#include <string.h>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
-#include "esp_err.h"
 #include "esp_check.h"
+#include "esp_err.h"
 #include "esp_log.h"
-
-#include <string.h>
 
 #include "nvs.h"
 
-static const char *TAG = "CONFIG_MANAGER";
-
-static SemaphoreHandle_t s_config_mutex = NULL;
-static bool s_initialized = false;
-
+/* Macros ------------------------------------------------------------------- */
 #define CONFIG_MANAGER_MUTEX_TIMEOUT_MS 1000U
 
 #define CONFIG_MANAGER_NVS_NAMESPACE "device_cfg"
@@ -29,18 +25,33 @@ static bool s_initialized = false;
 
 #define CONFIG_MANAGER_CUSTOM_NVS_NAMESPACE "custom_cfg"
 
-#define CONFIG_MANAGER_NVS_KEY_MAX_LEN 15U
-
 #define CONFIG_MANAGER_NVS_KEY_BUFFER_SIZE \
-    (CONFIG_MANAGER_NVS_KEY_MAX_LEN + 1U)
+    (CONFIG_MANAGER_CUSTOM_KEY_MAX_LEN + 1U)
 
-#define CONFIG_MANAGER_CUSTOM_BLOB_MAX_SIZE 512U
+/* Constants ---------------------------------------------------------------- */
+static const char *const TAG = "CONFIG_MANAGER";
 
+/* Static Variables --------------------------------------------------------- */
+static portMUX_TYPE s_init_lock =
+    portMUX_INITIALIZER_UNLOCKED;
+
+static SemaphoreHandle_t s_config_mutex = NULL;
+static bool s_initialized = false;
+static bool s_initializing = false;
+
+/* Function Prototypes ------------------------------------------------------ */
 static esp_err_t config_manager_lock(void);
+
 static void config_manager_unlock(void);
+
+static void config_manager_zeroize(
+    void *buffer,
+    size_t size);
+
 static esp_err_t config_manager_validate_wifi_config(
     const config_manager_wifi_config_t *config);
 
+/* Static Functions --------------------------------------------------------- */
 static esp_err_t config_manager_validate_wifi_config(
     const config_manager_wifi_config_t *config)
 {
@@ -74,10 +85,7 @@ static esp_err_t config_manager_validate_wifi_config(
         return ESP_ERR_INVALID_ARG;
     }
 
-    /*
-     * Password rỗng được chấp nhận cho mạng open.
-     * Password khác rỗng phải nằm trong khoảng 8–63 ký tự.
-     */
+    /* Open networks use an empty password; secured passwords use 8-63 bytes. */
     if (password_len != 0U &&
         (password_len < 8U ||
          password_len > CONFIG_MANAGER_WIFI_PASSWORD_MAX_LEN))
@@ -90,18 +98,29 @@ static esp_err_t config_manager_validate_wifi_config(
 
 static esp_err_t config_manager_lock(void)
 {
-    if (!s_initialized || s_config_mutex == NULL)
+    SemaphoreHandle_t mutex = NULL;
+
+    taskENTER_CRITICAL(&s_init_lock);
+
+    if (s_initialized)
+    {
+        mutex = s_config_mutex;
+    }
+
+    taskEXIT_CRITICAL(&s_init_lock);
+
+    if (mutex == NULL)
     {
         return ESP_ERR_INVALID_STATE;
     }
 
     BaseType_t result = xSemaphoreTake(
-        s_config_mutex,
+        mutex,
         pdMS_TO_TICKS(CONFIG_MANAGER_MUTEX_TIMEOUT_MS));
 
     if (result != pdTRUE)
     {
-        ESP_LOGE(TAG, "TimeOut");
+        ESP_LOGE(TAG, "Timed out waiting for configuration mutex");
         return ESP_ERR_TIMEOUT;
     }
 
@@ -110,34 +129,78 @@ static esp_err_t config_manager_lock(void)
 
 static void config_manager_unlock(void)
 {
-    if (!s_initialized || s_config_mutex == NULL)
+    SemaphoreHandle_t mutex = NULL;
+
+    taskENTER_CRITICAL(&s_init_lock);
+    mutex = s_config_mutex;
+    taskEXIT_CRITICAL(&s_init_lock);
+
+    if (mutex == NULL)
     {
-        ESP_LOGE(TAG, "invalid arguement");
+        ESP_LOGE(TAG, "Configuration mutex is unavailable");
         return;
     }
-    else
+
+    if (xSemaphoreGive(mutex) != pdTRUE)
     {
-        (void)xSemaphoreGive(s_config_mutex);
+        ESP_LOGE(TAG, "Failed to release configuration mutex");
+    }
+}
+
+static void config_manager_zeroize(
+    void *buffer,
+    size_t size)
+{
+    /* Volatile writes prevent removal of credential cleanup by optimization. */
+    volatile uint8_t *bytes =
+        (volatile uint8_t *)buffer;
+
+    while (size > 0U)
+    {
+        *bytes++ = 0U;
+        size--;
     }
 }
 
 /* Functions ---------------------------------------------------------------- */
 esp_err_t config_manager_init(void)
 {
-    if (s_initialized == true)
+    taskENTER_CRITICAL(&s_init_lock);
+
+    if (s_initialized)
     {
+        taskEXIT_CRITICAL(&s_init_lock);
         ESP_LOGW(TAG, "Config manager is initialized");
         return ESP_OK;
     }
 
-    s_config_mutex = xSemaphoreCreateMutex();
+    if (s_initializing)
+    {
+        taskEXIT_CRITICAL(&s_init_lock);
+        ESP_LOGW(TAG, "Config manager initialization is already in progress");
+        return ESP_ERR_INVALID_STATE;
+    }
 
-    ESP_RETURN_ON_FALSE(s_config_mutex != NULL,
-                        ESP_ERR_NO_MEM,
-                        TAG,
-                        "Fail to create a mutex");
+    s_initializing = true;
+    taskEXIT_CRITICAL(&s_init_lock);
 
+    SemaphoreHandle_t mutex = xSemaphoreCreateMutex();
+
+    if (mutex == NULL)
+    {
+        taskENTER_CRITICAL(&s_init_lock);
+        s_initializing = false;
+        taskEXIT_CRITICAL(&s_init_lock);
+
+        ESP_LOGE(TAG, "Failed to create configuration mutex");
+        return ESP_ERR_NO_MEM;
+    }
+
+    taskENTER_CRITICAL(&s_init_lock);
+    s_config_mutex = mutex;
     s_initialized = true;
+    s_initializing = false;
+    taskEXIT_CRITICAL(&s_init_lock);
 
     ESP_LOGI(TAG, "Config manager is initialized");
 
@@ -228,18 +291,7 @@ esp_err_t config_manager_save_wifi(
         goto cleanup;
     }
 
-    if (handle_opened)
-    {
-        nvs_close(handle);
-    }
-
     ESP_LOGI(TAG, "Wi-Fi configuration saved");
-    if (mutex_locked)
-    {
-        config_manager_unlock();
-    }
-
-    return ESP_OK;
 
 cleanup:
 
@@ -253,7 +305,9 @@ cleanup:
         config_manager_unlock();
     }
 
-    memset(&snapshot, 0, sizeof(snapshot));
+    config_manager_zeroize(
+        &snapshot,
+        sizeof(snapshot));
 
     if (err != ESP_OK)
     {
@@ -375,7 +429,9 @@ cleanup:
         config_manager_unlock();
     }
 
-    memset(&snapshot, 0, sizeof(snapshot));
+    config_manager_zeroize(
+        &snapshot,
+        sizeof(snapshot));
 
     if (err != ESP_OK)
     {
@@ -384,6 +440,7 @@ cleanup:
 
     return err;
 }
+
 esp_err_t config_manager_clear_wifi(void)
 {
     esp_err_t err = ESP_OK;
@@ -440,10 +497,7 @@ esp_err_t config_manager_clear_wifi(void)
         goto cleanup;
     }
 
-    /*
-     * Nếu cả hai key đều không tồn tại,
-     * trạng thái cuối cùng vẫn đúng: Wi-Fi config đã được clear.
-     */
+    /* Missing keys already satisfy the requested cleared state. */
     err = ESP_OK;
 
     if (config_changed)
@@ -494,7 +548,9 @@ esp_err_t config_manager_has_wifi_config(
         err = ESP_OK;
     }
 
-    memset(&config, 0, sizeof(config));
+    config_manager_zeroize(
+        &config,
+        sizeof(config));
 
     return err;
 }
