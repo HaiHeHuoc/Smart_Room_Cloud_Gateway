@@ -39,9 +39,14 @@ sensor_manager callback
     -> app_gui_post_sensor_status()
     -> map the same snapshot to cloud_sensor_telemetry_t
     -> cloud_manager_post_sensor_telemetry()
+
+cloud_manager status callback
+    -> map cloud_manager_status_t to ui_cloud_status_t
+    -> app_gui_post_cloud_status()
+    -> GUI task updates the Sensor screen Cloud row and indicator
 ```
 
-Both callbacks copy their input and return quickly. The GUI task owns LVGL
+The callbacks copy their input and return quickly. The GUI task owns LVGL
 updates, while the cloud task owns authentication and HTTPS requests.
 
 ## Current Configuration
@@ -115,5 +120,4 @@ idf.py -p <PORT> flash monitor
 - Move Wi-Fi and Firebase credentials out of source code.
 - Add a coordinated application controller only when runtime stop/restart is
   required.
-- Add cloud status to the GUI through the established queue-driven UI flow.
 - Replace development demo hooks only when their bring-up role is finished.

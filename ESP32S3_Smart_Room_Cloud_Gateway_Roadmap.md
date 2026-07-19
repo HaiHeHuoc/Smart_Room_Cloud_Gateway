@@ -51,16 +51,16 @@ ESP32 periodically uploads sensor data to Firebase
 
 | Feature | Priority | Status | Notes |
 |---|---:|---|---|
-| LCD bring-up | P0 | Not started | ST7735 / SPI |
-| LVGL UI | P0 | Not started | Basic screens and labels |
-| Wi-Fi Station | P0 | Not started | Hardcoded credentials first |
-| Sensor reading | P0 | Not started | DHT22 or equivalent |
-| Firebase upload | P0 | Not started | Realtime Database REST API |
+| LCD bring-up | P0 | Done | ST7735 / SPI hardware-accepted |
+| LVGL UI | P0 | Done | Queue-driven screens and labels |
+| Wi-Fi Station | P0 | Done | Event-driven Station connection and status UI |
+| Sensor reading | P0 | Done | DHT22 manager and stale/error handling |
+| Firebase upload | P0 | Done | Authenticated Realtime Database REST PUT verified on hardware |
 | NVS config storage | P0 | Not started | Store Wi-Fi and device settings |
 | BLE Wi-Fi provisioning | P1 | Not started | Prefer ESP-IDF provisioning manager first |
 | Button factory reset | P1 | Not started | Long press to erase config |
 | Wi-Fi reconnect strategy | P1 | Not started | Event-driven reconnect |
-| Cloud retry queue | P1 | Not started | Handle temporary upload failures |
+| Cloud retry queue | P1 | Done | Latest-value queue with bounded retry backoff |
 | MQTT | P2 | Not planned | Optional future feature |
 | OTA | P2 | Not planned | Final-stage optional feature |
 | Custom mobile app | P3 | Not planned | Avoid early scope creep |
@@ -70,6 +70,10 @@ Status values:
 ```text
 Not started / In progress / Blocked / Done / Deferred
 ```
+
+**Current milestone (2026-07-19):** Sprint 4 is complete and hardware-accepted.
+Sprint 5, NVS configuration storage, is the next planned sprint and has not
+started yet.
 
 ---
 
@@ -127,7 +131,8 @@ components/
 ├── sensor_manager/
 ├── ui_manager_lvgl/
 ├── display_driver/
-├── cloud_firebase/
+├── firebase_auth/
+├── cloud_manager/
 ├── input_manager/
 ├── led_manager/
 └── common/
@@ -142,9 +147,11 @@ components/
 | `wifi_manager` | Wi-Fi connection, disconnect, reconnect, events |
 | `config_manager` | NVS read/write/erase for credentials and settings |
 | `sensor_manager` | Periodic sensor reading and validation |
-| `ui_manager_lvgl` | LVGL screen creation and UI updates |
+| `ui_manager_lvgl` | LVGL initialization, tick, display integration, and mutex ownership |
+| `app_gui` | Queue-driven application screens and status rendering |
 | `display_driver` | LCD SPI init, panel driver, LVGL flush integration |
-| `cloud_firebase` | Build JSON payload and upload to Firebase via HTTPS REST |
+| `firebase_auth` | Firebase sign-in, ID-token validation, caching, and refresh |
+| `cloud_manager` | Build telemetry JSON and upload it to Firebase via authenticated HTTPS REST |
 | `input_manager` | Button, debounce, long press detection |
 | `led_manager` | LED status indication |
 | `common` | Shared types, events, error codes, utility macros |
@@ -236,12 +243,12 @@ Other tasks send events/messages to ui_task.
 
 ### Tasks
 
-- [ ] Create ESP-IDF project.
-- [ ] Set target to ESP32-S3.
-- [ ] Create component folders.
-- [ ] Add basic logging macro or wrapper.
-- [ ] Confirm build/flash/monitor works.
-- [ ] Create `README.md` skeleton.
+- [x] Create ESP-IDF project.
+- [x] Set target to ESP32-S3.
+- [x] Create component folders.
+- [x] Add project logging conventions.
+- [x] Confirm build/flash/monitor works.
+- [x] Create project and component documentation.
 
 ### Commands
 
@@ -253,9 +260,9 @@ idf.py flash monitor
 
 ### Done Criteria
 
-- [ ] Project builds successfully.
-- [ ] Firmware boots and prints project name/version.
-- [ ] Component structure is ready.
+- [x] Project builds successfully.
+- [x] Firmware boots and prints project name/version.
+- [x] Component structure is ready.
 
 ### Learning Topics
 
@@ -272,12 +279,12 @@ idf.py flash monitor
 
 ### Tasks
 
-- [ ] Bring up ST7735 LCD using SPI.
-- [ ] Add LVGL dependency.
-- [ ] Configure LVGL tick and handler.
-- [ ] Implement display flush callback.
-- [ ] Show basic screen with project title.
-- [ ] Update a counter label every second.
+- [x] Bring up ST7735 LCD using SPI.
+- [x] Add LVGL dependency.
+- [x] Configure LVGL tick and handler.
+- [x] Implement display flush callback.
+- [x] Show basic screen with project title.
+- [x] Update a counter label periodically during bring-up.
 
 ### Example UI
 
@@ -291,10 +298,10 @@ idf.py flash monitor
 
 ### Done Criteria
 
-- [ ] LCD shows correct colors.
-- [ ] Text is readable.
-- [ ] LVGL screen updates without crash.
-- [ ] No direct LVGL update from non-UI tasks.
+- [x] LCD shows correct colors.
+- [x] Text is readable.
+- [x] LVGL screen updates without crash.
+- [x] No direct LVGL update from non-UI tasks.
 
 ### Learning Topics
 
@@ -321,12 +328,12 @@ idf.py flash monitor
 
 ### Tasks
 
-- [ ] Implement `wifi_manager`.
-- [ ] Connect to Wi-Fi with hardcoded SSID/password.
-- [ ] Handle Wi-Fi events.
-- [ ] Display Wi-Fi state on LVGL screen.
-- [ ] Display IP address after connection.
-- [ ] Display RSSI if available.
+- [x] Implement `wifi_manager`.
+- [x] Connect to Wi-Fi with development SSID/password.
+- [x] Handle Wi-Fi and DHCP events.
+- [x] Display Wi-Fi state on the LVGL screen.
+- [x] Display the IP address after connection.
+- [ ] Display RSSI. Deferred; RSSI is transported but is not currently shown.
 
 ### Example UI
 
@@ -339,10 +346,10 @@ RSSI : -55 dBm
 
 ### Done Criteria
 
-- [ ] Wi-Fi connects reliably.
-- [ ] IP is printed in log.
-- [ ] IP is shown on LCD.
-- [ ] Disconnect event is detected.
+- [x] Wi-Fi connects reliably.
+- [x] IP is printed in log.
+- [x] IP is shown on LCD.
+- [x] Disconnect event is detected.
 
 ### Learning Topics
 
@@ -378,16 +385,13 @@ Sensor: OK
 
 - [x] Sensor data is read periodically.
 - [x] Invalid readings are handled gracefully.
-- [ ] UI updates without flicker or crash. Hardware acceptance pending.
+- [x] UI updates without flicker or crash.
 - [x] Sensor task does not call LVGL directly.
 
-### Hardware Acceptance Procedure
+### Hardware Acceptance Result
 
-1. Flash and monitor the current firmware on the target board.
-2. Observe the sensor screen for at least 60 seconds.
-3. Confirm temperature, humidity, and state update about every 2 seconds.
-4. Confirm there is no visible flicker, watchdog timeout, crash, or reboot.
-5. Mark the remaining criterion complete and change Sprint 3 to `Completed`.
+Sensor updates, stale/error handling, LVGL rendering, and task stability were
+accepted on the target hardware before Sprint 4 began.
 
 ### Learning Topics
 
@@ -404,39 +408,55 @@ Sensor: OK
 
 ### Tasks
 
-- [ ] Create Firebase Realtime Database project.
-- [ ] Define database path.
-- [ ] Implement `cloud_firebase` component.
-- [ ] Build JSON payload.
-- [ ] Send HTTPS request using `esp_http_client`.
-- [ ] Upload latest sensor value.
-- [ ] Display cloud sync status on LCD.
+- [x] Create Firebase Realtime Database project.
+- [x] Define the authenticated latest-value database path.
+- [x] Implement `firebase_auth` and `cloud_manager` components.
+- [x] Build a bounded JSON telemetry payload.
+- [x] Send authenticated HTTPS requests using `esp_http_client`.
+- [x] Upload the latest sensor snapshot.
+- [x] Display cloud sync/error status on the Sensor LCD screen.
 
 ### Suggested Firebase Paths
 
 ```text
-/smart_room_gateway/device_001/latest.json
-/smart_room_gateway/device_001/history/<date>/<sample_id>.json
+/devices/esp32s3-001/latest.json
 ```
+
+Historical storage remains outside Sprint 4; this phase intentionally owns
+only the latest-value path.
 
 ### Example Payload
 
 ```json
 {
-  "temperature": 28.4,
-  "humidity": 70.2,
-  "wifi_rssi": -55,
-  "uptime_sec": 3600,
-  "sync_status": "ok"
+  "temperature_c": 28.4,
+  "humidity_percent": 70.2,
+  "sensor_valid": true,
+  "sensor_stale": false,
+  "sensor_state": 3,
+  "last_error": 0,
+  "sample_uptime_ms": 3600000,
+  "source": "esp32_cloud_manager"
 }
 ```
 
 ### Done Criteria
 
-- [ ] ESP32 can upload one JSON object successfully.
-- [ ] Firebase shows latest data.
-- [ ] Upload failure is detected.
-- [ ] LCD shows `Cloud: Synced` or `Cloud: Error`.
+- [x] ESP32 uploads authenticated JSON successfully.
+- [x] Firebase shows the latest sensor data at the configured device path.
+- [x] Authentication, transport, and HTTP upload failures are detected.
+- [x] LCD shows the live Cloud state: `Wait`, `Sync`, `Online`, `Retry`,
+  `Auth`, or `Error`.
+
+### Hardware Acceptance Result
+
+Accepted on 2026-07-19:
+
+- [x] Firebase Email/Password authentication succeeds on the ESP32-S3.
+- [x] The ESP32-S3 receives a successful Firebase HTTPS response.
+- [x] Firebase data changes from firmware telemetry uploads.
+- [x] The LCD Cloud indicator follows upload and failure states.
+- [x] Failure/retry handling runs without a watchdog reset, crash, or reboot.
 
 ### Learning Topics
 
@@ -727,12 +747,12 @@ Use this section to track daily/weekly progress.
 
 | Sprint | Name | Status | Start Date | End Date | Notes |
 |---:|---|---|---|---|---|
-| 0 | Project setup | Not started |  |  |  |
-| 1 | LCD + LVGL bring-up | Not started |  |  |  |
-| 2 | Wi-Fi + LVGL status | Not started |  |  |  |
-| 3 | Sensor + UI update | Ready for acceptance |  |  | Build passes; LCD observation pending. |
-| 4 | Firebase upload | Not started |  |  |  |
-| 5 | NVS config storage | Not started |  |  |  |
+| 0 | Project setup | Done |  |  | Project structure and ESP-IDF workflow established. |
+| 1 | LCD + LVGL bring-up | Done |  |  | ST7735 and LVGL hardware-accepted. |
+| 2 | Wi-Fi + LVGL status | Done |  |  | Station events, DHCP status, and LCD UI accepted; RSSI display deferred. |
+| 3 | Sensor + UI update | Done |  |  | Sensor queue, stale/error behavior, and LCD updates hardware-accepted. |
+| 4 | Firebase upload | Done |  | 2026-07-19 | Hardware upload, Firebase data, failure handling, and LCD Cloud status accepted. |
+| 5 | NVS config storage | Not started |  |  | Next planned sprint. |
 | 6 | BLE provisioning | Not started |  |  |  |
 | 7 | Factory reset | Not started |  |  |  |
 | 8 | Reconnect + retry | Not started |  |  |  |

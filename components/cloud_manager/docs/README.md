@@ -153,6 +153,12 @@ test is `Test/TestFirebase_Auth.ps1`.
 Never store Firebase administrator credentials, service-account private keys,
 ID tokens, or refresh tokens in firmware or source control.
 
+## Phase 4 Acceptance
+
+Phase 4 was hardware-accepted on 2026-07-19. Authentication, authenticated
+telemetry upload, latest-data visibility in Firebase, LCD Cloud state updates,
+and failure/retry behavior were all verified on the ESP32-S3 target.
+
 ## Future Attention
 
 - Move device email/password out of shared source and into provisioning or
