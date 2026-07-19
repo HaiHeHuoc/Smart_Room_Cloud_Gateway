@@ -43,6 +43,21 @@ typedef enum
     CONFIG_MANAGER_DATA_TYPE_BLOB,
 } config_manager_data_type_t;
 
+typedef enum
+{
+    CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN = 0,
+
+    CONFIG_MANAGER_WIFI_CONFIG_STATE_NOT_CONFIGURED,
+
+    CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID,
+
+    CONFIG_MANAGER_WIFI_CONFIG_STATE_INCOMPLETE,
+
+    CONFIG_MANAGER_WIFI_CONFIG_STATE_UNSUPPORTED_VERSION,
+
+    CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA,
+} config_manager_wifi_config_state_t;
+
 /** @brief Wi-Fi credentials copied to or from the `device_cfg` namespace. */
 typedef struct
 {
@@ -173,6 +188,9 @@ esp_err_t config_manager_load_custom_data(
  */
 esp_err_t config_manager_clear_custom_data(
     const char *key);
+
+esp_err_t config_manager_get_wifi_config_state(
+    config_manager_wifi_config_state_t *state);
 
 #ifdef __cplusplus
 }

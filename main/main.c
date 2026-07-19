@@ -432,7 +432,31 @@ static esp_err_t network_platform_init(void)
         return ret;
     }
 
+    config_manager_wifi_config_t test_config = {
+        .ssid = WIFI_SSID,
+        .password = WIFI_PASSWORD,
+    };
+
     ESP_ERROR_CHECK(config_manager_init());
+    esp_err_t err = ESP_OK;
+    err = config_manager_clear_wifi();
+    if(err == ESP_OK)
+    {
+        ESP_LOGW(TAG,"Delete completed");
+    }
+
+    err = config_manager_save_wifi(&test_config);
+    err = config_manager_load_wifi(&test_config);
+
+    ESP_LOGW(
+        TAG,
+        "Load Wi-Fi config result: %s",
+        esp_err_to_name(err));
+    ESP_LOGW(
+        TAG,
+        "SSID: %s, password loaded: %s",
+        test_config.ssid,
+        test_config.password[0] != '\0' ? "yes" : "no");
 
     /*
      * Initialize ESP-NETIF and the underlying TCP/IP stack.
