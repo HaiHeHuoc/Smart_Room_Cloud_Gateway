@@ -45,8 +45,13 @@
 /* firebase auth ----------------------------------------------------------- */
 #include "firebase_auth.h"
 
+/* Config manager ---------------------------------------------------------- */
+#include "config_manager.h"
+
 /* Macros ------------------------------------------------------------------- */
 #define PERFORMANCE_MONITOR 0
+#define WIFI_SSID       "HaiHeHuoc888"
+#define WIFI_PASSWORD   "11233455"
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "MAIN_APP";
@@ -270,8 +275,8 @@ if (callback_ret != ESP_OK) {
  * Do not commit real credentials to a public repository.
  */
 const wifi_manager_sta_config_t station_config = {
-    .ssid = "HaiHeHuoc888",
-    .password = "11233455",
+    .ssid = WIFI_SSID,
+    .password = WIFI_PASSWORD,
 };
 
 esp_err_t connect_ret =
@@ -427,6 +432,19 @@ static esp_err_t network_platform_init(void)
         return ret;
     }
 
+    config_manager_wifi_config_t test_config;
+
+    memcpy(test_config.ssid, WIFI_SSID, sizeof(test_config.ssid));
+    memcpy(test_config.password, WIFI_PASSWORD, sizeof(test_config.password));
+
+    ESP_ERROR_CHECK(config_manager_init());
+
+    esp_err_t err = config_manager_save_wifi(&test_config);
+
+    ESP_LOGI(
+        TAG,
+        "Save Wi-Fi config result: %s",
+        esp_err_to_name(err));
     /*
      * Initialize ESP-NETIF and the underlying TCP/IP stack.
      *
