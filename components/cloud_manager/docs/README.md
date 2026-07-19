@@ -138,8 +138,17 @@ replaces it before the next attempt.
   must not perform LVGL operations; `main` forwards it through the GUI queue.
 - The authenticated URL can exceed ESP HTTP Client's default 512-byte TX
   buffer. The component explicitly sizes `buffer_size_tx` for the token URL.
-- ID-token and authenticated-URL buffers are static; the HTTP TX buffer exists
-  only for the lifetime of each HTTP client.
+- The cloud task reuses one HTTP client handle across successful uploads, as
+  recommended by ESP HTTP Client. This avoids a new TLS allocation/handshake
+  cycle every publish period and reduces long-running internal-heap churn.
+- ID-token, authenticated-URL, and request-payload buffers are static. The
+  payload must remain valid because ESP HTTP Client retains its pointer between
+  calls to `esp_http_client_perform()`.
+- A transport failure records socket/TLS diagnostics, fully cleans up the
+  current HTTP client, and lets the next backoff retry create a clean client.
+  HTTP responses such as 408/429/5xx retain the reusable client.
+- Losing the Wi-Fi IPv4-ready state also releases the client so a later
+  reconnect cannot inherit a stale TLS transport.
 - There is no stop/deinit API. Initialization and task start are one-shot.
 - Invalid/stale telemetry is not converted to JSON `null` and is not omitted;
   finite sentinel values are uploaded as supplied.
@@ -167,3 +176,12 @@ and failure/retry behavior were all verified on the ESP32-S3 target.
 - Decide whether invalid/stale temperature and humidity should remain numeric,
   become JSON `null`, or move into a separate last-known-good field.
 - Add stop/deinit only if runtime service shutdown becomes necessary.
+
+## Long-Running Recovery Test
+
+After changing HTTP/TLS lifecycle code, run the firmware for at least two
+hours, including the ID-token refresh window. Confirm periodic uploads continue
+and the LCD returns from `Cloud: Retry` to `Cloud: Online` after a temporary
+network failure. If a transport failure occurs, retain the complete
+`HTTP transport error` log containing `socket_errno`, `tls_error`, and
+`tls_flags` for diagnosis.
