@@ -7,7 +7,8 @@
       "intelliSenseMode": "gcc-x86",
       "includePath": [
         "C:\\esp\\v6.0.1\\esp-idf\\components\\**",
-        "${workspaceFolder}/**"
+        "${workspaceFolder}/main/**",
+        "${workspaceFolder}/components/**"
       ],
       "browse": {
         "path": [
