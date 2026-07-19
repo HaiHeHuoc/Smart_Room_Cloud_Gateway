@@ -40,17 +40,50 @@ static bool s_initialized = false;
 static bool s_initializing = false;
 
 /* Function Prototypes ------------------------------------------------------ */
+/**
+ * @brief Acquire the component mutex for one complete storage operation.
+ *
+ * @return ESP_OK when locked, ESP_ERR_INVALID_STATE before initialization, or
+ *         ESP_ERR_TIMEOUT when the mutex cannot be acquired in time.
+ */
 static esp_err_t config_manager_lock(void);
 
+/**
+ * @brief Release the component mutex after NVS handles have been closed.
+ */
 static void config_manager_unlock(void);
 
+/**
+ * @brief Overwrite a temporary buffer that may contain credentials.
+ *
+ * @param[in,out] buffer Non-NULL buffer to clear.
+ * @param[in] size Number of bytes to overwrite.
+ */
 static void config_manager_zeroize(
     void *buffer,
     size_t size);
 
+/**
+ * @brief Validate the public Wi-Fi configuration representation.
+ *
+ * @param[in] config Configuration to validate.
+ * @return ESP_OK when valid or ESP_ERR_INVALID_ARG when malformed.
+ */
 static esp_err_t config_manager_validate_wifi_config(
     const config_manager_wifi_config_t *config);
 
+/**
+ * @brief Read and classify Wi-Fi keys from an already-open NVS handle.
+ *
+ * This helper performs no locking, handle management, or commit. Type and
+ * length corruption are reported through @p state; storage access failures
+ * are returned directly.
+ *
+ * @param[in] handle Open read-only or read-write `device_cfg` handle.
+ * @param[out] snapshot Cleared credential snapshot populated from NVS.
+ * @param[out] state Semantic integrity state for the stored configuration.
+ * @return ESP_OK when classification completed, or an NVS access error.
+ */
 static esp_err_t config_manager_inspect_wifi_config(
     nvs_handle_t handle,
     config_manager_wifi_config_t *snapshot,
@@ -62,140 +95,127 @@ static esp_err_t config_manager_inspect_wifi_config(
     config_manager_wifi_config_t *snapshot,
     config_manager_wifi_config_state_t *state)
 {
-bool version_present = false;
-bool ssid_present = false;
-bool password_present = false;
+    bool version_present = false;
+    bool ssid_present = false;
+    bool password_present = false;
 
-memset(snapshot, 0, sizeof(*snapshot));
-*state = CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN;
+    memset(snapshot, 0, sizeof(*snapshot));
+    *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN;
 
-uint32_t stored_version = 0U;
+    uint32_t stored_version = 0U;
 
-esp_err_t err = nvs_get_u32(
-    handle,
-    CONFIG_MANAGER_NVS_KEY_VERSION,
-    &stored_version);
+    esp_err_t err = nvs_get_u32(
+        handle,
+        CONFIG_MANAGER_NVS_KEY_VERSION,
+        &stored_version);
 
-if (err == ESP_OK)
-{
-    version_present = true;
-}
-else if (err == ESP_ERR_NVS_NOT_FOUND)
-{
-    /* Version key không tồn tại. */
-}
-else if (err == ESP_ERR_NVS_TYPE_MISMATCH)
-{
-    *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA;
-    return ESP_OK;
-}
-else
-{
-    return err;
-}
+    if (err == ESP_OK)
+    {
+        version_present = true;
+    }
+    else if (err == ESP_ERR_NVS_NOT_FOUND)
+    {
+        /* Continue so all required keys can be classified together. */
+    }
+    else if (err == ESP_ERR_NVS_TYPE_MISMATCH)
+    {
+        *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA;
+        return ESP_OK;
+    }
+    else
+    {
+        return err;
+    }
 
-size_t ssid_size = sizeof(snapshot->ssid);
+    size_t ssid_size = sizeof(snapshot->ssid);
 
-err = nvs_get_str(
-    handle,
-    CONFIG_MANAGER_NVS_KEY_WIFI_SSID,
-    snapshot->ssid,
-    &ssid_size);
+    err = nvs_get_str(
+        handle,
+        CONFIG_MANAGER_NVS_KEY_WIFI_SSID,
+        snapshot->ssid,
+        &ssid_size);
 
-if (err == ESP_OK)
-{
-    ssid_present = true;
-}
-else if (err == ESP_ERR_NVS_NOT_FOUND)
-{
-    /* The SSID key is not stored. */
-}
-else if (err == ESP_ERR_NVS_TYPE_MISMATCH ||
-         err == ESP_ERR_NVS_INVALID_LENGTH)
-{
-    *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA;
-    return ESP_OK;
-}
-else
-{
-    return err;
-}
+    if (err == ESP_OK)
+    {
+        ssid_present = true;
+    }
+    else if (err == ESP_ERR_NVS_NOT_FOUND)
+    {
+        /* Continue so all required keys can be classified together. */
+    }
+    else if (err == ESP_ERR_NVS_TYPE_MISMATCH ||
+             err == ESP_ERR_NVS_INVALID_LENGTH)
+    {
+        *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA;
+        return ESP_OK;
+    }
+    else
+    {
+        return err;
+    }
 
-size_t password_size = sizeof(snapshot->password);
+    size_t password_size = sizeof(snapshot->password);
 
-err = nvs_get_str(
-    handle,
-    CONFIG_MANAGER_NVS_KEY_WIFI_PASS,
-    snapshot->password,
-    &password_size);
+    err = nvs_get_str(
+        handle,
+        CONFIG_MANAGER_NVS_KEY_WIFI_PASS,
+        snapshot->password,
+        &password_size);
 
-if (err == ESP_OK)
-{
-    password_present = true;
-}
-else if (err == ESP_ERR_NVS_NOT_FOUND)
-{
-    /* Password key không tồn tại. */
-}
-else if (err == ESP_ERR_NVS_TYPE_MISMATCH ||
-         err == ESP_ERR_NVS_INVALID_LENGTH)
-{
-    *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA;
-    return ESP_OK;
-}
-else
-{
-    return err;
-}
+    if (err == ESP_OK)
+    {
+        password_present = true;
+    }
+    else if (err == ESP_ERR_NVS_NOT_FOUND)
+    {
+        /* Continue so all required keys can be classified together. */
+    }
+    else if (err == ESP_ERR_NVS_TYPE_MISMATCH ||
+             err == ESP_ERR_NVS_INVALID_LENGTH)
+    {
+        *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA;
+        return ESP_OK;
+    }
+    else
+    {
+        return err;
+    }
 
-const bool any_key_present =
-    version_present ||
-    ssid_present ||
-    password_present;
+    const bool any_credential_present =
+        ssid_present ||
+        password_present;
 
-const bool all_keys_present =
-    version_present &&
-    ssid_present &&
-    password_present;
+    if (!any_credential_present)
+    {
+        *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_NOT_CONFIGURED;
+        return ESP_OK;
+    }
 
-if (!any_key_present)
-{
-    *state =
-        CONFIG_MANAGER_WIFI_CONFIG_STATE_NOT_CONFIGURED;
+    if (!version_present ||
+        !ssid_present ||
+        !password_present)
+    {
+        *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_INCOMPLETE;
+        return ESP_OK;
+    }
 
-    return ESP_OK;
-}
+    if (stored_version != CONFIG_MANAGER_CURRENT_VERSION)
+    {
+        *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_UNSUPPORTED_VERSION;
+        return ESP_OK;
+    }
 
-if (!all_keys_present)
-{
-    *state =
-        CONFIG_MANAGER_WIFI_CONFIG_STATE_INCOMPLETE;
+    err = config_manager_validate_wifi_config(snapshot);
 
-    return ESP_OK;
-}
+    if (err != ESP_OK)
+    {
+        *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA;
+        return ESP_OK;
+    }
 
-if (stored_version != CONFIG_MANAGER_CURRENT_VERSION)
-{
-    *state =
-        CONFIG_MANAGER_WIFI_CONFIG_STATE_UNSUPPORTED_VERSION;
-
-    return ESP_OK;
-}
-
-err = config_manager_validate_wifi_config(snapshot);
-
-if (err != ESP_OK)
-{
-    *state =
-        CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA;
+    *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID;
 
     return ESP_OK;
-}
-
-*state = CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID;
-
-return ESP_OK;
-
 }
 
 static esp_err_t config_manager_validate_wifi_config(
@@ -316,7 +336,7 @@ esp_err_t config_manager_init(void)
     if (s_initialized)
     {
         taskEXIT_CRITICAL(&s_init_lock);
-        ESP_LOGW(TAG, "Config manager is initialized");
+        ESP_LOGD(TAG, "Config manager is already initialized");
         return ESP_OK;
     }
 
@@ -593,7 +613,9 @@ cleanup:
     /*
      * Remove the local credential copy.
      */
-    memset(&snapshot, 0, sizeof(snapshot));
+    config_manager_zeroize(
+        &snapshot,
+        sizeof(snapshot));
 
     /*
      * Never return partial or stale credentials on failure.
@@ -1647,10 +1669,7 @@ esp_err_t config_manager_get_wifi_config_state(
 
     if (err == ESP_ERR_NVS_NOT_FOUND)
     {
-        /*
-         * Namespace chưa tồn tại.
-         * Đây là trạng thái chưa cấu hình, không phải storage failure.
-         */
+        /* A missing namespace means Wi-Fi has not been configured. */
         *state =
             CONFIG_MANAGER_WIFI_CONFIG_STATE_NOT_CONFIGURED;
 
@@ -1682,7 +1701,9 @@ cleanup:
         config_manager_unlock();
     }
 
-    memset(&snapshot, 0, sizeof(snapshot));
+    config_manager_zeroize(
+        &snapshot,
+        sizeof(snapshot));
 
     if (err != ESP_OK)
     {
