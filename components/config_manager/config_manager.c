@@ -51,7 +51,153 @@ static void config_manager_zeroize(
 static esp_err_t config_manager_validate_wifi_config(
     const config_manager_wifi_config_t *config);
 
+static esp_err_t config_manager_inspect_wifi_config(
+    nvs_handle_t handle,
+    config_manager_wifi_config_t *snapshot,
+    config_manager_wifi_config_state_t *state);
+
 /* Static Functions --------------------------------------------------------- */
+static esp_err_t config_manager_inspect_wifi_config(
+    nvs_handle_t handle,
+    config_manager_wifi_config_t *snapshot,
+    config_manager_wifi_config_state_t *state)
+{
+bool version_present = false;
+bool ssid_present = false;
+bool password_present = false;
+
+memset(snapshot, 0, sizeof(*snapshot));
+*state = CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN;
+
+uint32_t stored_version = 0U;
+
+esp_err_t err = nvs_get_u32(
+    handle,
+    CONFIG_MANAGER_NVS_KEY_VERSION,
+    &stored_version);
+
+if (err == ESP_OK)
+{
+    version_present = true;
+}
+else if (err == ESP_ERR_NVS_NOT_FOUND)
+{
+    /* Version key không tồn tại. */
+}
+else if (err == ESP_ERR_NVS_TYPE_MISMATCH)
+{
+    *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA;
+    return ESP_OK;
+}
+else
+{
+    return err;
+}
+
+size_t ssid_size = sizeof(snapshot->ssid);
+
+err = nvs_get_str(
+    handle,
+    CONFIG_MANAGER_NVS_KEY_WIFI_SSID,
+    snapshot->ssid,
+    &ssid_size);
+
+if (err == ESP_OK)
+{
+    ssid_present = true;
+}
+else if (err == ESP_ERR_NVS_NOT_FOUND)
+{
+    /* The SSID key is not stored. */
+}
+else if (err == ESP_ERR_NVS_TYPE_MISMATCH ||
+         err == ESP_ERR_NVS_INVALID_LENGTH)
+{
+    *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA;
+    return ESP_OK;
+}
+else
+{
+    return err;
+}
+
+size_t password_size = sizeof(snapshot->password);
+
+err = nvs_get_str(
+    handle,
+    CONFIG_MANAGER_NVS_KEY_WIFI_PASS,
+    snapshot->password,
+    &password_size);
+
+if (err == ESP_OK)
+{
+    password_present = true;
+}
+else if (err == ESP_ERR_NVS_NOT_FOUND)
+{
+    /* Password key không tồn tại. */
+}
+else if (err == ESP_ERR_NVS_TYPE_MISMATCH ||
+         err == ESP_ERR_NVS_INVALID_LENGTH)
+{
+    *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA;
+    return ESP_OK;
+}
+else
+{
+    return err;
+}
+
+const bool any_key_present =
+    version_present ||
+    ssid_present ||
+    password_present;
+
+const bool all_keys_present =
+    version_present &&
+    ssid_present &&
+    password_present;
+
+if (!any_key_present)
+{
+    *state =
+        CONFIG_MANAGER_WIFI_CONFIG_STATE_NOT_CONFIGURED;
+
+    return ESP_OK;
+}
+
+if (!all_keys_present)
+{
+    *state =
+        CONFIG_MANAGER_WIFI_CONFIG_STATE_INCOMPLETE;
+
+    return ESP_OK;
+}
+
+if (stored_version != CONFIG_MANAGER_CURRENT_VERSION)
+{
+    *state =
+        CONFIG_MANAGER_WIFI_CONFIG_STATE_UNSUPPORTED_VERSION;
+
+    return ESP_OK;
+}
+
+err = config_manager_validate_wifi_config(snapshot);
+
+if (err != ESP_OK)
+{
+    *state =
+        CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA;
+
+    return ESP_OK;
+}
+
+*state = CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID;
+
+return ESP_OK;
+
+}
+
 static esp_err_t config_manager_validate_wifi_config(
     const config_manager_wifi_config_t *config)
 {
@@ -319,15 +465,13 @@ cleanup:
 
     return err;
 }
-
 esp_err_t config_manager_load_wifi(
     config_manager_wifi_config_t *config)
 {
-    ESP_RETURN_ON_FALSE(
-        config != NULL,
-        ESP_ERR_INVALID_ARG,
-        TAG,
-        "Invalid argument");
+    if (config == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
 
     memset(config, 0, sizeof(*config));
 
@@ -335,13 +479,17 @@ esp_err_t config_manager_load_wifi(
 
     config_manager_wifi_config_t snapshot = {0};
 
+    config_manager_wifi_config_state_t state =
+        CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN;
+
     nvs_handle_t handle = 0;
 
     bool mutex_locked = false;
     bool handle_opened = false;
 
-    uint32_t stored_version = 0U;
-
+    /*
+     * Protect the complete read transaction.
+     */
     err = config_manager_lock();
 
     if (err != ESP_OK)
@@ -351,10 +499,23 @@ esp_err_t config_manager_load_wifi(
 
     mutex_locked = true;
 
+    /*
+     * Open the Wi-Fi/device configuration namespace.
+     */
     err = nvs_open(
         CONFIG_MANAGER_NVS_NAMESPACE,
         NVS_READONLY,
         &handle);
+
+    if (err == ESP_ERR_NVS_NOT_FOUND)
+    {
+        /*
+         * Namespace does not exist yet:
+         * Wi-Fi configuration has never been saved.
+         */
+        err = ESP_ERR_NVS_NOT_FOUND;
+        goto cleanup;
+    }
 
     if (err != ESP_OK)
     {
@@ -363,59 +524,59 @@ esp_err_t config_manager_load_wifi(
 
     handle_opened = true;
 
-    err = nvs_get_u32(
+    /*
+     * Read and classify the Wi-Fi configuration.
+     *
+     * This helper does not lock or open/close NVS.
+     */
+    err = config_manager_inspect_wifi_config(
         handle,
-        CONFIG_MANAGER_NVS_KEY_VERSION,
-        &stored_version);
-
-    if (err != ESP_OK)
-    {
-        goto cleanup;
-    }
-
-    if (stored_version != CONFIG_MANAGER_CURRENT_VERSION)
-    {
-        err = ESP_ERR_NOT_SUPPORTED;
-        goto cleanup;
-    }
-
-    size_t ssid_size = sizeof(snapshot.ssid);
-
-    err = nvs_get_str(
-        handle,
-        CONFIG_MANAGER_NVS_KEY_WIFI_SSID,
-        snapshot.ssid,
-        &ssid_size);
-
-    if (err != ESP_OK)
-    {
-        goto cleanup;
-    }
-
-    size_t password_size = sizeof(snapshot.password);
-
-    err = nvs_get_str(
-        handle,
-        CONFIG_MANAGER_NVS_KEY_WIFI_PASS,
-        snapshot.password,
-        &password_size);
-
-    if (err != ESP_OK)
-    {
-        goto cleanup;
-    }
-
-    err = config_manager_validate_wifi_config(&snapshot);
-
-    if (err != ESP_OK)
-    {
-        goto cleanup;
-    }
-
-    memcpy(
-        config,
         &snapshot,
-        sizeof(*config));
+        &state);
+
+    if (err != ESP_OK)
+    {
+        /*
+         * Actual storage/access failure.
+         */
+        goto cleanup;
+    }
+
+    /*
+     * Convert the semantic state into the public load result.
+     */
+    switch (state)
+    {
+        case CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID:
+            memcpy(
+                config,
+                &snapshot,
+                sizeof(*config));
+
+            err = ESP_OK;
+            break;
+
+        case CONFIG_MANAGER_WIFI_CONFIG_STATE_NOT_CONFIGURED:
+            err = ESP_ERR_NVS_NOT_FOUND;
+            break;
+
+        case CONFIG_MANAGER_WIFI_CONFIG_STATE_INCOMPLETE:
+            err = ESP_ERR_INVALID_STATE;
+            break;
+
+        case CONFIG_MANAGER_WIFI_CONFIG_STATE_UNSUPPORTED_VERSION:
+            err = ESP_ERR_NOT_SUPPORTED;
+            break;
+
+        case CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA:
+            err = ESP_ERR_INVALID_RESPONSE;
+            break;
+
+        case CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN:
+        default:
+            err = ESP_ERR_INVALID_STATE;
+            break;
+    }
 
 cleanup:
 
@@ -429,13 +590,34 @@ cleanup:
         config_manager_unlock();
     }
 
-    config_manager_zeroize(
-        &snapshot,
-        sizeof(snapshot));
+    /*
+     * Remove the local credential copy.
+     */
+    memset(&snapshot, 0, sizeof(snapshot));
 
+    /*
+     * Never return partial or stale credentials on failure.
+     */
     if (err != ESP_OK)
     {
         memset(config, 0, sizeof(*config));
+    }
+
+    if (err == ESP_OK)
+    {
+        ESP_LOGD(TAG, "Wi-Fi configuration loaded");
+    }
+    else if (err == ESP_ERR_NVS_NOT_FOUND)
+    {
+        ESP_LOGD(TAG, "Wi-Fi configuration is not stored");
+    }
+    else
+    {
+        ESP_LOGW(
+            TAG,
+            "Failed to load Wi-Fi configuration: state=%d, error=%s",
+            (int)state,
+            esp_err_to_name(err));
     }
 
     return err;
@@ -522,6 +704,25 @@ cleanup:
         config_manager_unlock();
     }
 
+    if (err == ESP_OK)
+    {
+        if (config_changed)
+        {
+            ESP_LOGI(TAG, "Wi-Fi configuration cleared");
+        }
+        else
+        {
+            ESP_LOGD(TAG, "Wi-Fi configuration was already clear");
+        }
+    }
+    else
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to clear Wi-Fi configuration: %s",
+            esp_err_to_name(err));
+    }
+
     return err;
 }
 
@@ -551,6 +752,21 @@ esp_err_t config_manager_has_wifi_config(
     config_manager_zeroize(
         &config,
         sizeof(config));
+
+    if (err == ESP_OK)
+    {
+        ESP_LOGD(
+            TAG,
+            "Wi-Fi configuration presence checked: present=%s",
+            *has_config ? "true" : "false");
+    }
+    else
+    {
+        ESP_LOGW(
+            TAG,
+            "Failed to check Wi-Fi configuration presence: %s",
+            esp_err_to_name(err));
+    }
 
     return err;
 }
@@ -892,6 +1108,32 @@ cleanup:
     if (mutex_locked)
     {
         config_manager_unlock();
+    }
+
+    if (err == ESP_OK)
+    {
+        ESP_LOGD(
+            TAG,
+            "Custom configuration loaded: key=%s, type=%d, size=%u",
+            key,
+            (int)type,
+            (unsigned int)*inout_size);
+    }
+    else if (err == ESP_ERR_NVS_NOT_FOUND)
+    {
+        ESP_LOGD(
+            TAG,
+            "Custom configuration is not stored: key=%s",
+            key);
+    }
+    else
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to load custom configuration: key=%s, type=%d, error=%s",
+            key,
+            (int)type,
+            esp_err_to_name(err));
     }
 
     return err;
@@ -1366,6 +1608,98 @@ cleanup:
             "Failed to clear custom configuration: key=%s, error=%s",
             key,
             esp_err_to_name(err));
+    }
+
+    return err;
+}
+
+esp_err_t config_manager_get_wifi_config_state(
+    config_manager_wifi_config_state_t *state)
+{
+    if (state == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN;
+
+    esp_err_t err = ESP_OK;
+
+    config_manager_wifi_config_t snapshot = {0};
+
+    nvs_handle_t handle = 0;
+    bool mutex_locked = false;
+    bool handle_opened = false;
+
+    err = config_manager_lock();
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    mutex_locked = true;
+
+    err = nvs_open(
+        CONFIG_MANAGER_NVS_NAMESPACE,
+        NVS_READONLY,
+        &handle);
+
+    if (err == ESP_ERR_NVS_NOT_FOUND)
+    {
+        /*
+         * Namespace chưa tồn tại.
+         * Đây là trạng thái chưa cấu hình, không phải storage failure.
+         */
+        *state =
+            CONFIG_MANAGER_WIFI_CONFIG_STATE_NOT_CONFIGURED;
+
+        err = ESP_OK;
+        goto cleanup;
+    }
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    handle_opened = true;
+
+    err = config_manager_inspect_wifi_config(
+        handle,
+        &snapshot,
+        state);
+
+cleanup:
+
+    if (handle_opened)
+    {
+        nvs_close(handle);
+    }
+
+    if (mutex_locked)
+    {
+        config_manager_unlock();
+    }
+
+    memset(&snapshot, 0, sizeof(snapshot));
+
+    if (err != ESP_OK)
+    {
+        *state =
+            CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN;
+
+        ESP_LOGE(
+            TAG,
+            "Failed to inspect Wi-Fi configuration state: %s",
+            esp_err_to_name(err));
+    }
+    else
+    {
+        ESP_LOGD(
+            TAG,
+            "Wi-Fi configuration state inspected: state=%d",
+            (int)*state);
     }
 
     return err;
