@@ -8,12 +8,17 @@
 #include "esp_err.h"
 
 /* Macros ------------------------------------------------------------------- */
+/** Maximum Wi-Fi SSID length, excluding the null terminator. */
 #define CONFIG_MANAGER_WIFI_SSID_MAX_LEN       32U
+
+/** Maximum Wi-Fi password length, excluding the null terminator. */
 #define CONFIG_MANAGER_WIFI_PASSWORD_MAX_LEN   63U
 
+/** Buffer size required for a maximum-length null-terminated SSID. */
 #define CONFIG_MANAGER_WIFI_SSID_BUFFER_SIZE \
     (CONFIG_MANAGER_WIFI_SSID_MAX_LEN + 1U)
 
+/** Buffer size required for a maximum-length null-terminated password. */
 #define CONFIG_MANAGER_WIFI_PASSWORD_BUFFER_SIZE \
     (CONFIG_MANAGER_WIFI_PASSWORD_MAX_LEN + 1U)
 
@@ -31,30 +36,37 @@ extern "C" {
 /** @brief NVS value types supported by the generic custom-data APIs. */
 typedef enum
 {
-    CONFIG_MANAGER_DATA_TYPE_U8 = 0,
-    CONFIG_MANAGER_DATA_TYPE_I8,
-    CONFIG_MANAGER_DATA_TYPE_U16,
-    CONFIG_MANAGER_DATA_TYPE_I16,
-    CONFIG_MANAGER_DATA_TYPE_U32,
-    CONFIG_MANAGER_DATA_TYPE_I32,
-    CONFIG_MANAGER_DATA_TYPE_U64,
-    CONFIG_MANAGER_DATA_TYPE_I64,
-    CONFIG_MANAGER_DATA_TYPE_STRING,
-    CONFIG_MANAGER_DATA_TYPE_BLOB,
+    CONFIG_MANAGER_DATA_TYPE_U8 = 0, /**< Unsigned 8-bit integer. */
+    CONFIG_MANAGER_DATA_TYPE_I8,     /**< Signed 8-bit integer. */
+    CONFIG_MANAGER_DATA_TYPE_U16,    /**< Unsigned 16-bit integer. */
+    CONFIG_MANAGER_DATA_TYPE_I16,    /**< Signed 16-bit integer. */
+    CONFIG_MANAGER_DATA_TYPE_U32,    /**< Unsigned 32-bit integer. */
+    CONFIG_MANAGER_DATA_TYPE_I32,    /**< Signed 32-bit integer. */
+    CONFIG_MANAGER_DATA_TYPE_U64,    /**< Unsigned 64-bit integer. */
+    CONFIG_MANAGER_DATA_TYPE_I64,    /**< Signed 64-bit integer. */
+    CONFIG_MANAGER_DATA_TYPE_STRING, /**< Null-terminated string. */
+    CONFIG_MANAGER_DATA_TYPE_BLOB,   /**< Opaque byte sequence. */
 } config_manager_data_type_t;
 
+/** @brief Integrity states reported for the stored Wi-Fi configuration. */
 typedef enum
 {
+    /** State is unavailable because inspection has not completed or failed. */
     CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN = 0,
 
+    /** Neither Wi-Fi credential key is stored; `cfg_ver` may remain. */
     CONFIG_MANAGER_WIFI_CONFIG_STATE_NOT_CONFIGURED,
 
+    /** Version, SSID, and password are present, supported, and valid. */
     CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID,
 
+    /** At least one credential exists, but another required key is missing. */
     CONFIG_MANAGER_WIFI_CONFIG_STATE_INCOMPLETE,
 
+    /** All required keys exist, but `cfg_ver` is not supported. */
     CONFIG_MANAGER_WIFI_CONFIG_STATE_UNSUPPORTED_VERSION,
 
+    /** A required key has the wrong type, length, or semantic value. */
     CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA,
 } config_manager_wifi_config_state_t;
 
@@ -105,9 +117,11 @@ esp_err_t config_manager_save_wifi(
  *
  * @param[out] config Destination for the copied credentials.
  * @return ESP_OK on success, ESP_ERR_NVS_NOT_FOUND for missing data,
- *         ESP_ERR_NOT_SUPPORTED for an incompatible version,
- *         ESP_ERR_INVALID_ARG when config is NULL, ESP_ERR_INVALID_STATE
- *         before initialization, ESP_ERR_TIMEOUT, or another NVS error.
+ *         ESP_ERR_INVALID_STATE for incomplete data or use before
+ *         initialization, ESP_ERR_NOT_SUPPORTED for an incompatible version,
+ *         ESP_ERR_INVALID_RESPONSE for invalid stored data,
+ *         ESP_ERR_INVALID_ARG when config is NULL, ESP_ERR_TIMEOUT, or another
+ *         NVS error.
  */
 esp_err_t config_manager_load_wifi(
     config_manager_wifi_config_t *config);
@@ -122,6 +136,22 @@ esp_err_t config_manager_load_wifi(
  *         before initialization, ESP_ERR_TIMEOUT, or an NVS error.
  */
 esp_err_t config_manager_clear_wifi(void);
+
+/**
+ * @brief Inspect stored Wi-Fi keys without returning credential contents.
+ *
+ * Semantic integrity problems are returned through @p state while the
+ * function itself returns ESP_OK. Storage, synchronization, and lifecycle
+ * failures return an error and leave @p state as
+ * CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN.
+ *
+ * @param[out] state Destination for the classified Wi-Fi configuration state.
+ * @return ESP_OK when inspection completes, ESP_ERR_INVALID_ARG when state is
+ *         NULL, ESP_ERR_INVALID_STATE before initialization, ESP_ERR_TIMEOUT,
+ *         or an NVS access error.
+ */
+esp_err_t config_manager_get_wifi_config_state(
+    config_manager_wifi_config_state_t *state);
 
 /**
  * @brief Check whether a complete, valid Wi-Fi configuration can be loaded.
@@ -188,9 +218,6 @@ esp_err_t config_manager_load_custom_data(
  */
 esp_err_t config_manager_clear_custom_data(
     const char *key);
-
-esp_err_t config_manager_get_wifi_config_state(
-    config_manager_wifi_config_state_t *state);
 
 #ifdef __cplusplus
 }
