@@ -2,9 +2,11 @@
 
 ## Status
 
-Implementation review and build verification are complete for the component
-scope described here. Hardware corruption and reboot-persistence tests remain
-required before treating the wider Phase 5 as complete.
+The Phase 5.3B implementation and fault-injection harness are complete. The
+first ESP32-S3 run executed all 14 Unity tests: 13 passed and the wrong-type
+SSID test exposed an integrity-classification defect. The defect is fixed and
+both firmware targets build with ESP-IDF v6.0.1, but a hardware rerun is still
+required before this phase is fully verified.
 
 ## Objective
 
@@ -98,6 +100,12 @@ The private inspection helper converts these cases to `INVALID_DATA`. Other NVS
 errors are preserved so callers can distinguish storage failure from corrupt
 configuration.
 
+In ESP-IDF v6.0.1, a typed getter such as `nvs_get_str()` can return
+`ESP_ERR_NVS_NOT_FOUND` when a key exists under a different NVS type. The
+inspection path first calls `nvs_find_key()` for each required key and verifies
+the actual type before using the typed getter. This distinguishes a genuinely
+missing key from wrong-type stored data.
+
 ## Resource and Concurrency Invariants
 
 For load and state inspection:
@@ -145,23 +153,94 @@ released.
 - Load and state-inspection snapshots use explicit zeroization before return.
 - Public enum values and state/error mappings now have Doxygen documentation.
 - The component README now includes the Phase 5.3B API and state model.
+- A standalone Unity test app now injects malformed NVS states without adding
+  a production fault-injection API.
+- Required key types are inspected explicitly so a wrong-type SSID, password,
+  or version cannot be mistaken for a missing key.
+
+## Fault-Injection Test App
+
+Location:
+
+```text
+Test/config_manager_phase_5_3b/
+```
+
+The app uses the production `config_manager` component through
+`EXTRA_COMPONENT_DIRS`. Its raw NVS helpers are private to the test binary and
+run sequentially while no component operation is active. The production
+header and component CMake file contain no test hook.
+
+The test app performs these steps:
+
+1. Erase and initialize the default NVS partition.
+2. Verify operation errors before `config_manager_init()`.
+3. Initialize the component once.
+4. Run public-API and raw-NVS fault-injection tests with Unity.
+5. Clear the three Wi-Fi keys in `setUp()`, `tearDown()`, and final cleanup.
+6. Leave the Wi-Fi state as `NOT_CONFIGURED`.
+
+The firmware is intentionally destructive because it erases default NVS on
+every boot. Use a test device or back up any configuration that must be kept.
+
+Build and run:
+
+```powershell
+cd Test/config_manager_phase_5_3b
+idf.py -B build -DIDF_TARGET=esp32s3 build
+idf.py -B build -p <PORT> flash monitor
+```
+
+Tests execute automatically. Each test logs expected and actual state/result,
+then Unity reports PASS or FAIL. Password contents are not logged.
+
+Expected final evidence for a successful board run:
+
+```text
+14 Tests 0 Failures 0 Ignored
+Final cleanup: clear=ESP_OK, state_result=ESP_OK, state=NOT_CONFIGURED
+Phase 5.3B test run complete: failures=0
+```
+
+## Verification Performed
+
+Completed in the current development environment:
+
+- Reviewed state classification and the shared inspection helper.
+- Reviewed output clearing, credential snapshot zeroization, handle lifecycle,
+  mutex symmetry, commit rules, and secret-free logging.
+- Compiled and linked the production ESP32-S3 firmware.
+- Compiled and linked the standalone ESP32-S3 Unity test firmware.
+- Confirmed no test code is included by the production project CMake graph.
+- Reviewed the first hardware run supplied by the tester: 14 tests executed,
+  13 passed, and wrong-type SSID classification failed before the fix.
+
+Not executed in the current environment:
+
+- Hardware rerun of the corrected wrong-type classification.
+- Reboot-persistence tests.
+- Concurrent-operation or mutex-timeout stress tests.
 
 ## Acceptance Matrix
 
 | Scenario | Expected result | Verification status |
 | --- | --- | --- |
-| Clean NVS | State `NOT_CONFIGURED`; load `ESP_ERR_NVS_NOT_FOUND` | Build-reviewed; hardware pending |
-| Save valid open network | State `VALID`; load `ESP_OK` | Hardware pending |
-| Save valid secured network | State `VALID`; load `ESP_OK` | Hardware pending |
-| Clear after save | State `NOT_CONFIGURED`; `has=false` | Hardware pending |
-| SSID key only | State `INCOMPLETE` | Hardware corruption test pending |
-| Password key only | State `INCOMPLETE` | Hardware corruption test pending |
-| Missing version with credentials | State `INCOMPLETE` | Hardware corruption test pending |
-| Unsupported version | State `UNSUPPORTED_VERSION` | Hardware corruption test pending |
-| Wrong key type | State `INVALID_DATA` | Hardware corruption test pending |
-| Oversized stored string | State `INVALID_DATA` | Hardware corruption test pending |
-| Concurrent operations | Serialized or `ESP_ERR_TIMEOUT` | Stress test pending |
-| Full project compile/link | No new compiler error | Completed |
+| Operation before init | Error; state `UNKNOWN`; load output empty | Passed on first hardware run |
+| Missing namespace | State `NOT_CONFIGURED`; load `ESP_ERR_NVS_NOT_FOUND` | Passed on first hardware run |
+| Save valid open network | State `VALID`; load `ESP_OK` | Passed on first hardware run |
+| Save valid secured network | State `VALID`; load `ESP_OK` | Passed on first hardware run |
+| Clear after save, version retained | State `NOT_CONFIGURED`; load output empty | Passed on first hardware run |
+| Version and SSID only | State `INCOMPLETE` | Passed on first hardware run |
+| Password only | State `INCOMPLETE` | Passed on first hardware run |
+| SSID and password without version | State `INCOMPLETE` | Passed on first hardware run |
+| Unsupported version | State remains `UNSUPPORTED_VERSION`; data not erased | Passed on first hardware run |
+| SSID stored as `u32` | State `INVALID_DATA`; load output empty | Failed before fix; corrected build pending rerun |
+| Oversized stored SSID | State `INVALID_DATA`; load output empty | Passed on first hardware run |
+| Empty stored SSID | State `INVALID_DATA`; load output empty | Passed on first hardware run |
+| Stored password length 1-7 | State `INVALID_DATA`; load output empty | Passed on first hardware run |
+| Production firmware compile/link | No compiler or linker error | Completed |
+| Test firmware compile/link | No compiler or linker error | Completed |
+| Concurrent operations | Serialized or `ESP_ERR_TIMEOUT` | Not implemented; deferred stress test |
 
 ## Explicit Non-Goals
 

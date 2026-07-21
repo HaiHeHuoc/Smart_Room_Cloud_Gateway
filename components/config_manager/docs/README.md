@@ -111,6 +111,11 @@ Custom APIs never read or write the `device_cfg` namespace.
 semantic classification. It returns a non-OK error only when inspection itself
 cannot complete, and then leaves the state as `UNKNOWN`.
 
+ESP-IDF typed getters can report a wrong-type key as `ESP_ERR_NVS_NOT_FOUND`.
+The integrity inspection therefore uses `nvs_find_key()` to verify each
+required key's stored type before reading its value. This keeps a malformed key
+in `INVALID_DATA` instead of misclassifying it as a missing key.
+
 `config_manager_load_wifi()` maps semantic states to load results:
 
 | State | Load result |
@@ -180,6 +185,45 @@ Idempotent erase operations skip commit when no key changed.
 - Do not store administrator secrets, private keys, or long-lived cloud tokens
   through the custom-data API.
 
+## Phase 5.3B Test Harness
+
+The destructive hardware test app is isolated from the production build at:
+
+```text
+Test/config_manager_phase_5_3b/
+```
+
+It links the production `config_manager` component without adding fault-
+injection APIs to the public header. Raw NVS writes exist only in the test
+binary and cover valid, missing, incomplete, wrong-type, oversized,
+unsupported-version, and semantically invalid configurations.
+
+The test image erases the default NVS partition when it boots. Do not flash it
+to a device whose stored configuration must be preserved.
+
+Build and run it from the test-app directory:
+
+```powershell
+idf.py -B build -DIDF_TARGET=esp32s3 build
+idf.py -B build -p <PORT> flash monitor
+```
+
+The tests run automatically after boot. A successful hardware run ends with a
+Unity summary containing `14 Tests 0 Failures` and a final cleanup state of
+`NOT_CONFIGURED`. Password contents are never printed; valid-load checks report
+only `password_match=YES` or `password_match=NO`.
+
+Current verification status:
+
+- Production source review: completed.
+- Production firmware compile and link: completed with ESP-IDF v6.0.1.
+- Test firmware compile and link: completed with ESP-IDF v6.0.1.
+- First ESP32-S3 run: 14 tests executed, 13 passed, and the wrong-type SSID
+  case exposed an `INCOMPLETE` versus `INVALID_DATA` classification defect.
+- Wrong-type classification fix: implemented and build-verified; hardware
+  confirmation rerun is pending.
+- Reboot-persistence and concurrent stress execution: pending.
+
 ## Important Errors
 
 - `ESP_ERR_INVALID_ARG`: invalid pointer, key, type, or malformed input.
@@ -205,5 +249,8 @@ The following work is intentionally outside Phase 5.3B:
 - Wi-Fi reconnect policy and application state transitions.
 - NVS encryption policy.
 
-Hardware tests for reboot persistence, deliberate NVS corruption, repeated
-concurrent operations, and long-run resource stability remain acceptance work.
+The Phase 5.3B fault-injection harness has completed one ESP32-S3 run. That run
+exposed one wrong-type classification defect, which is fixed and build-
+verified. A hardware rerun is still required before recording `14 Tests 0
+Failures`. Reboot persistence, concurrent stress, and long-run resource
+stability remain acceptance work.

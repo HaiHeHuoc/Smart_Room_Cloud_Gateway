@@ -73,6 +73,25 @@ static esp_err_t config_manager_validate_wifi_config(
     const config_manager_wifi_config_t *config);
 
 /**
+ * @brief Check whether an NVS key exists with the expected data type.
+ *
+ * The caller owns the component mutex and the open NVS handle. A missing key
+ * is reported as ESP_OK with @p present set to false. An existing key with a
+ * different type is reported as ESP_ERR_NVS_TYPE_MISMATCH.
+ *
+ * @param[in] handle Open NVS handle containing the key.
+ * @param[in] key Key name to inspect.
+ * @param[in] expected_type Required NVS data type.
+ * @param[out] present True only when the key exists with the expected type.
+ * @return ESP_OK, ESP_ERR_NVS_TYPE_MISMATCH, or an NVS access error.
+ */
+static esp_err_t config_manager_find_expected_key(
+    nvs_handle_t handle,
+    const char *key,
+    nvs_type_t expected_type,
+    bool *present);
+
+/**
  * @brief Read and classify Wi-Fi keys from an already-open NVS handle.
  *
  * This helper performs no locking, handle management, or commit. Type and
@@ -90,6 +109,41 @@ static esp_err_t config_manager_inspect_wifi_config(
     config_manager_wifi_config_state_t *state);
 
 /* Static Functions --------------------------------------------------------- */
+static esp_err_t config_manager_find_expected_key(
+    nvs_handle_t handle,
+    const char *key,
+    nvs_type_t expected_type,
+    bool *present)
+{
+    nvs_type_t stored_type = NVS_TYPE_ANY;
+
+    *present = false;
+
+    esp_err_t err = nvs_find_key(
+        handle,
+        key,
+        &stored_type);
+
+    if (err == ESP_ERR_NVS_NOT_FOUND)
+    {
+        return ESP_OK;
+    }
+
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    if (stored_type != expected_type)
+    {
+        return ESP_ERR_NVS_TYPE_MISMATCH;
+    }
+
+    *present = true;
+
+    return ESP_OK;
+}
+
 static esp_err_t config_manager_inspect_wifi_config(
     nvs_handle_t handle,
     config_manager_wifi_config_t *snapshot,
@@ -104,81 +158,112 @@ static esp_err_t config_manager_inspect_wifi_config(
 
     uint32_t stored_version = 0U;
 
-    esp_err_t err = nvs_get_u32(
+    esp_err_t err = config_manager_find_expected_key(
         handle,
         CONFIG_MANAGER_NVS_KEY_VERSION,
-        &stored_version);
+        NVS_TYPE_U32,
+        &version_present);
 
-    if (err == ESP_OK)
-    {
-        version_present = true;
-    }
-    else if (err == ESP_ERR_NVS_NOT_FOUND)
-    {
-        /* Continue so all required keys can be classified together. */
-    }
-    else if (err == ESP_ERR_NVS_TYPE_MISMATCH)
+    if (err == ESP_ERR_NVS_TYPE_MISMATCH)
     {
         *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA;
         return ESP_OK;
     }
-    else
+
+    if (err != ESP_OK)
     {
         return err;
     }
 
-    size_t ssid_size = sizeof(snapshot->ssid);
+    if (version_present)
+    {
+        err = nvs_get_u32(
+            handle,
+            CONFIG_MANAGER_NVS_KEY_VERSION,
+            &stored_version);
 
-    err = nvs_get_str(
+        if (err != ESP_OK)
+        {
+            return err;
+        }
+    }
+
+    err = config_manager_find_expected_key(
         handle,
         CONFIG_MANAGER_NVS_KEY_WIFI_SSID,
-        snapshot->ssid,
-        &ssid_size);
+        NVS_TYPE_STR,
+        &ssid_present);
 
-    if (err == ESP_OK)
-    {
-        ssid_present = true;
-    }
-    else if (err == ESP_ERR_NVS_NOT_FOUND)
-    {
-        /* Continue so all required keys can be classified together. */
-    }
-    else if (err == ESP_ERR_NVS_TYPE_MISMATCH ||
-             err == ESP_ERR_NVS_INVALID_LENGTH)
+    if (err == ESP_ERR_NVS_TYPE_MISMATCH)
     {
         *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA;
         return ESP_OK;
     }
-    else
+
+    if (err != ESP_OK)
     {
         return err;
     }
 
-    size_t password_size = sizeof(snapshot->password);
+    if (ssid_present)
+    {
+        size_t ssid_size = sizeof(snapshot->ssid);
 
-    err = nvs_get_str(
+        err = nvs_get_str(
+            handle,
+            CONFIG_MANAGER_NVS_KEY_WIFI_SSID,
+            snapshot->ssid,
+            &ssid_size);
+
+        if (err == ESP_ERR_NVS_INVALID_LENGTH)
+        {
+            *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA;
+            return ESP_OK;
+        }
+
+        if (err != ESP_OK)
+        {
+            return err;
+        }
+    }
+
+    err = config_manager_find_expected_key(
         handle,
         CONFIG_MANAGER_NVS_KEY_WIFI_PASS,
-        snapshot->password,
-        &password_size);
+        NVS_TYPE_STR,
+        &password_present);
 
-    if (err == ESP_OK)
-    {
-        password_present = true;
-    }
-    else if (err == ESP_ERR_NVS_NOT_FOUND)
-    {
-        /* Continue so all required keys can be classified together. */
-    }
-    else if (err == ESP_ERR_NVS_TYPE_MISMATCH ||
-             err == ESP_ERR_NVS_INVALID_LENGTH)
+    if (err == ESP_ERR_NVS_TYPE_MISMATCH)
     {
         *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA;
         return ESP_OK;
     }
-    else
+
+    if (err != ESP_OK)
     {
         return err;
+    }
+
+    if (password_present)
+    {
+        size_t password_size = sizeof(snapshot->password);
+
+        err = nvs_get_str(
+            handle,
+            CONFIG_MANAGER_NVS_KEY_WIFI_PASS,
+            snapshot->password,
+            &password_size);
+
+        if (err == ESP_ERR_NVS_INVALID_LENGTH)
+        {
+            *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA;
+            return ESP_OK;
+        }
+
+        if (err != ESP_OK)
+        {
+            return err;
+        }
     }
 
     const bool any_credential_present =
