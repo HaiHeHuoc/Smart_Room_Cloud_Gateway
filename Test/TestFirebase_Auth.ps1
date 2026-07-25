@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-# Firebase Web API key from components/cloud_manager/README.txt.
+# Firebase Web API key from components/cloud/cloud_manager/README.txt.
 $apiKey = "REVOKED_FIREBASE_API_KEY"
 $email = "tranlonghai21@gmail.com"
 $password = "Musaking888"

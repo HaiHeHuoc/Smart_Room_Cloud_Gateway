@@ -156,7 +156,7 @@ replaces it before the next attempt.
 ## Firebase Setup
 
 Project identifiers, UID, REST test steps, and example Database Security Rules
-are recorded in `components/cloud_manager/README.txt`. The authenticated host
+are recorded in `components/cloud/cloud_manager/README.txt`. The authenticated host
 test is `Test/TestFirebase_Auth.ps1`.
 
 Never store Firebase administrator credentials, service-account private keys,

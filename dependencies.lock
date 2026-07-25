@@ -87,7 +87,7 @@ dependencies:
   waveshare/esp_lcd_st7735:
     dependencies: []
     source:
-      path: components\waveshare__esp_lcd_st7735
+      path: components\display\waveshare__esp_lcd_st7735
       type: local
     version: 1.0.1
 direct_dependencies:
@@ -97,6 +97,6 @@ direct_dependencies:
 - idf
 - lvgl/lvgl
 - waveshare/esp_lcd_st7735
-manifest_hash: fa51cfd27f9bbc63b338720df5e5ee0ad96bda9855d6c1995a323ec10ba93d58
+manifest_hash: 1dcf74a00a3c855d5d26c7f85a8308ef7e6e9a307f3a145d8da1efbd91f2b236
 target: esp32s3
 version: 3.0.0

@@ -1,5 +1,8 @@
-idf_component_register(SRCS "main.c"
-                    INCLUDE_DIRS "."
+idf_component_register(
+    SRCS
+        "main.c"
+    INCLUDE_DIRS
+        "."
     REQUIRES
         common
         display_driver
@@ -10,7 +13,6 @@ idf_component_register(SRCS "main.c"
         performance_monitor
         wifi_manager
         app_gui
-        sensor_DHT22
         sensor_manager
         cloud_manager
         firebase_auth
@@ -20,4 +22,4 @@ idf_component_register(SRCS "main.c"
         nvs_flash
         esp_netif
         esp_event
-        )
+)

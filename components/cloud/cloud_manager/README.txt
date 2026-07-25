@@ -146,8 +146,8 @@ transport/retryable HTTP failures with bounded backoff.
 Component implementation notes are in:
 
 ```text
-components/firebase_auth/docs/README.md
-components/cloud_manager/docs/README.md
+components/cloud/firebase_auth/docs/README.md
+components/cloud/cloud_manager/docs/README.md
 ```
 
 The device email/password are still development configuration compiled into
