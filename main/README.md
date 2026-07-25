@@ -132,7 +132,8 @@ idf.py -p <PORT> flash monitor
 
 ## Future Attention
 
-- Add Sprint 6 provisioning to populate missing Wi-Fi configuration.
+- Continue Sprint 6 after the completed Phase 6.1 BLE lifecycle bring-up:
+  receive, validate, and persist provisioned Wi-Fi configuration.
 - Move Firebase credentials out of source code.
 - Add a coordinated application controller only when runtime stop/restart is
   required.

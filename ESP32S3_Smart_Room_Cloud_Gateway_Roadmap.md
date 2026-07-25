@@ -130,6 +130,7 @@ components/
 │   ├── cloud_manager/
 │   └── firebase_auth/
 ├── connectivity/
+│   ├── provisioning_manager/
 │   └── wifi_manager/
 ├── display/
 │   ├── display_driver/
@@ -157,6 +158,7 @@ Component names and public APIs remain independent.
 
 | Component | Responsibility |
 |---|---|
+| `provisioning_manager` | Temporary BLE provisioning transport lifecycle and cleanup |
 | `wifi_manager` | Wi-Fi connection, disconnect, reconnect, events |
 | `config_manager` | NVS read/write/erase for credentials and settings |
 | `sensor_manager` | Periodic sensor reading and validation |
@@ -551,9 +553,22 @@ config_version
 
 Start with **ESP-IDF Wi-Fi Provisioning Manager** instead of writing custom BLE GATT from scratch.
 
+### Phase 6.1 Status — Complete
+
+- [x] Add the reusable `provisioning_manager` component.
+- [x] Initialize the Espressif BLE provisioning scheme.
+- [x] Advertise a MAC-derived service using Security 1.
+- [x] Verify thread-safe start/stop lifecycle state transitions.
+- [x] Stop BLE and de-initialize provisioning resources without deadlock.
+- [x] Document the public API, ownership boundaries, and cleanup behavior.
+
+Phase 6.1 is limited to controlled BLE bring-up and cleanup. Credential
+reception, validation, NVS handoff, Station connection, and GUI integration
+remain later Phase 6 work.
+
 ### Tasks
 
-- [ ] Add BLE provisioning component.
+- [x] Add BLE provisioning component.
 - [ ] Start provisioning if no Wi-Fi config exists.
 - [ ] Send SSID/password from phone/tool.
 - [ ] Save credentials to NVS.
@@ -571,7 +586,7 @@ Status: Waiting for Wi-Fi config
 
 ### Done Criteria
 
-- [ ] Device advertises BLE provisioning service.
+- [x] Device advertises BLE provisioning service.
 - [ ] Phone/tool can provision Wi-Fi.
 - [ ] Credentials are saved.
 - [ ] Device connects to Wi-Fi after provisioning.
@@ -783,7 +798,7 @@ Use this section to track daily/weekly progress.
 | 3 | Sensor + UI update | Done |  |  | Sensor queue, stale/error behavior, and LCD updates hardware-accepted. |
 | 4 | Firebase upload | Done |  | 2026-07-19 | Hardware upload, Firebase data, failure handling, and LCD Cloud status accepted. |
 | 5 | NVS config storage | In progress |  |  | Implementation/build complete; updated hardware acceptance pending. |
-| 6 | BLE provisioning | Not started |  |  |  |
+| 6 | BLE provisioning | In progress |  |  | Phase 6.1 BLE lifecycle bring-up and cleanup complete. |
 | 7 | Factory reset | Not started |  |  |  |
 | 8 | Reconnect + retry | Not started |  |  |  |
 | 9 | Portfolio polish | Not started |  |  |  |
