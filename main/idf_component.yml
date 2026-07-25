@@ -21,3 +21,4 @@ dependencies:
   lvgl/lvgl: ^9
   esp-idf-lib/dht: ^1.2.0
   espressif/cjson: ^1.7.19
+  espressif/network_provisioning: ^1.2.4

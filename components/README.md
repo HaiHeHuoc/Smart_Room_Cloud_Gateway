@@ -13,6 +13,7 @@ components/
 |   |-- cloud_manager/
 |   `-- firebase_auth/
 |-- connectivity/
+|   |-- provisioning_manager/
 |   `-- wifi_manager/
 |-- display/
 |   |-- display_driver/
@@ -43,7 +44,7 @@ targets.
 | Domain | Components | Primary responsibility |
 |---|---|---|
 | Cloud | `cloud_manager`, `firebase_auth` | Authenticated Firebase telemetry |
-| Connectivity | `wifi_manager` | Wi-Fi lifecycle and connection state |
+| Connectivity | `provisioning_manager`, `wifi_manager` | BLE provisioning and Wi-Fi connection lifecycle |
 | Display | `display_driver`, `waveshare__esp_lcd_st7735` | LCD bus and panel integration |
 | Sensing | `sensor_manager`, `sensor_DHT22` | Sensor policy and DHT22 acquisition |
 | Storage | `config_manager`, `sd_card_manager` | Persistent configuration and SD-card access |

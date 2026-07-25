@@ -17,6 +17,7 @@ idf_component_register(
         cloud_manager
         firebase_auth
         config_manager
+        provisioning_manager
 
     PRIV_REQUIRES
         nvs_flash

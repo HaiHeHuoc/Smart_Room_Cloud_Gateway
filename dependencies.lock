@@ -63,6 +63,22 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.6.58
+  espressif/network_provisioning:
+    component_hash: 72d27784e3daf807418a34fb00be136ec50c6db49d989ce981d22e031fc0e7f8
+    dependencies:
+    - name: espressif/cjson
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: idf_version >= 6.0
+      version: ^1.7.19
+    - name: idf
+      require: private
+      version: '>=5.1'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.2.4
   espressif/zlib:
     component_hash: 64ea2fd6754c5a05951f1ddb312ac835cd782e68cb5bd9dfcd1c3a107c8fbfbc
     dependencies:
@@ -94,9 +110,10 @@ direct_dependencies:
 - esp-idf-lib/dht
 - espressif/cjson
 - espressif/libpng
+- espressif/network_provisioning
 - idf
 - lvgl/lvgl
 - waveshare/esp_lcd_st7735
-manifest_hash: 1dcf74a00a3c855d5d26c7f85a8308ef7e6e9a307f3a145d8da1efbd91f2b236
+manifest_hash: e96000485a250603abf6b3f6d794793e6d74fb914b7340c80e6f4adb0d128e8f
 target: esp32s3
 version: 3.0.0

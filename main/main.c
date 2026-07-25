@@ -34,6 +34,9 @@
 /* Wifi manager ------------------------------------------------------------ */
 #include "wifi_manager.h"
 
+/* Provisioning manager ---------------------------------------------------- */
+#include "provisioning_manager.h"
+
 /* GUI Manager ------------------------------------------------------------- */
 #include "app_gui.h"
 
@@ -52,7 +55,13 @@
 /* Macros ------------------------------------------------------------------- */
 #define PERFORMANCE_MONITOR 0
 
-#define APP_TEMP_WIFI_BOOTSTRAP_ENABLED 1
+#define APP_PROVISIONING_BRINGUP_ENABLED 1
+
+#define APP_PROVISIONING_STOP_DELAY_MS   20000U
+#define APP_PROVISIONING_STOP_TIMEOUT_MS 10000U
+#define APP_PROVISIONING_POLL_PERIOD_MS  100U
+
+#define APP_TEMP_WIFI_BOOTSTRAP_ENABLED 0
 #if APP_TEMP_WIFI_BOOTSTRAP_ENABLED
 #define APP_TEMP_WIFI_SSID     "HaiHeHuoc888"
 #define APP_TEMP_WIFI_PASSWORD "11233455"
@@ -315,6 +324,150 @@ if (callback_ret != ESP_OK) {
 
     return;
 }
+
+#if APP_PROVISIONING_BRINGUP_ENABLED
+    /*
+     * Temporary Phase 6.1 BLE bring-up.
+     *
+     * This path intentionally stops normal application startup before stored
+     * Wi-Fi connection, sensors, Firebase, and cloud services are started.
+     */
+    esp_err_t provisioning_ret =
+        provisioning_manager_init();
+
+    if (provisioning_ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to initialize provisioning manager: %s",
+            esp_err_to_name(provisioning_ret));
+
+        return;
+    }
+
+    provisioning_ret =
+        provisioning_manager_start();
+
+    if (provisioning_ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to start provisioning manager: %s",
+            esp_err_to_name(provisioning_ret));
+
+        return;
+    }
+
+ESP_LOGW(
+    TAG,
+    "Phase 6.1 BLE bring-up active; "
+    "do not submit Wi-Fi credentials yet");
+
+ESP_LOGI(
+    TAG,
+    "Provisioning will stop automatically after %u ms",
+    APP_PROVISIONING_STOP_DELAY_MS);
+
+/*
+ * Allow enough time to verify that the device is visible from the
+ * ESP BLE Provisioning application.
+ */
+vTaskDelay(
+    pdMS_TO_TICKS(
+        APP_PROVISIONING_STOP_DELAY_MS));
+
+provisioning_ret =
+    provisioning_manager_stop();
+
+if (provisioning_ret != ESP_OK)
+{
+    ESP_LOGE(
+        TAG,
+        "Failed to request provisioning stop: %s",
+        esp_err_to_name(provisioning_ret));
+
+    return;
+}
+
+ESP_LOGI(
+    TAG,
+    "Waiting for provisioning cleanup");
+
+TickType_t stop_start_tick =
+    xTaskGetTickCount();
+
+while (1)
+{
+    provisioning_manager_state_t provisioning_state =
+        PROVISIONING_MANAGER_STATE_UNINITIALIZED;
+
+    provisioning_ret =
+        provisioning_manager_get_state(
+            &provisioning_state);
+
+    if (provisioning_ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to read provisioning state: %s",
+            esp_err_to_name(provisioning_ret));
+
+        return;
+    }
+
+    if (provisioning_state ==
+        PROVISIONING_MANAGER_STATE_STOPPED)
+    {
+        ESP_LOGI(
+            TAG,
+            "Phase 6.1 provisioning stop lifecycle PASS");
+
+        break;
+    }
+
+    if (provisioning_state ==
+        PROVISIONING_MANAGER_STATE_FAILED)
+    {
+        ESP_LOGE(
+            TAG,
+            "Provisioning entered FAILED state during cleanup");
+
+        return;
+    }
+
+    TickType_t elapsed_ticks =
+        xTaskGetTickCount() -
+        stop_start_tick;
+
+    if (elapsed_ticks >=
+        pdMS_TO_TICKS(
+            APP_PROVISIONING_STOP_TIMEOUT_MS))
+    {
+        ESP_LOGE(
+            TAG,
+            "Timed out waiting for provisioning cleanup; "
+            "current state=%d",
+            (int)provisioning_state);
+
+        return;
+    }
+
+    vTaskDelay(
+        pdMS_TO_TICKS(
+            APP_PROVISIONING_POLL_PERIOD_MS));
+}
+
+/*
+ * Keep the controlled bring-up isolated from the normal Wi-Fi,
+ * sensor and cloud startup paths.
+ */
+while (1)
+{
+    vTaskDelay(pdMS_TO_TICKS(1000U));
+}
+
+#endif
+
 app_log_wifi_config_state(wifi_config_state);
 
 if (wifi_config_state == CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID)

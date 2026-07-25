@@ -39,6 +39,7 @@ components/
 │   ├── cloud_manager/
 │   └── firebase_auth/
 ├── connectivity/
+│   ├── provisioning_manager/
 │   └── wifi_manager/
 ├── display/
 │   ├── display_driver/
