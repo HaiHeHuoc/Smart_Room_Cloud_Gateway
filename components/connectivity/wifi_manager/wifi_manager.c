@@ -869,6 +869,10 @@ static void wifi_manager_event_handler(
                 break;
 
             case WIFI_EVENT_STA_CONNECTED:
+            {
+                const wifi_event_sta_connected_t *connected_event =
+                    (const wifi_event_sta_connected_t *)event_data;
+
                 taskENTER_CRITICAL(&s_status_lock);
 
                     s_wifi_manager.status.state =
@@ -883,6 +887,23 @@ static void wifi_manager_event_handler(
                     s_wifi_manager.status.ipv4_address[0] =
                     '\0';
 
+                    if ((connected_event != NULL) &&
+                        (connected_event->ssid_len > 0U) &&
+                        (connected_event->ssid_len <= WIFI_MANAGER_SSID_MAX_LENGTH))
+                    {
+                        memset(
+                            s_wifi_manager.status.ssid,
+                            0,
+                            sizeof(s_wifi_manager.status.ssid));
+
+                        memcpy(
+                            s_wifi_manager.status.ssid,
+                            connected_event->ssid,
+                            connected_event->ssid_len);
+
+                        s_wifi_manager.status.ssid[connected_event->ssid_len] = '\0';
+                    }
+
                 taskEXIT_CRITICAL(&s_status_lock);
 
                 ESP_LOGI(TAG, "Event: WIFI_EVENT_STA_CONNECTED");
@@ -891,6 +912,7 @@ static void wifi_manager_event_handler(
                 wifi_manager_notify_status_changed();
 
                 break;
+            }
 
             case WIFI_EVENT_STA_DISCONNECTED:
                 {
@@ -2408,6 +2430,117 @@ esp_err_t wifi_manager_scan_and_log(void)
     );
 
     free(ap_records);
+
+    return ESP_OK;
+}
+
+esp_err_t wifi_manager_adopt_active_connection(void)
+{
+    bool initialized = false;
+
+    taskENTER_CRITICAL(&s_status_lock);
+
+    initialized =
+        s_wifi_manager.initialized;
+
+    taskEXIT_CRITICAL(&s_status_lock);
+
+    if (!initialized)
+    {
+        ESP_LOGE(
+            TAG,
+            "Cannot adopt connection because Wi-Fi manager is not initialized");
+
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /*
+     * network_provisioning changes Wi-Fi storage to FLASH.
+     * Restore the runtime policy owned by wifi_manager.
+     *
+     * This does not disconnect the current Station connection.
+     */
+    esp_err_t ret =
+        esp_wifi_set_storage(WIFI_STORAGE_RAM);
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to restore Wi-Fi RAM storage: %s",
+            esp_err_to_name(ret));
+
+        return ret;
+    }
+
+    /*
+     * There should be no wifi_manager-owned timeout for a connection
+     * established by provisioning, but stop any stale timer defensively.
+     */
+    ret =
+        wifi_manager_stop_connection_timeout_timer();
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to stop connection timeout during adoption: %s",
+            esp_err_to_name(ret));
+
+        return ret;
+    }
+
+    bool adopted = false;
+
+    taskENTER_CRITICAL(&s_status_lock);
+
+    const bool can_adopt =
+        s_wifi_manager.initialized &&
+        (s_wifi_manager.status.state ==
+         WIFI_MANAGER_STATE_CONNECTED) &&
+        s_wifi_manager.status.has_ipv4_address &&
+        (s_wifi_manager.status.ssid[0] != '\0') &&
+        !s_wifi_manager.manual_disconnect_requested &&
+        !s_wifi_manager.connection_timeout_abort_in_progress &&
+        (s_wifi_manager.reconnect_task_handle != NULL) &&
+        (s_wifi_manager.connection_timeout_timer != NULL);
+
+    if (can_adopt)
+    {
+        s_wifi_manager.credentials_configured =
+            true;
+
+        s_wifi_manager.auto_reconnect_enabled =
+            true;
+
+        s_wifi_manager.manual_disconnect_requested =
+            false;
+
+        s_wifi_manager.reconnect_delay_ms =
+            WIFI_MANAGER_RECONNECT_INITIAL_DELAY_MS;
+
+        s_wifi_manager.reconnect_attempt_count =
+            0U;
+
+        wifi_manager_cancel_connection_attempt_locked();
+
+        adopted = true;
+    }
+
+    taskEXIT_CRITICAL(&s_status_lock);
+
+    if (!adopted)
+    {
+        ESP_LOGW(
+            TAG,
+            "Active Wi-Fi connection is not eligible for adoption");
+
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Active provisioning connection adopted by Wi-Fi manager");
 
     return ESP_OK;
 }

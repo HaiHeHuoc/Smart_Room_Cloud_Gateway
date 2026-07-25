@@ -295,6 +295,8 @@ const char *wifi_manager_state_to_string(
  */
 esp_err_t wifi_manager_scan_and_log(void);
 
+esp_err_t wifi_manager_adopt_active_connection(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -17,8 +17,9 @@ The reusable component domain layout is documented in `components/README.md`.
 4. Initialize the LCD display driver and LVGL display integration.
 5. Mount the SD card and register the LVGL `S:` filesystem.
 6. Initialize `app_gui`, start its single UI task, and create the Wi-Fi screen.
-7. Initialize `wifi_manager`, register its callback, and load/connect only
-   when persisted Wi-Fi configuration is `VALID`.
+7. Initialize `wifi_manager`, register its callback, and either connect a
+   `VALID` persisted configuration or run BLE provisioning for
+   `NOT_CONFIGURED`.
 8. Initialize `sensor_manager`, register its callback, and start DHT22
    sampling.
 9. Initialize `firebase_auth` with Email/Password credentials and the expected
@@ -47,6 +48,12 @@ cloud_manager status callback
     -> map cloud_manager_status_t to ui_cloud_status_t
     -> app_gui_post_cloud_status()
     -> GUI task updates the Sensor screen Cloud row and indicator
+
+provisioning_manager callback
+    -> validate and hold credentials pending
+    -> release them only after Wi-Fi connection success
+    -> main persists and verifies through config_manager
+    -> wifi_manager adopts the active Station connection
 ```
 
 The callbacks copy their input and return quickly. The GUI task owns LVGL
@@ -62,6 +69,8 @@ updates, while the cloud task owns authentication and HTTPS requests.
   `devices/esp32s3-001/latest.json` in Firebase Realtime Database.
 - Wi-Fi credentials are loaded from `config_manager`; production code contains
   no hard-coded Wi-Fi SSID/password fallback.
+- BLE provisioning waits up to 120 seconds for verified credentials and uses
+  finite polling while framework cleanup completes.
 - Firebase device credentials remain development values compiled into source.
   They must move to protected local configuration before production or
   publication.
@@ -74,6 +83,8 @@ updates, while the cloud task owns authentication and HTTPS requests.
   migration once, then re-inspects before any credential load.
 - `wifi_manager_connect()` runs only after config-manager has closed NVS and
   released its mutex. The application credential copy is then zeroized.
+- `provisioning_manager` owns only transient BLE transport and credential
+  handoff; `config_manager` remains the durable storage authority.
 - The display handle has static lifetime because `ui_manager_lvgl` borrows it.
 - `app_gui` owns the task that calls `lv_timer_handler()`.
 - Wi-Fi and sensor callbacks must not call LVGL.
@@ -117,9 +128,9 @@ idf.py -p <PORT> flash monitor
 
 - LVGL currently initializes before SD registration is checked. A failure in
   either path stops the remaining startup sequence.
-- Missing Wi-Fi configuration is logged and startup continues without a
-  connection request. Incomplete, invalid, interrupted-write, and unsupported
-  data is preserved.
+- Missing Wi-Fi configuration starts BLE provisioning. Incomplete, invalid,
+  interrupted-write, and unsupported data is preserved and does not
+  auto-provision.
 - Production startup does not erase the complete NVS partition to recover from
   NVS initialization errors.
 - Sensor sampling starts before cloud initialization, but its initial DHT22
@@ -132,8 +143,8 @@ idf.py -p <PORT> flash monitor
 
 ## Future Attention
 
-- Continue Sprint 6 after the completed Phase 6.1 BLE lifecycle bring-up:
-  receive, validate, and persist provisioned Wi-Fi configuration.
+- Continue only with separately approved work after completed Phase 6.2;
+  factory reset and reprovisioning remain Sprint 7 concerns.
 - Move Firebase credentials out of source code.
 - Add a coordinated application controller only when runtime stop/restart is
   required.

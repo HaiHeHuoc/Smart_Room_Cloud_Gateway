@@ -56,8 +56,8 @@ ESP32 periodically uploads sensor data to Firebase
 | Wi-Fi Station | P0 | Done | Event-driven Station connection and status UI |
 | Sensor reading | P0 | Done | DHT22 manager and stale/error handling |
 | Firebase upload | P0 | Done | Authenticated Realtime Database REST PUT verified on hardware |
-| NVS config storage | P0 | In progress | Implementation complete; final hardware acceptance pending |
-| BLE Wi-Fi provisioning | P1 | Not started | Prefer ESP-IDF provisioning manager first |
+| NVS config storage | P0 | Done | Integrity, persistence, migration, and recovery tests accepted |
+| BLE Wi-Fi provisioning | P1 | In progress | Phases 6.1 and 6.2 complete |
 | Button factory reset | P1 | Not started | Long press to erase config |
 | Wi-Fi reconnect strategy | P1 | Not started | Event-driven reconnect |
 | Cloud retry queue | P1 | Done | Latest-value queue with bounded retry backoff |
@@ -564,16 +564,29 @@ Start with **ESP-IDF Wi-Fi Provisioning Manager** instead of writing custom BLE 
 
 Phase 6.1 is limited to controlled BLE bring-up and cleanup. Credential
 reception, validation, NVS handoff, Station connection, and GUI integration
-remain later Phase 6 work.
+are completed in Phase 6.2.
+
+### Phase 6.2 Status — Complete
+
+- [x] Start provisioning only for `NOT_CONFIGURED`.
+- [x] Validate and deep-copy framework-owned credentials.
+- [x] Hand credentials to the application only after Wi-Fi success.
+- [x] Discard pending credentials after a failed connection attempt.
+- [x] Persist credentials only through `config_manager`.
+- [x] Verify configuration state and read-back before continuing.
+- [x] Recover safely from an injected NVS persistence failure.
+- [x] Stop BLE, release provisioning resources, and let `wifi_manager` adopt
+  the active Station connection.
+- [x] Remove temporary fault-injection code after hardware acceptance.
 
 ### Tasks
 
 - [x] Add BLE provisioning component.
-- [ ] Start provisioning if no Wi-Fi config exists.
-- [ ] Send SSID/password from phone/tool.
-- [ ] Save credentials to NVS.
-- [ ] Stop BLE after provisioning.
-- [ ] Connect Wi-Fi using provisioned credentials.
+- [x] Start provisioning if no Wi-Fi config exists.
+- [x] Send SSID/password from phone/tool.
+- [x] Save credentials to NVS.
+- [x] Stop BLE after provisioning.
+- [x] Connect Wi-Fi using provisioned credentials.
 - [ ] Show provisioning status on LVGL.
 
 ### Example UI
@@ -587,10 +600,10 @@ Status: Waiting for Wi-Fi config
 ### Done Criteria
 
 - [x] Device advertises BLE provisioning service.
-- [ ] Phone/tool can provision Wi-Fi.
-- [ ] Credentials are saved.
-- [ ] Device connects to Wi-Fi after provisioning.
-- [ ] BLE is stopped after provisioning.
+- [x] Phone/tool can provision Wi-Fi.
+- [x] Credentials are saved and read back.
+- [x] Device connects to Wi-Fi after provisioning.
+- [x] BLE is stopped after provisioning.
 
 ### Learning Topics
 
@@ -797,8 +810,8 @@ Use this section to track daily/weekly progress.
 | 2 | Wi-Fi + LVGL status | Done |  |  | Station events, DHCP status, and LCD UI accepted; RSSI display deferred. |
 | 3 | Sensor + UI update | Done |  |  | Sensor queue, stale/error behavior, and LCD updates hardware-accepted. |
 | 4 | Firebase upload | Done |  | 2026-07-19 | Hardware upload, Firebase data, failure handling, and LCD Cloud status accepted. |
-| 5 | NVS config storage | In progress |  |  | Implementation/build complete; updated hardware acceptance pending. |
-| 6 | BLE provisioning | In progress |  |  | Phase 6.1 BLE lifecycle bring-up and cleanup complete. |
+| 5 | NVS config storage | Done |  | 2026-07-26 | Persistence, integrity, migration, and recovery tests accepted. |
+| 6 | BLE provisioning | In progress |  |  | Phases 6.1 and 6.2 complete; later Sprint 6 work remains pending. |
 | 7 | Factory reset | Not started |  |  |  |
 | 8 | Reconnect + retry | Not started |  |  |  |
 | 9 | Portfolio polish | Not started |  |  |  |
