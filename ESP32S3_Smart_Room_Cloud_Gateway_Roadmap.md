@@ -56,7 +56,7 @@ ESP32 periodically uploads sensor data to Firebase
 | Wi-Fi Station | P0 | Done | Event-driven Station connection and status UI |
 | Sensor reading | P0 | Done | DHT22 manager and stale/error handling |
 | Firebase upload | P0 | Done | Authenticated Realtime Database REST PUT verified on hardware |
-| NVS config storage | P0 | Not started | Store Wi-Fi and device settings |
+| NVS config storage | P0 | In progress | Implementation complete; final hardware acceptance pending |
 | BLE Wi-Fi provisioning | P1 | Not started | Prefer ESP-IDF provisioning manager first |
 | Button factory reset | P1 | Not started | Long press to erase config |
 | Wi-Fi reconnect strategy | P1 | Not started | Event-driven reconnect |
@@ -71,9 +71,11 @@ Status values:
 Not started / In progress / Blocked / Done / Deferred
 ```
 
-**Current milestone (2026-07-19):** Sprint 4 is complete and hardware-accepted.
-Sprint 5, NVS configuration storage, is the next planned sprint and has not
-started yet.
+**Current milestone (2026-07-25):** Sprint 5 persistent configuration
+implementation and build verification are complete. The previous 37-case
+hardware suite passed. The updated 38-case suite, reboot persistence, and
+production boot-state matrix remain pending before Sprint 5 can be marked
+fully verified.
 
 ---
 
@@ -480,12 +482,14 @@ Accepted on 2026-07-19:
 
 ### Tasks
 
-- [ ] Implement `config_manager`.
-- [ ] Store SSID/password in NVS.
-- [ ] Load config at boot.
-- [ ] Add config version.
-- [ ] Add config erase function.
-- [ ] Detect missing/invalid config.
+- [x] Implement `config_manager`.
+- [x] Store SSID/password in NVS.
+- [x] Load valid persisted config at boot.
+- [x] Add schema version policy and explicit legacy migration.
+- [x] Add Wi-Fi clear and component factory reset.
+- [x] Detect missing/incomplete/invalid/unsupported/legacy config.
+- [x] Add optional device identity persistence.
+- [x] Add isolated Sprint 5 fault-injection and hardening tests.
 
 ### Example Config Fields
 
@@ -499,10 +503,21 @@ config_version
 
 ### Done Criteria
 
-- [ ] Config is saved successfully.
+- [x] Config is saved successfully.
 - [ ] Config persists after reboot.
-- [ ] Missing config is detected.
-- [ ] Erase config works.
+- [x] Missing config is detected.
+- [x] Wi-Fi erase works.
+- [ ] Updated 38-case Sprint 5 suite passes on ESP32-S3 hardware.
+- [ ] Production boot state matrix passes on ESP32-S3 hardware.
+
+### Verification Status
+
+- Production firmware compile/link after hardening: passed with ESP-IDF v6.0.1.
+- Renamed 38-case `Test/config_manager` firmware compile/link: passed.
+- Historical 14-case Phase 5.3B hardware suite: passed.
+- Previous 37-case expanded hardware suite: passed.
+- Updated 38-case runtime, reboot persistence, and production boot-state
+  tests: pending hardware.
 
 ### Learning Topics
 
@@ -752,7 +767,7 @@ Use this section to track daily/weekly progress.
 | 2 | Wi-Fi + LVGL status | Done |  |  | Station events, DHCP status, and LCD UI accepted; RSSI display deferred. |
 | 3 | Sensor + UI update | Done |  |  | Sensor queue, stale/error behavior, and LCD updates hardware-accepted. |
 | 4 | Firebase upload | Done |  | 2026-07-19 | Hardware upload, Firebase data, failure handling, and LCD Cloud status accepted. |
-| 5 | NVS config storage | Not started |  |  | Next planned sprint. |
+| 5 | NVS config storage | In progress |  |  | Implementation/build complete; updated hardware acceptance pending. |
 | 6 | BLE provisioning | Not started |  |  |  |
 | 7 | Factory reset | Not started |  |  |  |
 | 8 | Reconnect + retry | Not started |  |  |  |

@@ -28,6 +28,20 @@
 /** Maximum blob accepted by config_manager_save_custom_data(). */
 #define CONFIG_MANAGER_CUSTOM_BLOB_MAX_SIZE    512U
 
+/** Maximum device ID length, excluding the null terminator. */
+#define CONFIG_MANAGER_DEVICE_ID_MAX_LEN       36U
+
+/** Maximum device name length, excluding the null terminator. */
+#define CONFIG_MANAGER_DEVICE_NAME_MAX_LEN     32U
+
+/** Buffer size for a maximum-length null-terminated device ID. */
+#define CONFIG_MANAGER_DEVICE_ID_BUFFER_SIZE \
+    (CONFIG_MANAGER_DEVICE_ID_MAX_LEN + 1U)
+
+/** Buffer size for a maximum-length null-terminated device name. */
+#define CONFIG_MANAGER_DEVICE_NAME_BUFFER_SIZE \
+    (CONFIG_MANAGER_DEVICE_NAME_MAX_LEN + 1U)
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -63,11 +77,17 @@ typedef enum
     /** At least one credential exists, but another required key is missing. */
     CONFIG_MANAGER_WIFI_CONFIG_STATE_INCOMPLETE,
 
-    /** All required keys exist, but `cfg_ver` is not supported. */
+    /** Complete valid credentials use an unsupported non-legacy version. */
     CONFIG_MANAGER_WIFI_CONFIG_STATE_UNSUPPORTED_VERSION,
 
     /** A required key has the wrong type, length, or semantic value. */
     CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA,
+
+    /**
+     * Valid legacy credentials are present but require an explicit schema
+     * migration before they can be loaded.
+     */
+    CONFIG_MANAGER_WIFI_CONFIG_STATE_MIGRATION_REQUIRED,
 } config_manager_wifi_config_state_t;
 
 /** @brief Wi-Fi credentials copied to or from the `device_cfg` namespace. */
@@ -79,6 +99,21 @@ typedef struct
     /** Empty for an open network, otherwise a null-terminated 8-63 byte key. */
     char password[CONFIG_MANAGER_WIFI_PASSWORD_BUFFER_SIZE];
 } config_manager_wifi_config_t;
+
+/**
+ * @brief Application-owned device identity stored in `device_cfg`.
+ *
+ * The component validates and persists these values but does not generate
+ * them or assign identity policy.
+ */
+typedef struct
+{
+    /** Non-empty null-terminated device identifier containing 1-36 bytes. */
+    char device_id[CONFIG_MANAGER_DEVICE_ID_BUFFER_SIZE];
+
+    /** Non-empty null-terminated display name containing 1-32 bytes. */
+    char device_name[CONFIG_MANAGER_DEVICE_NAME_BUFFER_SIZE];
+} config_manager_device_identity_t;
 
 /* Functions ---------------------------------------------------------------- */
 /**
@@ -97,9 +132,11 @@ esp_err_t config_manager_init(void);
 /**
  * @brief Validate and persist Wi-Fi credentials.
  *
- * The credentials and current configuration version are stored as separate
- * NVS keys and committed as one mutex-protected logical operation. Password
- * contents are never logged.
+ * The credentials and configuration version are stored as separate NVS keys
+ * in one mutex-protected operation. A durable write-in-progress version marker
+ * prevents boot from accepting a partially updated credential pair after a
+ * reset or flash error. Saving an identical current configuration is a no-op
+ * to avoid unnecessary flash writes. Password contents are never logged.
  *
  * @param[in] config Credentials to copy and save.
  * @return ESP_OK on success, ESP_ERR_INVALID_ARG for malformed credentials,
@@ -113,12 +150,14 @@ esp_err_t config_manager_save_wifi(
  * @brief Load and validate persisted Wi-Fi credentials.
  *
  * The output is cleared before loading and remains cleared on every failure.
- * Only the current configuration version is accepted.
+ * Only the current configuration version is accepted. Valid legacy data is
+ * reported as ESP_ERR_INVALID_STATE and must be migrated explicitly.
  *
  * @param[out] config Destination for the copied credentials.
  * @return ESP_OK on success, ESP_ERR_NVS_NOT_FOUND for missing data,
- *         ESP_ERR_INVALID_STATE for incomplete data or use before
- *         initialization, ESP_ERR_NOT_SUPPORTED for an incompatible version,
+ *         ESP_ERR_INVALID_STATE for incomplete data, migration-required data,
+ *         or use before initialization,
+ *         ESP_ERR_NOT_SUPPORTED for an incompatible version,
  *         ESP_ERR_INVALID_RESPONSE for invalid stored data,
  *         ESP_ERR_INVALID_ARG when config is NULL, ESP_ERR_TIMEOUT, or another
  *         NVS error.
@@ -129,8 +168,8 @@ esp_err_t config_manager_load_wifi(
 /**
  * @brief Erase Wi-Fi SSID and password keys.
  *
- * This operation is idempotent. It does not erase custom data or other future
- * device identity keys owned by the component.
+ * This operation is idempotent. It preserves `cfg_ver`, custom data, and
+ * device identity.
  *
  * @return ESP_OK when the keys are absent or erased, ESP_ERR_INVALID_STATE
  *         before initialization, ESP_ERR_TIMEOUT, or an NVS error.
@@ -154,6 +193,22 @@ esp_err_t config_manager_get_wifi_config_state(
     config_manager_wifi_config_state_t *state);
 
 /**
+ * @brief Explicitly migrate a supported legacy Wi-Fi schema to version 1.
+ *
+ * Read APIs never migrate implicitly. Valid legacy credentials are preserved
+ * unchanged while `cfg_ver` is written and committed once. Calling this API
+ * for an already-current configuration is an idempotent ESP_OK no-op.
+ *
+ * @return ESP_OK after migration or for an already-current configuration,
+ *         ESP_ERR_NVS_NOT_FOUND when credentials are absent,
+ *         ESP_ERR_INVALID_STATE for incomplete data or use before init,
+ *         ESP_ERR_NOT_SUPPORTED for a newer unsupported schema,
+ *         ESP_ERR_INVALID_RESPONSE for invalid stored data,
+ *         ESP_ERR_TIMEOUT, or another NVS error.
+ */
+esp_err_t config_manager_migrate_device_config(void);
+
+/**
  * @brief Check whether a complete, valid Wi-Fi configuration can be loaded.
  *
  * @param[out] has_config Set true only when config_manager_load_wifi()
@@ -163,6 +218,56 @@ esp_err_t config_manager_get_wifi_config_state(
  */
 esp_err_t config_manager_has_wifi_config(
     bool *has_config);
+
+/**
+ * @brief Validate and persist application-owned device identity.
+ *
+ * Both identity keys are staged and committed once. Device identity is
+ * optional and does not alter the Wi-Fi schema version.
+ *
+ * @param[in] identity Identity values to copy and save.
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG for malformed identity,
+ *         ESP_ERR_INVALID_STATE before initialization, ESP_ERR_TIMEOUT, or an
+ *         NVS error.
+ */
+esp_err_t config_manager_save_device_identity(
+    const config_manager_device_identity_t *identity);
+
+/**
+ * @brief Load a complete and valid device identity.
+ *
+ * The output is cleared before NVS access and remains cleared on every
+ * failure.
+ *
+ * @param[out] identity Destination for copied identity values.
+ * @return ESP_OK on success, ESP_ERR_NVS_NOT_FOUND when both keys are absent,
+ *         ESP_ERR_INVALID_STATE when exactly one key is present or before
+ *         initialization, ESP_ERR_INVALID_RESPONSE for wrong-type, oversized,
+ *         or invalid stored values, ESP_ERR_INVALID_ARG when identity is NULL,
+ *         ESP_ERR_TIMEOUT, or another NVS error.
+ */
+esp_err_t config_manager_load_device_identity(
+    config_manager_device_identity_t *identity);
+
+/**
+ * @brief Idempotently erase both device identity keys.
+ *
+ * Wi-Fi credentials, schema version, and custom data are preserved.
+ *
+ * @return ESP_OK when already absent or erased, ESP_ERR_INVALID_STATE before
+ *         initialization, ESP_ERR_TIMEOUT, or an NVS error.
+ */
+esp_err_t config_manager_clear_device_identity(void);
+
+/**
+ * @brief Check whether a complete valid device identity can be loaded.
+ *
+ * @param[out] has_identity Set true only for a complete valid identity.
+ * @return ESP_OK for present or missing identity, or the integrity,
+ *         synchronization, lifecycle, or NVS error for other failures.
+ */
+esp_err_t config_manager_has_device_identity(
+    bool *has_identity);
 
 /**
  * @brief Save one typed value in the `custom_cfg` namespace.
@@ -188,8 +293,9 @@ esp_err_t config_manager_save_custom_data(
  * @brief Load one typed value from the `custom_cfg` namespace.
  *
  * Fixed-size integers require a non-NULL output and exact input size. For a
- * string or blob, out_value may be NULL to query the required size. NVS updates
- * inout_size with the actual or required size where supported.
+ * string or blob, out_value may be NULL to query the required size. A supplied
+ * output buffer is cleared before NVS access and remains cleared on failure.
+ * NVS updates inout_size with the actual or required size where supported.
  *
  * @param[in] key Null-terminated NVS key containing 1-15 bytes.
  * @param[out] out_value Destination, or NULL for string/blob size queries.
@@ -218,6 +324,22 @@ esp_err_t config_manager_load_custom_data(
  */
 esp_err_t config_manager_clear_custom_data(
     const char *key);
+
+/**
+ * @brief Erase all configuration owned by this component.
+ *
+ * The `device_cfg` and `custom_cfg` namespaces are cleared independently.
+ * This operation is idempotent, does not erase the complete NVS partition,
+ * does not reboot, and does not call Wi-Fi or application APIs. Because NVS
+ * has no cross-namespace transaction, a flash failure between namespace
+ * commits can leave a partial reset. Both namespaces are attempted even when
+ * clearing the first namespace fails; the first error is returned.
+ *
+ * @return ESP_OK when both namespaces are absent or cleared,
+ *         ESP_ERR_INVALID_STATE before initialization, ESP_ERR_TIMEOUT, or
+ *         the first NVS error encountered.
+ */
+esp_err_t config_manager_factory_reset(void);
 
 #ifdef __cplusplus
 }
