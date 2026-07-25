@@ -20,8 +20,11 @@
 #define CONFIG_MANAGER_NVS_KEY_VERSION "cfg_ver"
 #define CONFIG_MANAGER_NVS_KEY_WIFI_SSID "wifi_ssid"
 #define CONFIG_MANAGER_NVS_KEY_WIFI_PASS "wifi_pass"
+#define CONFIG_MANAGER_NVS_KEY_DEVICE_ID "device_id"
+#define CONFIG_MANAGER_NVS_KEY_DEVICE_NAME "device_name"
 
 #define CONFIG_MANAGER_CURRENT_VERSION 1U
+#define CONFIG_MANAGER_WRITE_IN_PROGRESS_VERSION UINT32_MAX
 
 #define CONFIG_MANAGER_CUSTOM_NVS_NAMESPACE "custom_cfg"
 
@@ -73,6 +76,15 @@ static esp_err_t config_manager_validate_wifi_config(
     const config_manager_wifi_config_t *config);
 
 /**
+ * @brief Validate the public device identity representation.
+ *
+ * @param[in] identity Identity to validate.
+ * @return ESP_OK when valid or ESP_ERR_INVALID_ARG when malformed.
+ */
+static esp_err_t config_manager_validate_device_identity(
+    const config_manager_device_identity_t *identity);
+
+/**
  * @brief Check whether an NVS key exists with the expected data type.
  *
  * The caller owns the component mutex and the open NVS handle. A missing key
@@ -92,6 +104,17 @@ static esp_err_t config_manager_find_expected_key(
     bool *present);
 
 /**
+ * @brief Map a public custom-data type to its ESP-IDF NVS type.
+ *
+ * @param[in] type Public custom-data type.
+ * @param[out] nvs_type Matching NVS representation.
+ * @return ESP_OK or ESP_ERR_INVALID_ARG for an unsupported type.
+ */
+static esp_err_t config_manager_data_type_to_nvs_type(
+    config_manager_data_type_t type,
+    nvs_type_t *nvs_type);
+
+/**
  * @brief Read and classify Wi-Fi keys from an already-open NVS handle.
  *
  * This helper performs no locking, handle management, or commit. Type and
@@ -107,6 +130,45 @@ static esp_err_t config_manager_inspect_wifi_config(
     nvs_handle_t handle,
     config_manager_wifi_config_t *snapshot,
     config_manager_wifi_config_state_t *state);
+
+/**
+ * @brief Read and validate identity from an already-open NVS handle.
+ *
+ * The caller owns locking and handle lifecycle. The snapshot is cleared before
+ * inspection and populated only with complete stored values.
+ *
+ * @param[in] handle Open `device_cfg` handle.
+ * @param[out] snapshot Cleared identity snapshot populated from NVS.
+ * @return ESP_OK for a complete valid identity, ESP_ERR_NVS_NOT_FOUND when
+ *         both keys are absent, ESP_ERR_INVALID_STATE when only one key exists,
+ *         ESP_ERR_INVALID_RESPONSE for corrupt data, or an NVS access error.
+ */
+static esp_err_t config_manager_inspect_device_identity(
+    nvs_handle_t handle,
+    config_manager_device_identity_t *snapshot);
+
+/**
+ * @brief Convert a completed Wi-Fi integrity state into an API error.
+ *
+ * @param[in] state Classified Wi-Fi state.
+ * @return Error mapping shared by load and migration APIs.
+ */
+static esp_err_t config_manager_wifi_state_to_error(
+    config_manager_wifi_config_state_t state);
+
+/**
+ * @brief Erase and commit one component-owned namespace.
+ *
+ * The caller must hold the component mutex. Missing namespaces are treated as
+ * already erased. Every handle opened here is closed before return.
+ *
+ * @param[in] namespace_name Namespace owned by config_manager.
+ * @param[out] changed True when an existing namespace was erased and committed.
+ * @return ESP_OK or an NVS lifecycle, erase, or commit error.
+ */
+static esp_err_t config_manager_erase_namespace(
+    const char *namespace_name,
+    bool *changed);
 
 /* Static Functions --------------------------------------------------------- */
 static esp_err_t config_manager_find_expected_key(
@@ -144,51 +206,71 @@ static esp_err_t config_manager_find_expected_key(
     return ESP_OK;
 }
 
+static esp_err_t config_manager_data_type_to_nvs_type(
+    config_manager_data_type_t type,
+    nvs_type_t *nvs_type)
+{
+    switch (type)
+    {
+        case CONFIG_MANAGER_DATA_TYPE_U8:
+            *nvs_type = NVS_TYPE_U8;
+            break;
+
+        case CONFIG_MANAGER_DATA_TYPE_I8:
+            *nvs_type = NVS_TYPE_I8;
+            break;
+
+        case CONFIG_MANAGER_DATA_TYPE_U16:
+            *nvs_type = NVS_TYPE_U16;
+            break;
+
+        case CONFIG_MANAGER_DATA_TYPE_I16:
+            *nvs_type = NVS_TYPE_I16;
+            break;
+
+        case CONFIG_MANAGER_DATA_TYPE_U32:
+            *nvs_type = NVS_TYPE_U32;
+            break;
+
+        case CONFIG_MANAGER_DATA_TYPE_I32:
+            *nvs_type = NVS_TYPE_I32;
+            break;
+
+        case CONFIG_MANAGER_DATA_TYPE_U64:
+            *nvs_type = NVS_TYPE_U64;
+            break;
+
+        case CONFIG_MANAGER_DATA_TYPE_I64:
+            *nvs_type = NVS_TYPE_I64;
+            break;
+
+        case CONFIG_MANAGER_DATA_TYPE_STRING:
+            *nvs_type = NVS_TYPE_STR;
+            break;
+
+        case CONFIG_MANAGER_DATA_TYPE_BLOB:
+            *nvs_type = NVS_TYPE_BLOB;
+            break;
+
+        default:
+            return ESP_ERR_INVALID_ARG;
+    }
+
+    return ESP_OK;
+}
+
 static esp_err_t config_manager_inspect_wifi_config(
     nvs_handle_t handle,
     config_manager_wifi_config_t *snapshot,
     config_manager_wifi_config_state_t *state)
 {
-    bool version_present = false;
     bool ssid_present = false;
     bool password_present = false;
 
     memset(snapshot, 0, sizeof(*snapshot));
     *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN;
 
-    uint32_t stored_version = 0U;
-
     esp_err_t err = config_manager_find_expected_key(
-        handle,
-        CONFIG_MANAGER_NVS_KEY_VERSION,
-        NVS_TYPE_U32,
-        &version_present);
-
-    if (err == ESP_ERR_NVS_TYPE_MISMATCH)
-    {
-        *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA;
-        return ESP_OK;
-    }
-
-    if (err != ESP_OK)
-    {
-        return err;
-    }
-
-    if (version_present)
-    {
-        err = nvs_get_u32(
-            handle,
-            CONFIG_MANAGER_NVS_KEY_VERSION,
-            &stored_version);
-
-        if (err != ESP_OK)
-        {
-            return err;
-        }
-    }
-
-    err = config_manager_find_expected_key(
         handle,
         CONFIG_MANAGER_NVS_KEY_WIFI_SSID,
         NVS_TYPE_STR,
@@ -276,17 +358,10 @@ static esp_err_t config_manager_inspect_wifi_config(
         return ESP_OK;
     }
 
-    if (!version_present ||
-        !ssid_present ||
+    if (!ssid_present ||
         !password_present)
     {
         *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_INCOMPLETE;
-        return ESP_OK;
-    }
-
-    if (stored_version != CONFIG_MANAGER_CURRENT_VERSION)
-    {
-        *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_UNSUPPORTED_VERSION;
         return ESP_OK;
     }
 
@@ -298,7 +373,58 @@ static esp_err_t config_manager_inspect_wifi_config(
         return ESP_OK;
     }
 
-    *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID;
+    bool version_present = false;
+
+    err = config_manager_find_expected_key(
+        handle,
+        CONFIG_MANAGER_NVS_KEY_VERSION,
+        NVS_TYPE_U32,
+        &version_present);
+
+    if (err == ESP_ERR_NVS_TYPE_MISMATCH)
+    {
+        *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA;
+        return ESP_OK;
+    }
+
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    if (!version_present)
+    {
+        *state =
+            CONFIG_MANAGER_WIFI_CONFIG_STATE_MIGRATION_REQUIRED;
+        return ESP_OK;
+    }
+
+    uint32_t stored_version = 0U;
+
+    err = nvs_get_u32(
+        handle,
+        CONFIG_MANAGER_NVS_KEY_VERSION,
+        &stored_version);
+
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    if (stored_version == 0U)
+    {
+        *state =
+            CONFIG_MANAGER_WIFI_CONFIG_STATE_MIGRATION_REQUIRED;
+    }
+    else if (stored_version == CONFIG_MANAGER_CURRENT_VERSION)
+    {
+        *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID;
+    }
+    else
+    {
+        *state =
+            CONFIG_MANAGER_WIFI_CONFIG_STATE_UNSUPPORTED_VERSION;
+    }
 
     return ESP_OK;
 }
@@ -345,6 +471,217 @@ static esp_err_t config_manager_validate_wifi_config(
     }
 
     return ESP_OK;
+}
+
+static esp_err_t config_manager_validate_device_identity(
+    const config_manager_device_identity_t *identity)
+{
+    ESP_RETURN_ON_FALSE(
+        identity != NULL,
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "Invalid argument");
+
+    const size_t device_id_len = strnlen(
+        identity->device_id,
+        CONFIG_MANAGER_DEVICE_ID_BUFFER_SIZE);
+
+    if (device_id_len == 0U ||
+        device_id_len == CONFIG_MANAGER_DEVICE_ID_BUFFER_SIZE)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const size_t device_name_len = strnlen(
+        identity->device_name,
+        CONFIG_MANAGER_DEVICE_NAME_BUFFER_SIZE);
+
+    if (device_name_len == 0U ||
+        device_name_len == CONFIG_MANAGER_DEVICE_NAME_BUFFER_SIZE)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t config_manager_inspect_device_identity(
+    nvs_handle_t handle,
+    config_manager_device_identity_t *snapshot)
+{
+    bool device_id_present = false;
+    bool device_name_present = false;
+
+    memset(snapshot, 0, sizeof(*snapshot));
+
+    esp_err_t err = config_manager_find_expected_key(
+        handle,
+        CONFIG_MANAGER_NVS_KEY_DEVICE_ID,
+        NVS_TYPE_STR,
+        &device_id_present);
+
+    if (err == ESP_ERR_NVS_TYPE_MISMATCH)
+    {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    err = config_manager_find_expected_key(
+        handle,
+        CONFIG_MANAGER_NVS_KEY_DEVICE_NAME,
+        NVS_TYPE_STR,
+        &device_name_present);
+
+    if (err == ESP_ERR_NVS_TYPE_MISMATCH)
+    {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    if (!device_id_present &&
+        !device_name_present)
+    {
+        return ESP_ERR_NVS_NOT_FOUND;
+    }
+
+    if (!device_id_present ||
+        !device_name_present)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    size_t device_id_size = sizeof(snapshot->device_id);
+
+    err = nvs_get_str(
+        handle,
+        CONFIG_MANAGER_NVS_KEY_DEVICE_ID,
+        snapshot->device_id,
+        &device_id_size);
+
+    if (err == ESP_ERR_NVS_INVALID_LENGTH)
+    {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    size_t device_name_size = sizeof(snapshot->device_name);
+
+    err = nvs_get_str(
+        handle,
+        CONFIG_MANAGER_NVS_KEY_DEVICE_NAME,
+        snapshot->device_name,
+        &device_name_size);
+
+    if (err == ESP_ERR_NVS_INVALID_LENGTH)
+    {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    err = config_manager_validate_device_identity(snapshot);
+
+    if (err != ESP_OK)
+    {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t config_manager_wifi_state_to_error(
+    config_manager_wifi_config_state_t state)
+{
+    switch (state)
+    {
+        case CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID:
+            return ESP_OK;
+
+        case CONFIG_MANAGER_WIFI_CONFIG_STATE_NOT_CONFIGURED:
+            return ESP_ERR_NVS_NOT_FOUND;
+
+        case CONFIG_MANAGER_WIFI_CONFIG_STATE_INCOMPLETE:
+        case CONFIG_MANAGER_WIFI_CONFIG_STATE_MIGRATION_REQUIRED:
+            return ESP_ERR_INVALID_STATE;
+
+        case CONFIG_MANAGER_WIFI_CONFIG_STATE_UNSUPPORTED_VERSION:
+            return ESP_ERR_NOT_SUPPORTED;
+
+        case CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA:
+            return ESP_ERR_INVALID_RESPONSE;
+
+        case CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN:
+        default:
+            return ESP_ERR_INVALID_STATE;
+    }
+}
+
+static esp_err_t config_manager_erase_namespace(
+    const char *namespace_name,
+    bool *changed)
+{
+    nvs_handle_t handle = 0;
+
+    *changed = false;
+
+    esp_err_t err = nvs_open(
+        namespace_name,
+        NVS_READONLY,
+        &handle);
+
+    if (err == ESP_ERR_NVS_NOT_FOUND)
+    {
+        return ESP_OK;
+    }
+
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    nvs_close(handle);
+    handle = 0;
+
+    err = nvs_open(
+        namespace_name,
+        NVS_READWRITE,
+        &handle);
+
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    err = nvs_erase_all(handle);
+
+    if (err == ESP_OK)
+    {
+        err = nvs_commit(handle);
+    }
+
+    nvs_close(handle);
+
+    if (err == ESP_OK)
+    {
+        *changed = true;
+    }
+
+    return err;
 }
 
 static esp_err_t config_manager_lock(void)
@@ -464,11 +801,15 @@ esp_err_t config_manager_save_wifi(
     esp_err_t err = ESP_OK;
 
     config_manager_wifi_config_t snapshot = {0};
+    config_manager_wifi_config_t stored_snapshot = {0};
+    config_manager_wifi_config_state_t stored_state =
+        CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN;
 
     nvs_handle_t handle = 0;
 
     bool mutex_locked = false;
     bool handle_opened = false;
+    bool config_changed = false;
 
     ESP_RETURN_ON_FALSE(
         config != NULL,
@@ -511,14 +852,46 @@ esp_err_t config_manager_save_wifi(
 
     handle_opened = true;
 
-    err = nvs_set_u32(
+    err = config_manager_inspect_wifi_config(
         handle,
-        CONFIG_MANAGER_NVS_KEY_VERSION,
-        CONFIG_MANAGER_CURRENT_VERSION);
+        &stored_snapshot,
+        &stored_state);
+
     if (err != ESP_OK)
     {
         goto cleanup;
     }
+
+    if (stored_state == CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID &&
+        strcmp(snapshot.ssid, stored_snapshot.ssid) == 0 &&
+        strcmp(snapshot.password, stored_snapshot.password) == 0)
+    {
+        goto cleanup;
+    }
+
+    /*
+     * Persist a fail-closed marker before changing either credential key.
+     * A reset or flash error during the following multi-key update therefore
+     * leaves an unsupported schema instead of a potentially mixed credential
+     * pair that boot could mistake for a valid configuration.
+     */
+    err = nvs_set_u32(
+        handle,
+        CONFIG_MANAGER_NVS_KEY_VERSION,
+        CONFIG_MANAGER_WRITE_IN_PROGRESS_VERSION);
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    err = nvs_commit(handle);
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
     err = nvs_set_str(
         handle,
         CONFIG_MANAGER_NVS_KEY_WIFI_SSID,
@@ -536,13 +909,35 @@ esp_err_t config_manager_save_wifi(
         goto cleanup;
     }
 
+    /*
+     * Keep the fail-closed marker durable while the credential pair becomes
+     * durable. The current version is published only after both values commit.
+     */
     err = nvs_commit(handle);
+
     if (err != ESP_OK)
     {
         goto cleanup;
     }
 
-    ESP_LOGI(TAG, "Wi-Fi configuration saved");
+    err = nvs_set_u32(
+        handle,
+        CONFIG_MANAGER_NVS_KEY_VERSION,
+        CONFIG_MANAGER_CURRENT_VERSION);
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    err = nvs_commit(handle);
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    config_changed = true;
 
 cleanup:
 
@@ -559,8 +954,22 @@ cleanup:
     config_manager_zeroize(
         &snapshot,
         sizeof(snapshot));
+    config_manager_zeroize(
+        &stored_snapshot,
+        sizeof(stored_snapshot));
 
-    if (err != ESP_OK)
+    if (err == ESP_OK)
+    {
+        if (config_changed)
+        {
+            ESP_LOGI(TAG, "Wi-Fi configuration saved");
+        }
+        else
+        {
+            ESP_LOGD(TAG, "Wi-Fi configuration is already current");
+        }
+    }
+    else
     {
         ESP_LOGE(
             TAG,
@@ -570,6 +979,7 @@ cleanup:
 
     return err;
 }
+
 esp_err_t config_manager_load_wifi(
     config_manager_wifi_config_t *config)
 {
@@ -647,41 +1057,15 @@ esp_err_t config_manager_load_wifi(
         goto cleanup;
     }
 
-    /*
-     * Convert the semantic state into the public load result.
-     */
-    switch (state)
+    if (state == CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID)
     {
-        case CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID:
-            memcpy(
-                config,
-                &snapshot,
-                sizeof(*config));
-
-            err = ESP_OK;
-            break;
-
-        case CONFIG_MANAGER_WIFI_CONFIG_STATE_NOT_CONFIGURED:
-            err = ESP_ERR_NVS_NOT_FOUND;
-            break;
-
-        case CONFIG_MANAGER_WIFI_CONFIG_STATE_INCOMPLETE:
-            err = ESP_ERR_INVALID_STATE;
-            break;
-
-        case CONFIG_MANAGER_WIFI_CONFIG_STATE_UNSUPPORTED_VERSION:
-            err = ESP_ERR_NOT_SUPPORTED;
-            break;
-
-        case CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA:
-            err = ESP_ERR_INVALID_RESPONSE;
-            break;
-
-        case CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN:
-        default:
-            err = ESP_ERR_INVALID_STATE;
-            break;
+        memcpy(
+            config,
+            &snapshot,
+            sizeof(*config));
     }
+
+    err = config_manager_wifi_state_to_error(state);
 
 cleanup:
 
@@ -723,6 +1107,119 @@ cleanup:
         ESP_LOGW(
             TAG,
             "Failed to load Wi-Fi configuration: state=%d, error=%s",
+            (int)state,
+            esp_err_to_name(err));
+    }
+
+    return err;
+}
+
+esp_err_t config_manager_migrate_device_config(void)
+{
+    esp_err_t err = ESP_OK;
+
+    config_manager_wifi_config_t snapshot = {0};
+    config_manager_wifi_config_state_t state =
+        CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN;
+
+    nvs_handle_t handle = 0;
+    bool mutex_locked = false;
+    bool handle_opened = false;
+    bool config_changed = false;
+
+    err = config_manager_lock();
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    mutex_locked = true;
+
+    err = nvs_open(
+        CONFIG_MANAGER_NVS_NAMESPACE,
+        NVS_READWRITE,
+        &handle);
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    handle_opened = true;
+
+    err = config_manager_inspect_wifi_config(
+        handle,
+        &snapshot,
+        &state);
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    if (state == CONFIG_MANAGER_WIFI_CONFIG_STATE_MIGRATION_REQUIRED)
+    {
+        err = nvs_set_u32(
+            handle,
+            CONFIG_MANAGER_NVS_KEY_VERSION,
+            CONFIG_MANAGER_CURRENT_VERSION);
+
+        if (err != ESP_OK)
+        {
+            goto cleanup;
+        }
+
+        err = nvs_commit(handle);
+
+        if (err != ESP_OK)
+        {
+            goto cleanup;
+        }
+
+        config_changed = true;
+    }
+    else
+    {
+        err = config_manager_wifi_state_to_error(state);
+    }
+
+cleanup:
+
+    if (handle_opened)
+    {
+        nvs_close(handle);
+    }
+
+    if (mutex_locked)
+    {
+        config_manager_unlock();
+    }
+
+    config_manager_zeroize(
+        &snapshot,
+        sizeof(snapshot));
+
+    if (err == ESP_OK)
+    {
+        if (config_changed)
+        {
+            ESP_LOGI(TAG, "Wi-Fi configuration migrated to schema version 1");
+        }
+        else
+        {
+            ESP_LOGD(TAG, "Wi-Fi configuration already uses current schema");
+        }
+    }
+    else if (err == ESP_ERR_NVS_NOT_FOUND)
+    {
+        ESP_LOGD(TAG, "No Wi-Fi configuration is available to migrate");
+    }
+    else
+    {
+        ESP_LOGW(
+            TAG,
+            "Failed to migrate Wi-Fi configuration: state=%d, error=%s",
             (int)state,
             esp_err_to_name(err));
     }
@@ -878,6 +1375,325 @@ esp_err_t config_manager_has_wifi_config(
     return err;
 }
 
+esp_err_t config_manager_save_device_identity(
+    const config_manager_device_identity_t *identity)
+{
+    ESP_RETURN_ON_FALSE(
+        identity != NULL,
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "Invalid argument");
+
+    esp_err_t err = ESP_OK;
+
+    config_manager_device_identity_t snapshot = {0};
+    nvs_handle_t handle = 0;
+    bool mutex_locked = false;
+    bool handle_opened = false;
+
+    memcpy(
+        &snapshot,
+        identity,
+        sizeof(snapshot));
+
+    err = config_manager_validate_device_identity(&snapshot);
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    err = config_manager_lock();
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    mutex_locked = true;
+
+    err = nvs_open(
+        CONFIG_MANAGER_NVS_NAMESPACE,
+        NVS_READWRITE,
+        &handle);
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    handle_opened = true;
+
+    err = nvs_set_str(
+        handle,
+        CONFIG_MANAGER_NVS_KEY_DEVICE_ID,
+        snapshot.device_id);
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    err = nvs_set_str(
+        handle,
+        CONFIG_MANAGER_NVS_KEY_DEVICE_NAME,
+        snapshot.device_name);
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    err = nvs_commit(handle);
+
+cleanup:
+
+    if (handle_opened)
+    {
+        nvs_close(handle);
+    }
+
+    if (mutex_locked)
+    {
+        config_manager_unlock();
+    }
+
+    config_manager_zeroize(
+        &snapshot,
+        sizeof(snapshot));
+
+    if (err == ESP_OK)
+    {
+        ESP_LOGI(TAG, "Device identity saved");
+    }
+    else
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to save device identity: %s",
+            esp_err_to_name(err));
+    }
+
+    return err;
+}
+
+esp_err_t config_manager_load_device_identity(
+    config_manager_device_identity_t *identity)
+{
+    if (identity == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    memset(identity, 0, sizeof(*identity));
+
+    esp_err_t err = ESP_OK;
+
+    config_manager_device_identity_t snapshot = {0};
+    nvs_handle_t handle = 0;
+    bool mutex_locked = false;
+    bool handle_opened = false;
+
+    err = config_manager_lock();
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    mutex_locked = true;
+
+    err = nvs_open(
+        CONFIG_MANAGER_NVS_NAMESPACE,
+        NVS_READONLY,
+        &handle);
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    handle_opened = true;
+
+    err = config_manager_inspect_device_identity(
+        handle,
+        &snapshot);
+
+    if (err == ESP_OK)
+    {
+        memcpy(
+            identity,
+            &snapshot,
+            sizeof(*identity));
+    }
+
+cleanup:
+
+    if (handle_opened)
+    {
+        nvs_close(handle);
+    }
+
+    if (mutex_locked)
+    {
+        config_manager_unlock();
+    }
+
+    config_manager_zeroize(
+        &snapshot,
+        sizeof(snapshot));
+
+    if (err != ESP_OK)
+    {
+        memset(identity, 0, sizeof(*identity));
+    }
+
+    if (err == ESP_OK)
+    {
+        ESP_LOGD(TAG, "Device identity loaded");
+    }
+    else if (err == ESP_ERR_NVS_NOT_FOUND)
+    {
+        ESP_LOGD(TAG, "Device identity is not stored");
+    }
+    else
+    {
+        ESP_LOGW(
+            TAG,
+            "Failed to load device identity: %s",
+            esp_err_to_name(err));
+    }
+
+    return err;
+}
+
+esp_err_t config_manager_clear_device_identity(void)
+{
+    esp_err_t err = ESP_OK;
+    nvs_handle_t handle = 0;
+    bool mutex_locked = false;
+    bool handle_opened = false;
+    bool identity_changed = false;
+
+    err = config_manager_lock();
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    mutex_locked = true;
+
+    err = nvs_open(
+        CONFIG_MANAGER_NVS_NAMESPACE,
+        NVS_READWRITE,
+        &handle);
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    handle_opened = true;
+
+    err = nvs_erase_key(
+        handle,
+        CONFIG_MANAGER_NVS_KEY_DEVICE_ID);
+
+    if (err == ESP_OK)
+    {
+        identity_changed = true;
+    }
+    else if (err != ESP_ERR_NVS_NOT_FOUND)
+    {
+        goto cleanup;
+    }
+
+    err = nvs_erase_key(
+        handle,
+        CONFIG_MANAGER_NVS_KEY_DEVICE_NAME);
+
+    if (err == ESP_OK)
+    {
+        identity_changed = true;
+    }
+    else if (err != ESP_ERR_NVS_NOT_FOUND)
+    {
+        goto cleanup;
+    }
+
+    err = ESP_OK;
+
+    if (identity_changed)
+    {
+        err = nvs_commit(handle);
+    }
+
+cleanup:
+
+    if (handle_opened)
+    {
+        nvs_close(handle);
+    }
+
+    if (mutex_locked)
+    {
+        config_manager_unlock();
+    }
+
+    if (err == ESP_OK)
+    {
+        if (identity_changed)
+        {
+            ESP_LOGI(TAG, "Device identity cleared");
+        }
+        else
+        {
+            ESP_LOGD(TAG, "Device identity was already clear");
+        }
+    }
+    else
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to clear device identity: %s",
+            esp_err_to_name(err));
+    }
+
+    return err;
+}
+
+esp_err_t config_manager_has_device_identity(
+    bool *has_identity)
+{
+    if (has_identity == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *has_identity = false;
+
+    config_manager_device_identity_t identity = {0};
+
+    esp_err_t err =
+        config_manager_load_device_identity(&identity);
+
+    if (err == ESP_OK)
+    {
+        *has_identity = true;
+    }
+    else if (err == ESP_ERR_NVS_NOT_FOUND)
+    {
+        err = ESP_OK;
+    }
+
+    config_manager_zeroize(
+        &identity,
+        sizeof(identity));
+
+    return err;
+}
+
 esp_err_t config_manager_load_custom_data(
     const char *key,
     void *out_value,
@@ -889,6 +1705,7 @@ esp_err_t config_manager_load_custom_data(
     nvs_handle_t handle = 0;
     bool mutex_locked = false;
     bool handle_opened = false;
+    nvs_type_t expected_nvs_type = NVS_TYPE_ANY;
 
     /*
      * Validate common arguments.
@@ -1039,6 +1856,20 @@ esp_err_t config_manager_load_custom_data(
             return ESP_ERR_INVALID_ARG;
     }
 
+    err = config_manager_data_type_to_nvs_type(
+        type,
+        &expected_nvs_type);
+
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    if (out_value != NULL)
+    {
+        memset(out_value, 0, *inout_size);
+    }
+
     err = config_manager_lock();
 
     if (err != ESP_OK)
@@ -1060,12 +1891,31 @@ esp_err_t config_manager_load_custom_data(
 
     handle_opened = true;
 
+    bool key_present = false;
+
+    err = config_manager_find_expected_key(
+        handle,
+        key,
+        expected_nvs_type,
+        &key_present);
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    if (!key_present)
+    {
+        err = ESP_ERR_NVS_NOT_FOUND;
+        goto cleanup;
+    }
+
     /*
      * Read the value using the matching NVS getter.
      *
      * Integer values are first read into a local variable and copied
-     * to the caller only after nvs_get_*() succeeds. This keeps the
-     * caller's output unchanged when the read operation fails.
+     * to the caller only after nvs_get_*() succeeds. The caller's
+     * validated output buffer was cleared before NVS access.
      */
     switch (type)
     {
@@ -1806,6 +2656,60 @@ cleanup:
             TAG,
             "Wi-Fi configuration state inspected: state=%d",
             (int)*state);
+    }
+
+    return err;
+}
+
+esp_err_t config_manager_factory_reset(void)
+{
+    esp_err_t err = config_manager_lock();
+
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    bool device_config_changed = false;
+    bool custom_config_changed = false;
+
+    const esp_err_t device_config_err = config_manager_erase_namespace(
+        CONFIG_MANAGER_NVS_NAMESPACE,
+        &device_config_changed);
+
+    /*
+     * Always attempt both independently owned namespaces. This preserves the
+     * best possible reset state even if the first namespace reports an error.
+     */
+    const esp_err_t custom_config_err = config_manager_erase_namespace(
+        CONFIG_MANAGER_CUSTOM_NVS_NAMESPACE,
+        &custom_config_changed);
+
+    err = device_config_err != ESP_OK
+        ? device_config_err
+        : custom_config_err;
+
+    config_manager_unlock();
+
+    if (err == ESP_OK)
+    {
+        if (device_config_changed ||
+            custom_config_changed)
+        {
+            ESP_LOGI(TAG, "Component-owned configuration reset");
+        }
+        else
+        {
+            ESP_LOGD(TAG, "Component-owned configuration was already reset");
+        }
+    }
+    else
+    {
+        ESP_LOGE(
+            TAG,
+            "Component reset incomplete: device_cfg=%s, custom_cfg=%s",
+            esp_err_to_name(device_config_err),
+            esp_err_to_name(custom_config_err));
     }
 
     return err;

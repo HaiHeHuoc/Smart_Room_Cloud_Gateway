@@ -1,4 +1,5 @@
 /* Includes ----------------------------------------------------------------- */
+#include <stdint.h>
 #include <stdio.h>
 
 #include "freertos/FreeRTOS.h"
@@ -50,8 +51,12 @@
 
 /* Macros ------------------------------------------------------------------- */
 #define PERFORMANCE_MONITOR 0
-#define WIFI_SSID       "HaiHeHuoc888"
-#define WIFI_PASSWORD   "11233455"
+
+#define APP_TEMP_WIFI_BOOTSTRAP_ENABLED 1
+#if APP_TEMP_WIFI_BOOTSTRAP_ENABLED
+#define APP_TEMP_WIFI_SSID     "HaiHeHuoc888"
+#define APP_TEMP_WIFI_PASSWORD "11233455"
+#endif
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "MAIN_APP";
@@ -88,8 +93,41 @@ static const firebase_auth_config_t FIREBASE_AUTH_CONFIG =
 };
 
 /* Function Prototypes ------------------------------------------------------ */
-/** @brief Initialize NVS, ESP-NETIF, and the default event loop once. */
-static esp_err_t network_platform_init(void);
+/**
+ * @brief Initialize NVS, config storage, ESP-NETIF, and the event loop.
+ *
+ * @param[out] wifi_config_state Resolved boot-time Wi-Fi configuration state.
+ */
+static esp_err_t network_platform_init(
+    config_manager_wifi_config_state_t *wifi_config_state);
+
+/**
+ * @brief Inspect Wi-Fi storage and attempt one explicit legacy migration.
+ *
+ * @param[out] state Final state after optional migration.
+ * @return ESP_OK for a completed semantic classification or the real storage
+ *         or migration error.
+ */
+static esp_err_t app_resolve_wifi_config_state(
+    config_manager_wifi_config_state_t *state);
+
+/**
+ * @brief Load persisted credentials and request Wi-Fi connection startup.
+ *
+ * The config-manager operation finishes before wifi_manager_connect() runs.
+ *
+ * @return ESP_OK when connection startup is requested or an API error.
+ */
+static esp_err_t app_connect_stored_wifi(void);
+
+/** @brief Log the boot action associated with a Wi-Fi configuration state. */
+static void app_log_wifi_config_state(
+    config_manager_wifi_config_state_t state);
+
+/** @brief Explicitly overwrite a temporary application credential buffer. */
+static void app_zeroize(
+    void *buffer,
+    size_t size);
 
 /** @brief Convert and forward Wi-Fi manager events to the GUI queue. */
 static void app_wifi_status_callback(
@@ -118,6 +156,11 @@ static void app_cloud_status_callback(
     const cloud_manager_status_t *status,
     void *user_context);
 
+#if APP_TEMP_WIFI_BOOTSTRAP_ENABLED
+static esp_err_t app_bootstrap_wifi_config_if_missing(
+    config_manager_wifi_config_state_t *state);
+#endif
+
 /* Application -------------------------------------------------------------- */
 /** @brief Initialize the current application services and run diagnostics. */
 void app_main(void)
@@ -144,8 +187,11 @@ void app_main(void)
      * Initialize shared network infrastructure before initializing
      * the Wi-Fi manager.
      */
+    config_manager_wifi_config_state_t wifi_config_state =
+        CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN;
+
     esp_err_t network_ret =
-    network_platform_init();
+        network_platform_init(&wifi_config_state);
     
     if (network_ret != ESP_OK) {
         ESP_LOGE(
@@ -269,27 +315,21 @@ if (callback_ret != ESP_OK) {
 
     return;
 }
-/*
- * Temporary hardcoded credentials for Sprint 2.
- *
- * Do not commit real credentials to a public repository.
- */
-const wifi_manager_sta_config_t station_config = {
-    .ssid = WIFI_SSID,
-    .password = WIFI_PASSWORD,
-};
+app_log_wifi_config_state(wifi_config_state);
 
-esp_err_t connect_ret =
-    wifi_manager_connect(&station_config);
+if (wifi_config_state == CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID)
+{
+    esp_err_t connect_ret = app_connect_stored_wifi();
 
-if (connect_ret != ESP_OK) {
-    ESP_LOGE(
-        TAG,
-        "Failed to start Wi-Fi connection: %s",
-        esp_err_to_name(connect_ret)
-    );
+    if (connect_ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to start Wi-Fi connection from stored config: %s",
+            esp_err_to_name(connect_ret));
 
-    return;
+        return;
+    }
 }
     esp_err_t service_ret =
         sensor_manager_init(
@@ -381,82 +421,61 @@ if (connect_ret != ESP_OK) {
     
 }
 /* Static Functions --------------------------------------------------------- */
-static esp_err_t network_platform_init(void)
+static esp_err_t network_platform_init(
+    config_manager_wifi_config_state_t *wifi_config_state)
 {
-    /*
-     * Initialize the default NVS partition.
-     */
-    esp_err_t ret = nvs_flash_init();
-    
-
-    /*
-     * These errors can occur when:
-     *
-     * - the NVS partition has no free pages;
-     * - the stored NVS format belongs to another ESP-IDF version.
-     *
-     * Erasing is acceptable during the current development phase because
-     * Sprint 5 NVS configuration storage has not been implemented yet.
-     */
-    if ((ret == ESP_ERR_NVS_NO_FREE_PAGES) ||
-        (ret == ESP_ERR_NVS_NEW_VERSION_FOUND)) {
-
-        ESP_LOGW(
-            TAG,
-            "NVS partition requires erase: %s",
-            esp_err_to_name(ret)
-        );
-
-        ret = nvs_flash_erase();
-
-        if (ret != ESP_OK) {
-            ESP_LOGE(
-                TAG,
-                "Failed to erase NVS: %s",
-                esp_err_to_name(ret)
-            );
-
-            return ret;
-        }
-
-        ret = nvs_flash_init();
+    if (wifi_config_state == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
     }
 
-    if (ret != ESP_OK) {
+    *wifi_config_state =
+        CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN;
+
+    esp_err_t ret = nvs_flash_init();
+
+    if (ret != ESP_OK)
+    {
         ESP_LOGE(
             TAG,
             "Failed to initialize NVS: %s",
-            esp_err_to_name(ret)
-        );
+            esp_err_to_name(ret));
 
         return ret;
     }
 
-    config_manager_wifi_config_t test_config = {
-        .ssid = WIFI_SSID,
-        .password = WIFI_PASSWORD,
-    };
+    ret = config_manager_init();
 
-    ESP_ERROR_CHECK(config_manager_init());
-    esp_err_t err = ESP_OK;
-    err = config_manager_clear_wifi();
-    if(err == ESP_OK)
+    if (ret != ESP_OK)
     {
-        ESP_LOGW(TAG,"Delete completed");
+        ESP_LOGE(
+            TAG,
+            "Failed to initialize config manager: %s",
+            esp_err_to_name(ret));
+
+        return ret;
     }
 
-    err = config_manager_save_wifi(&test_config);
-    err = config_manager_load_wifi(&test_config);
+    ret = app_resolve_wifi_config_state(
+        wifi_config_state);
 
-    ESP_LOGW(
-        TAG,
-        "Load Wi-Fi config result: %s",
-        esp_err_to_name(err));
-    ESP_LOGW(
-        TAG,
-        "SSID: %s, password loaded: %s",
-        test_config.ssid,
-        test_config.password[0] != '\0' ? "yes" : "no");
+    #if APP_TEMP_WIFI_BOOTSTRAP_ENABLED
+        if (ret == ESP_OK)
+        {
+            ret = app_bootstrap_wifi_config_if_missing(
+                wifi_config_state);
+        }
+    #endif
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to resolve persisted Wi-Fi configuration: %s",
+            esp_err_to_name(ret));
+
+        return ret;
+    }
 
     /*
      * Initialize ESP-NETIF and the underlying TCP/IP stack.
@@ -466,12 +485,12 @@ static esp_err_t network_platform_init(void)
      */
     ret = esp_netif_init();
 
-    if (ret != ESP_OK) {
+    if (ret != ESP_OK)
+    {
         ESP_LOGE(
             TAG,
             "Failed to initialize ESP-NETIF: %s",
-            esp_err_to_name(ret)
-        );
+            esp_err_to_name(ret));
 
         return ret;
     }
@@ -482,12 +501,12 @@ static esp_err_t network_platform_init(void)
      */
     ret = esp_event_loop_create_default();
 
-    if (ret != ESP_OK) {
+    if (ret != ESP_OK)
+    {
         ESP_LOGE(
             TAG,
             "Failed to create default event loop: %s",
-            esp_err_to_name(ret)
-        );
+            esp_err_to_name(ret));
 
         return ret;
     }
@@ -495,6 +514,144 @@ static esp_err_t network_platform_init(void)
     ESP_LOGI(TAG, "Network platform initialized");
 
     return ESP_OK;
+}
+
+static esp_err_t app_resolve_wifi_config_state(
+    config_manager_wifi_config_state_t *state)
+{
+    if (state == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN;
+
+    esp_err_t err =
+        config_manager_get_wifi_config_state(state);
+
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    if (*state !=
+        CONFIG_MANAGER_WIFI_CONFIG_STATE_MIGRATION_REQUIRED)
+    {
+        return ESP_OK;
+    }
+
+    ESP_LOGI(TAG, "Migrating legacy Wi-Fi configuration");
+
+    err = config_manager_migrate_device_config();
+
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    err = config_manager_get_wifi_config_state(state);
+
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    if (*state != CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID)
+    {
+        ESP_LOGE(
+            TAG,
+            "Wi-Fi configuration is not valid after migration: state=%d",
+            (int)*state);
+
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t app_connect_stored_wifi(void)
+{
+    config_manager_wifi_config_t stored_config = {0};
+
+    esp_err_t err =
+        config_manager_load_wifi(&stored_config);
+
+    if (err == ESP_OK)
+    {
+        const wifi_manager_sta_config_t station_config =
+        {
+            .ssid = stored_config.ssid,
+            .password = stored_config.password,
+        };
+
+        err = wifi_manager_connect(&station_config);
+    }
+
+    app_zeroize(
+        &stored_config,
+        sizeof(stored_config));
+
+    return err;
+}
+
+static void app_log_wifi_config_state(
+    config_manager_wifi_config_state_t state)
+{
+    switch (state)
+    {
+        case CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID:
+            ESP_LOGI(TAG, "Stored Wi-Fi configuration is valid");
+            break;
+
+        case CONFIG_MANAGER_WIFI_CONFIG_STATE_NOT_CONFIGURED:
+            ESP_LOGW(
+                TAG,
+                "Wi-Fi configuration is required; connection is not started");
+            break;
+
+        case CONFIG_MANAGER_WIFI_CONFIG_STATE_INCOMPLETE:
+            ESP_LOGE(
+                TAG,
+                "Stored Wi-Fi configuration is incomplete; data is preserved");
+            break;
+
+        case CONFIG_MANAGER_WIFI_CONFIG_STATE_UNSUPPORTED_VERSION:
+            ESP_LOGE(
+                TAG,
+                "Stored Wi-Fi schema is unsupported; data is preserved");
+            break;
+
+        case CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA:
+            ESP_LOGE(
+                TAG,
+                "Stored Wi-Fi configuration is invalid; data is preserved");
+            break;
+
+        case CONFIG_MANAGER_WIFI_CONFIG_STATE_MIGRATION_REQUIRED:
+            ESP_LOGE(
+                TAG,
+                "Stored Wi-Fi configuration still requires migration");
+            break;
+
+        case CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN:
+        default:
+            ESP_LOGE(TAG, "Stored Wi-Fi configuration state is unknown");
+            break;
+    }
+}
+
+static void app_zeroize(
+    void *buffer,
+    size_t size)
+{
+    volatile uint8_t *bytes =
+        (volatile uint8_t *)buffer;
+
+    while (size > 0U)
+    {
+        *bytes++ = 0U;
+        size--;
+    }
 }
 
 
@@ -764,3 +921,70 @@ static void app_cloud_status_callback(
             esp_err_to_name(error));
     }
 }
+
+#if APP_TEMP_WIFI_BOOTSTRAP_ENABLED
+static esp_err_t app_bootstrap_wifi_config_if_missing(
+    config_manager_wifi_config_state_t *state)
+{
+    if (state == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (*state !=
+        CONFIG_MANAGER_WIFI_CONFIG_STATE_NOT_CONFIGURED)
+    {
+        return ESP_OK;
+    }
+
+    ESP_LOGW(
+        TAG,
+        "Applying temporary Wi-Fi bootstrap configuration");
+
+    config_manager_wifi_config_t wifi_config =
+    {
+        .ssid = APP_TEMP_WIFI_SSID,
+        .password = APP_TEMP_WIFI_PASSWORD,
+    };
+
+    esp_err_t err =
+        config_manager_save_wifi(&wifi_config);
+
+    app_zeroize(
+        &wifi_config,
+        sizeof(wifi_config));
+
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to save bootstrap Wi-Fi configuration: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+    err = config_manager_get_wifi_config_state(state);
+
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    if (*state != CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID)
+    {
+        ESP_LOGE(
+            TAG,
+            "Bootstrap Wi-Fi configuration is not valid: state=%d",
+            (int)*state);
+
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Temporary Wi-Fi bootstrap completed");
+
+    return ESP_OK;
+}
+#endif

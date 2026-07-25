@@ -5,4 +5,4 @@ set(EXTRA_COMPONENT_DIRS
 )
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(config_manager_phase_5_3b_test)
+project(config_manager_test)

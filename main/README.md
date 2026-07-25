@@ -10,18 +10,20 @@ cloud data types without calling LVGL or HTTPS from producer callbacks.
 ## Current Startup Order
 
 1. Log project identity and optionally start `performance_monitor`.
-2. Initialize NVS, ESP-NETIF, and the default ESP event loop.
-3. Initialize the LCD display driver and LVGL display integration.
-4. Mount the SD card and register the LVGL `S:` filesystem.
-5. Initialize `app_gui`, start its single UI task, and create the Wi-Fi screen.
-6. Initialize `wifi_manager`, register its callback, and begin Station mode
-   connection.
-7. Initialize `sensor_manager`, register its callback, and start DHT22
+2. Initialize NVS and `config_manager`, inspect Wi-Fi state, and migrate a
+   supported legacy schema once when required.
+3. Initialize ESP-NETIF and the default ESP event loop.
+4. Initialize the LCD display driver and LVGL display integration.
+5. Mount the SD card and register the LVGL `S:` filesystem.
+6. Initialize `app_gui`, start its single UI task, and create the Wi-Fi screen.
+7. Initialize `wifi_manager`, register its callback, and load/connect only
+   when persisted Wi-Fi configuration is `VALID`.
+8. Initialize `sensor_manager`, register its callback, and start DHT22
    sampling.
-8. Initialize `firebase_auth` with Email/Password credentials and the expected
+9. Initialize `firebase_auth` with Email/Password credentials and the expected
    device UID.
-9. Initialize and start `cloud_manager` with the Firebase latest-value URL.
-10. Leave `app_main()` in a low-activity delay loop while component tasks own
+10. Initialize and start `cloud_manager` with the Firebase latest-value URL.
+11. Leave `app_main()` in a low-activity delay loop while component tasks own
     ongoing work.
 
 Startup errors are logged and return from `app_main()` instead of using active
@@ -57,13 +59,20 @@ updates, while the cloud task owns authentication and HTTPS requests.
 - Firebase token refresh margin is 300 seconds.
 - The telemetry endpoint is
   `devices/esp32s3-001/latest.json` in Firebase Realtime Database.
-- Wi-Fi and Firebase device credentials are development values compiled into
-  source. They must move to provisioning or protected local configuration
-  before production or publication.
+- Wi-Fi credentials are loaded from `config_manager`; production code contains
+  no hard-coded Wi-Fi SSID/password fallback.
+- Firebase device credentials remain development values compiled into source.
+  They must move to protected local configuration before production or
+  publication.
 
 ## Ownership And Threading
 
-- `network_platform_init()` owns one-time NVS, ESP-NETIF, and event-loop setup.
+- `network_platform_init()` owns one-time NVS/config-manager, ESP-NETIF, and
+  event-loop setup.
+- Read-only config inspection never migrates implicitly. Boot attempts explicit
+  migration once, then re-inspects before any credential load.
+- `wifi_manager_connect()` runs only after config-manager has closed NVS and
+  released its mutex. The application credential copy is then zeroized.
 - The display handle has static lifetime because `ui_manager_lvgl` borrows it.
 - `app_gui` owns the task that calls `lv_timer_handler()`.
 - Wi-Fi and sensor callbacks must not call LVGL.
@@ -107,6 +116,11 @@ idf.py -p <PORT> flash monitor
 
 - LVGL currently initializes before SD registration is checked. A failure in
   either path stops the remaining startup sequence.
+- Missing Wi-Fi configuration is logged and startup continues without a
+  connection request. Incomplete, invalid, interrupted-write, and unsupported
+  data is preserved.
+- Production startup does not erase the complete NVS partition to recover from
+  NVS initialization errors.
 - Sensor sampling starts before cloud initialization, but its initial DHT22
   stabilization delay normally allows cloud resources to become ready first.
   A telemetry post before cloud initialization is safely rejected.
@@ -117,7 +131,8 @@ idf.py -p <PORT> flash monitor
 
 ## Future Attention
 
-- Move Wi-Fi and Firebase credentials out of source code.
+- Add Sprint 6 provisioning to populate missing Wi-Fi configuration.
+- Move Firebase credentials out of source code.
 - Add a coordinated application controller only when runtime stop/restart is
   required.
 - Replace development demo hooks only when their bring-up role is finished.
