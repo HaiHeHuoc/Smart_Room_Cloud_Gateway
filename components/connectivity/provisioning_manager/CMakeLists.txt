@@ -9,6 +9,7 @@ idf_component_register(
 
     PRIV_REQUIRES
         esp_hw_support
+        esp_wifi
         freertos
         log
         network_provisioning

@@ -1,13 +1,45 @@
 #pragma once
 
 /* Includes ----------------------------------------------------------------- */
+#include <stdint.h>
+
 #include "esp_err.h"
+
+/* Macros ------------------------------------------------------------------- */
+/** Maximum supported Wi-Fi SSID length, excluding the null terminator. */
+#define PROVISIONING_MANAGER_WIFI_SSID_MAX_LEN 32U
+
+/** Maximum supported Wi-Fi password length, excluding the null terminator. */
+#define PROVISIONING_MANAGER_WIFI_PASSWORD_MAX_LEN 63U
+
+/** Storage size for a null-terminated Wi-Fi SSID. */
+#define PROVISIONING_MANAGER_WIFI_SSID_BUFFER_SIZE \
+    (PROVISIONING_MANAGER_WIFI_SSID_MAX_LEN + 1U)
+
+/** Storage size for a null-terminated Wi-Fi password. */
+#define PROVISIONING_MANAGER_WIFI_PASSWORD_BUFFER_SIZE \
+    (PROVISIONING_MANAGER_WIFI_PASSWORD_MAX_LEN + 1U)
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /* Type Definitions --------------------------------------------------------- */
+/**
+ * @brief Application-owned copy of provisioned Wi-Fi credentials.
+ *
+ * This structure never references memory owned by the provisioning framework.
+ * The caller must clear it promptly after persistence or on any error path.
+ */
+typedef struct
+{
+    /** Null-terminated Wi-Fi network name. */
+    char ssid[PROVISIONING_MANAGER_WIFI_SSID_BUFFER_SIZE];
+
+    /** Null-terminated Wi-Fi password, or an empty string for an open network. */
+    char password[PROVISIONING_MANAGER_WIFI_PASSWORD_BUFFER_SIZE];
+} provisioning_manager_wifi_credentials_t;
+
 /**
  * @brief Lifecycle states owned by the BLE provisioning manager.
  *
@@ -44,7 +76,7 @@ typedef enum
     /**
      * @brief Provisioning has stopped and released its runtime resources.
      *
-     * Phase 6.1 treats this as a terminal state for the current boot.
+     * This is a terminal state for the current boot.
      */
     PROVISIONING_MANAGER_STATE_STOPPED,
 
@@ -111,6 +143,30 @@ esp_err_t provisioning_manager_stop(void);
  */
 esp_err_t provisioning_manager_get_state(
     provisioning_manager_state_t *state);
+
+/**
+ * @brief Wait for and copy the latest provisioned Wi-Fi credentials.
+ *
+ * Credentials are deep-copied when received but become available through this
+ * API only after the provisioning framework reports a successful Wi-Fi
+ * connection. Failed connection attempts discard their pending credential
+ * copy. The output is cleared before waiting and remains cleared on failure.
+ *
+ * This function must be called from task context, not from an ISR.
+ *
+ * @param[out] credentials Destination credential structure.
+ * @param[in] timeout_ms Maximum time to wait in milliseconds. Zero performs
+ * a non-blocking check.
+ *
+ * @return
+ * - ESP_OK: Credentials were copied successfully.
+ * - ESP_ERR_INVALID_ARG: credentials is NULL.
+ * - ESP_ERR_INVALID_STATE: Credential handoff is not initialized.
+ * - ESP_ERR_TIMEOUT: No credentials arrived before timeout.
+ */
+esp_err_t provisioning_manager_receive_wifi_credentials(
+    provisioning_manager_wifi_credentials_t *credentials,
+    uint32_t timeout_ms);
 
 #ifdef __cplusplus
 }

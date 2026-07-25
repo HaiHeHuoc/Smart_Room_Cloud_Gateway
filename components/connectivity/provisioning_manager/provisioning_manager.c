@@ -5,21 +5,25 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/task.h"
 
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_mac.h"
+#include "esp_wifi_types.h"
 
 #include "network_provisioning/manager.h"
 #include "network_provisioning/scheme_ble.h"
-
 /* Macros ------------------------------------------------------------------- */
 #define PROVISIONING_MANAGER_SERVICE_NAME_BUFFER_SIZE      12U
 #define PROVISIONING_MANAGER_CLEANUP_TASK_STACK_SIZE_BYTES (4U * 1024U)
 #define PROVISIONING_MANAGER_CLEANUP_TASK_PRIORITY          4U
+
+#define PROVISIONING_MANAGER_CREDENTIAL_QUEUE_LENGTH 1U
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "PROVISIONING_MANAGER";
@@ -46,7 +50,23 @@ static provisioning_manager_state_t s_state =
 
 static bool s_initializing = false;
 
+static QueueHandle_t s_credentials_queue = NULL;
+
+static provisioning_manager_wifi_credentials_t s_pending_credentials = {0};
+
+static bool s_pending_credentials_valid = false;
+
 /* Function Prototypes ------------------------------------------------------ */
+/**
+ * @brief Securely overwrite a buffer that may contain sensitive data.
+ *
+ * @param[in,out] buffer Buffer to clear.
+ * @param[in] size Buffer size in bytes.
+ */
+static void provisioning_manager_zeroize(
+    void *buffer,
+    size_t size);
+
 /**
  * @brief Build a unique BLE service name from the Station MAC address.
  *
@@ -83,7 +103,7 @@ static void provisioning_manager_cleanup_task(
  *
  * @param[in] user_data Optional callback context; unused.
  * @param[in] event Provisioning framework event.
- * @param[in] event_data Event-specific payload; unused by Phase 6.1.
+ * @param[in] event_data Event-specific payload supplied by the framework.
  */
 static void provisioning_manager_event_callback(
     void *user_data,
@@ -98,7 +118,100 @@ static void provisioning_manager_event_callback(
 static provisioning_manager_state_t
 provisioning_manager_get_state_snapshot(void);
 
-/* Static Functions --------------------------------------------------------- */
+/**
+ * @brief Validate and deep-copy framework-owned station credentials.
+ *
+ * @param[out] destination Application-owned destination structure.
+ * @param[in] source Framework-owned station configuration.
+ *
+ * @return ESP_OK on success, or ESP_ERR_INVALID_ARG for invalid input.
+ */
+static esp_err_t provisioning_manager_copy_wifi_credentials(
+    provisioning_manager_wifi_credentials_t *destination,
+    const wifi_sta_config_t *source);
+
+/* Private Functions -------------------------------------------------------- */
+static void provisioning_manager_zeroize(
+    void *buffer,
+    size_t size)
+{
+    volatile uint8_t *byte =
+        (volatile uint8_t *)buffer;
+
+    while ((byte != NULL) &&
+           (size > 0U))
+    {
+        *byte = 0U;
+        byte++;
+        size--;
+    }
+}
+
+static esp_err_t provisioning_manager_copy_wifi_credentials(
+    provisioning_manager_wifi_credentials_t *destination,
+    const wifi_sta_config_t *source)
+{
+    if ((destination == NULL) ||
+        (source == NULL))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    memset(
+        destination,
+        0,
+        sizeof(*destination));
+
+    const size_t ssid_length =
+        strnlen(
+            (const char *)source->ssid,
+            sizeof(source->ssid));
+
+    const size_t password_length =
+        strnlen(
+            (const char *)source->password,
+            sizeof(source->password));
+
+    /*
+     * A 32-byte SSID may not contain a null terminator in the source array.
+     * The destination has one extra byte, so it can always be terminated.
+     */
+    if ((ssid_length == 0U) ||
+        (ssid_length >
+         PROVISIONING_MANAGER_WIFI_SSID_MAX_LEN))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /*
+     * Open networks use an empty password.
+     * WPA/WPA2 passphrases accepted by config_manager contain 8-63 bytes.
+     */
+    if ((password_length != 0U) &&
+        ((password_length < 8U) ||
+         (password_length >
+          PROVISIONING_MANAGER_WIFI_PASSWORD_MAX_LEN)))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    memcpy(
+        destination->ssid,
+        source->ssid,
+        ssid_length);
+
+    destination->ssid[ssid_length] = '\0';
+
+    memcpy(
+        destination->password,
+        source->password,
+        password_length);
+
+    destination->password[password_length] = '\0';
+
+    return ESP_OK;
+}
+
 static esp_err_t provisioning_manager_build_service_name(
     char *service_name,
     size_t service_name_size)
@@ -183,7 +296,6 @@ static void provisioning_manager_event_callback(
     void *event_data)
 {
     (void)user_data;
-    (void)event_data;
 
     switch (event)
     {
@@ -198,6 +310,141 @@ static void provisioning_manager_event_callback(
                 TAG,
                 "Underlying provisioning service started");
             break;
+
+        case NETWORK_PROV_WIFI_CRED_RECV:
+        {
+            const wifi_sta_config_t *received_credentials =
+                (const wifi_sta_config_t *)event_data;
+
+            provisioning_manager_wifi_credentials_t credentials_copy = {0};
+
+            esp_err_t copy_ret =
+                provisioning_manager_copy_wifi_credentials(
+                    &credentials_copy,
+                    received_credentials);
+
+            if (copy_ret != ESP_OK)
+            {
+                provisioning_manager_zeroize(
+                    &credentials_copy,
+                    sizeof(credentials_copy));
+
+                ESP_LOGE(
+                    TAG,
+                    "Received invalid Wi-Fi credentials");
+
+                break;
+            }
+
+            portENTER_CRITICAL(&s_state_lock);
+
+            provisioning_manager_zeroize(
+                &s_pending_credentials,
+                sizeof(s_pending_credentials));
+
+            memcpy(
+                &s_pending_credentials,
+                &credentials_copy,
+                sizeof(s_pending_credentials));
+
+            s_pending_credentials_valid = true;
+
+            portEXIT_CRITICAL(&s_state_lock);
+
+            provisioning_manager_zeroize(
+                &credentials_copy,
+                sizeof(credentials_copy));
+
+            ESP_LOGI(
+                TAG,
+                "Wi-Fi credentials received; awaiting connection result");
+
+            break;
+        }
+
+        case NETWORK_PROV_WIFI_CRED_FAIL:
+            portENTER_CRITICAL(&s_state_lock);
+
+            provisioning_manager_zeroize(
+                &s_pending_credentials,
+                sizeof(s_pending_credentials));
+
+            s_pending_credentials_valid = false;
+
+            portEXIT_CRITICAL(&s_state_lock);
+
+            ESP_LOGW(
+                TAG,
+                "Provisioned Wi-Fi connection failed; pending credentials "
+                "discarded");
+            break;
+
+        case NETWORK_PROV_WIFI_CRED_SUCCESS:
+        {
+            provisioning_manager_wifi_credentials_t credentials_copy = {0};
+            QueueHandle_t credentials_queue = NULL;
+            bool credentials_ready = false;
+
+            portENTER_CRITICAL(&s_state_lock);
+
+            if (s_pending_credentials_valid)
+            {
+                memcpy(
+                    &credentials_copy,
+                    &s_pending_credentials,
+                    sizeof(credentials_copy));
+
+                provisioning_manager_zeroize(
+                    &s_pending_credentials,
+                    sizeof(s_pending_credentials));
+
+                s_pending_credentials_valid = false;
+                credentials_ready = true;
+            }
+
+            credentials_queue = s_credentials_queue;
+
+            portEXIT_CRITICAL(&s_state_lock);
+
+            if (!credentials_ready ||
+                (credentials_queue == NULL))
+            {
+                provisioning_manager_zeroize(
+                    &credentials_copy,
+                    sizeof(credentials_copy));
+
+                ESP_LOGE(
+                    TAG,
+                    "Provisioned connection succeeded but credential "
+                    "handoff is unavailable");
+
+                break;
+            }
+
+            BaseType_t queue_ret =
+                xQueueOverwrite(
+                    credentials_queue,
+                    &credentials_copy);
+
+            provisioning_manager_zeroize(
+                &credentials_copy,
+                sizeof(credentials_copy));
+
+            if (queue_ret != pdPASS)
+            {
+                ESP_LOGE(
+                    TAG,
+                    "Failed to queue verified Wi-Fi credentials");
+
+                break;
+            }
+
+            ESP_LOGI(
+                TAG,
+                "Provisioned Wi-Fi connection succeeded; credentials ready "
+                "for application handoff");
+            break;
+        }
 
         case NETWORK_PROV_END:
         {
@@ -242,8 +489,16 @@ static void provisioning_manager_event_callback(
         }
 
         case NETWORK_PROV_DEINIT:
-            provisioning_manager_set_state(
-                PROVISIONING_MANAGER_STATE_STOPPED);
+            portENTER_CRITICAL(&s_state_lock);
+
+            provisioning_manager_zeroize(
+                &s_pending_credentials,
+                sizeof(s_pending_credentials));
+
+            s_pending_credentials_valid = false;
+            s_state = PROVISIONING_MANAGER_STATE_STOPPED;
+
+            portEXIT_CRITICAL(&s_state_lock);
 
             ESP_LOGI(
                 TAG,
@@ -305,6 +560,12 @@ esp_err_t provisioning_manager_init(void)
 
     s_initializing = true;
 
+    provisioning_manager_zeroize(
+        &s_pending_credentials,
+        sizeof(s_pending_credentials));
+
+    s_pending_credentials_valid = false;
+
     portEXIT_CRITICAL(&s_state_lock);
 
     network_prov_mgr_config_t config =
@@ -325,8 +586,37 @@ esp_err_t provisioning_manager_init(void)
         },
     };
 
+    QueueHandle_t credentials_queue =
+        xQueueCreate(
+            PROVISIONING_MANAGER_CREDENTIAL_QUEUE_LENGTH,
+            sizeof(provisioning_manager_wifi_credentials_t));
+
+    if (credentials_queue == NULL)
+    {
+        portENTER_CRITICAL(&s_state_lock);
+
+        s_initializing = false;
+        s_state = PROVISIONING_MANAGER_STATE_FAILED;
+
+        portEXIT_CRITICAL(&s_state_lock);
+
+        ESP_LOGE(
+            TAG,
+            "Failed to create provisioning credential queue");
+
+        return ESP_ERR_NO_MEM;
+    }
+
+    s_credentials_queue = credentials_queue;
+
     esp_err_t ret =
         network_prov_mgr_init(config);
+
+    if (ret != ESP_OK)
+    {
+        vQueueDelete(credentials_queue);
+        s_credentials_queue = NULL;
+    }
 
     portENTER_CRITICAL(&s_state_lock);
 
@@ -489,10 +779,53 @@ esp_err_t provisioning_manager_get_state(
         "State is NULL"
     );
 
-    ESP_LOGI(TAG, "Getting State");
-
     *state =
         provisioning_manager_get_state_snapshot();
+
+    return ESP_OK;
+}
+
+esp_err_t provisioning_manager_receive_wifi_credentials(
+    provisioning_manager_wifi_credentials_t *credentials,
+    uint32_t timeout_ms)
+{
+    if (credentials == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    memset(
+        credentials,
+        0,
+        sizeof(*credentials));
+
+    QueueHandle_t credentials_queue =
+        s_credentials_queue;
+
+    if (credentials_queue == NULL)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    BaseType_t receive_ret =
+        xQueueReceive(
+            credentials_queue,
+            credentials,
+            pdMS_TO_TICKS(timeout_ms));
+
+    if (receive_ret != pdTRUE)
+    {
+        memset(
+            credentials,
+            0,
+            sizeof(*credentials));
+
+        return ESP_ERR_TIMEOUT;
+    }
+
+    ESP_LOGD(
+        TAG,
+        "Verified Wi-Fi credentials delivered to application");
 
     return ESP_OK;
 }
