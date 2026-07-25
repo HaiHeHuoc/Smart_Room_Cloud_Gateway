@@ -126,37 +126,52 @@ Complex local web dashboard
 
 ```text
 components/
-├── app_controller/
-├── ble_provisioning/
-├── wifi_manager/
-├── config_manager/
-├── sensor_manager/
-├── ui_manager_lvgl/
-├── display_driver/
-├── firebase_auth/
-├── cloud_manager/
-├── input_manager/
-├── led_manager/
-└── common/
+├── cloud/
+│   ├── cloud_manager/
+│   └── firebase_auth/
+├── connectivity/
+│   └── wifi_manager/
+├── display/
+│   ├── display_driver/
+│   └── waveshare__esp_lcd_st7735/
+├── sensing/
+│   ├── sensor_manager/
+│   └── sensor_DHT22/
+├── storage/
+│   ├── config_manager/
+│   └── sd_card_manager/
+├── system/
+│   ├── common/
+│   └── performance_monitor/
+└── ui/
+    ├── app_gui/
+    ├── ui_manager_lvgl/
+    ├── lvgl_image_handler/
+    └── lvgl_sd_fs/
 ```
+
+The first-level directories group reusable ESP-IDF components by domain.
+Component names and public APIs remain independent.
 
 ### 6.2 Component Responsibilities
 
 | Component | Responsibility |
 |---|---|
-| `app_controller` | Main state machine and feature coordination |
-| `ble_provisioning` | BLE-based Wi-Fi provisioning |
 | `wifi_manager` | Wi-Fi connection, disconnect, reconnect, events |
 | `config_manager` | NVS read/write/erase for credentials and settings |
 | `sensor_manager` | Periodic sensor reading and validation |
+| `sensor_DHT22` | DHT22-specific sampling driver |
 | `ui_manager_lvgl` | LVGL initialization, tick, display integration, and mutex ownership |
 | `app_gui` | Queue-driven application screens and status rendering |
 | `display_driver` | LCD SPI init, panel driver, LVGL flush integration |
+| `waveshare__esp_lcd_st7735` | ST7735 panel implementation used by the display driver |
+| `lvgl_image_handler` | Image decoding, scaling, animation, and LVGL image object handling |
+| `lvgl_sd_fs` | LVGL file-system bridge for SD-card content |
+| `sd_card_manager` | SD-card mount, file access, and diagnostic helpers |
 | `firebase_auth` | Firebase sign-in, ID-token validation, caching, and refresh |
 | `cloud_manager` | Build telemetry JSON and upload it to Firebase via authenticated HTTPS REST |
-| `input_manager` | Button, debounce, long press detection |
-| `led_manager` | LED status indication |
 | `common` | Shared types, events, error codes, utility macros |
+| `performance_monitor` | Runtime CPU, memory, and task-stack diagnostics |
 
 ---
 

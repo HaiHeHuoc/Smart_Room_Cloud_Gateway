@@ -35,20 +35,33 @@ This is a learning-oriented embedded project. Do not over-engineer or implement 
 
 ```text
 components/
-├── app_controller/
-├── ble_provisioning/
-├── wifi_manager/
-├── config_manager/
-├── sensor_manager/
-├── ui_manager_lvgl/
-├── display_driver/
-├── cloud_firebase/
-├── input_manager/
-├── led_manager/
-└── web_server/              # optional, not MVP
+├── cloud/
+│   ├── cloud_manager/
+│   └── firebase_auth/
+├── connectivity/
+│   └── wifi_manager/
+├── display/
+│   ├── display_driver/
+│   └── waveshare__esp_lcd_st7735/
+├── sensing/
+│   ├── sensor_manager/
+│   └── sensor_DHT22/
+├── storage/
+│   ├── config_manager/
+│   └── sd_card_manager/
+├── system/
+│   ├── common/
+│   └── performance_monitor/
+└── ui/
+    ├── app_gui/
+    ├── ui_manager_lvgl/
+    ├── lvgl_image_handler/
+    └── lvgl_sd_fs/
 ```
 
-Only create components required by the current sprint.
+The first-level folders are organizational domains. Their children remain
+independent ESP-IDF components with separate public APIs. Only create
+components required by the current sprint.
 
 ---
 

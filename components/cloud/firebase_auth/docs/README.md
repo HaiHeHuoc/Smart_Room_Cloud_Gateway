@@ -126,7 +126,7 @@ therefore not required for the current expiration calculation.
   before production deployment.
 
 Firebase project setup and the verified PowerShell flow are documented in
-`components/cloud_manager/README.txt` and `Test/TestFirebase_Auth.ps1`.
+`components/cloud/cloud_manager/README.txt` and `Test/TestFirebase_Auth.ps1`.
 
 ## Future Attention
 

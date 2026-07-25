@@ -6,6 +6,7 @@
 storage, GUI, Wi-Fi, sensor, Firebase Authentication, and cloud components in
 their required order. It also maps manager-owned snapshots into the GUI and
 cloud data types without calling LVGL or HTTPS from producer callbacks.
+The reusable component domain layout is documented in `components/README.md`.
 
 ## Current Startup Order
 
@@ -125,7 +126,7 @@ idf.py -p <PORT> flash monitor
   stabilization delay normally allows cloud resources to become ready first.
   A telemetry post before cloud initialization is safely rejected.
 - Firebase project setup and authenticated host testing are documented in
-  `components/cloud_manager/README.txt` and `Test/TestFirebase_Auth.ps1`.
+  `components/cloud/cloud_manager/README.txt` and `Test/TestFirebase_Auth.ps1`.
 - Never log or commit passwords, ID tokens, refresh tokens, service-account
   keys, or Firebase administrator credentials.
 

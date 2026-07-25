@@ -44,7 +44,7 @@ conversion from copied config-manager types to subsystem-specific types.
 ## Component Structure
 
 ```text
-components/config_manager/
+components/storage/config_manager/
 |-- CMakeLists.txt
 |-- config_manager.c
 |-- include/
