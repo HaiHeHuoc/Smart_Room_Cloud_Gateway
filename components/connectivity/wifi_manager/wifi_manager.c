@@ -1257,11 +1257,8 @@ esp_err_t wifi_manager_init(void)
 
 
     /*
-     * During Sprint 2, credentials are temporary and hardcoded.
-     *
-     * Do not let the Wi-Fi driver silently persist them into NVS.
-     * Persistent configuration will be owned by config_manager
-     * during Sprint 5.
+     * Keep driver storage volatile. Durable application credentials are owned
+     * exclusively by config_manager, including provisioning handoff.
      */
     ret = esp_wifi_set_storage(WIFI_STORAGE_RAM);
 
@@ -1837,8 +1834,7 @@ esp_err_t wifi_manager_connect(
 
     ESP_LOGI(
         TAG,
-        "Connecting to Wi-Fi SSID: %s",
-        config->ssid);
+        "Connecting to configured Wi-Fi network");
 
     /*
      * 6. Start the asynchronous connection process.
@@ -2128,6 +2124,7 @@ bool wifi_manager_is_connected(void)
 
     connected =
         s_wifi_manager.initialized &&
+        s_wifi_manager.credentials_configured &&
         (s_wifi_manager.status.state ==
          WIFI_MANAGER_STATE_CONNECTED) &&
         s_wifi_manager.status.has_ipv4_address;

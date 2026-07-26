@@ -179,8 +179,9 @@ esp_err_t wifi_manager_init(void);
 /**
  * @brief Configure credentials and begin a timed connection to an access point.
  *
- * This first Sprint 2 implementation uses hardcoded credentials supplied
- * by the application. NVS-based credentials will be introduced in Sprint 5.
+ * The supplied credentials are copied into the Wi-Fi driver's RAM storage.
+ * The caller retains ownership of the input strings, while durable storage
+ * remains exclusively owned by config_manager outside this component.
  *
  * @param config Station SSID/password configuration.
  *
@@ -239,13 +240,14 @@ esp_err_t wifi_manager_get_rssi(
 );
 
 /**
- * @brief Check whether the Station has received an IP address.
+ * @brief Check whether wifi_manager owns an IPv4-ready Station connection.
  *
- * Connected means the Station has received a valid IPv4 address. Association
- * while waiting for DHCP is not considered connected. The function returns
- * false before wifi_manager_init() succeeds.
+ * Connected means the Station has a valid IPv4 address and its credentials
+ * have been configured or adopted by wifi_manager. A connection created by
+ * provisioning remains not ready until wifi_manager_adopt_active_connection()
+ * completes. Association while waiting for DHCP is not connected.
  *
- * @return true only while the Station has a valid IPv4 address.
+ * @return true only while wifi_manager owns a valid IPv4 connection.
  */
 bool wifi_manager_is_connected(void);
 

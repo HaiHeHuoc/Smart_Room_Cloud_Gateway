@@ -43,10 +43,12 @@ ESP_ERROR_CHECK(cloud_manager_register_status_callback(
 ESP_ERROR_CHECK(cloud_manager_start());
 ```
 
-When BLE provisioning is required at boot, start the cloud task only after the
-application network coordinator has completed provisioning cleanup and
-`wifi_manager` has adopted the active connection. This avoids starting a TLS
-authentication request while temporary BLE resources are still active.
+The component may be initialized while BLE provisioning is active, but the
+application defers `cloud_manager_start()` until the network coordinator
+reaches `CONNECTING` for stored credentials or `ONLINE` after provisioning.
+This avoids allocating the 12 KB cloud task stack while temporary BLE
+resources are active. `wifi_manager_is_connected()` also remains false until
+provisioning cleanup and active-connection adoption complete.
 
 The configured Firebase URL must be a base `.json` URL without query
 parameters:
@@ -172,6 +174,10 @@ ID tokens, or refresh tokens in firmware or source control.
 Phase 4 was hardware-accepted on 2026-07-19. Authentication, authenticated
 telemetry upload, latest-data visibility in Firebase, LCD Cloud state updates,
 and failure/retry behavior were all verified on the ESP32-S3 target.
+
+The deferred task-start integration added by checkpoint 6.3.2 was
+hardware-accepted on 2026-07-26 using timeout, reset, reprovisioning, Wi-Fi
+adoption, Firebase upload, and GUI cloud-state recovery.
 
 ## Future Attention
 

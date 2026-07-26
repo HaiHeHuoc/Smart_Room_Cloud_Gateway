@@ -13,6 +13,16 @@
 #include "provisioning_manager.h"
 #include "wifi_manager.h"
 
+/* Macros ------------------------------------------------------------------- */
+#define APP_NETWORK_COORDINATOR_TASK_NAME \
+    "app_net_coord"
+
+#define APP_NETWORK_COORDINATOR_TASK_STACK_SIZE_BYTES \
+    (6U * 1024U)
+
+#define APP_NETWORK_COORDINATOR_TASK_PRIORITY \
+    4U
+
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "APP_NETWORK_COORDINATOR";
 
@@ -100,7 +110,109 @@ static esp_err_t app_apply_wifi_boot_policy(
 static void app_network_coordinator_set_state(
     app_network_coordinator_state_t state);
 
+/**
+ * @brief Execute the synchronous boot policy in coordinator task context.
+ *
+ * @return ESP_OK when the selected network path starts or completes.
+ */
+static esp_err_t app_network_coordinator_run_boot_policy(void);
+
+/**
+ * @brief Run one-shot network boot orchestration without blocking app_main.
+ *
+ * @param[in] argument Unused.
+ */
+static void app_network_coordinator_task(
+    void *argument);
+
 /* Static Functions --------------------------------------------------------- */
+static void app_network_coordinator_task(
+    void *argument)
+{
+    (void)argument;
+
+    ESP_LOGI(
+        TAG,
+        "Network coordinator task started");
+
+    const esp_err_t ret =
+        app_network_coordinator_run_boot_policy();
+
+    if (ret != ESP_OK)
+    {
+        app_network_coordinator_set_state(
+            APP_NETWORK_COORDINATOR_STATE_FAILED);
+
+        ESP_LOGE(
+            TAG,
+            "Network coordinator task failed: %s",
+            esp_err_to_name(ret));
+    }
+    else
+    {
+        app_network_coordinator_state_t final_state =
+            APP_NETWORK_COORDINATOR_STATE_FAILED;
+
+        if (app_network_coordinator_get_state(
+                &final_state) == ESP_OK)
+        {
+            ESP_LOGI(
+                TAG,
+                "Network coordinator boot task completed: state=%s",
+                app_network_coordinator_state_to_string(
+                    final_state));
+        }
+    }
+
+    vTaskDelete(NULL);
+}
+
+static esp_err_t app_network_coordinator_run_boot_policy(void)
+{
+    app_network_coordinator_set_state(
+        APP_NETWORK_COORDINATOR_STATE_RESOLVING_CONFIG);
+
+    config_manager_wifi_config_state_t config_state =
+        CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN;
+
+    esp_err_t ret =
+        app_resolve_wifi_config_state(
+            &config_state);
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to resolve Wi-Fi configuration: %s",
+            esp_err_to_name(ret));
+
+        return ret;
+    }
+
+    app_log_wifi_config_state(
+        config_state);
+
+    ret =
+        app_apply_wifi_boot_policy(
+            config_state);
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Network boot policy failed: %s",
+            esp_err_to_name(ret));
+
+        return ret;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Network boot policy started successfully");
+
+    return ESP_OK;
+}
+
 static void app_network_coordinator_set_state(
     app_network_coordinator_state_t state)
 {
@@ -293,8 +405,6 @@ cleanup:
     return ret;
 }
 
-
-
 static esp_err_t app_run_wifi_provisioning(void)
 {
     esp_err_t ret =
@@ -372,28 +482,43 @@ static esp_err_t app_run_wifi_provisioning(void)
             return ret;
         }
 
-        if ((provisioning_state ==
-             PROVISIONING_MANAGER_STATE_STOPPED) &&
-            wifi_manager_is_connected())
+        if (provisioning_state ==
+            PROVISIONING_MANAGER_STATE_STOPPED)
         {
+            wifi_manager_status_t wifi_status = {0};
+
             ret =
-                wifi_manager_adopt_active_connection();
+                wifi_manager_get_status(
+                    &wifi_status);
 
             if (ret != ESP_OK)
             {
-                ESP_LOGE(
-                    TAG,
-                    "Failed to hand provisioning connection to Wi-Fi manager: %s",
-                    esp_err_to_name(ret));
-
                 return ret;
             }
 
-            ESP_LOGI(
-                TAG,
-                "Wi-Fi provisioning completed successfully");
+            if ((wifi_status.state ==
+                 WIFI_MANAGER_STATE_CONNECTED) &&
+                wifi_status.has_ipv4_address)
+            {
+                ret =
+                    wifi_manager_adopt_active_connection();
 
-            return ESP_OK;
+                if (ret != ESP_OK)
+                {
+                    ESP_LOGE(
+                        TAG,
+                        "Failed to hand provisioning connection to Wi-Fi manager: %s",
+                        esp_err_to_name(ret));
+
+                    return ret;
+                }
+
+                ESP_LOGI(
+                    TAG,
+                    "Wi-Fi provisioning completed successfully");
+
+                return ESP_OK;
+            }
         }
 
         if (provisioning_state ==
@@ -423,22 +548,29 @@ static esp_err_t app_run_wifi_provisioning(void)
     }
 }
 
-
 static esp_err_t app_apply_wifi_boot_policy(
     config_manager_wifi_config_state_t state)
 {
     switch (state)
     {
         case CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID:
-            app_network_coordinator_set_state(
-                APP_NETWORK_COORDINATOR_STATE_CONNECTING);
-
             ESP_LOGI(
                 TAG,
                 "Valid Wi-Fi configuration found; "
                 "starting stored connection");
 
-            return app_connect_stored_wifi();
+            {
+                esp_err_t ret =
+                    app_connect_stored_wifi();
+
+                if (ret == ESP_OK)
+                {
+                    app_network_coordinator_set_state(
+                        APP_NETWORK_COORDINATOR_STATE_CONNECTING);
+                }
+
+                return ret;
+            }
 
         case CONFIG_MANAGER_WIFI_CONFIG_STATE_NOT_CONFIGURED:
         {
@@ -494,7 +626,16 @@ static esp_err_t app_apply_wifi_boot_policy(
                 return ESP_ERR_INVALID_RESPONSE;
             }
 
-            return app_connect_stored_wifi();
+            ret =
+                app_connect_stored_wifi();
+
+            if (ret == ESP_OK)
+            {
+                app_network_coordinator_set_state(
+                    APP_NETWORK_COORDINATOR_STATE_CONNECTING);
+            }
+
+            return ret;
         }
 
         case CONFIG_MANAGER_WIFI_CONFIG_STATE_INCOMPLETE:
@@ -725,52 +866,30 @@ esp_err_t app_network_coordinator_start(void)
 
     portEXIT_CRITICAL(&s_state_lock);
 
-    app_network_coordinator_set_state(
-        APP_NETWORK_COORDINATOR_STATE_RESOLVING_CONFIG);
+    const BaseType_t task_result =
+        xTaskCreate(
+            app_network_coordinator_task,
+            APP_NETWORK_COORDINATOR_TASK_NAME,
+            APP_NETWORK_COORDINATOR_TASK_STACK_SIZE_BYTES,
+            NULL,
+            APP_NETWORK_COORDINATOR_TASK_PRIORITY,
+            NULL);
 
-    config_manager_wifi_config_state_t config_state =
-        CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN;
-
-    esp_err_t ret =
-        app_resolve_wifi_config_state(
-            &config_state);
-
-    if (ret != ESP_OK)
+    if (task_result != pdPASS)
     {
-        ESP_LOGE(
-            TAG,
-            "Failed to resolve Wi-Fi configuration: %s",
-            esp_err_to_name(ret));
-
         app_network_coordinator_set_state(
             APP_NETWORK_COORDINATOR_STATE_FAILED);
 
-        return ret;
-    }
-
-    app_log_wifi_config_state(
-        config_state);
-
-    ret =
-        app_apply_wifi_boot_policy(
-            config_state);
-
-    if (ret != ESP_OK)
-    {
         ESP_LOGE(
             TAG,
-            "Network boot policy failed: %s",
-            esp_err_to_name(ret));
+            "Failed to create network coordinator task");
 
-        app_network_coordinator_set_state(
-            APP_NETWORK_COORDINATOR_STATE_FAILED);
-
-        return ret;
+        return ESP_ERR_NO_MEM;
     }
 
     ESP_LOGI(
         TAG,
-        "Network boot policy started successfully");
+        "Network coordinator task scheduled");
 
     return ESP_OK;
 }

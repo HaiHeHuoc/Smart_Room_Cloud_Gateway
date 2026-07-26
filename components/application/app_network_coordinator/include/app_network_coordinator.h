@@ -118,14 +118,17 @@ const char *app_network_coordinator_state_to_string(
     app_network_coordinator_state_t state);
 
 /**
- * @brief Resolve persistent Wi-Fi policy and start the selected network path.
+ * @brief Schedule application network boot orchestration.
  *
- * This blocking boot-orchestration API is accepted only from READY. Stored
- * credentials start an asynchronous Station connection. An unconfigured
- * device runs the bounded BLE provisioning flow through connection adoption.
+ * This non-blocking API creates a dedicated one-shot FreeRTOS task. Persistent
+ * configuration resolution, stored connection startup, and bounded BLE
+ * provisioning run in that task.
  *
- * @return ESP_OK when the selected path starts or completes successfully, or
- * an error from config_manager, provisioning_manager, or wifi_manager.
+ * ESP_OK confirms only that the task was created. Inspect coordinator and
+ * manager states for the eventual network result.
+ *
+ * @return ESP_OK when the task is scheduled, ESP_ERR_INVALID_STATE unless the
+ *         coordinator is READY, or ESP_ERR_NO_MEM when task creation fails.
  */
 esp_err_t app_network_coordinator_start(void);
 

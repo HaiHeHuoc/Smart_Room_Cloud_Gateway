@@ -313,10 +313,9 @@ void app_main(void)
     }
 
     /*
-     * On the provisioning path, successful return means BLE cleanup and
-     * wifi_manager adoption are complete. Start sensor/cloud services only
-     * after this boundary so Firebase TLS does not compete with temporary BLE
-     * resources.
+     * Provisioning continues in the coordinator task. Cloud state and queues
+     * are initialized below, while its memory-heavy task is started later from
+     * the main loop after stored connection startup or provisioning handoff.
      */
 
     esp_err_t service_ret =
@@ -391,20 +390,64 @@ void app_main(void)
         return;
     }
 
-    service_ret = cloud_manager_start();
-
-    if (service_ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
-            "Failed to start cloud manager: %s",
-            esp_err_to_name(service_ret));
-        return;
-    }
+    bool cloud_started = false;
 
     while (1)
     {
-        // ESP_LOGI(TAG, "Main loop running...");
-        vTaskDelay(pdMS_TO_TICKS(5000));
+        if (!cloud_started)
+        {
+            app_network_coordinator_state_t network_state =
+                APP_NETWORK_COORDINATOR_STATE_UNINITIALIZED;
+
+            service_ret =
+                app_network_coordinator_get_state(
+                    &network_state);
+
+            if (service_ret != ESP_OK)
+            {
+                ESP_LOGW(
+                    TAG,
+                    "Failed to inspect network readiness for cloud startup: %s",
+                    esp_err_to_name(service_ret));
+            }
+            else if ((network_state ==
+                      APP_NETWORK_COORDINATOR_STATE_CONNECTING) ||
+                     (network_state ==
+                      APP_NETWORK_COORDINATOR_STATE_ONLINE))
+            {
+                service_ret =
+                    cloud_manager_start();
+
+                if (service_ret == ESP_OK)
+                {
+                    cloud_started = true;
+
+                    ESP_LOGI(
+                        TAG,
+                        "Cloud manager started after network handoff: state=%s",
+                        app_network_coordinator_state_to_string(
+                            network_state));
+                }
+                else
+                {
+                    /*
+                     * cloud_manager_start() rolls back its started flag when
+                     * task allocation fails, so a later loop may retry after
+                     * temporary memory pressure has cleared.
+                     */
+                    ESP_LOGW(
+                        TAG,
+                        "Cloud manager start deferred: %s",
+                        esp_err_to_name(service_ret));
+                }
+            }
+        }
+
+        vTaskDelay(
+            pdMS_TO_TICKS(
+                cloud_started
+                    ? 5000U
+                    : 500U));
     }
     
 }
@@ -551,20 +594,15 @@ static void app_wifi_status_callback(
     }
 
 
-    ESP_LOGD(TAG, "*------------------------------------------------------------------------------------------*");
     ESP_LOGD(
         TAG,
-        "Wi-Fi callback: state=%s, ssid=%s, ip=%s, reason=%u",
+        "Wi-Fi callback: state=%s, ip=%s, reason=%u",
         wifi_manager_state_to_string(status->state),
-        status->ssid[0] != '\0'
-            ? status->ssid
-            : "<none>",
         status->has_ipv4_address
             ? status->ipv4_address
             : "<none>",
         (unsigned int)status->disconnect_reason
     );
-    ESP_LOGD(TAG, "*------------------------------------------------------------------------------------------*");
 }
 
 static ui_sensor_state_t app_map_sensor_state(
