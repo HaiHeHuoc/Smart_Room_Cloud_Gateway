@@ -43,6 +43,11 @@ ESP_ERROR_CHECK(cloud_manager_register_status_callback(
 ESP_ERROR_CHECK(cloud_manager_start());
 ```
 
+When BLE provisioning is required at boot, start the cloud task only after the
+application network coordinator has completed provisioning cleanup and
+`wifi_manager` has adopted the active connection. This avoids starting a TLS
+authentication request while temporary BLE resources are still active.
+
 The configured Firebase URL must be a base `.json` URL without query
 parameters:
 

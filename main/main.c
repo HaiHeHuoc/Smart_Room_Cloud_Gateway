@@ -104,8 +104,6 @@ static const firebase_auth_config_t FIREBASE_AUTH_CONFIG =
 /* Function Prototypes ------------------------------------------------------ */
 /**
  * @brief Initialize NVS, config storage, ESP-NETIF, and the event loop.
- *
- * @param[out] wifi_config_state Resolved boot-time Wi-Fi configuration state.
  */
 static esp_err_t network_platform_init(void);
 
@@ -314,6 +312,12 @@ void app_main(void)
         return;
     }
 
+    /*
+     * On the provisioning path, successful return means BLE cleanup and
+     * wifi_manager adoption are complete. Start sensor/cloud services only
+     * after this boundary so Firebase TLS does not compete with temporary BLE
+     * resources.
+     */
 
     esp_err_t service_ret =
         sensor_manager_init(
