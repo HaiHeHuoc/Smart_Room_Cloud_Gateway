@@ -35,6 +35,8 @@ Startup errors are logged and return from `app_main()` instead of using active
 
 ```text
 wifi_manager callback
+    -> map runtime state to app_network_coordinator_wifi_event_t
+    -> update coordinator CONNECTING / ONLINE / OFFLINE state
     -> map wifi_manager_status_t to ui_wifi_status_t
     -> app_gui_post_wifi_status()
 
@@ -96,6 +98,9 @@ updates, while the cloud task owns authentication and HTTPS requests.
   handoff; `config_manager` remains the durable storage authority.
 - `app_network_coordinator` owns boot policy in a dedicated task and does not
   call GUI, cloud, or LVGL APIs.
+- The Wi-Fi callback forwards a short runtime event to the coordinator before
+  queueing the independent GUI snapshot. `wifi_manager` remains responsible
+  for connection and reconnect behavior.
 - The display handle has static lifetime because `ui_manager_lvgl` borrows it.
 - `app_gui` owns the task that calls `lv_timer_handler()`.
 - Wi-Fi and sensor callbacks must not call LVGL.
@@ -151,6 +156,9 @@ idf.py -p <PORT> flash monitor
 - Checkpoint 6.3.2 was hardware-accepted on 2026-07-26 using provisioning
   timeout, reset, reprovisioning, Wi-Fi adoption, Firebase upload, and GUI
   cloud-state recovery.
+- Checkpoint 6.3.3 was hardware-accepted on 2026-07-26. Coordinator readiness
+  now follows later Wi-Fi connecting, IPv4 online, disconnect, retry, and
+  failure snapshots.
 - Firebase project setup and authenticated host testing are documented in
   `components/cloud/cloud_manager/README.txt` and `Test/TestFirebase_Auth.ps1`.
 - Never log or commit passwords, ID tokens, refresh tokens, service-account
@@ -159,7 +167,7 @@ idf.py -p <PORT> flash monitor
 ## Future Attention
 
 - Continue remaining Phase 6.3 work only when separately approved; checkpoint
-  6.3.2 completion does not authorize the next checkpoint.
+  6.3.3 completion does not authorize the next checkpoint.
 - Move Firebase credentials out of source code.
 - Add a coordinated application controller only when runtime stop/restart is
   required.

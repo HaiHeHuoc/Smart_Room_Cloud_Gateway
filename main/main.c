@@ -135,6 +135,18 @@ static void app_cloud_status_callback(
     const cloud_manager_status_t *status,
     void *user_context);
 
+/**
+ * @brief Convert one Wi-Fi manager snapshot into a coordinator runtime event.
+ *
+ * @param[in] status Wi-Fi manager status snapshot.
+ * @param[out] event Converted coordinator event.
+ *
+ * @return true when the snapshot represents a runtime event.
+ */
+static bool app_map_wifi_status_to_network_event(
+    const wifi_manager_status_t *status,
+    app_network_coordinator_wifi_event_t *event);
+
 
 /* Application -------------------------------------------------------------- */
 /** @brief Initialize the current application services and run diagnostics. */
@@ -549,6 +561,25 @@ static void app_wifi_status_callback(
         return;
     }
 
+    app_network_coordinator_wifi_event_t network_event;
+
+    if (app_map_wifi_status_to_network_event(
+            status,
+            &network_event))
+    {
+        const esp_err_t coordinator_error =
+            app_network_coordinator_notify_wifi_event(
+                network_event);
+
+        if (coordinator_error != ESP_OK)
+        {
+            ESP_LOGW(
+                TAG,
+                "Failed to forward Wi-Fi event to coordinator: %s",
+                esp_err_to_name(coordinator_error));
+        }
+    }
+
     ui_wifi_status_t ui_status = {
         .state =
             app_map_wifi_state(status->state),
@@ -770,6 +801,45 @@ static void app_cloud_status_callback(
             TAG,
             "Cloud GUI update dropped: %s",
             esp_err_to_name(error));
+    }
+}
+
+static bool app_map_wifi_status_to_network_event(
+    const wifi_manager_status_t *status,
+    app_network_coordinator_wifi_event_t *event)
+{
+    if ((status == NULL) ||
+        (event == NULL))
+    {
+        return false;
+    }
+
+    switch (status->state)
+    {
+        case WIFI_MANAGER_STATE_CONNECTING:
+        case WIFI_MANAGER_STATE_WAITING_FOR_IP:
+            *event =
+                APP_NETWORK_COORDINATOR_WIFI_EVENT_CONNECTING;
+            return true;
+
+        case WIFI_MANAGER_STATE_CONNECTED:
+            *event =
+                status->has_ipv4_address
+                    ? APP_NETWORK_COORDINATOR_WIFI_EVENT_ONLINE
+                    : APP_NETWORK_COORDINATOR_WIFI_EVENT_CONNECTING;
+            return true;
+
+        case WIFI_MANAGER_STATE_DISCONNECTED:
+        case WIFI_MANAGER_STATE_RETRY_WAIT:
+        case WIFI_MANAGER_STATE_FAILED:
+            *event =
+                APP_NETWORK_COORDINATOR_WIFI_EVENT_OFFLINE;
+            return true;
+
+        case WIFI_MANAGER_STATE_UNINITIALIZED:
+        case WIFI_MANAGER_STATE_READY:
+        default:
+            return false;
     }
 }
 
