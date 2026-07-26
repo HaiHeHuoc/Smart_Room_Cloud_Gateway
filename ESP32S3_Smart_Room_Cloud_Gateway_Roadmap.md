@@ -57,7 +57,7 @@ ESP32 periodically uploads sensor data to Firebase
 | Sensor reading | P0 | Done | DHT22 manager and stale/error handling |
 | Firebase upload | P0 | Done | Authenticated Realtime Database REST PUT verified on hardware |
 | NVS config storage | P0 | Done | Integrity, persistence, migration, and recovery tests accepted |
-| BLE Wi-Fi provisioning | P1 | In progress | Phases 6.1/6.2 and checkpoints 6.3.2/6.3.3 complete |
+| BLE Wi-Fi provisioning | P1 | In progress | Phases 6.1/6.2 and checkpoints 6.3.2/6.3.3 complete; 6.3.4 implemented, hardware pending |
 | Button factory reset | P1 | Not started | Long press to erase config |
 | Wi-Fi reconnect strategy | P1 | Not started | Event-driven reconnect |
 | Cloud retry queue | P1 | Done | Latest-value queue with bounded retry backoff |
@@ -613,6 +613,27 @@ remains in progress; this checkpoint does not complete its remaining work.
 Checkpoint 6.3.3 was hardware-accepted by the user on 2026-07-26. Phase 6.3
 remains in progress; provisioning-status UI work is still pending.
 
+#### Checkpoint 6.3.4 - Application Service Lifecycle Separation - Implemented
+
+- [x] Initialize Firebase Authentication and the cloud telemetry queue before
+  starting the sensor producer.
+- [x] Run sensor sampling as a local service independent of network success.
+- [x] Schedule network orchestration only after local producers and consumer
+  queues are ready.
+- [x] Gate the memory-heavy cloud task on coordinator `CONNECTING` or `ONLINE`
+  states that cannot overlap active BLE provisioning.
+- [x] Recover a `GOT_IP` event near the provisioning deadline through one
+  bounded handoff grace before declaring the coordinator failed.
+- [x] Keep sensor, cloud, Wi-Fi, provisioning, GUI, and coordinator ownership
+  within their existing components.
+- [x] Build and statically review callback, queue, critical-section, and
+  credential-handling paths.
+- [ ] Confirm provisioning, late-DHCP recovery, GUI/sensor responsiveness,
+  reconnect, watchdog, and Firebase recovery behavior on hardware.
+
+Checkpoint 6.3.4 is implemented and statically verified. Hardware acceptance
+is not yet claimed, and Phase 6.3 remains in progress.
+
 ### Tasks
 
 - [x] Add BLE provisioning component.
@@ -845,7 +866,7 @@ Use this section to track daily/weekly progress.
 | 3 | Sensor + UI update | Done |  |  | Sensor queue, stale/error behavior, and LCD updates hardware-accepted. |
 | 4 | Firebase upload | Done |  | 2026-07-19 | Hardware upload, Firebase data, failure handling, and LCD Cloud status accepted. |
 | 5 | NVS config storage | Done |  | 2026-07-26 | Persistence, integrity, migration, and recovery tests accepted. |
-| 6 | BLE provisioning | In progress |  |  | Phases 6.1/6.2 and checkpoints 6.3.2/6.3.3 complete; remaining Sprint 6 work is pending. |
+| 6 | BLE provisioning | In progress |  |  | Phases 6.1/6.2 and checkpoints 6.3.2/6.3.3 complete; 6.3.4 implemented with hardware verification pending. |
 | 7 | Factory reset | Not started |  |  |  |
 | 8 | Reconnect + retry | Not started |  |  |  |
 | 9 | Portfolio polish | Not started |  |  |  |

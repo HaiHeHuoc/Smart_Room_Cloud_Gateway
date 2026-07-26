@@ -65,9 +65,11 @@ cleaned up, and the active connection is adopted.
 task performs the bounded receive, persistence, cleanup, and adoption flow so
 `app_main()` can continue initializing independent services.
 
-The composition root may initialize dependent service state immediately, then
-defer memory-heavy tasks until the coordinator reaches `CONNECTING` for a
-stored connection or `ONLINE` after provisioning cleanup and adoption.
+The composition root initializes cloud state/queues and starts local sensor
+sampling before scheduling this task. It then defers the memory-heavy cloud
+task until the coordinator reaches `CONNECTING` for a stored connection or
+`ONLINE` after provisioning cleanup and adoption. `PROVISIONING` never opens
+the cloud gate, so BLE resources do not overlap with cloud TLS activity.
 
 ## Boot Policy
 
@@ -93,6 +95,8 @@ stored connection or `ONLINE` after provisioning cleanup and adoption.
   blocking wait, Wi-Fi call, or GUI call; it is suitable for the normal
   task-context Wi-Fi status callback.
 - Provisioning waits use configured finite timeout and poll periods.
+- A session timeout receives one additional finite connection grace only when
+  `provisioning_manager` reports that valid credentials are already in flight.
 - Temporary SSID/password buffers are securely overwritten on all completed
   paths.
 - GUI updates remain event-driven through the registered `wifi_manager`
@@ -103,12 +107,34 @@ stored connection or `ONLINE` after provisioning cleanup and adoption.
 ```c
 static const app_network_coordinator_config_t config = {
     .provisioning_timeout_ms = 120000U,
+    .provisioning_connection_grace_ms = 30000U,
     .provisioning_poll_period_ms = 200U,
 };
 ```
 
-Both timing values must be greater than zero. The coordinator copies this
-structure during initialization.
+All timing values must be greater than zero. The coordinator copies this
+structure during initialization. The 30-second grace is not added when no
+credential handoff is pending, so an idle provisioning session still stops at
+its normal deadline.
+
+## Late DHCP Recovery
+
+When the normal provisioning deadline and a framework `GOT_IP` event race,
+the coordinator checks only the non-sensitive handoff-pending snapshot. A
+pending handoff receives one bounded grace wait. Success still follows the
+normal security and ownership path:
+
+```text
+verified credential queue
+    -> config_manager persistence and read-back
+    -> BLE stop/deinit
+    -> wifi_manager adoption
+    -> coordinator ONLINE
+    -> cloud start gate opens
+```
+
+The coordinator never promotes a late Wi-Fi event directly from
+`PROVISIONING` or `FAILED` to `ONLINE`.
 
 ## Phase 6.3 Acceptance
 
@@ -122,6 +148,11 @@ Checkpoint 6.3.3 is complete and was hardware-accepted on 2026-07-26. Runtime
 Wi-Fi snapshots now update the coordinator between `CONNECTING`, `ONLINE`, and
 `OFFLINE` without transferring reconnect ownership away from `wifi_manager` or
 calling LVGL from the callback.
+
+Checkpoint 6.3.4 separates local-service startup from network-service task
+startup. It is implemented and build-verified, but hardware smoke tests have
+not yet confirmed sensor/GUI responsiveness during provisioning, timeout and
+watchdog behavior, late-DHCP recovery, reconnect, or Firebase upload recovery.
 
 ## Future Attention
 

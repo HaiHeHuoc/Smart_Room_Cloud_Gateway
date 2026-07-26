@@ -31,6 +31,8 @@ components/connectivity/provisioning_manager/
 - Prevents concurrent callers from claiming the same lifecycle transition.
 - Deep-copies and validates framework-owned credentials on receipt.
 - Keeps credentials pending until the framework reports Wi-Fi success.
+- Exposes a thread-safe, non-sensitive handoff-pending snapshot so application
+  policy can distinguish idle provisioning from an in-flight Wi-Fi attempt.
 - Discards pending credentials after a failed connection attempt.
 - Delivers one verified copy through a length-one FreeRTOS queue.
 - Requests provisioning shutdown asynchronously.
@@ -62,6 +64,7 @@ The application manifest currently selects
 | `provisioning_manager_start()` | Start advertising and enter `ACTIVE` |
 | `provisioning_manager_stop()` | Begin asynchronous shutdown |
 | `provisioning_manager_get_state()` | Copy the current lifecycle state |
+| `provisioning_manager_is_wifi_handoff_pending()` | Report whether received credentials are still connecting or awaiting application consumption |
 | `provisioning_manager_receive_wifi_credentials()` | Wait for credentials from a framework-confirmed connection |
 
 All public APIs return `esp_err_t`. The component does not call
@@ -89,19 +92,33 @@ READY -> STARTING -> ACTIVE -> STOPPING -> STOPPED
 ```text
 NETWORK_PROV_WIFI_CRED_RECV
     -> validate and copy to pending storage
+    -> mark Wi-Fi handoff pending
     -> wait for the framework connection result
 
 NETWORK_PROV_WIFI_CRED_FAIL
     -> clear pending credentials
+    -> clear handoff-pending state
 
 NETWORK_PROV_WIFI_CRED_SUCCESS
     -> move the pending copy into the handoff queue
     -> application persists through config_manager
+    -> clear handoff-pending state after application consumption
 ```
 
 The queue holds an independent copy. The caller must clear its output after
 persistence or on every error path. The component never calls
 `config_manager`, `wifi_manager`, GUI, cloud, or reboot APIs from its callback.
+The progress API returns only a boolean and never exposes SSID or password
+contents.
+
+## Timeout Boundary Handling
+
+The credential receive API still honors each caller-supplied finite timeout.
+The application coordinator first waits for the normal provisioning session
+deadline. If that deadline expires while the handoff-pending snapshot is true,
+the coordinator performs one additional bounded connection wait. This catches
+a `GOT_IP` event arriving near the deadline without accepting unverified
+credentials or treating an unadopted Station connection as application-ready.
 
 ## Threading And Cleanup
 
@@ -152,12 +169,14 @@ would waste CPU and flood the state log.
 The production provisioning path in `main.c`:
 
 1. Starts provisioning only when Wi-Fi state is `NOT_CONFIGURED`.
-2. Waits with a finite timeout for framework-verified credentials.
-3. Persists only through `config_manager`.
-4. Re-reads state and data; continues only after successful verification.
-5. Waits for BLE cleanup and the active Station connection.
-6. Lets `wifi_manager` adopt the connection and own later Wi-Fi events.
-7. Clears every application credential copy.
+2. Waits with a finite session timeout for framework-verified credentials.
+3. Allows one bounded connection grace only when credentials are already
+   pending at the session deadline.
+4. Persists only through `config_manager`.
+5. Re-reads state and data; continues only after successful verification.
+6. Waits for BLE cleanup and the active Station connection.
+7. Lets `wifi_manager` adopt the connection and own later Wi-Fi events.
+8. Clears every application credential copy.
 
 Integrity states such as `INCOMPLETE`, `INVALID_DATA`, and
 `UNSUPPORTED_VERSION` are preserved and do not automatically start

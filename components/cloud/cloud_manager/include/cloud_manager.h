@@ -121,8 +121,10 @@ typedef struct
  * @brief Initialize cloud state, synchronization, and latest-value queue.
  *
  * This function copies the URL and configuration. It does not start a task or
- * perform a network request. Initialize firebase_auth and wifi_manager before
- * starting the cloud manager.
+ * perform a network request. The latest-value telemetry queue is ready when
+ * this function returns ESP_OK, so initialize it before starting any producer
+ * whose callback posts telemetry. Initialize firebase_auth and wifi_manager
+ * before starting the cloud manager task.
  *
  * @param[in] config Firebase endpoint and publish period to copy.
  * @return ESP_OK on success, ESP_ERR_INVALID_ARG for an invalid URL/period,
@@ -134,6 +136,10 @@ esp_err_t cloud_manager_init(
 
 /**
  * @brief Start the single cloud upload task.
+ *
+ * When BLE provisioning shares constrained memory with TLS, the composition
+ * root must defer this call until provisioning cleanup and network handoff
+ * have completed.
  *
  * @return ESP_OK on success, ESP_ERR_INVALID_STATE before initialization or
  *         when already started, or ESP_ERR_NO_MEM if task creation fails.
@@ -160,7 +166,8 @@ esp_err_t cloud_manager_register_status_callback(
  * @brief Replace pending telemetry with the newest sensor snapshot.
  *
  * This non-blocking API copies the structure into a queue of length one. It is
- * suitable for the sensor callback and does not perform network I/O.
+ * suitable for the sensor callback and does not perform network I/O. Posting
+ * is supported after cloud_manager_init() and before cloud_manager_start().
  *
  * @param[in] telemetry Snapshot to copy. Numeric values marked valid must be
  *            finite. The current payload still serializes finite values when

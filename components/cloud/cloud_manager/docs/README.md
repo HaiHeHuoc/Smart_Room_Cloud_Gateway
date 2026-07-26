@@ -31,8 +31,9 @@ remain owned by `sensor_manager` and `app_gui`.
 
 ## Initialization And Use
 
-Initialize networking, Wi-Fi, and Firebase Authentication before starting the
-cloud task:
+Initialize Firebase Authentication and the cloud state/queue before starting
+the sensor producer. Start the task only after the application network
+coordinator reports a safe handoff:
 
 ```c
 ESP_ERROR_CHECK(firebase_auth_init(&auth_config));
@@ -40,7 +41,13 @@ ESP_ERROR_CHECK(cloud_manager_init(&cloud_config));
 ESP_ERROR_CHECK(cloud_manager_register_status_callback(
     app_cloud_status_callback,
     NULL));
-ESP_ERROR_CHECK(cloud_manager_start());
+
+/* sensor_manager may now post snapshots into the initialized queue. */
+
+if (network_state == APP_NETWORK_COORDINATOR_STATE_CONNECTING ||
+    network_state == APP_NETWORK_COORDINATOR_STATE_ONLINE) {
+    ESP_ERROR_CHECK(cloud_manager_start());
+}
 ```
 
 The component may be initialized while BLE provisioning is active, but the
@@ -49,6 +56,11 @@ reaches `CONNECTING` for stored credentials or `ONLINE` after provisioning.
 This avoids allocating the 12 KB cloud task stack while temporary BLE
 resources are active. `wifi_manager_is_connected()` also remains false until
 provisioning cleanup and active-connection adoption complete.
+
+Telemetry may be posted after `cloud_manager_init()` and before task start.
+The length-one queue retains the latest local sensor snapshot during
+provisioning or a provisioning timeout without triggering authentication or
+HTTPS activity.
 
 The configured Firebase URL must be a base `.json` URL without query
 parameters:
@@ -178,6 +190,11 @@ and failure/retry behavior were all verified on the ESP32-S3 target.
 The deferred task-start integration added by checkpoint 6.3.2 was
 hardware-accepted on 2026-07-26 using timeout, reset, reprovisioning, Wi-Fi
 adoption, Firebase upload, and GUI cloud-state recovery.
+
+Checkpoint 6.3.4 initializes this component before the sensor producer and
+keeps task creation behind the coordinator handoff gate. The implementation is
+build-verified; its provisioning, local-sensor, watchdog, reconnect, and
+Firebase recovery paths still require hardware smoke testing.
 
 ## Future Attention
 

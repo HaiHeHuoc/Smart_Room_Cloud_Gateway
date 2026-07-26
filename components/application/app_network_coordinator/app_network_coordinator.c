@@ -426,10 +426,48 @@ static esp_err_t app_run_wifi_provisioning(void)
     provisioning_manager_wifi_credentials_t credentials =
         {0};
 
+    bool connection_grace_used = false;
+
     ret =
         provisioning_manager_receive_wifi_credentials(
             &credentials,
             s_config.provisioning_timeout_ms);
+
+    if (ret == ESP_ERR_TIMEOUT)
+    {
+        bool handoff_pending = false;
+
+        const esp_err_t progress_ret =
+            provisioning_manager_is_wifi_handoff_pending(
+                &handoff_pending);
+
+        if (progress_ret != ESP_OK)
+        {
+            ret = progress_ret;
+        }
+        else if (handoff_pending)
+        {
+            /*
+             * The session deadline may expire after credentials are accepted
+             * but just before DHCP completes. Keep the coordinator alive for
+             * one bounded connection grace so the verified handoff can still
+             * be persisted, cleaned up, and adopted safely.
+             */
+            ESP_LOGW(
+                TAG,
+                "Provisioning deadline reached with Wi-Fi handoff pending; "
+                "waiting up to %lu ms for connection completion",
+                (unsigned long)
+                    s_config.provisioning_connection_grace_ms);
+
+            connection_grace_used = true;
+
+            ret =
+                provisioning_manager_receive_wifi_credentials(
+                    &credentials,
+                    s_config.provisioning_connection_grace_ms);
+        }
+    }
 
     if (ret != ESP_OK)
     {
@@ -450,6 +488,13 @@ static esp_err_t app_run_wifi_provisioning(void)
         }
 
         return ret;
+    }
+
+    if (connection_grace_used)
+    {
+        ESP_LOGI(
+            TAG,
+            "Provisioning Wi-Fi handoff completed during connection grace");
     }
 
     ret =
@@ -762,6 +807,7 @@ esp_err_t app_network_coordinator_init(
 
     ESP_RETURN_ON_FALSE(
         (config->provisioning_timeout_ms > 0U) &&
+            (config->provisioning_connection_grace_ms > 0U) &&
             (config->provisioning_poll_period_ms > 0U),
         ESP_ERR_INVALID_ARG,
         TAG,

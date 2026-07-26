@@ -10,23 +10,24 @@ The reusable component domain layout is documented in `components/README.md`.
 
 ## Current Startup Order
 
-1. Log project identity and optionally start `performance_monitor`.
+1. Log project identity.
 2. Initialize NVS and `config_manager`.
 3. Initialize ESP-NETIF and the default ESP event loop.
 4. Initialize the LCD display driver and LVGL display integration.
 5. Mount the SD card and register the LVGL `S:` filesystem.
 6. Initialize `app_gui`, start its single UI task, and create the Wi-Fi screen.
-7. Initialize `wifi_manager`, register its callback, and schedule the dedicated
-   one-shot `app_network_coordinator` task.
-8. Initialize `sensor_manager`, register its callback, and start DHT22
-   sampling.
-9. Initialize `firebase_auth` with Email/Password credentials and the expected
-   device UID.
-10. Initialize `cloud_manager` and register its status callback without
-    allocating the cloud task while BLE provisioning may still be active.
-11. In the low-activity main loop, start `cloud_manager` after the coordinator
-    reaches `CONNECTING` for stored credentials or `ONLINE` after provisioning;
-    retry task allocation after temporary memory pressure.
+7. Optionally start the diagnostic `performance_monitor`.
+8. Initialize `wifi_manager` and register its status callback.
+9. Initialize `app_network_coordinator` without scheduling its task.
+10. Initialize `firebase_auth`, then initialize `cloud_manager` and register its
+   status callback. The telemetry queue now exists, but TLS has not started.
+11. Initialize `sensor_manager`, register its callback, and start DHT22
+    sampling as a local service independent of network availability.
+12. Schedule the dedicated one-shot `app_network_coordinator` task.
+13. In the low-activity main loop, start `cloud_manager` only after the
+    coordinator reaches `CONNECTING` for stored credentials or `ONLINE` after
+    provisioning cleanup and adoption; retry task allocation after temporary
+    memory pressure.
 
 Startup errors are logged and return from `app_main()` instead of using active
 `ESP_ERROR_CHECK()` calls that abort the firmware.
@@ -62,10 +63,17 @@ app_network_coordinator task
     -> connect stored credentials or run bounded BLE provisioning
     -> stop/deinitialize BLE and adopt the active connection
     -> publish CONNECTING or ONLINE readiness for deferred cloud startup
+
+app_main cloud gate
+    -> reject READY / STARTING / RESOLVING_CONFIG / PROVISIONING / FAILED
+    -> accept CONNECTING for stored Wi-Fi or ONLINE after provisioning handoff
+    -> cloud_manager_start()
 ```
 
 The callbacks copy their input and return quickly. The GUI task owns LVGL
-updates, while the cloud task owns authentication and HTTPS requests.
+updates, while the cloud task owns authentication and HTTPS requests. The
+cloud telemetry queue exists before the sensor task starts, so a sensor
+callback cannot post into an uninitialized cloud component.
 
 ## Current Configuration
 
@@ -77,11 +85,16 @@ updates, while the cloud task owns authentication and HTTPS requests.
   `devices/esp32s3-001/latest.json` in Firebase Realtime Database.
 - Wi-Fi credentials are loaded from `config_manager`; production code contains
   no hard-coded Wi-Fi SSID/password fallback.
-- BLE provisioning waits up to 120 seconds for verified credentials and uses
-  finite polling while framework cleanup completes.
+- BLE provisioning waits up to 120 seconds for verified credentials. If that
+  deadline expires with a credential handoff already in flight, it allows one
+  additional 30-second connection grace. Framework cleanup polling remains
+  finite.
 - The one-shot network coordinator task uses a 6 KB stack at priority 4.
 - The 12 KB cloud task is allocated only after stored connection startup or
   successful provisioning cleanup and adoption.
+- `firebase_auth_init()` and `cloud_manager_init()` allocate only protected
+  state and queues during startup; authentication and TLS remain deferred to
+  the gated cloud task.
 - Firebase device credentials remain development values compiled into source.
   They must move to protected local configuration before production or
   publication.
@@ -98,9 +111,13 @@ updates, while the cloud task owns authentication and HTTPS requests.
   handoff; `config_manager` remains the durable storage authority.
 - `app_network_coordinator` owns boot policy in a dedicated task and does not
   call GUI, cloud, or LVGL APIs.
+- `sensor_manager` is a local service and continues sampling and updating the
+  GUI while provisioning waits, times out, or network connectivity is absent.
 - The Wi-Fi callback forwards a short runtime event to the coordinator before
   queueing the independent GUI snapshot. `wifi_manager` remains responsible
   for connection and reconnect behavior.
+- The sensor callback can always post to an initialized cloud latest-value
+  queue; posting does not perform authentication, TLS, or network I/O.
 - The display handle has static lifetime because `ui_manager_lvgl` borrows it.
 - `app_gui` owns the task that calls `lv_timer_handler()`.
 - Wi-Fi and sensor callbacks must not call LVGL.
@@ -150,15 +167,18 @@ idf.py -p <PORT> flash monitor
   auto-provision.
 - Production startup does not erase the complete NVS partition to recover from
   NVS initialization errors.
-- Sensor sampling starts before cloud initialization, but its initial DHT22
-  stabilization delay normally allows cloud resources to become ready first.
-  A telemetry post before cloud initialization is safely rejected.
+- Cloud state and its latest-value telemetry queue are initialized before
+  sensor sampling starts.
 - Checkpoint 6.3.2 was hardware-accepted on 2026-07-26 using provisioning
   timeout, reset, reprovisioning, Wi-Fi adoption, Firebase upload, and GUI
   cloud-state recovery.
 - Checkpoint 6.3.3 was hardware-accepted on 2026-07-26. Coordinator readiness
   now follows later Wi-Fi connecting, IPv4 online, disconnect, retry, and
   failure snapshots.
+- Checkpoint 6.3.4 is implemented and build-verified. Hardware confirmation is
+  still required for sensor/GUI operation during provisioning, provisioning
+  timeout and late-DHCP recovery, watchdog stability, reconnect, and Firebase
+  recovery.
 - Firebase project setup and authenticated host testing are documented in
   `components/cloud/cloud_manager/README.txt` and `Test/TestFirebase_Auth.ps1`.
 - Never log or commit passwords, ID tokens, refresh tokens, service-account
@@ -167,7 +187,7 @@ idf.py -p <PORT> flash monitor
 ## Future Attention
 
 - Continue remaining Phase 6.3 work only when separately approved; checkpoint
-  6.3.3 completion does not authorize the next checkpoint.
+  6.3.4 implementation does not authorize the next checkpoint.
 - Move Firebase credentials out of source code.
 - Add a coordinated application controller only when runtime stop/restart is
   required.
