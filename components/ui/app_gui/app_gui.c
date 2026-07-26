@@ -56,6 +56,9 @@ static app_gui_screen_id_t s_current_screen_id = APP_GUI_SCREEN_NONE;
 static portMUX_TYPE s_screen_id_lock = portMUX_INITIALIZER_UNLOCKED;
 static bool s_latest_wifi_status_available = false;
 static bool s_latest_wifi_online = false;
+static bool s_latest_sensor_status_available = false;
+static ui_sensor_status_t s_latest_sensor_status = {0};
+static bool s_sensor_screen_requested = false;
 static bool s_latest_cloud_status_available = false;
 static ui_cloud_state_t s_latest_cloud_state = UI_CLOUD_STATE_UNKNOWN;
 
@@ -106,6 +109,7 @@ static void app_gui_update_cloud_status(const ui_cloud_status_t *status);
 static void app_gui_process_sensor_status(void);
 static void app_gui_process_wifi_status(void);
 static void app_gui_process_cloud_status(void);
+static void app_gui_process_pending_sensor_screen(void);
 static void app_gui_log_stack_usage(const char *task_name);
 static void app_gui_process_lvgl(void);
 static void app_gui_ui_task(void *param);
@@ -148,9 +152,9 @@ void app_gui_create_demo_screen(void)
 static void app_gui_wifi_screen_timeout_cb(lv_timer_t *timer)
 {
     /*
-     * LVGL invokes this callback from lv_timer_handler(), while the app GUI
-     * task already owns the LVGL mutex. app_gui_clear_screen() must therefore
-     * not attempt to lock that non-recursive mutex again.
+     * LVGL invokes this callback while the GUI task owns the non-recursive
+     * LVGL mutex. Defer construction to the next GUI iteration so the current
+     * Wi-Fi screen remains visible until its replacement is complete.
      */
     app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
 
@@ -160,16 +164,11 @@ static void app_gui_wifi_screen_timeout_cb(lv_timer_t *timer)
         return;
     }
 
+    taskENTER_CRITICAL(&s_screen_id_lock);
+    s_sensor_screen_requested = true;
+    taskEXIT_CRITICAL(&s_screen_id_lock);
 
-    esp_err_t ret = app_gui_clear_screen();
-    if (ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
-            "Failed to clear Wi-Fi screen: %s",
-            esp_err_to_name(ret));
-    }
-
-    ESP_LOGD(TAG, "Wi-Fi screen timeout");
+    ESP_LOGD(TAG, "Wi-Fi screen timeout; sensor screen requested");
 
     /* Make this timer behave like a reusable one-shot timer. */
     lv_timer_pause(timer);
@@ -462,6 +461,10 @@ esp_err_t app_gui_create_wifi_screen(void)
     lv_obj_set_style_bg_color(screen,
                               lv_color_hex(0x101619),
                               LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(screen, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(screen, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(screen, 0, LV_PART_MAIN);
 
     lv_obj_t *title = lv_label_create(screen);
     if (title == NULL) {
@@ -555,6 +558,10 @@ esp_err_t app_gui_create_wifi_screen(void)
             NULL
         );
     }
+
+    taskENTER_CRITICAL(&s_screen_id_lock);
+    s_sensor_screen_requested = false;
+    taskEXIT_CRITICAL(&s_screen_id_lock);
 
     (void)app_gui_set_screen_id(APP_GUI_SCREEN_WIFI);
     app_gui_restart_wifi_screen_timer();
@@ -795,6 +802,10 @@ esp_err_t app_gui_create_sensor_screen(void)
         app_gui_sensor_state_color(UI_SENSOR_STATE_INITIALIZING),
         LV_PART_MAIN);
 
+    taskENTER_CRITICAL(&s_screen_id_lock);
+    s_sensor_screen_requested = false;
+    taskEXIT_CRITICAL(&s_screen_id_lock);
+
     (void)app_gui_set_screen_id(APP_GUI_SCREEN_SENSOR);
     ESP_LOGD(TAG, "Sensor status screen created");
 
@@ -969,14 +980,15 @@ static void app_gui_process_sensor_status(void)
         return;
     }
 
+    taskENTER_CRITICAL(&s_screen_id_lock);
+    s_latest_sensor_status = sensor_status;
+    s_latest_sensor_status_available = true;
+    taskEXIT_CRITICAL(&s_screen_id_lock);
+
     app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
 
     if (app_gui_get_screen_id(&screen_id) == ESP_OK) {
         if (screen_id == APP_GUI_SCREEN_NONE) {
-            ui_manager_lvgl_wait_for_mutex();
-            (void)app_gui_clear_screen();
-            ui_manager_lvgl_release_mutex();
-
             const esp_err_t ret = app_gui_create_sensor_screen();
             if (ret != ESP_OK) {
                 ESP_LOGE(
@@ -1061,6 +1073,7 @@ static void app_gui_process_wifi_status(void)
     s_latest_wifi_online =
         wifi_status.state == UI_WIFI_STATE_CONNECTED &&
         wifi_status.has_ipv4_address;
+    s_sensor_screen_requested = false;
     taskEXIT_CRITICAL(&s_screen_id_lock);
 
     app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
@@ -1068,10 +1081,6 @@ static void app_gui_process_wifi_status(void)
     if ((app_gui_get_screen_id(&screen_id) == ESP_OK) &&
         (screen_id != APP_GUI_SCREEN_WIFI))
     {
-        ui_manager_lvgl_wait_for_mutex();
-        (void)app_gui_clear_screen();
-        ui_manager_lvgl_release_mutex();
-
         (void)app_gui_create_wifi_screen();
     }
 
@@ -1099,6 +1108,51 @@ static void app_gui_process_wifi_status(void)
     );
 
     
+}
+
+/* Deferred Screen Transition ---------------------------------------------- */
+static void app_gui_process_pending_sensor_screen(void)
+{
+    bool screen_requested = false;
+    bool sensor_status_available = false;
+    ui_sensor_status_t sensor_status = {0};
+
+    taskENTER_CRITICAL(&s_screen_id_lock);
+
+    screen_requested = s_sensor_screen_requested;
+
+    if (screen_requested) {
+        s_sensor_screen_requested = false;
+        sensor_status_available = s_latest_sensor_status_available;
+        sensor_status = s_latest_sensor_status;
+    }
+
+    taskEXIT_CRITICAL(&s_screen_id_lock);
+
+    if (!screen_requested) {
+        return;
+    }
+
+    app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
+
+    if ((app_gui_get_screen_id(&screen_id) != ESP_OK) ||
+        (screen_id != APP_GUI_SCREEN_WIFI)) {
+        return;
+    }
+
+    const esp_err_t ret = app_gui_create_sensor_screen();
+
+    if (ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Failed to switch from Wi-Fi to sensor screen: %s",
+            esp_err_to_name(ret));
+        return;
+    }
+
+    if (sensor_status_available) {
+        app_gui_update_sensor_screen(&sensor_status);
+    }
 }
 
 /* GUI Task Core ----------------------------------------------------------- */
@@ -1129,6 +1183,8 @@ static void app_gui_process_lvgl(void)
     app_gui_process_cloud_status();
 
     app_gui_process_wifi_status();
+
+    app_gui_process_pending_sensor_screen();
 
     ui_manager_lvgl_wait_for_mutex();
 
@@ -1475,23 +1531,31 @@ esp_err_t app_gui_clear_screen(void)
      * This function intentionally does not acquire the LVGL mutex. Callers
      * must already serialize LVGL access as documented in app_gui.h.
      */
-    lv_obj_t* m_currentScreen = lv_screen_active();
+    lv_obj_t *current_screen = lv_screen_active();
 
-    ESP_RETURN_ON_FALSE(m_currentScreen != NULL,
-    ESP_ERR_INVALID_RESPONSE,
-    TAG,
-    "Failed to get current screen");
+    ESP_RETURN_ON_FALSE(
+        current_screen != NULL,
+        ESP_ERR_INVALID_RESPONSE,
+        TAG,
+        "Failed to get current screen");
 
-    lv_obj_t* m_newScreen = lv_obj_create(NULL);
-    ESP_RETURN_ON_FALSE(m_newScreen != NULL,
-    ESP_ERR_INVALID_RESPONSE,
-    TAG,
-    "Failed to create new screent");
-
-    lv_obj_set_size(m_newScreen, LCD_H_RES, LCD_V_RES);
-    lv_obj_center(m_newScreen);
-
-    lv_screen_load(m_newScreen);
+    /*
+     * Reuse the active root instead of briefly owning two root screens. This
+     * avoids both the default white frame and the extra allocation peak.
+     */
+    lv_obj_clean(current_screen);
+    lv_obj_remove_flag(current_screen, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(
+        current_screen,
+        lv_color_hex(0x202223),
+        LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(
+        current_screen,
+        LV_OPA_COVER,
+        LV_PART_MAIN);
+    lv_obj_set_style_border_width(current_screen, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(current_screen, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(current_screen, 0, LV_PART_MAIN);
 
     s_wifi_mode_label = NULL;
     s_wifi_ssid_label = NULL;
@@ -1501,8 +1565,12 @@ esp_err_t app_gui_clear_screen(void)
     s_sensor_state_label = NULL;
     s_sensor_cloud_label = NULL;
     s_sensor_cloud_dot = NULL;
+
+    taskENTER_CRITICAL(&s_screen_id_lock);
+    s_sensor_screen_requested = false;
+    taskEXIT_CRITICAL(&s_screen_id_lock);
+
     (void)app_gui_set_screen_id(APP_GUI_SCREEN_NONE);
 
-    lv_obj_del(m_currentScreen);
     return ESP_OK;
 }
