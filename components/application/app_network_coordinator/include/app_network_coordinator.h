@@ -94,6 +94,14 @@ typedef struct
     uint32_t provisioning_timeout_ms;
 
     /**
+     * @brief Additional wait for an in-flight provisioning Wi-Fi connection.
+     *
+     * This grace is used only when the main provisioning deadline expires
+     * after valid credentials have already entered the connection handoff.
+     */
+    uint32_t provisioning_connection_grace_ms;
+
+    /**
      * @brief Poll period used while waiting for asynchronous manager cleanup.
      *
      * This field will be removed later when the coordinator becomes fully
@@ -109,7 +117,8 @@ typedef struct
  * The configuration is copied. Initialization is accepted only from
  * APP_NETWORK_COORDINATOR_STATE_UNINITIALIZED.
  *
- * @param[in] config Provisioning timeout and cleanup polling configuration.
+ * @param[in] config Provisioning timeout, connection grace, and cleanup
+ *                   polling configuration.
  *
  * @return
  * - ESP_OK: Coordinator initialized and entered READY.

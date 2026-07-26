@@ -53,7 +53,9 @@ ESP_ERROR_CHECK(sensor_manager_start());
 ```
 
 Callback registration must happen after initialization and before the task is
-started.
+started. Every queue or service used by the callback must be initialized before
+`sensor_manager_start()` because the producer is independent of network state
+and may publish as soon as its initial sensor delay completes.
 
 ## Public API
 
@@ -75,6 +77,12 @@ callback does not touch LVGL or perform network I/O directly.
 The internal mutex is released before application callback code runs. This
 prevents callback code from blocking status readers while it processes a
 snapshot.
+
+In the current composition, both the GUI queue and the cloud latest-value
+queue exist before this task starts. Sampling therefore continues locally
+during Wi-Fi connection, BLE provisioning, provisioning timeout, and network
+failure. Posting telemetry only copies a snapshot; it does not start Firebase
+Authentication or TLS from the sensor task.
 
 ## Data-Quality Behavior
 

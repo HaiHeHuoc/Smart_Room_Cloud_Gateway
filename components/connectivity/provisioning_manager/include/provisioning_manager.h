@@ -1,6 +1,7 @@
 #pragma once
 
 /* Includes ----------------------------------------------------------------- */
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "esp_err.h"
@@ -143,6 +144,27 @@ esp_err_t provisioning_manager_stop(void);
  */
 esp_err_t provisioning_manager_get_state(
     provisioning_manager_state_t *state);
+
+/**
+ * @brief Check whether a credential-to-connection handoff is in progress.
+ *
+ * The result becomes true after valid credentials are received and remains
+ * true while the framework connects or until verified credentials are
+ * consumed by provisioning_manager_receive_wifi_credentials(). A failed
+ * connection clears it.
+ *
+ * This API returns only progress metadata and never exposes credential data.
+ * It is thread-safe and does not block on provisioning events.
+ *
+ * @param[out] handoff_pending Destination for the progress snapshot.
+ *
+ * @return
+ * - ESP_OK: Progress copied successfully.
+ * - ESP_ERR_INVALID_ARG: @p handoff_pending is NULL.
+ * - ESP_ERR_INVALID_STATE: Credential handoff is not initialized.
+ */
+esp_err_t provisioning_manager_is_wifi_handoff_pending(
+    bool *handoff_pending);
 
 /**
  * @brief Wait for and copy the latest provisioned Wi-Fi credentials.

@@ -25,9 +25,6 @@
 /* LVGL SD Management ------------------------------------------------------- */
 #include "lvgl_sd_fs.h"
 
-/* LVGL Image Handler------------------------------------------------------- */
-#include "lvgl_image_handler.h"
-
 /* Performance monitor ----------------------------------------------------- */
 #include "performance_monitor.h"
 
@@ -55,8 +52,6 @@
 /* Macros ------------------------------------------------------------------- */
 #define PERFORMANCE_MONITOR 0
 
-
-
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "MAIN_APP";
 
@@ -77,11 +72,14 @@ static const app_network_coordinator_config_t
     .provisioning_timeout_ms =
         120000U,
 
+    .provisioning_connection_grace_ms =
+        30000U,
+
     .provisioning_poll_period_ms =
         200U,
 };
 
-// Cloud configuration
+/* Cloud state and its telemetry queue are initialized before sensor start. */
 static const cloud_manager_config_t CLOUD_MANAGER_CONFIG =
 {
     .firebase_latest_url =
@@ -147,6 +145,16 @@ static bool app_map_wifi_status_to_network_event(
     const wifi_manager_status_t *status,
     app_network_coordinator_wifi_event_t *event);
 
+/**
+ * @brief Check whether BLE cleanup and network ownership permit cloud start.
+ *
+ * @param[in] state Current application network coordinator state.
+ *
+ * @return true when the cloud task may be created without overlapping BLE
+ *         provisioning.
+ */
+static bool app_network_state_allows_cloud_start(
+    app_network_coordinator_state_t state);
 
 /* Application -------------------------------------------------------------- */
 /** @brief Initialize the current application services and run diagnostics. */
@@ -157,124 +165,133 @@ void app_main(void)
     ESP_LOGI(TAG, "VERSION: %s", APP_PROJECT_VER);
     ESP_LOGI(TAG, "BUILD DATE: %s", APP_PROJECT_VER_DATE);
 
-#if PERFORMANCE_MONITOR
-    esp_err_t monitor_ret =
-        performance_monitor_start();
-
-    if (monitor_ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
-            "Failed to start performance monitor: %s",
-            esp_err_to_name(monitor_ret)
-        );
-    }
-#endif
-
     esp_err_t network_ret =
         network_platform_init();
-    
-    if (network_ret != ESP_OK) {
+
+    if (network_ret != ESP_OK)
+    {
         ESP_LOGE(
             TAG,
             "Failed to initialize network platform: %s",
-            esp_err_to_name(network_ret)
-        );
-        
+            esp_err_to_name(network_ret));
+
         return;
     }
 
-    // Display driver initialization
-    esp_err_t ret = display_driver_init(&display_handle);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize display driver: %s", esp_err_to_name(ret));
+    esp_err_t ret =
+        display_driver_init(
+            &display_handle);
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to initialize display driver: %s",
+            esp_err_to_name(ret));
+
         return;
     }
 
-    // Used to test the display by filling it with known colors. Uncomment to run the test.
-    // ESP_ERROR_CHECK(display_driver_raw_color_test(&display_handle));
+    ret =
+        ui_manager_lvgl_init(
+            &display_handle);
 
-    // Initialize LVGL UI manager
-    // Because LVGL core needs lvgl_init inside ui_manager_lvgl_init
-    esp_err_t lvgl_ret = ui_manager_lvgl_init(&display_handle);
-
-
-    // Initilize SD card manager
-    esp_err_t sd_card_ret = sd_card_manager_init();
-    if(sd_card_ret != ESP_OK)
+    if (ret != ESP_OK)
     {
-        ESP_LOGE(TAG, "Fail to initialize SD card driver");
+        ESP_LOGE(
+            TAG,
+            "Failed to initialize LVGL UI manager: %s",
+            esp_err_to_name(ret));
+
         return;
     }
-    else
+
+    ret = sd_card_manager_init();
+
+    if (ret != ESP_OK)
     {
-        // ESP_LOGI(TAG, "Start test SD card");
-        // ESP_ERROR_CHECK(sd_card_manager_write_test_file());
-        // ESP_ERROR_CHECK(sd_card_manager_read_test_file());
-        // ESP_LOGI(TAG, "testing SD card is done");
+        ESP_LOGE(
+            TAG,
+            "Failed to initialize SD card driver: %s",
+            esp_err_to_name(ret));
 
-        // Scan files inside specific folder
-        // sd_card_manager_list_files(NULL);
-
-        esp_err_t fs_ret = lvgl_sd_fs_register();
-        if (fs_ret != ESP_OK) {
-            ESP_LOGE(
-                TAG,
-                "Failed to register LVGL SD filesystem: %s",
-                esp_err_to_name(fs_ret));
-            return;
-        }
+        return;
     }
 
-    if (lvgl_ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize LVGL UI manager");
-    }
-    else
+    ret = lvgl_sd_fs_register();
+
+    if (ret != ESP_OK)
     {
-        esp_err_t app_gui_ret = app_gui_init();
-        if (app_gui_ret != ESP_OK) {
-            ESP_LOGE(TAG,
-                     "Failed to initialize application GUI: %s",
-                     esp_err_to_name(app_gui_ret));
-            return;
-        }
+        ESP_LOGE(
+            TAG,
+            "Failed to register LVGL SD filesystem: %s",
+            esp_err_to_name(ret));
 
-        ESP_LOGD(TAG, "Starting LVGL task handler");
+        return;
+    }
 
-        esp_err_t ui_task_ret = app_gui_start_ui_task();
-        if (ui_task_ret != ESP_OK) {
-            ESP_LOGE(TAG,
-                        "Failed to start application GUI task: %s",
-                        esp_err_to_name(ui_task_ret));
-            return;
-        }
-        else
-        {
-            esp_err_t screen_ret =  app_gui_create_wifi_screen();
+    ret = app_gui_init();
 
-            if (screen_ret != ESP_OK) {
-                ESP_LOGE(TAG,
-                        "Failed to create Wi-Fi GUI: %s",
-                        esp_err_to_name(screen_ret));
-                return;
-            }
-            // lvgl_image_handler_example_task();
-    
-            // app_gui_start_running_demo_task();
-        }
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to initialize application GUI: %s",
+            esp_err_to_name(ret));
 
+        return;
+    }
+
+    ESP_LOGD(TAG, "Starting LVGL task handler");
+
+    ret = app_gui_start_ui_task();
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to start application GUI task: %s",
+            esp_err_to_name(ret));
+
+        return;
+    }
+
+    ret = app_gui_create_wifi_screen();
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to create Wi-Fi GUI: %s",
+            esp_err_to_name(ret));
+
+        return;
     }
 
     ESP_LOGI(TAG, "LVGL display initialized successfully");
 
+#if PERFORMANCE_MONITOR
+    esp_err_t monitor_ret =
+        performance_monitor_start();
+
+    if (monitor_ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to start performance monitor: %s",
+            esp_err_to_name(monitor_ret));
+    }
+#endif
+
     esp_err_t wifi_ret =
         wifi_manager_init();
 
-    if (wifi_ret != ESP_OK) {
+    if (wifi_ret != ESP_OK)
+    {
         ESP_LOGE(
             TAG,
             "Failed to initialize Wi-Fi manager: %s",
-            esp_err_to_name(wifi_ret)
-        );
+            esp_err_to_name(wifi_ret));
 
         return;
     }
@@ -288,7 +305,8 @@ void app_main(void)
             app_wifi_status_callback,
             NULL);
 
-    if (callback_ret != ESP_OK) {
+    if (callback_ret != ESP_OK)
+    {
         ESP_LOGE(
             TAG,
             "Failed to register Wi-Fi status callback: %s",
@@ -311,65 +329,17 @@ void app_main(void)
         return;
     }
 
-    coordinator_ret =
-        app_network_coordinator_start();
-
-    if (coordinator_ret != ESP_OK)
-    {
-        ESP_LOGE(
-            TAG,
-            "Failed to start network coordinator: %s",
-            esp_err_to_name(coordinator_ret));
-
-        return;
-    }
-
     /*
-     * Provisioning continues in the coordinator task. Cloud state and queues
-     * are initialized below, while its memory-heavy task is started later from
-     * the main loop after stored connection startup or provisioning handoff.
+     * Prepare authentication state and the telemetry queue before the sensor
+     * producer can invoke its callback. These initialization APIs do not
+     * perform TLS requests or create the cloud task.
      */
-
     esp_err_t service_ret =
-        sensor_manager_init(
-            &SENSOR_MANAGER_CONFIG);
-
-    if (service_ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
-            "Failed to initialize sensor manager: %s",
-            esp_err_to_name(service_ret));
-        return;
-    }
-
-    service_ret =
-        sensor_manager_register_callback(
-            app_sensor_status_callback,
-            NULL);
-
-    if (service_ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
-            "Failed to register sensor callback: %s",
-            esp_err_to_name(service_ret));
-        return;
-    }
-
-    service_ret = sensor_manager_start();
-
-    if (service_ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
-            "Failed to start sensor manager: %s",
-            esp_err_to_name(service_ret));
-        return;
-    }
-
-    service_ret =
         firebase_auth_init(
             &FIREBASE_AUTH_CONFIG);
 
-    if (service_ret != ESP_OK) {
+    if (service_ret != ESP_OK)
+    {
         ESP_LOGE(
             TAG,
             "Failed to initialize Firebase Authentication: %s",
@@ -381,7 +351,8 @@ void app_main(void)
         cloud_manager_init(
             &CLOUD_MANAGER_CONFIG);
 
-    if (service_ret != ESP_OK) {
+    if (service_ret != ESP_OK)
+    {
         ESP_LOGE(
             TAG,
             "Failed to initialize cloud manager: %s",
@@ -394,11 +365,72 @@ void app_main(void)
             app_cloud_status_callback,
             NULL);
 
-    if (service_ret != ESP_OK) {
+    if (service_ret != ESP_OK)
+    {
         ESP_LOGE(
             TAG,
             "Failed to register cloud status callback: %s",
             esp_err_to_name(service_ret));
+        return;
+    }
+
+    /*
+     * Sensor sampling is a local service. It starts independently of network
+     * availability, with both GUI and cloud destination queues already ready.
+     */
+    service_ret =
+        sensor_manager_init(
+            &SENSOR_MANAGER_CONFIG);
+
+    if (service_ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to initialize sensor manager: %s",
+            esp_err_to_name(service_ret));
+        return;
+    }
+
+    service_ret =
+        sensor_manager_register_callback(
+            app_sensor_status_callback,
+            NULL);
+
+    if (service_ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to register sensor callback: %s",
+            esp_err_to_name(service_ret));
+        return;
+    }
+
+    service_ret = sensor_manager_start();
+
+    if (service_ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to start sensor manager: %s",
+            esp_err_to_name(service_ret));
+        return;
+    }
+
+    /*
+     * Start network boot only after all local producers and deferred-consumer
+     * queues are ready. The coordinator task may now connect stored Wi-Fi or
+     * run bounded BLE provisioning without blocking app_main().
+     */
+    coordinator_ret =
+        app_network_coordinator_start();
+
+    if (coordinator_ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to start network coordinator: %s",
+            esp_err_to_name(coordinator_ret));
+
         return;
     }
 
@@ -422,10 +454,8 @@ void app_main(void)
                     "Failed to inspect network readiness for cloud startup: %s",
                     esp_err_to_name(service_ret));
             }
-            else if ((network_state ==
-                      APP_NETWORK_COORDINATOR_STATE_CONNECTING) ||
-                     (network_state ==
-                      APP_NETWORK_COORDINATOR_STATE_ONLINE))
+            else if (app_network_state_allows_cloud_start(
+                         network_state))
             {
                 service_ret =
                     cloud_manager_start();
@@ -461,8 +491,8 @@ void app_main(void)
                     ? 5000U
                     : 500U));
     }
-    
 }
+
 /* Static Functions --------------------------------------------------------- */
 static esp_err_t network_platform_init(void)
 {
@@ -843,5 +873,17 @@ static bool app_map_wifi_status_to_network_event(
     }
 }
 
-
-/* Static Functions --------------------------------------------------------- */
+static bool app_network_state_allows_cloud_start(
+    app_network_coordinator_state_t state)
+{
+    /*
+     * Stored credentials enter CONNECTING without BLE. Provisioning remains
+     * PROVISIONING until BLE cleanup and active-connection adoption complete,
+     * then enters ONLINE. No other lifecycle state may allocate the TLS task.
+     */
+    return
+        (state ==
+         APP_NETWORK_COORDINATOR_STATE_CONNECTING) ||
+        (state ==
+         APP_NETWORK_COORDINATOR_STATE_ONLINE);
+}

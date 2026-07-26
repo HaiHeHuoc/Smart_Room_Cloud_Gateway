@@ -124,7 +124,9 @@ esp_err_t sensor_manager_init(
 /**
  * @brief Start the periodic DHT22 sampling task.
  *
- * Call sensor_manager_init() first. The task can be started only once.
+ * Call sensor_manager_init() first. The task can be started only once. Any
+ * queues or services used by the registered callback must already be
+ * initialized because the callback may run as soon as sampling begins.
  *
  * @return ESP_OK on success, ESP_ERR_INVALID_STATE when initialization or
  *         lifecycle state is invalid, ESP_ERR_TIMEOUT if the status mutex
