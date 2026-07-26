@@ -2158,6 +2158,16 @@ esp_err_t wifi_manager_register_status_callback(
             : "unregistered"
     );
 
+    /*
+     * A newly registered consumer may have missed startup or provisioning
+     * events. Deliver the current snapshot immediately. The helper copies the
+     * state and invokes application code outside the critical section.
+     */
+    if (callback != NULL)
+    {
+        wifi_manager_notify_status_changed();
+    }
+
     return ESP_OK;
 }
 
@@ -2541,6 +2551,13 @@ esp_err_t wifi_manager_adopt_active_connection(void)
     ESP_LOGI(
         TAG,
         "Active provisioning connection adopted by Wi-Fi manager");
+
+    /*
+     * Provisioning can establish the connection before an application
+     * consumer observes its Wi-Fi/IP events. Republish the adopted CONNECTED
+     * snapshot so the GUI and other consumers converge immediately.
+     */
+    wifi_manager_notify_status_changed();
 
     return ESP_OK;
 }

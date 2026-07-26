@@ -34,9 +34,6 @@
 /* Wifi manager ------------------------------------------------------------ */
 #include "wifi_manager.h"
 
-/* Provisioning manager ---------------------------------------------------- */
-#include "provisioning_manager.h"
-
 /* GUI Manager ------------------------------------------------------------- */
 #include "app_gui.h"
 
@@ -52,11 +49,13 @@
 /* Config manager ---------------------------------------------------------- */
 #include "config_manager.h"
 
+/* app network coordinator ------------------------------------------------- */
+#include "app_network_coordinator.h"
+
 /* Macros ------------------------------------------------------------------- */
 #define PERFORMANCE_MONITOR 0
 
-#define APP_PROVISIONING_SESSION_TIMEOUT_MS 120 * 1'000U
-#define APP_PROVISIONING_POLL_PERIOD_MS     200U
+
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "MAIN_APP";
@@ -70,6 +69,16 @@ static const sensor_manager_config_t SENSOR_MANAGER_CONFIG =
 {
     .sample_period_ms = 2000U,
     .stale_timeout_ms = 10000U,
+};
+
+static const app_network_coordinator_config_t
+    APP_NETWORK_COORDINATOR_CONFIG =
+{
+    .provisioning_timeout_ms =
+        120000U,
+
+    .provisioning_poll_period_ms =
+        200U,
 };
 
 // Cloud configuration
@@ -98,36 +107,8 @@ static const firebase_auth_config_t FIREBASE_AUTH_CONFIG =
  *
  * @param[out] wifi_config_state Resolved boot-time Wi-Fi configuration state.
  */
-static esp_err_t network_platform_init(
-    config_manager_wifi_config_state_t *wifi_config_state);
+static esp_err_t network_platform_init(void);
 
-/**
- * @brief Inspect Wi-Fi storage and attempt one explicit legacy migration.
- *
- * @param[out] state Final state after optional migration.
- * @return ESP_OK for a completed semantic classification or the real storage
- *         or migration error.
- */
-static esp_err_t app_resolve_wifi_config_state(
-    config_manager_wifi_config_state_t *state);
-
-/**
- * @brief Load persisted credentials and request Wi-Fi connection startup.
- *
- * The config-manager operation finishes before wifi_manager_connect() runs.
- *
- * @return ESP_OK when connection startup is requested or an API error.
- */
-static esp_err_t app_connect_stored_wifi(void);
-
-/** @brief Log the boot action associated with a Wi-Fi configuration state. */
-static void app_log_wifi_config_state(
-    config_manager_wifi_config_state_t state);
-
-/** @brief Explicitly overwrite a temporary application credential buffer. */
-static void app_zeroize(
-    void *buffer,
-    size_t size);
 
 /** @brief Convert and forward Wi-Fi manager events to the GUI queue. */
 static void app_wifi_status_callback(
@@ -156,23 +137,6 @@ static void app_cloud_status_callback(
     const cloud_manager_status_t *status,
     void *user_context);
 
-static esp_err_t app_persist_and_verify_provisioned_wifi(
-    const provisioning_manager_wifi_credentials_t *credentials);
-
-/**
- * @brief Run one BLE provisioning session for an unconfigured device.
- *
- * The function receives an application-owned credential copy, persists it
- * through config_manager, waits for Wi-Fi connectivity and BLE cleanup, and
- * removes all temporary plaintext copies before returning.
- */
-static esp_err_t app_run_wifi_provisioning(void);
-
-/**
- * @brief Execute the boot action associated with stored Wi-Fi state.
- */
-static esp_err_t app_apply_wifi_boot_policy(
-    config_manager_wifi_config_state_t state);
 
 /* Application -------------------------------------------------------------- */
 /** @brief Initialize the current application services and run diagnostics. */
@@ -196,15 +160,8 @@ void app_main(void)
     }
 #endif
 
-    /*
-     * Initialize shared network infrastructure before initializing
-     * the Wi-Fi manager.
-     */
-    config_manager_wifi_config_state_t wifi_config_state =
-        CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN;
-
     esp_err_t network_ret =
-        network_platform_init(&wifi_config_state);
+        network_platform_init();
     
     if (network_ret != ESP_OK) {
         ESP_LOGE(
@@ -312,38 +269,51 @@ void app_main(void)
         return;
     }
 
+    /*
+     * Register before starting network orchestration so the GUI observes the
+     * first stored-connection or provisioning status transition.
+     */
+    esp_err_t callback_ret =
+        wifi_manager_register_status_callback(
+            app_wifi_status_callback,
+            NULL);
 
-esp_err_t callback_ret =
-    wifi_manager_register_status_callback(
-        app_wifi_status_callback,
-        NULL
-    );
+    if (callback_ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Failed to register Wi-Fi status callback: %s",
+            esp_err_to_name(callback_ret));
 
-if (callback_ret != ESP_OK) {
-    ESP_LOGE(
-        TAG,
-        "Failed to register Wi-Fi status callback: %s",
-        esp_err_to_name(callback_ret)
-    );
+        return;
+    }
 
-    return;
-}
+    esp_err_t coordinator_ret =
+        app_network_coordinator_init(
+            &APP_NETWORK_COORDINATOR_CONFIG);
 
-app_log_wifi_config_state(wifi_config_state);
+    if (coordinator_ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to initialize network coordinator: %s",
+            esp_err_to_name(coordinator_ret));
 
-esp_err_t wifi_boot_ret =
-    app_apply_wifi_boot_policy(
-        wifi_config_state);
+        return;
+    }
 
-if (wifi_boot_ret != ESP_OK)
-{
-    ESP_LOGE(
-        TAG,
-        "Wi-Fi boot policy failed: %s",
-        esp_err_to_name(wifi_boot_ret));
+    coordinator_ret =
+        app_network_coordinator_start();
 
-    return;
-}
+    if (coordinator_ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to start network coordinator: %s",
+            esp_err_to_name(coordinator_ret));
+
+        return;
+    }
+
 
     esp_err_t service_ret =
         sensor_manager_init(
@@ -435,17 +405,8 @@ if (wifi_boot_ret != ESP_OK)
     
 }
 /* Static Functions --------------------------------------------------------- */
-static esp_err_t network_platform_init(
-    config_manager_wifi_config_state_t *wifi_config_state)
+static esp_err_t network_platform_init(void)
 {
-    if (wifi_config_state == NULL)
-    {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    *wifi_config_state =
-        CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN;
-
     esp_err_t ret = nvs_flash_init();
 
     if (ret != ESP_OK)
@@ -470,25 +431,6 @@ static esp_err_t network_platform_init(
         return ret;
     }
 
-    ret = app_resolve_wifi_config_state(
-        wifi_config_state);
-
-    if (ret != ESP_OK)
-    {
-        ESP_LOGE(
-            TAG,
-            "Failed to resolve persisted Wi-Fi configuration: %s",
-            esp_err_to_name(ret));
-
-        return ret;
-    }
-
-    /*
-     * Initialize ESP-NETIF and the underlying TCP/IP stack.
-     *
-     * This must be called once before creating Wi-Fi or Ethernet
-     * network interfaces.
-     */
     ret = esp_netif_init();
 
     if (ret != ESP_OK)
@@ -521,145 +463,6 @@ static esp_err_t network_platform_init(
 
     return ESP_OK;
 }
-
-static esp_err_t app_resolve_wifi_config_state(
-    config_manager_wifi_config_state_t *state)
-{
-    if (state == NULL)
-    {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    *state = CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN;
-
-    esp_err_t err =
-        config_manager_get_wifi_config_state(state);
-
-    if (err != ESP_OK)
-    {
-        return err;
-    }
-
-    if (*state !=
-        CONFIG_MANAGER_WIFI_CONFIG_STATE_MIGRATION_REQUIRED)
-    {
-        return ESP_OK;
-    }
-
-    ESP_LOGI(TAG, "Migrating legacy Wi-Fi configuration");
-
-    err = config_manager_migrate_device_config();
-
-    if (err != ESP_OK)
-    {
-        return err;
-    }
-
-    err = config_manager_get_wifi_config_state(state);
-
-    if (err != ESP_OK)
-    {
-        return err;
-    }
-
-    if (*state != CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID)
-    {
-        ESP_LOGE(
-            TAG,
-            "Wi-Fi configuration is not valid after migration: state=%d",
-            (int)*state);
-
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    return ESP_OK;
-}
-
-static esp_err_t app_connect_stored_wifi(void)
-{
-    config_manager_wifi_config_t stored_config = {0};
-
-    esp_err_t err =
-        config_manager_load_wifi(&stored_config);
-
-    if (err == ESP_OK)
-    {
-        const wifi_manager_sta_config_t station_config =
-        {
-            .ssid = stored_config.ssid,
-            .password = stored_config.password,
-        };
-
-        err = wifi_manager_connect(&station_config);
-    }
-
-    app_zeroize(
-        &stored_config,
-        sizeof(stored_config));
-
-    return err;
-}
-
-static void app_log_wifi_config_state(
-    config_manager_wifi_config_state_t state)
-{
-    switch (state)
-    {
-        case CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID:
-            ESP_LOGI(TAG, "Stored Wi-Fi configuration is valid");
-            break;
-
-        case CONFIG_MANAGER_WIFI_CONFIG_STATE_NOT_CONFIGURED:
-            ESP_LOGW(
-                TAG,
-                "Wi-Fi configuration is required; connection is not started");
-            break;
-
-        case CONFIG_MANAGER_WIFI_CONFIG_STATE_INCOMPLETE:
-            ESP_LOGE(
-                TAG,
-                "Stored Wi-Fi configuration is incomplete; data is preserved");
-            break;
-
-        case CONFIG_MANAGER_WIFI_CONFIG_STATE_UNSUPPORTED_VERSION:
-            ESP_LOGE(
-                TAG,
-                "Stored Wi-Fi schema is unsupported; data is preserved");
-            break;
-
-        case CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA:
-            ESP_LOGE(
-                TAG,
-                "Stored Wi-Fi configuration is invalid; data is preserved");
-            break;
-
-        case CONFIG_MANAGER_WIFI_CONFIG_STATE_MIGRATION_REQUIRED:
-            ESP_LOGE(
-                TAG,
-                "Stored Wi-Fi configuration still requires migration");
-            break;
-
-        case CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN:
-        default:
-            ESP_LOGE(TAG, "Stored Wi-Fi configuration state is unknown");
-            break;
-    }
-}
-
-static void app_zeroize(
-    void *buffer,
-    size_t size)
-{
-    volatile uint8_t *bytes =
-        (volatile uint8_t *)buffer;
-
-    while (size > 0U)
-    {
-        *bytes++ = 0U;
-        size--;
-    }
-}
-
 
 static ui_wifi_state_t app_map_wifi_state(
     wifi_manager_state_t state)
@@ -930,339 +733,3 @@ static void app_cloud_status_callback(
 
 
 /* Static Functions --------------------------------------------------------- */
-static esp_err_t app_persist_and_verify_provisioned_wifi(
-    const provisioning_manager_wifi_credentials_t *credentials)
-{
-    if (credentials == NULL)
-    {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    config_manager_wifi_config_t config_to_save =
-        {0};
-
-    config_manager_wifi_config_t config_loaded =
-        {0};
-
-    config_manager_wifi_config_state_t config_state =
-        CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN;
-
-    esp_err_t ret =
-        ESP_FAIL;
-
-    const size_t ssid_length =
-        strnlen(
-            credentials->ssid,
-            sizeof(credentials->ssid));
-
-    const size_t password_length =
-        strnlen(
-            credentials->password,
-            sizeof(credentials->password));
-
-    /*
-     * provisioning_manager already validates the credentials before queueing
-     * them. These checks protect this application boundary from malformed or
-     * unterminated input.
-     */
-    if ((ssid_length == 0U) ||
-        (ssid_length >= sizeof(credentials->ssid)) ||
-        (password_length >= sizeof(credentials->password)))
-    {
-        ret = ESP_ERR_INVALID_ARG;
-        goto cleanup;
-    }
-
-    memcpy(
-        config_to_save.ssid,
-        credentials->ssid,
-        ssid_length + 1U);
-
-    memcpy(
-        config_to_save.password,
-        credentials->password,
-        password_length + 1U);
-
-    ret =
-        config_manager_save_wifi(
-            &config_to_save);
-
-    if (ret != ESP_OK)
-    {
-        goto cleanup;
-    }
-
-    /*
-     * Saving successfully is not enough. Re-inspect the schema and require a
-     * complete current configuration before continuing.
-     */
-    ret =
-        config_manager_get_wifi_config_state(
-            &config_state);
-
-    if (ret != ESP_OK)
-    {
-        goto cleanup;
-    }
-
-    if (config_state !=
-        CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID)
-    {
-        ret = ESP_ERR_INVALID_RESPONSE;
-        goto cleanup;
-    }
-
-    /*
-     * Read the data back from NVS rather than trusting the input buffer.
-     */
-    ret =
-        config_manager_load_wifi(
-            &config_loaded);
-
-    if (ret != ESP_OK)
-    {
-        goto cleanup;
-    }
-
-    if ((strcmp(
-             config_loaded.ssid,
-             credentials->ssid) != 0) ||
-        (strcmp(
-             config_loaded.password,
-             credentials->password) != 0))
-    {
-        ret = ESP_ERR_INVALID_RESPONSE;
-        goto cleanup;
-    }
-
-    ret = ESP_OK;
-
-cleanup:
-    /*
-     * Remove every temporary copy regardless of which operation failed.
-     */
-    app_zeroize(
-        &config_to_save,
-        sizeof(config_to_save));
-
-    app_zeroize(
-        &config_loaded,
-        sizeof(config_loaded));
-
-    return ret;
-}
-
-static esp_err_t app_apply_wifi_boot_policy(
-    config_manager_wifi_config_state_t state)
-{
-    switch (state)
-    {
-        case CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID:
-            ESP_LOGI(
-                TAG,
-                "Valid Wi-Fi configuration found; "
-                "starting stored connection");
-
-            return app_connect_stored_wifi();
-
-        case CONFIG_MANAGER_WIFI_CONFIG_STATE_NOT_CONFIGURED:
-            ESP_LOGI(
-                TAG,
-                "Wi-Fi is not configured; "
-                "starting BLE provisioning");
-
-            return app_run_wifi_provisioning();
-
-        case CONFIG_MANAGER_WIFI_CONFIG_STATE_MIGRATION_REQUIRED:
-        {
-            ESP_LOGI(
-                TAG,
-                "Legacy Wi-Fi configuration requires migration");
-
-            esp_err_t ret =
-                config_manager_migrate_device_config();
-
-            if (ret != ESP_OK)
-            {
-                return ret;
-            }
-
-            config_manager_wifi_config_state_t migrated_state =
-                CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN;
-
-            ret =
-                config_manager_get_wifi_config_state(
-                    &migrated_state);
-
-            if (ret != ESP_OK)
-            {
-                return ret;
-            }
-
-            if (migrated_state !=
-                CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID)
-            {
-                return ESP_ERR_INVALID_RESPONSE;
-            }
-
-            return app_connect_stored_wifi();
-        }
-
-        case CONFIG_MANAGER_WIFI_CONFIG_STATE_INCOMPLETE:
-            ESP_LOGE(
-                TAG,
-                "Stored Wi-Fi configuration is incomplete");
-
-            return ESP_ERR_INVALID_STATE;
-
-        case CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA:
-            ESP_LOGE(
-                TAG,
-                "Stored Wi-Fi configuration contains invalid data");
-
-            return ESP_ERR_INVALID_RESPONSE;
-
-        case CONFIG_MANAGER_WIFI_CONFIG_STATE_UNSUPPORTED_VERSION:
-            ESP_LOGE(
-                TAG,
-                "Stored Wi-Fi configuration version is unsupported");
-
-            return ESP_ERR_NOT_SUPPORTED;
-
-        case CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN:
-        default:
-            ESP_LOGE(
-                TAG,
-                "Wi-Fi configuration state is unknown");
-
-            return ESP_FAIL;
-    }
-}
-
-static esp_err_t app_run_wifi_provisioning(void)
-{
-    esp_err_t ret =
-        provisioning_manager_init();
-
-    if (ret != ESP_OK)
-    {
-        return ret;
-    }
-
-    ret =
-        provisioning_manager_start();
-
-    if (ret != ESP_OK)
-    {
-        return ret;
-    }
-
-    provisioning_manager_wifi_credentials_t credentials =
-        {0};
-
-    ret =
-        provisioning_manager_receive_wifi_credentials(
-            &credentials,
-            APP_PROVISIONING_SESSION_TIMEOUT_MS);
-
-    if (ret != ESP_OK)
-    {
-        app_zeroize(
-            &credentials,
-            sizeof(credentials));
-
-        /*
-         * Request cleanup only when the provisioning service remains active.
-         */
-        provisioning_manager_state_t state =
-            PROVISIONING_MANAGER_STATE_UNINITIALIZED;
-
-        if ((provisioning_manager_get_state(&state) == ESP_OK) &&
-            (state == PROVISIONING_MANAGER_STATE_ACTIVE))
-        {
-            (void)provisioning_manager_stop();
-        }
-
-        return ret;
-    }
-
-    ret =
-        app_persist_and_verify_provisioned_wifi(
-            &credentials);
-
-    app_zeroize(
-        &credentials,
-        sizeof(credentials));
-
-    if (ret != ESP_OK)
-    {
-        return ret;
-    }
-
-    TickType_t wait_start_tick =
-        xTaskGetTickCount();
-
-    while (1)
-    {
-        provisioning_manager_state_t provisioning_state =
-            PROVISIONING_MANAGER_STATE_UNINITIALIZED;
-
-        ret =
-            provisioning_manager_get_state(
-                &provisioning_state);
-
-        if (ret != ESP_OK)
-        {
-            return ret;
-        }
-
-        if ((provisioning_state ==
-             PROVISIONING_MANAGER_STATE_STOPPED) &&
-            wifi_manager_is_connected())
-        {
-            ret =
-                wifi_manager_adopt_active_connection();
-
-            if (ret != ESP_OK)
-            {
-                ESP_LOGE(
-                    TAG,
-                    "Failed to hand provisioning connection to Wi-Fi manager: %s",
-                    esp_err_to_name(ret));
-
-                return ret;
-            }
-
-            ESP_LOGI(
-                TAG,
-                "Wi-Fi provisioning completed successfully");
-
-            return ESP_OK;
-        }
-
-        if (provisioning_state ==
-            PROVISIONING_MANAGER_STATE_FAILED)
-        {
-            return ESP_FAIL;
-        }
-
-        TickType_t elapsed_ticks =
-            xTaskGetTickCount() -
-            wait_start_tick;
-
-        if (elapsed_ticks >=
-            pdMS_TO_TICKS(
-                APP_PROVISIONING_SESSION_TIMEOUT_MS))
-        {
-            ESP_LOGE(
-                TAG,
-                "Timed out waiting for provisioning completion");
-
-            return ESP_ERR_TIMEOUT;
-        }
-
-        vTaskDelay(
-            pdMS_TO_TICKS(
-                APP_PROVISIONING_POLL_PERIOD_MS));
-    }
-}
