@@ -206,3 +206,287 @@ The code should be:
 - Not overly clever
 
 If a requested implementation depends on missing hardware pins, ESP-IDF version, or library choice, clearly state the assumptions and keep the implementation easy to adjust.
+
+---
+
+# END PHASE Automation Protocol
+
+## Command Detection
+
+Treat any user message matching:
+
+```text
+END PHASE <phase_id>
+```
+
+as confirmation that implementation and manual or hardware acceptance for that
+checkpoint have passed, unless the user explicitly says otherwise.
+
+For example, `END PHASE 6.3.2` instructs Codex to:
+
+- review the completed checkpoint;
+- clean its code;
+- improve its documentation;
+- validate the repository;
+- prepare a Git-ready checkpoint.
+
+This command does not authorize a Git commit, push, merge, pull request,
+destructive Git operation, or implementation of the next phase. Never commit,
+push, merge, reset, discard, checkout, or delete work unless the user
+explicitly requests that action.
+
+## 1. Inspect Before Editing
+
+When an `END PHASE` command is received:
+
+1. Run or inspect `git status`.
+2. Inspect the current diff.
+3. Identify files related to `<phase_id>`.
+4. Read the relevant roadmap, tracker, README files, component documentation,
+   and recent implementation.
+5. Preserve unrelated and potentially uncommitted work.
+6. Never overwrite or clean unrelated files.
+7. Prefer focused edits over full-file rewrites.
+
+Infer phase scope from the phase identifier, current repository changes,
+roadmap or tracker, component documentation, and implementation context. Do
+not introduce unrelated features.
+
+## 2. Review Correctness
+
+Review the phase implementation for:
+
+- functional correctness and return-value handling;
+- error paths, cleanup, lifecycle, and state-machine correctness;
+- concurrency, race conditions, and deadlock risks;
+- memory ownership, lifetime, and buffer bounds;
+- timeout behavior;
+- task and callback ownership;
+- security and sensitive-data handling;
+- compatibility with the existing architecture.
+
+For ESP-IDF and FreeRTOS, also verify:
+
+- ISR-safe APIs are used only from ISR context and task APIs from task context;
+- no blocking operation runs inside a critical section;
+- no LVGL call is made from an arbitrary callback or non-UI task;
+- callbacks remain short;
+- shared state is synchronized correctly;
+- queues, mutexes, timers, event groups, and task notifications have clear
+  ownership;
+- waits that can fail use finite timeouts;
+- tasks have documented stack size, priority, purpose, and lifecycle;
+- temporary credential buffers are securely cleared;
+- credentials, passwords, PoP values, tokens, and secrets are never logged.
+
+Fix only confirmed problems within the phase scope. Do not perform speculative
+architecture rewrites during phase cleanup.
+
+## 3. Clean Phase Code
+
+Clean only code related to `<phase_id>`. Remove or fix:
+
+- temporary bring-up and fault-injection code;
+- obsolete test-only macros and temporary diagnostic loops;
+- debug log spam and hardcoded Wi-Fi credentials;
+- stale TODO comments and prototypes;
+- unused includes, variables, and macros;
+- duplicated logic and unreachable state branches;
+- outdated comments;
+- commented-out executable code without a clear future purpose;
+- formatting inconsistencies introduced by the phase.
+
+Preserve reusable test utilities only when clearly isolated and documented. Do
+not remove useful production diagnostics.
+
+## 4. Improve Code Documentation
+
+Update public API documentation with relevant:
+
+- purpose, parameters, and return values;
+- prerequisites;
+- blocking or non-blocking behavior;
+- timeout behavior;
+- thread safety and ISR, callback, or task context;
+- ownership and lifetime;
+- security constraints.
+
+Add private function comments only for non-obvious lifecycle behavior, state
+transitions, concurrency requirements, ownership transfer, cleanup
+requirements, framework workarounds, or architectural reasoning. Do not add
+comments that merely repeat the code; explain why a rule exists.
+
+## 5. Update Documentation
+
+Update all relevant documentation when present:
+
+- component `docs/README.md`;
+- component `README.md`;
+- root `README.md`;
+- project roadmap and sprint tracker;
+- architecture notes and project-state documents.
+
+Documentation must describe the final implementation rather than the original
+plan. Update relevant purpose, ownership, dependencies, public APIs,
+initialization, state-machine, task/callback/queue/event flow, timeout/retry,
+threading, memory ownership, credentials, security, known limitations,
+manual/hardware acceptance, and intentionally deferred work.
+
+Remove outdated claims, including completed functionality still marked as not
+implemented, obsolete API behavior, temporary bring-up descriptions, and
+incorrect GPIO, timing, task, or lifecycle values.
+
+Mark only `<phase_id>` complete. Do not mark a parent phase complete unless
+every required child checkpoint is complete. For example:
+
+```text
+6.3.2 Dedicated coordinator task - COMPLETE
+```
+
+does not by itself authorize marking Phase 6.3 complete.
+
+## 6. Preserve Project Architecture
+
+Preserve these ownership boundaries unless the current phase explicitly
+changes them:
+
+- `main` is the composition root.
+- `config_manager` owns persistent application configuration.
+- `wifi_manager` owns Wi-Fi Station connection and reconnect behavior.
+- `provisioning_manager` owns temporary BLE provisioning transport.
+- `app_network_coordinator` owns application-level network orchestration.
+- `app_gui` owns GUI screens, models, and UI queues.
+- `ui_manager_lvgl` owns LVGL runtime and synchronization.
+- Callbacks must not call LVGL directly.
+- Persistent Wi-Fi credentials are written only through `config_manager`.
+- Configuration locks and NVS handles are released before calling Wi-Fi
+  connection APIs.
+- Sensitive temporary buffers are cleared after use.
+- Network, GUI, sensor, storage, and cloud components do not take over one
+  another's responsibilities.
+
+Apply the smallest safe fix when an ownership violation is confirmed.
+
+## 7. Validate
+
+Run validation appropriate for the repository. For ESP-IDF, normally run:
+
+```text
+idf.py build
+```
+
+Also run relevant existing unit tests, integration tests, static checks,
+formatting checks, and repository validation scripts.
+
+Do not claim hardware testing was performed unless the user already confirmed
+it or actual hardware logs are available. Clearly distinguish:
+
+- build performed;
+- automated tests performed;
+- hardware or manual acceptance confirmed by the user;
+- checks that could not be run.
+
+Do not hide warnings or failures. Do not modify unrelated code merely to
+remove unrelated warnings.
+
+## 8. Final Diff Inspection
+
+Before reporting completion:
+
+1. Review the complete phase-related diff.
+2. Confirm no unrelated file was modified accidentally.
+3. Confirm no password, credential, token, private key, PoP, or secret was
+   added.
+4. Confirm documentation matches implementation.
+5. Confirm the repository builds when build tools are available.
+6. Confirm the checkpoint can be reverted independently.
+7. Confirm temporary phase code has been removed.
+8. Confirm no destructive Git operation was executed.
+
+## 9. Completion Report
+
+After processing `END PHASE`, return this compact report:
+
+```text
+# END PHASE <phase_id> - Ready For Commit
+
+## Status
+
+- Cleanup: PASS / PARTIAL / BLOCKED
+- Build: PASS / FAIL / NOT RUN
+- Automated tests: PASS / FAIL / NOT RUN
+- Hardware acceptance: CONFIRMED BY USER / NOT CONFIRMED
+
+## Code Cleaned
+
+- List important cleanup changes.
+
+## Documentation Updated
+
+- List updated documentation.
+
+## Correctness Fixes
+
+- List meaningful fixes.
+- Write `None` when no correctness problem was found.
+
+## Known Limitations
+
+- List intentionally deferred work.
+
+## Files Changed
+
+- List changed files grouped by component.
+
+## Validation
+
+- List commands run and their results.
+
+## Suggested Commit Message
+
+<type>(<scope>): <engineering summary> [<phase_id>]
+
+## Suggested Commit Body
+
+- Provide 2-6 concise bullets covering implementation, cleanup,
+  documentation, and validation.
+
+## Next Checkpoint
+
+State the next planned checkpoint, but do not implement it automatically.
+```
+
+Use an engineering-specific commit subject, for example:
+
+```text
+feat(network): run coordinator boot policy in dedicated task [6.3.2]
+```
+
+Do not suggest a vague subject such as `End phase 6.3.2`.
+
+## 10. Blocking Conditions
+
+Report `BLOCKED` instead of pretending completion when:
+
+- phase-related code does not build;
+- a critical lifecycle, concurrency, memory, or security issue remains;
+- required files are missing;
+- tracked source contains credentials or secrets;
+- documentation contradicts implementation;
+- cleanup would overwrite unrelated changes;
+- phase acceptance criteria have not actually been met.
+
+When blocked:
+
+- explain the exact blocker;
+- identify affected files;
+- recommend the smallest safe fix;
+- do not mark the phase complete;
+- do not start the next phase.
+
+## Final Rule
+
+`END PHASE <phase_id>` must produce a clean, documented, validated,
+reviewable, and Git-ready checkpoint while preserving unrelated work. Do not
+sacrifice correctness, architecture, security, or repository safety merely to
+mark a phase complete.
