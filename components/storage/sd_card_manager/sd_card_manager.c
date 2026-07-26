@@ -23,8 +23,8 @@
 #include "sdmmc_cmd.h"
 
 /* Macros ------------------------------------------------------------------- */
-#define SD_MOUNT_MAX_RETRY 5
-#define SD_MOUNT_RETRY_DELAY_MS 1000
+#define SD_MOUNT_MAX_RETRY 10
+#define SD_MOUNT_RETRY_DELAY_MS 1500
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "sd_card_manager";

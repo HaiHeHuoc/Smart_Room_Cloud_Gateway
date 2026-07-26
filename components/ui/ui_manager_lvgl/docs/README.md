@@ -80,7 +80,7 @@ ui_manager_lvgl_release_mutex();
   the task watchdog.
 - RGB565 byte swapping is currently enabled with `LCD_SWAP_RGB565_BYTES`.
 - Landscape rotation costs extra RAM because a rotate buffer is allocated.
-- The configured rotation is currently `LV_DISPLAY_ROTATION_270`, so LVGL's
+- The configured rotation is currently `LV_DISPLAY_ROTATION_90`, so LVGL's
   logical screen is landscape after initialization.
 - `LCD_LVGL_DRAW_BUF_LINES` controls partial draw buffer height, not full screen
   resolution.
