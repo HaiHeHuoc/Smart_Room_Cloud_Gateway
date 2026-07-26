@@ -57,7 +57,7 @@ ESP32 periodically uploads sensor data to Firebase
 | Sensor reading | P0 | Done | DHT22 manager and stale/error handling |
 | Firebase upload | P0 | Done | Authenticated Realtime Database REST PUT verified on hardware |
 | NVS config storage | P0 | Done | Integrity, persistence, migration, and recovery tests accepted |
-| BLE Wi-Fi provisioning | P1 | In progress | Phases 6.1/6.2 and checkpoint 6.3.2 complete |
+| BLE Wi-Fi provisioning | P1 | In progress | Phases 6.1/6.2 and checkpoints 6.3.2/6.3.3 complete |
 | Button factory reset | P1 | Not started | Long press to erase config |
 | Wi-Fi reconnect strategy | P1 | Not started | Event-driven reconnect |
 | Cloud retry queue | P1 | Done | Latest-value queue with bounded retry backoff |
@@ -598,6 +598,21 @@ are completed in Phase 6.2.
 Checkpoint 6.3.2 was hardware-accepted by the user on 2026-07-26. Phase 6.3
 remains in progress; this checkpoint does not complete its remaining work.
 
+#### Checkpoint 6.3.3 - Runtime Network State Synchronization - Complete
+
+- [x] Forward task-context Wi-Fi manager snapshots into the application
+  network coordinator.
+- [x] Track runtime `CONNECTING`, `ONLINE`, and `OFFLINE` transitions after
+  normal Station ownership begins.
+- [x] Ignore transient provisioning Wi-Fi events until persistence, BLE
+  cleanup, and connection adoption complete.
+- [x] Preserve `wifi_manager` ownership of connection and reconnect behavior.
+- [x] Preserve queue-driven GUI updates without calling LVGL from the Wi-Fi
+  callback.
+
+Checkpoint 6.3.3 was hardware-accepted by the user on 2026-07-26. Phase 6.3
+remains in progress; provisioning-status UI work is still pending.
+
 ### Tasks
 
 - [x] Add BLE provisioning component.
@@ -830,7 +845,7 @@ Use this section to track daily/weekly progress.
 | 3 | Sensor + UI update | Done |  |  | Sensor queue, stale/error behavior, and LCD updates hardware-accepted. |
 | 4 | Firebase upload | Done |  | 2026-07-19 | Hardware upload, Firebase data, failure handling, and LCD Cloud status accepted. |
 | 5 | NVS config storage | Done |  | 2026-07-26 | Persistence, integrity, migration, and recovery tests accepted. |
-| 6 | BLE provisioning | In progress |  |  | Phases 6.1/6.2 and checkpoint 6.3.2 complete; remaining Sprint 6 work is pending. |
+| 6 | BLE provisioning | In progress |  |  | Phases 6.1/6.2 and checkpoints 6.3.2/6.3.3 complete; remaining Sprint 6 work is pending. |
 | 7 | Factory reset | Not started |  |  |  |
 | 8 | Reconnect + retry | Not started |  |  |  |
 | 9 | Portfolio polish | Not started |  |  |  |

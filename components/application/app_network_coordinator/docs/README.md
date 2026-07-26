@@ -19,7 +19,8 @@ The coordinator:
 - Verifies NVS state and credential read-back.
 - Waits for provisioning cleanup and asks `wifi_manager` to adopt the active
   connection.
-- Tracks the application-level network boot state.
+- Tracks application-level Wi-Fi readiness after boot, including later
+  connecting, online, and offline transitions.
 
 The coordinator does not:
 
@@ -37,6 +38,7 @@ The coordinator does not:
 | `app_network_coordinator_start()` | Schedule the one-shot coordinator task and return immediately. |
 | `app_network_coordinator_get_state()` | Copy the thread-safe lifecycle state. |
 | `app_network_coordinator_state_to_string()` | Convert a state to readable text. |
+| `app_network_coordinator_notify_wifi_event()` | Apply a short runtime Wi-Fi state notification after normal Station ownership begins. |
 
 ## State Flow
 
@@ -46,13 +48,18 @@ UNINITIALIZED
     -> STARTING
     -> RESOLVING_CONFIG
        -> CONNECTING
-       -> PROVISIONING -> ONLINE
+          <-> ONLINE
+          <-> OFFLINE
+       -> PROVISIONING -> ONLINE <-> OFFLINE
        -> FAILED
 ```
 
 `CONNECTING` represents an asynchronous stored-credential connection request.
-`ONLINE` is currently assigned after the provisioning connection is verified,
-cleaned up, and adopted.
+`ONLINE` requires a valid IPv4 address. After normal Station ownership begins,
+the composition root forwards Wi-Fi manager snapshots so later connection,
+DHCP, disconnection, and retry events keep the coordinator state current.
+Provisioning events remain ignored until credentials are persisted, BLE is
+cleaned up, and the active connection is adopted.
 
 `app_network_coordinator_start()` does not wait for provisioning. The dedicated
 task performs the bounded receive, persistence, cleanup, and adoption flow so
@@ -82,6 +89,9 @@ stored connection or `ONLINE` after provisioning cleanup and adoption.
   itself after boot orchestration succeeds or fails.
 - Manager, NVS, Wi-Fi, logging, and callback APIs are never called while that
   critical section is held.
+- `app_network_coordinator_notify_wifi_event()` performs no allocation,
+  blocking wait, Wi-Fi call, or GUI call; it is suitable for the normal
+  task-context Wi-Fi status callback.
 - Provisioning waits use configured finite timeout and poll periods.
 - Temporary SSID/password buffers are securely overwritten on all completed
   paths.
@@ -100,7 +110,7 @@ static const app_network_coordinator_config_t config = {
 Both timing values must be greater than zero. The coordinator copies this
 structure during initialization.
 
-## Phase 6.3.2 Acceptance
+## Phase 6.3 Acceptance
 
 Checkpoint 6.3.2 is complete and was hardware-accepted on 2026-07-26. The
 accepted path covers provisioning timeout, reset, successful reprovisioning,
@@ -108,10 +118,13 @@ Wi-Fi adoption, deferred cloud task startup, Firebase upload recovery, and GUI
 cloud-state updates. This checkpoint does not complete the remaining Phase 6.3
 work.
 
+Checkpoint 6.3.3 is complete and was hardware-accepted on 2026-07-26. Runtime
+Wi-Fi snapshots now update the coordinator between `CONNECTING`, `ONLINE`, and
+`OFFLINE` without transferring reconnect ownership away from `wifi_manager` or
+calling LVGL from the callback.
+
 ## Future Attention
 
-- Add an event-driven coordinator update path if application code needs its
-  state to follow later disconnect and reconnect events.
 - Add cancellation or restart APIs only when runtime reprovisioning policy is
   approved.
 - Keep factory reset outside this component until Sprint 7 ownership is

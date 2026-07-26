@@ -10,6 +10,28 @@ extern "C" {
 #endif
 
 /* Type Definitions --------------------------------------------------------- */
+
+/**
+ * @brief Runtime Wi-Fi event delivered by the application composition layer.
+ */
+typedef enum
+{
+    /**
+     * @brief A Station connection or DHCP attempt is active.
+     */
+    APP_NETWORK_COORDINATOR_WIFI_EVENT_CONNECTING = 0,
+
+    /**
+     * @brief The Station owns a valid IPv4 address.
+     */
+    APP_NETWORK_COORDINATOR_WIFI_EVENT_ONLINE,
+
+    /**
+     * @brief The Station currently has no usable IPv4 connection.
+     */
+    APP_NETWORK_COORDINATOR_WIFI_EVENT_OFFLINE,
+} app_network_coordinator_wifi_event_t;
+
 /**
  * @brief Application-level network lifecycle state.
  *
@@ -131,6 +153,28 @@ const char *app_network_coordinator_state_to_string(
  *         coordinator is READY, or ESP_ERR_NO_MEM when task creation fails.
  */
 esp_err_t app_network_coordinator_start(void);
+
+/**
+ * @brief Notify the coordinator of one runtime Wi-Fi state event.
+ *
+ * This function performs only a short state update and may be called from a
+ * normal task-context Wi-Fi status callback. It does not block, allocate
+ * memory, call Wi-Fi APIs, or invoke GUI code.
+ *
+ * Runtime Wi-Fi events are intentionally ignored while the coordinator is
+ * provisioning, resolving configuration, or in a terminal failure state.
+ * Provisioning becomes ONLINE only after persistence, BLE cleanup, and
+ * wifi_manager connection adoption have completed.
+ *
+ * @param[in] event Runtime Wi-Fi event.
+ *
+ * @return
+ * - ESP_OK: Event was processed or intentionally ignored for the current
+ *   lifecycle state.
+ * - ESP_ERR_INVALID_ARG: Event value is unsupported.
+ */
+esp_err_t app_network_coordinator_notify_wifi_event(
+    app_network_coordinator_wifi_event_t event);
 
 #ifdef __cplusplus
 }

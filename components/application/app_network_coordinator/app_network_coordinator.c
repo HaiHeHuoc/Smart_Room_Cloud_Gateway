@@ -893,3 +893,73 @@ esp_err_t app_network_coordinator_start(void)
 
     return ESP_OK;
 }
+
+esp_err_t app_network_coordinator_notify_wifi_event(
+    app_network_coordinator_wifi_event_t event)
+{
+    app_network_coordinator_state_t next_state;
+
+    switch (event)
+    {
+        case APP_NETWORK_COORDINATOR_WIFI_EVENT_CONNECTING:
+            next_state =
+                APP_NETWORK_COORDINATOR_STATE_CONNECTING;
+            break;
+
+        case APP_NETWORK_COORDINATOR_WIFI_EVENT_ONLINE:
+            next_state =
+                APP_NETWORK_COORDINATOR_STATE_ONLINE;
+            break;
+
+        case APP_NETWORK_COORDINATOR_WIFI_EVENT_OFFLINE:
+            next_state =
+                APP_NETWORK_COORDINATOR_STATE_OFFLINE;
+            break;
+
+        default:
+            return ESP_ERR_INVALID_ARG;
+    }
+
+    app_network_coordinator_state_t previous_state;
+    bool state_changed = false;
+
+    portENTER_CRITICAL(&s_state_lock);
+
+    previous_state = s_state;
+
+    /*
+     * Runtime Wi-Fi events are valid only after normal Station ownership has
+     * begun. During provisioning, transient GOT_IP/disconnect events belong to
+     * the provisioning transaction and must not advertise application ONLINE
+     * before persistence, BLE cleanup, and connection adoption complete.
+     */
+    const bool runtime_tracking_active =
+        (s_state ==
+         APP_NETWORK_COORDINATOR_STATE_CONNECTING) ||
+        (s_state ==
+         APP_NETWORK_COORDINATOR_STATE_ONLINE) ||
+        (s_state ==
+         APP_NETWORK_COORDINATOR_STATE_OFFLINE);
+
+    if (runtime_tracking_active &&
+        (s_state != next_state))
+    {
+        s_state = next_state;
+        state_changed = true;
+    }
+
+    portEXIT_CRITICAL(&s_state_lock);
+
+    if (state_changed)
+    {
+        ESP_LOGI(
+            TAG,
+            "Runtime network state: %s -> %s",
+            app_network_coordinator_state_to_string(
+                previous_state),
+            app_network_coordinator_state_to_string(
+                next_state));
+    }
+
+    return ESP_OK;
+}
