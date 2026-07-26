@@ -34,7 +34,7 @@ The coordinator does not:
 | API | Responsibility |
 |---|---|
 | `app_network_coordinator_init()` | Copy timing configuration and enter `READY`. |
-| `app_network_coordinator_start()` | Resolve boot policy and start the selected network path. |
+| `app_network_coordinator_start()` | Resolve boot policy and start the selected network path; the provisioning path waits for cleanup and adoption. |
 | `app_network_coordinator_get_state()` | Copy the thread-safe lifecycle state. |
 | `app_network_coordinator_state_to_string()` | Convert a state to readable text. |
 
@@ -53,6 +53,12 @@ UNINITIALIZED
 `CONNECTING` represents an asynchronous stored-credential connection request.
 `ONLINE` is currently assigned after the provisioning connection is verified,
 cleaned up, and adopted.
+
+For an unconfigured device, `app_network_coordinator_start()` blocks only for
+the configured finite provisioning interval. Application services that need
+TLS, such as `firebase_auth` and `cloud_manager`, should start after this call
+returns successfully. This prevents them from competing with temporary BLE
+provisioning resources before cleanup and Wi-Fi ownership handoff complete.
 
 ## Boot Policy
 
