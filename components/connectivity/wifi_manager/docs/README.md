@@ -173,7 +173,7 @@ configuration. An empty password is valid for an open network.
 | `wifi_manager_get_status()` | Copy a locked snapshot of current manager status. |
 | `wifi_manager_get_rssi()` | Read and cache RSSI while connected with IPv4. |
 | `wifi_manager_is_connected()` | Return true only while state is `CONNECTED` with valid IPv4. |
-| `wifi_manager_register_status_callback()` | Register, replace, or unregister the single callback. |
+| `wifi_manager_register_status_callback()` | Register or replace the callback and immediately publish the current snapshot; pass NULL to unregister. |
 | `wifi_manager_state_to_string()` | Convert a state enum to readable constant text. |
 | `wifi_manager_scan_and_log()` | Block while scanning and print AP results. |
 
@@ -181,8 +181,8 @@ No timeout-specific public state or API is exposed.
 
 ## Status Callback And LVGL
 
-The callback can run synchronously from component APIs or from the ESP event
-loop task. It must return quickly and must not call LVGL directly.
+The callback can run synchronously during registration/adoption or from the ESP
+event loop task. It must return quickly and must not call LVGL directly.
 
 ```text
 ESP Wi-Fi/IP event
@@ -194,7 +194,10 @@ ESP Wi-Fi/IP event
 ```
 
 The callback receives a temporary status snapshot. Copy required values before
-returning and do not retain the pointer.
+returning and do not retain the pointer. Immediate publication during
+registration prevents a GUI consumer from remaining stale if startup or
+provisioning events happened before callback installation. Adoption of an
+active provisioning connection republishes the final `CONNECTED` snapshot.
 
 ## Expected Logs
 

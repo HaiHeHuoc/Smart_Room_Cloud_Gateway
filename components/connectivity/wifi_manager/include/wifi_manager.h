@@ -256,6 +256,8 @@ bool wifi_manager_is_connected(void);
  * Registering a new callback replaces the previous callback.
  *
  * Passing NULL as callback unregisters the current callback.
+ * Registering a non-NULL callback immediately invokes it once with the latest
+ * status snapshot. The callback runs outside the manager critical section.
  *
  * @param callback  Callback function, or NULL to unregister.
  * @param user_data User context passed to the callback.
@@ -295,6 +297,15 @@ const char *wifi_manager_state_to_string(
  */
 esp_err_t wifi_manager_scan_and_log(void);
 
+/**
+ * @brief Adopt a Station connection established by provisioning.
+ *
+ * Restores Wi-Fi manager runtime policy and republishes the current CONNECTED
+ * snapshot to the registered status callback.
+ *
+ * @return ESP_OK on success, or an ESP-IDF error when the current connection
+ * is not eligible for adoption.
+ */
 esp_err_t wifi_manager_adopt_active_connection(void);
 
 #ifdef __cplusplus

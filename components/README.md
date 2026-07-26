@@ -9,6 +9,8 @@ and documentation.
 
 ```text
 components/
+|-- application/
+|   `-- app_network_coordinator/
 |-- cloud/
 |   |-- cloud_manager/
 |   `-- firebase_auth/
@@ -43,6 +45,7 @@ targets.
 
 | Domain | Components | Primary responsibility |
 |---|---|---|
+| Application | `app_network_coordinator` | Network boot policy and manager coordination |
 | Cloud | `cloud_manager`, `firebase_auth` | Authenticated Firebase telemetry |
 | Connectivity | `provisioning_manager`, `wifi_manager` | BLE provisioning and Wi-Fi connection lifecycle |
 | Display | `display_driver`, `waveshare__esp_lcd_st7735` | LCD bus and panel integration |
