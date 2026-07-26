@@ -16,7 +16,8 @@ This component is currently a bring-up component, not yet a full storage service
 - Uses ESP-IDF `esp_vfs_fat_sdspi_mount()` to attach SDSPI, initialize the card,
   and register FATFS with VFS.
 - Tracks internal mount state with `s_sd_mounted`.
-- Retries SD card initialization several times before returning failure.
+- Attempts SD card initialization up to 10 times before returning failure,
+  waiting 1500 ms between retry attempts.
 - Provides `sd_card_manager_write_test_file()` to create `/sdcard/hello.txt`.
 - Provides `sd_card_manager_read_test_file()` to read and log the same file.
 - Provides `sd_card_manager_list_files()` to log one directory level.
@@ -83,6 +84,8 @@ FILE *file = fopen("/sdcard/example.txt", "w");
   than every storage operation.
 - SD card speed is intentionally low for bring-up. Increase it only after the
   hardware wiring is stable.
+- With the current retry policy, a continuously failing mount can delay startup
+  by roughly 13.5 seconds before the final failure is returned.
 
 ## Future Attention
 

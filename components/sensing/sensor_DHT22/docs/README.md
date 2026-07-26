@@ -42,7 +42,10 @@ state, statistics, and GUI notification.
 
 - DHT22 requires a relatively slow sampling period. The current manager uses
   2000 ms and rejects configurations below 2000 ms.
-- The sensor pin comes from `DHT22_PIN_GPIO` in `board_config.h`.
+- The sensor pin comes from `DHT22_PIN_GPIO` in `board_config.h` and is
+  currently GPIO4.
+- GPIO4 must not be shared with another peripheral. Keep the DHT22 data-line
+  pull-up required by the actual sensor module or wiring.
 - A communication failure is returned from the underlying DHT driver.
 - A finite but out-of-range sample returns `ESP_ERR_INVALID_RESPONSE`.
 - Do not run `dht22_bringup_start()` together with `sensor_manager`; both would

@@ -109,4 +109,4 @@
  * Sensor Manager
  * ========================================================================= */
 // DHT22
-#define DHT22_PIN_GPIO                  GPIO_NUM_21
+#define DHT22_PIN_GPIO                  GPIO_NUM_4

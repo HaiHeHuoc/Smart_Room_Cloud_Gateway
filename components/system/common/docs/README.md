@@ -23,6 +23,26 @@ types, and board/device configuration, not feature logic.
 - Exposes SD card mount point, SPI host, SPI speed, max open files, and FAT
   allocation unit size.
 - Exposes shared SD path buffer length through `SD_CARD_MANAGER_PATH_MAX_LEN`.
+- Configures the DHT22 data line on GPIO4.
+
+## Current GPIO Mapping
+
+| Device | Signal | GPIO |
+|---|---|---:|
+| ST7735 LCD | CS | 10 |
+| ST7735 LCD | MOSI | 11 |
+| ST7735 LCD | SCLK | 12 |
+| ST7735 LCD | DC | 13 |
+| ST7735 LCD | RESET | 14 |
+| ST7735 LCD | Backlight | 15 |
+| SD card | CS | 8 |
+| SD card | MOSI | 16 |
+| SD card | MISO | 17 |
+| SD card | SCLK | 18 |
+| DHT22 | Data | 4 |
+
+The ST7735 connection is write-only, so `LCD_GPIO_MISO` is
+`GPIO_NUM_NC`.
 
 ## How To Use
 
@@ -49,6 +69,7 @@ Typical users:
   size.
 - `ui_manager_lvgl` uses LCD resolution and `LCD_LVGL_DRAW_BUF_LINES`.
 - `sd_card_manager` uses SD SPI pins, mount point, clock, and FAT settings.
+- `sensor_DHT22` uses `DHT22_PIN_GPIO`, currently GPIO4.
 - `lvgl_sd_fs` uses the SD mount point and SD path length when mapping LVGL
   paths such as `S:/image.png` to VFS paths such as `/sdcard/image.png`.
 
@@ -63,6 +84,8 @@ Typical users:
   SD filesystem adapter.
 - Keep hardware pin changes here instead of spreading pin numbers across
   drivers.
+- Verify that a replacement pin is exposed by the target board and is not
+  reserved for flash, PSRAM, USB, boot strapping, or another project device.
 - `APP_PROJECT_VER_DATE` is a string constant; it is not generated from the
   build time.
 - Firebase device credentials in `app_common.h` are compiled into both the
