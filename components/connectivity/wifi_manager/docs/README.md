@@ -172,7 +172,7 @@ configuration. An empty password is valid for an open network.
 | `wifi_manager_disconnect()` | Disconnect manually and suppress automatic reconnect. |
 | `wifi_manager_get_status()` | Copy a locked snapshot of current manager status. |
 | `wifi_manager_get_rssi()` | Read and cache RSSI while connected with IPv4. |
-| `wifi_manager_is_connected()` | Return true only while state is `CONNECTED` with valid IPv4. |
+| `wifi_manager_is_connected()` | Return true only while wifi_manager owns a `CONNECTED` Station with valid IPv4. |
 | `wifi_manager_register_status_callback()` | Register or replace the callback and immediately publish the current snapshot; pass NULL to unregister. |
 | `wifi_manager_state_to_string()` | Convert a state enum to readable constant text. |
 | `wifi_manager_scan_and_log()` | Block while scanning and print AP results. |
@@ -205,7 +205,7 @@ Successful startup includes messages similar to:
 
 ```text
 I (...) WIFI_MANAGER: Wi-Fi manager initialized: mode=STATION, storage=RAM
-I (...) WIFI_MANAGER: Connecting to Wi-Fi SSID: ...
+I (...) WIFI_MANAGER: Connecting to configured Wi-Fi network
 I (...) WIFI_MANAGER: Event: WIFI_EVENT_STA_CONNECTED
 I (...) WIFI_MANAGER: Event: IP_EVENT_STA_GOT_IP, address=...
 ```
@@ -232,11 +232,12 @@ task.
 
 - The 30-second timeout is private and currently fixed at compile time.
 - There is no public deinitialization API.
-- Credentials still come from application configuration rather than a
-  provisioning/NVS owner.
+- Durable credentials remain owned by `config_manager`; `wifi_manager` keeps
+  only the runtime Station configuration in driver RAM.
 - `IP_EVENT_STA_LOST_IP` keeps the associated station in `WAITING_FOR_IP`; it
   does not start a new connection-attempt timer by itself.
 - Runtime validation on hardware is still required for unreachable AP, wrong
   password, association without DHCP, repeated timeout/retry cycles, successful
   recovery, and manual disconnect during timeout or backoff.
-- BLE provisioning and a structured scan-result API remain future work.
+- BLE transport lifecycle remains owned by `provisioning_manager`; a
+  structured scan-result API remains future work.

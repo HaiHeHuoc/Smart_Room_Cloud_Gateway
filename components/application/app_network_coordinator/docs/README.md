@@ -34,7 +34,7 @@ The coordinator does not:
 | API | Responsibility |
 |---|---|
 | `app_network_coordinator_init()` | Copy timing configuration and enter `READY`. |
-| `app_network_coordinator_start()` | Resolve boot policy and start the selected network path; the provisioning path waits for cleanup and adoption. |
+| `app_network_coordinator_start()` | Schedule the one-shot coordinator task and return immediately. |
 | `app_network_coordinator_get_state()` | Copy the thread-safe lifecycle state. |
 | `app_network_coordinator_state_to_string()` | Convert a state to readable text. |
 
@@ -54,11 +54,13 @@ UNINITIALIZED
 `ONLINE` is currently assigned after the provisioning connection is verified,
 cleaned up, and adopted.
 
-For an unconfigured device, `app_network_coordinator_start()` blocks only for
-the configured finite provisioning interval. Application services that need
-TLS, such as `firebase_auth` and `cloud_manager`, should start after this call
-returns successfully. This prevents them from competing with temporary BLE
-provisioning resources before cleanup and Wi-Fi ownership handoff complete.
+`app_network_coordinator_start()` does not wait for provisioning. The dedicated
+task performs the bounded receive, persistence, cleanup, and adoption flow so
+`app_main()` can continue initializing independent services.
+
+The composition root may initialize dependent service state immediately, then
+defer memory-heavy tasks until the coordinator reaches `CONNECTING` for a
+stored connection or `ONLINE` after provisioning cleanup and adoption.
 
 ## Boot Policy
 
@@ -76,6 +78,8 @@ provisioning resources before cleanup and Wi-Fi ownership handoff complete.
 
 - Lifecycle state and copied configuration are protected by a short critical
   section.
+- The one-shot coordinator task uses a 6 KB stack at priority 4 and deletes
+  itself after boot orchestration succeeds or fails.
 - Manager, NVS, Wi-Fi, logging, and callback APIs are never called while that
   critical section is held.
 - Provisioning waits use configured finite timeout and poll periods.
@@ -95,6 +99,14 @@ static const app_network_coordinator_config_t config = {
 
 Both timing values must be greater than zero. The coordinator copies this
 structure during initialization.
+
+## Phase 6.3.2 Acceptance
+
+Checkpoint 6.3.2 is complete and was hardware-accepted on 2026-07-26. The
+accepted path covers provisioning timeout, reset, successful reprovisioning,
+Wi-Fi adoption, deferred cloud task startup, Firebase upload recovery, and GUI
+cloud-state updates. This checkpoint does not complete the remaining Phase 6.3
+work.
 
 ## Future Attention
 
