@@ -136,7 +136,8 @@ esp_err_t app_gui_start_ui_task(void);
 /**
  * @brief Create and activate the Wi-Fi status screen.
  *
- * This function acquires and releases the LVGL mutex internally.
+ * This function acquires the LVGL mutex, rebuilds the active root screen in
+ * place, and releases the mutex after all Wi-Fi widgets are ready.
  *
  * @return ESP_OK on success, ESP_ERR_INVALID_STATE if LVGL has no active
  *         screen, or ESP_ERR_NO_MEM if a widget cannot be created.
@@ -168,7 +169,8 @@ esp_err_t app_gui_post_wifi_status(
  * function acquires and releases the LVGL mutex internally. Sensor updates
  * posted through app_gui_post_sensor_status() are applied by the GUI task.
  * Cloud updates posted through app_gui_post_cloud_status() follow the same
- * queue-driven GUI-task ownership model.
+ * queue-driven GUI-task ownership model. The active root screen is reused, so
+ * this operation does not allocate and load a second LVGL root.
  *
  * @return ESP_OK on success, ESP_ERR_INVALID_STATE if LVGL has no active
  *         screen, or ESP_ERR_NO_MEM if a widget cannot be created.
@@ -224,14 +226,15 @@ esp_err_t app_gui_get_screen_id(
     app_gui_screen_id_t *screen_id);
 
 /**
- * @brief Replace the active LVGL screen with an empty application screen.
+ * @brief Clear the active LVGL root and leave a dark empty screen.
  *
  * The caller must already own the LVGL mutex, or call this function from an
  * LVGL callback executed by the mutex-protected app GUI task. Do not acquire
- * the same non-recursive mutex again from such a callback.
+ * the same non-recursive mutex again from such a callback. The active root is
+ * reused; this function does not allocate or load a replacement root screen.
  *
  * @return ESP_OK on success, or ESP_ERR_INVALID_RESPONSE if no active screen
- *         exists or the replacement screen cannot be created.
+ *         exists.
  */
 esp_err_t app_gui_clear_screen(void);
 

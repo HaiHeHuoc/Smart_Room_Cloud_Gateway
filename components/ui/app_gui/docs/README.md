@@ -37,8 +37,12 @@ call sequence unchanged. `app_gui.c` is grouped into these responsibilities:
 - A compact 160x128 Smart Room dashboard with a framed header, two-column
   layout, temperature/humidity readings, Wi-Fi summary, cloud status, and
   sensor health.
-- A reusable LVGL timer that clears the Wi-Fi screen after 10 seconds without
-  a new Wi-Fi event.
+- A reusable LVGL timer that requests the Sensor screen after 10 seconds
+  without a new Wi-Fi event.
+- In-place screen rebuilding on one active LVGL root, avoiding an intermediate
+  default-white screen and a second-root allocation peak.
+- Retention of the latest sensor snapshot so the dashboard can be populated
+  immediately when the Wi-Fi screen times out.
 - Stack high-water logging every 60 seconds.
 - Guards against starting a second GUI task or a second demo task.
 
@@ -60,14 +64,14 @@ animations to progress.
 | --- | --- |
 | `app_gui_init()` | Create the Wi-Fi, sensor, and cloud status queues. |
 | `app_gui_start_ui_task()` | Start the application GUI/LVGL timer task. |
-| `app_gui_create_wifi_screen()` | Build and activate Wi-Fi widgets while internally holding the LVGL mutex. |
+| `app_gui_create_wifi_screen()` | Rebuild the active root with Wi-Fi widgets while internally holding the LVGL mutex. |
 | `app_gui_post_wifi_status()` | Replace the pending Wi-Fi snapshot without waiting. |
-| `app_gui_create_sensor_screen()` | Build and activate sensor widgets while internally holding the LVGL mutex. |
+| `app_gui_create_sensor_screen()` | Rebuild the active root with sensor widgets while internally holding the LVGL mutex. |
 | `app_gui_post_sensor_status()` | Append a sensor snapshot without waiting. |
 | `app_gui_post_cloud_status()` | Replace the pending cloud snapshot without waiting. |
 | `app_gui_set_screen_id()` | Update only the tracked screen ID. |
 | `app_gui_get_screen_id()` | Read the tracked screen ID under a critical section. |
-| `app_gui_clear_screen()` | Replace the active LVGL root screen; the caller must serialize LVGL access. |
+| `app_gui_clear_screen()` | Clear the active root in place; the caller must serialize LVGL access. |
 | `app_gui_create_demo_screen()` | Create the static `LVGL OK` demo. |
 | `app_gui_start_running_demo_task()` | Start the optional moving-label demo task. |
 
@@ -84,8 +88,10 @@ wifi_manager event
 ```
 
 The timer callback runs from `lv_timer_handler()` while the GUI task owns the
-LVGL mutex. It clears only an active Wi-Fi screen, pauses itself, and leaves the
-tracked screen ID as `NONE`.
+non-recursive LVGL mutex. It records a Sensor-screen request and pauses itself
+without deleting the visible Wi-Fi widgets. On the next GUI iteration, the
+request is handled before rendering and the active root is rebuilt directly as
+the Sensor screen.
 
 ## Sensor Flow
 
@@ -94,13 +100,18 @@ sensor_manager task
     -> main callback maps sensor_manager_status_t to ui_sensor_status_t
     -> app_gui_post_sensor_status()
     -> GUI task receives one pending snapshot
-    -> Sensor screen is created only when the active ID is NONE
+    -> latest sensor snapshot is retained
+    -> Sensor screen is created when the active ID is NONE or Wi-Fi times out
     -> Temperature, humidity, and state labels are updated
 ```
 
-An active Wi-Fi screen has priority over sensor snapshots. After the Wi-Fi
-timeout clears that screen, a later sensor snapshot can create the sensor
-screen. A subsequent Wi-Fi event brings the Wi-Fi screen forward again.
+An active Wi-Fi screen has priority over sensor snapshots until its timer
+expires. The current Wi-Fi screen remains visible until the GUI task can
+rebuild that same root as the Sensor screen. If a sensor snapshot is available,
+its values are restored during the same GUI iteration; otherwise the Sensor
+screen uses placeholders until the first sample arrives. A subsequent Wi-Fi
+event cancels a pending Sensor transition and rebuilds the same root as the
+Wi-Fi screen.
 When sensor data is invalid or stale, the temperature and humidity labels
 display `-`. The same placeholder is displayed immediately when
 `sensor_manager` posts its `-1.0f` failed-read sentinel, even during the
@@ -143,9 +154,12 @@ the GUI queue.
 - `app_gui_clear_screen()` deliberately does not acquire the mutex. Call it
   only while already holding the mutex, from the mutex-protected LVGL timer
   callback path, or from another path that exclusively owns LVGL access.
+- Wi-Fi timeout handling records only a small deferred-transition flag while
+  inside `lv_timer_handler()`; it never attempts to take the LVGL mutex again.
 - The LVGL mutex is non-recursive. A timer callback running inside
   `lv_timer_handler()` must not lock it again.
-- Screen ID locking protects only the enum value, not LVGL objects.
+- The screen-state critical section protects the screen ID, retained status
+  summaries, and the deferred Sensor-screen request, but not LVGL objects.
 - Callback producers must copy status through the queue and must not call LVGL
   directly.
 
@@ -158,14 +172,15 @@ the GUI queue.
 - RSSI and disconnect reason are transported but not displayed.
 - Failed sensor readings currently depend on the private `-1.0f` producer/UI
   convention in addition to `data_valid` and `data_stale`.
-- `app_gui_clear_screen()` relies on its caller to satisfy the LVGL ownership
-  contract.
+- `app_gui_clear_screen()` reuses the active root but still relies on its
+  caller to satisfy the LVGL ownership contract.
 - The optional demo task is retained for development only. It stops itself if
   another screen transition deletes its label.
 
 ## Future Attention
 
-- Centralize every screen transition inside one explicit GUI command queue.
+- Add an explicit GUI command queue only when more asynchronous screen types
+  require centralized transition policy.
 - Add a stop/deinit path only when runtime shutdown is required.
 - Decide whether sensor updates should preserve history or overwrite older
   pending snapshots.
