@@ -26,6 +26,37 @@ typedef enum
     APP_GUI_SCREEN_SENSOR_DASHBOARD,
 } app_gui_screen_id_t;
 
+/* Provisioning UI Types -------------------------------------------------- */
+
+/** @brief UI-only states rendered by the BLE Wi-Fi provisioning screen. */
+typedef enum
+{
+    UI_PROVISIONING_STATE_STARTING = 0,
+    UI_PROVISIONING_STATE_WAITING_FOR_PHONE,
+    UI_PROVISIONING_STATE_CREDENTIAL_RECEIVED,
+    UI_PROVISIONING_STATE_CONNECTING_WIFI,
+    UI_PROVISIONING_STATE_WAITING_FOR_IP,
+    UI_PROVISIONING_STATE_SAVING_CONFIG,
+    UI_PROVISIONING_STATE_CLEANING_UP,
+    UI_PROVISIONING_STATE_SUCCESS,
+    UI_PROVISIONING_STATE_FAILED,
+    UI_PROVISIONING_STATE_TIMEOUT,
+    UI_PROVISIONING_STATE_RETRYING,
+} ui_provisioning_state_t;
+
+/**
+ * @brief Non-sensitive provisioning snapshot copied into the GUI command queue.
+ *
+ * This UI model contains no credentials, PoP value, framework-owned pointer,
+ * or raw Wi-Fi configuration.
+ */
+typedef struct
+{
+    ui_provisioning_state_t state;
+    esp_err_t last_error;
+    uint16_t wifi_disconnect_reason;
+} ui_provisioning_status_t;
+
 /* Wi-Fi UI Types ---------------------------------------------------------- */
 
 #define UI_WIFI_SSID_BUFFER_SIZE  33U
@@ -135,6 +166,24 @@ esp_err_t app_gui_init(void);
  *         creation fails.
  */
 esp_err_t app_gui_start_ui_task(void);
+
+/* Provisioning Status API ------------------------------------------------ */
+
+/**
+ * @brief Post a copied provisioning status to the GUI task without waiting.
+ *
+ * The status is copied into the GUI command queue. This function never calls
+ * LVGL, does not retain @p status, and is safe from normal task and
+ * task-context callback code. It is not ISR-safe and never changes the active
+ * screen.
+ *
+ * @param[in] status Non-sensitive provisioning UI snapshot to copy.
+ * @return ESP_OK when queued, ESP_ERR_INVALID_ARG for NULL or an invalid
+ *         provisioning state, ESP_ERR_INVALID_STATE before app_gui_init(), or
+ *         ESP_ERR_TIMEOUT when the GUI command queue is full.
+ */
+esp_err_t app_gui_post_provisioning_status(
+    const ui_provisioning_status_t *status);
 
 /* Wi-Fi Status API -------------------------------------------------------- */
 /**

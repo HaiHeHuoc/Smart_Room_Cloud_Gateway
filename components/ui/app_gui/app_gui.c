@@ -29,6 +29,14 @@
 #define APP_GUI_SENSOR_VALUE_WIDTH_PX          92
 #define APP_GUI_SENSOR_VALUE_HEIGHT_PX         18
 
+/* Provisioning layout reserves an 80x80 QR region for Phase 6.4.3. */
+#define APP_GUI_PROVISIONING_QR_X_PX             4
+#define APP_GUI_PROVISIONING_QR_Y_PX            40
+#define APP_GUI_PROVISIONING_QR_SIZE_PX         80
+#define APP_GUI_PROVISIONING_TEXT_X_PX          90
+#define APP_GUI_PROVISIONING_TEXT_WIDTH_PX      66
+#define APP_GUI_PROVISIONING_INDICATOR_SIZE_PX   8
+
 /* sensor_manager publishes this sentinel after a failed DHT22 read. */
 #define APP_GUI_SENSOR_FAILED_VALUE             (-1.0f)
 
@@ -45,6 +53,7 @@
 typedef enum
 {
     APP_GUI_COMMAND_SHOW_SCREEN = 0,
+    APP_GUI_COMMAND_UPDATE_PROVISIONING_STATUS,
 } app_gui_command_type_t;
 
 typedef struct
@@ -54,11 +63,16 @@ typedef struct
     union
     {
         app_gui_screen_id_t screen_id;
+        ui_provisioning_status_t provisioning_status;
     } data;
 } app_gui_command_t;
 
 typedef struct
 {
+    lv_obj_t *provisioning_title_label;
+    lv_obj_t *provisioning_instruction_label;
+    lv_obj_t *provisioning_status_label;
+    lv_obj_t *provisioning_state_indicator;
     lv_obj_t *wifi_mode_label;
     lv_obj_t *wifi_ssid_label;
     lv_obj_t *wifi_ip_label;
@@ -83,12 +97,24 @@ static QueueHandle_t s_cloud_status_queue = NULL;
 static TaskHandle_t s_ui_task_handle = NULL;
 static app_gui_screen_id_t s_current_screen_id = APP_GUI_SCREEN_NONE;
 static portMUX_TYPE s_screen_id_lock = portMUX_INITIALIZER_UNLOCKED;
+static bool s_latest_provisioning_status_available = false;
+static ui_provisioning_status_t s_latest_provisioning_status = {
+    .state = UI_PROVISIONING_STATE_STARTING,
+    .last_error = ESP_OK,
+    .wifi_disconnect_reason = 0U,
+};
 static bool s_latest_wifi_status_available = false;
 static ui_wifi_status_t s_latest_wifi_status = {0};
 static bool s_latest_sensor_status_available = false;
 static ui_sensor_status_t s_latest_sensor_status = {0};
 static bool s_latest_cloud_status_available = false;
 static ui_cloud_status_t s_latest_cloud_status = {0};
+
+/* Provisioning references are valid only while its screen is active. */
+static lv_obj_t *s_provisioning_title_label = NULL;
+static lv_obj_t *s_provisioning_instruction_label = NULL;
+static lv_obj_t *s_provisioning_status_label = NULL;
+static lv_obj_t *s_provisioning_state_indicator = NULL;
 
 /* Wi-Fi object references are valid only while the Wi-Fi screen is active. */
 static lv_obj_t *s_wifi_mode_label = NULL;
@@ -109,8 +135,18 @@ static lv_obj_t *s_sensor_cloud_dot = NULL;
 static bool app_gui_is_valid_screen_id(
     app_gui_screen_id_t screen_id,
     bool allow_none);
+static bool app_gui_is_valid_provisioning_state(
+    ui_provisioning_state_t state);
 static const char *app_gui_screen_id_to_string(
     app_gui_screen_id_t screen_id);
+static const char *app_gui_provisioning_state_to_string(
+    ui_provisioning_state_t state);
+static const char *app_gui_provisioning_instruction_text(
+    ui_provisioning_state_t state);
+static const char *app_gui_provisioning_status_text(
+    ui_provisioning_state_t state);
+static lv_color_t app_gui_provisioning_state_color(
+    ui_provisioning_state_t state);
 static void app_gui_cleanup_queues(void);
 static void app_gui_set_active_screen_id(
     app_gui_screen_id_t screen_id);
@@ -127,6 +163,8 @@ static void app_gui_render_boot_status(
     lv_obj_t *screen);
 static esp_err_t app_gui_create_provisioning_screen(
     lv_obj_t *screen);
+static void app_gui_render_provisioning_status(
+    const ui_provisioning_status_t *status);
 static esp_err_t app_gui_create_wifi_screen(
     lv_obj_t *screen);
 static esp_err_t app_gui_create_sensor_screen(
@@ -168,6 +206,8 @@ static void app_gui_render_cached_status(
     app_gui_screen_id_t screen_id);
 static esp_err_t app_gui_activate_screen(
     app_gui_screen_id_t target_screen);
+static void app_gui_process_provisioning_status(
+    const ui_provisioning_status_t *status);
 static void app_gui_process_commands(void);
 static void app_gui_process_sensor_status(void);
 static void app_gui_process_wifi_status(void);
@@ -188,6 +228,14 @@ static bool app_gui_is_valid_screen_id(
          (screen_id == APP_GUI_SCREEN_PROVISIONING) ||
          (screen_id == APP_GUI_SCREEN_WIFI_STATUS) ||
          (screen_id == APP_GUI_SCREEN_SENSOR_DASHBOARD));
+}
+
+static bool app_gui_is_valid_provisioning_state(
+    ui_provisioning_state_t state)
+{
+    return
+        (state >= UI_PROVISIONING_STATE_STARTING) &&
+        (state <= UI_PROVISIONING_STATE_RETRYING);
 }
 
 static const char *app_gui_screen_id_to_string(
@@ -211,6 +259,154 @@ static const char *app_gui_screen_id_to_string(
 
         default:
             return "UNKNOWN";
+    }
+}
+
+static const char *app_gui_provisioning_state_to_string(
+    ui_provisioning_state_t state)
+{
+    switch (state) {
+        case UI_PROVISIONING_STATE_STARTING:
+            return "STARTING";
+
+        case UI_PROVISIONING_STATE_WAITING_FOR_PHONE:
+            return "WAITING_FOR_PHONE";
+
+        case UI_PROVISIONING_STATE_CREDENTIAL_RECEIVED:
+            return "CREDENTIAL_RECEIVED";
+
+        case UI_PROVISIONING_STATE_CONNECTING_WIFI:
+            return "CONNECTING_WIFI";
+
+        case UI_PROVISIONING_STATE_WAITING_FOR_IP:
+            return "WAITING_FOR_IP";
+
+        case UI_PROVISIONING_STATE_SAVING_CONFIG:
+            return "SAVING_CONFIG";
+
+        case UI_PROVISIONING_STATE_CLEANING_UP:
+            return "CLEANING_UP";
+
+        case UI_PROVISIONING_STATE_SUCCESS:
+            return "SUCCESS";
+
+        case UI_PROVISIONING_STATE_FAILED:
+            return "FAILED";
+
+        case UI_PROVISIONING_STATE_TIMEOUT:
+            return "TIMEOUT";
+
+        case UI_PROVISIONING_STATE_RETRYING:
+            return "RETRYING";
+
+        default:
+            return "UNKNOWN";
+    }
+}
+
+static const char *app_gui_provisioning_instruction_text(
+    ui_provisioning_state_t state)
+{
+    switch (state) {
+        case UI_PROVISIONING_STATE_WAITING_FOR_PHONE:
+            return "Scan to connect";
+
+        case UI_PROVISIONING_STATE_CREDENTIAL_RECEIVED:
+            return "Wi-Fi received";
+
+        case UI_PROVISIONING_STATE_CONNECTING_WIFI:
+            return "Connecting to Wi-Fi";
+
+        case UI_PROVISIONING_STATE_WAITING_FOR_IP:
+            return "Connected to router";
+
+        case UI_PROVISIONING_STATE_SAVING_CONFIG:
+            return "Saving settings";
+
+        case UI_PROVISIONING_STATE_CLEANING_UP:
+            return "Setup complete";
+
+        case UI_PROVISIONING_STATE_SUCCESS:
+            return "Wi-Fi configured";
+
+        case UI_PROVISIONING_STATE_FAILED:
+            return "Check Wi-Fi details";
+
+        case UI_PROVISIONING_STATE_TIMEOUT:
+            return "Setup expired";
+
+        case UI_PROVISIONING_STATE_RETRYING:
+            return "Starting a new session";
+
+        case UI_PROVISIONING_STATE_STARTING:
+        default:
+            return "Prepare your phone";
+    }
+}
+
+static const char *app_gui_provisioning_status_text(
+    ui_provisioning_state_t state)
+{
+    switch (state) {
+        case UI_PROVISIONING_STATE_WAITING_FOR_PHONE:
+            return "Waiting for phone";
+
+        case UI_PROVISIONING_STATE_CREDENTIAL_RECEIVED:
+            return "Checking...";
+
+        case UI_PROVISIONING_STATE_CONNECTING_WIFI:
+            return "Connecting...";
+
+        case UI_PROVISIONING_STATE_WAITING_FOR_IP:
+            return "Getting IP...";
+
+        case UI_PROVISIONING_STATE_SAVING_CONFIG:
+            return "Saving...";
+
+        case UI_PROVISIONING_STATE_CLEANING_UP:
+            return "Finishing...";
+
+        case UI_PROVISIONING_STATE_SUCCESS:
+            return "Connected";
+
+        case UI_PROVISIONING_STATE_FAILED:
+            return "Connection failed";
+
+        case UI_PROVISIONING_STATE_TIMEOUT:
+            return "Timed out";
+
+        case UI_PROVISIONING_STATE_RETRYING:
+            return "Retrying...";
+
+        case UI_PROVISIONING_STATE_STARTING:
+        default:
+            return "Starting setup...";
+    }
+}
+
+static lv_color_t app_gui_provisioning_state_color(
+    ui_provisioning_state_t state)
+{
+    switch (state) {
+        case UI_PROVISIONING_STATE_SUCCESS:
+            return lv_color_hex(0x49C978);
+
+        case UI_PROVISIONING_STATE_FAILED:
+        case UI_PROVISIONING_STATE_TIMEOUT:
+            return lv_color_hex(0xF06464);
+
+        case UI_PROVISIONING_STATE_SAVING_CONFIG:
+        case UI_PROVISIONING_STATE_CLEANING_UP:
+        case UI_PROVISIONING_STATE_RETRYING:
+            return lv_color_hex(0xFFC857);
+
+        case UI_PROVISIONING_STATE_STARTING:
+        case UI_PROVISIONING_STATE_WAITING_FOR_PHONE:
+        case UI_PROVISIONING_STATE_CREDENTIAL_RECEIVED:
+        case UI_PROVISIONING_STATE_CONNECTING_WIFI:
+        case UI_PROVISIONING_STATE_WAITING_FOR_IP:
+        default:
+            return lv_color_hex(0x4DB6E5);
     }
 }
 
@@ -252,6 +448,12 @@ static void app_gui_capture_widget_refs(
         return;
     }
 
+    refs->provisioning_title_label = s_provisioning_title_label;
+    refs->provisioning_instruction_label =
+        s_provisioning_instruction_label;
+    refs->provisioning_status_label = s_provisioning_status_label;
+    refs->provisioning_state_indicator =
+        s_provisioning_state_indicator;
     refs->wifi_mode_label = s_wifi_mode_label;
     refs->wifi_ssid_label = s_wifi_ssid_label;
     refs->wifi_ip_label = s_wifi_ip_label;
@@ -266,6 +468,10 @@ static void app_gui_capture_widget_refs(
 
 static void app_gui_clear_widget_refs(void)
 {
+    s_provisioning_title_label = NULL;
+    s_provisioning_instruction_label = NULL;
+    s_provisioning_status_label = NULL;
+    s_provisioning_state_indicator = NULL;
     s_wifi_mode_label = NULL;
     s_wifi_ssid_label = NULL;
     s_wifi_ip_label = NULL;
@@ -287,6 +493,12 @@ static void app_gui_apply_widget_refs(
         return;
     }
 
+    s_provisioning_title_label = refs->provisioning_title_label;
+    s_provisioning_instruction_label =
+        refs->provisioning_instruction_label;
+    s_provisioning_status_label = refs->provisioning_status_label;
+    s_provisioning_state_indicator =
+        refs->provisioning_state_indicator;
     s_wifi_mode_label = refs->wifi_mode_label;
     s_wifi_ssid_label = refs->wifi_ssid_label;
     s_wifi_ip_label = refs->wifi_ip_label;
@@ -671,36 +883,199 @@ static esp_err_t app_gui_create_provisioning_screen(
     lv_obj_set_style_radius(screen, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(screen, 0, LV_PART_MAIN);
 
-    lv_obj_t *title = lv_label_create(screen);
-    lv_obj_t *status = lv_label_create(screen);
+    s_provisioning_title_label =
+        lv_label_create(screen);
 
-    if ((title == NULL) || (status == NULL)) {
+    if (s_provisioning_title_label == NULL) {
+        ESP_LOGE(TAG, "Failed to create provisioning title");
         return ESP_ERR_NO_MEM;
     }
 
-    lv_label_set_text(title, "Wi-Fi Setup");
+    lv_label_set_text(
+        s_provisioning_title_label,
+        "Wi-Fi Setup");
+    lv_obj_set_pos(s_provisioning_title_label, 6, 5);
     lv_obj_set_style_text_font(
-        title,
-        &lv_font_montserrat_20,
+        s_provisioning_title_label,
+        &lv_font_montserrat_18,
         LV_PART_MAIN);
     lv_obj_set_style_text_color(
-        title,
+        s_provisioning_title_label,
         lv_color_hex(0xF2F5F7),
         LV_PART_MAIN);
-    lv_obj_align(title, LV_ALIGN_CENTER, 0, -14);
 
-    lv_label_set_text(status, "Preparing setup...");
+    s_provisioning_state_indicator =
+        lv_obj_create(screen);
+
+    if (s_provisioning_state_indicator == NULL) {
+        ESP_LOGE(TAG, "Failed to create provisioning state indicator");
+        return ESP_ERR_NO_MEM;
+    }
+
+    lv_obj_remove_style_all(
+        s_provisioning_state_indicator);
+    lv_obj_set_size(
+        s_provisioning_state_indicator,
+        APP_GUI_PROVISIONING_INDICATOR_SIZE_PX,
+        APP_GUI_PROVISIONING_INDICATOR_SIZE_PX);
+    lv_obj_set_pos(
+        s_provisioning_state_indicator,
+        146,
+        10);
+    lv_obj_set_style_radius(
+        s_provisioning_state_indicator,
+        LV_RADIUS_CIRCLE,
+        LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(
+        s_provisioning_state_indicator,
+        LV_OPA_COVER,
+        LV_PART_MAIN);
+
+    lv_obj_t *divider = lv_obj_create(screen);
+
+    if (divider == NULL) {
+        ESP_LOGE(TAG, "Failed to create provisioning divider");
+        return ESP_ERR_NO_MEM;
+    }
+
+    lv_obj_remove_style_all(divider);
+    lv_obj_set_size(divider, 148, 1);
+    lv_obj_set_pos(divider, 6, 31);
+    lv_obj_set_style_bg_opa(divider, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(
+        divider,
+        lv_color_hex(0x344047),
+        LV_PART_MAIN);
+
+    lv_obj_t *qr_region = lv_obj_create(screen);
+
+    if (qr_region == NULL) {
+        ESP_LOGE(TAG, "Failed to create reserved QR region");
+        return ESP_ERR_NO_MEM;
+    }
+
+    lv_obj_remove_flag(qr_region, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(
+        qr_region,
+        APP_GUI_PROVISIONING_QR_SIZE_PX,
+        APP_GUI_PROVISIONING_QR_SIZE_PX);
+    lv_obj_set_pos(
+        qr_region,
+        APP_GUI_PROVISIONING_QR_X_PX,
+        APP_GUI_PROVISIONING_QR_Y_PX);
+    lv_obj_set_style_bg_color(
+        qr_region,
+        lv_color_hex(0x182125),
+        LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(
+        qr_region,
+        LV_OPA_COVER,
+        LV_PART_MAIN);
+    lv_obj_set_style_border_width(qr_region, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(
+        qr_region,
+        lv_color_hex(0x4DB6E5),
+        LV_PART_MAIN);
+    lv_obj_set_style_radius(qr_region, 2, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(qr_region, 0, LV_PART_MAIN);
+
+    s_provisioning_instruction_label =
+        lv_label_create(screen);
+
+    if (s_provisioning_instruction_label == NULL) {
+        ESP_LOGE(TAG, "Failed to create provisioning instruction");
+        return ESP_ERR_NO_MEM;
+    }
+
+    lv_label_set_text(
+        s_provisioning_instruction_label,
+        "");
+    lv_label_set_long_mode(
+        s_provisioning_instruction_label,
+        LV_LABEL_LONG_WRAP);
+    lv_obj_set_size(
+        s_provisioning_instruction_label,
+        APP_GUI_PROVISIONING_TEXT_WIDTH_PX,
+        44);
+    lv_obj_set_pos(
+        s_provisioning_instruction_label,
+        APP_GUI_PROVISIONING_TEXT_X_PX,
+        41);
     lv_obj_set_style_text_font(
-        status,
+        s_provisioning_instruction_label,
         &lv_font_montserrat_12,
         LV_PART_MAIN);
     lv_obj_set_style_text_color(
-        status,
-        lv_color_hex(0x8C989F),
+        s_provisioning_instruction_label,
+        lv_color_hex(0xF2F5F7),
         LV_PART_MAIN);
-    lv_obj_align(status, LV_ALIGN_CENTER, 0, 14);
+    lv_obj_set_style_text_align(
+        s_provisioning_instruction_label,
+        LV_TEXT_ALIGN_CENTER,
+        LV_PART_MAIN);
+
+    s_provisioning_status_label =
+        lv_label_create(screen);
+
+    if (s_provisioning_status_label == NULL) {
+        ESP_LOGE(TAG, "Failed to create provisioning status");
+        return ESP_ERR_NO_MEM;
+    }
+
+    lv_label_set_text(
+        s_provisioning_status_label,
+        "");
+    lv_label_set_long_mode(
+        s_provisioning_status_label,
+        LV_LABEL_LONG_WRAP);
+    lv_obj_set_size(
+        s_provisioning_status_label,
+        APP_GUI_PROVISIONING_TEXT_WIDTH_PX,
+        31);
+    lv_obj_set_pos(
+        s_provisioning_status_label,
+        APP_GUI_PROVISIONING_TEXT_X_PX,
+        89);
+    lv_obj_set_style_text_font(
+        s_provisioning_status_label,
+        &lv_font_montserrat_10,
+        LV_PART_MAIN);
+    lv_obj_set_style_text_align(
+        s_provisioning_status_label,
+        LV_TEXT_ALIGN_CENTER,
+        LV_PART_MAIN);
 
     return ESP_OK;
+}
+
+static void app_gui_render_provisioning_status(
+    const ui_provisioning_status_t *status)
+{
+    if ((status == NULL) ||
+        !app_gui_is_valid_provisioning_state(status->state) ||
+        (s_provisioning_instruction_label == NULL) ||
+        (s_provisioning_status_label == NULL) ||
+        (s_provisioning_state_indicator == NULL)) {
+        return;
+    }
+
+    const lv_color_t state_color =
+        app_gui_provisioning_state_color(status->state);
+
+    lv_label_set_text(
+        s_provisioning_instruction_label,
+        app_gui_provisioning_instruction_text(status->state));
+    lv_label_set_text(
+        s_provisioning_status_label,
+        app_gui_provisioning_status_text(status->state));
+    lv_obj_set_style_text_color(
+        s_provisioning_status_label,
+        state_color,
+        LV_PART_MAIN);
+    lv_obj_set_style_bg_color(
+        s_provisioning_state_indicator,
+        state_color,
+        LV_PART_MAIN);
 }
 
 /* Wi-Fi Screen Construction ----------------------------------------------- */
@@ -1191,14 +1566,24 @@ static void app_gui_render_cloud_status(
 static void app_gui_render_cached_status(
     app_gui_screen_id_t screen_id)
 {
+    bool provisioning_available = false;
     bool wifi_available = false;
     bool sensor_available = false;
     bool cloud_available = false;
+    ui_provisioning_status_t provisioning_status = {
+        .state = UI_PROVISIONING_STATE_STARTING,
+        .last_error = ESP_OK,
+        .wifi_disconnect_reason = 0U,
+    };
     ui_wifi_status_t wifi_status = {0};
     ui_sensor_status_t sensor_status = {0};
     ui_cloud_status_t cloud_status = {0};
 
     taskENTER_CRITICAL(&s_screen_id_lock);
+    provisioning_available =
+        s_latest_provisioning_status_available;
+    provisioning_status =
+        s_latest_provisioning_status;
     wifi_available = s_latest_wifi_status_available;
     wifi_status = s_latest_wifi_status;
     sensor_available = s_latest_sensor_status_available;
@@ -1206,6 +1591,19 @@ static void app_gui_render_cached_status(
     cloud_available = s_latest_cloud_status_available;
     cloud_status = s_latest_cloud_status;
     taskEXIT_CRITICAL(&s_screen_id_lock);
+
+    if (screen_id == APP_GUI_SCREEN_PROVISIONING) {
+        if (!provisioning_available) {
+            provisioning_status.state =
+                UI_PROVISIONING_STATE_STARTING;
+            provisioning_status.last_error = ESP_OK;
+            provisioning_status.wifi_disconnect_reason = 0U;
+        }
+
+        app_gui_render_provisioning_status(
+            &provisioning_status);
+        return;
+    }
 
     if ((screen_id == APP_GUI_SCREEN_WIFI_STATUS) &&
         wifi_available) {
@@ -1342,6 +1740,38 @@ static esp_err_t app_gui_activate_screen(
     return ESP_OK;
 }
 
+static void app_gui_process_provisioning_status(
+    const ui_provisioning_status_t *status)
+{
+    if ((status == NULL) ||
+        !app_gui_is_valid_provisioning_state(status->state)) {
+        ESP_LOGW(TAG, "Ignoring invalid provisioning GUI status");
+        return;
+    }
+
+    taskENTER_CRITICAL(&s_screen_id_lock);
+    s_latest_provisioning_status = *status;
+    s_latest_provisioning_status_available = true;
+    taskEXIT_CRITICAL(&s_screen_id_lock);
+
+    app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
+
+    if ((app_gui_get_screen_id(&screen_id) == ESP_OK) &&
+        (screen_id == APP_GUI_SCREEN_PROVISIONING)) {
+        ui_manager_lvgl_wait_for_mutex();
+        app_gui_render_provisioning_status(status);
+        ui_manager_lvgl_release_mutex();
+    }
+
+    ESP_LOGD(
+        TAG,
+        "GUI received provisioning status: "
+        "state=%s, error=%s, disconnect_reason=%u",
+        app_gui_provisioning_state_to_string(status->state),
+        esp_err_to_name(status->last_error),
+        (unsigned int)status->wifi_disconnect_reason);
+}
+
 static void app_gui_process_commands(void)
 {
     app_gui_command_t command = {0};
@@ -1354,25 +1784,36 @@ static void app_gui_process_commands(void)
                s_command_queue,
                &command,
                0) == pdTRUE) {
-        if (command.type != APP_GUI_COMMAND_SHOW_SCREEN) {
-            ESP_LOGW(
-                TAG,
-                "Ignoring unknown GUI command: %d",
-                (int)command.type);
-            continue;
-        }
+        switch (command.type) {
+            case APP_GUI_COMMAND_SHOW_SCREEN:
+            {
+                const esp_err_t ret =
+                    app_gui_activate_screen(
+                        command.data.screen_id);
 
-        const esp_err_t ret =
-            app_gui_activate_screen(
-                command.data.screen_id);
+                if (ret != ESP_OK) {
+                    ESP_LOGE(
+                        TAG,
+                        "Failed to activate screen %s: %s",
+                        app_gui_screen_id_to_string(
+                            command.data.screen_id),
+                        esp_err_to_name(ret));
+                }
 
-        if (ret != ESP_OK) {
-            ESP_LOGE(
-                TAG,
-                "Failed to activate screen %s: %s",
-                app_gui_screen_id_to_string(
-                    command.data.screen_id),
-                esp_err_to_name(ret));
+                break;
+            }
+
+            case APP_GUI_COMMAND_UPDATE_PROVISIONING_STATUS:
+                app_gui_process_provisioning_status(
+                    &command.data.provisioning_status);
+                break;
+
+            default:
+                ESP_LOGW(
+                    TAG,
+                    "Ignoring unknown GUI command: %d",
+                    (int)command.type);
+                break;
         }
     }
 }
@@ -1660,6 +2101,39 @@ esp_err_t app_gui_start_ui_task(void)
     ESP_LOGI(TAG,
              "Application GUI task started with %u-byte stack",
              (unsigned int)APP_GUI_UI_TASK_STACK_SIZE_BYTES);
+
+    return ESP_OK;
+}
+
+/* Provisioning Status API ------------------------------------------------- */
+esp_err_t app_gui_post_provisioning_status(
+    const ui_provisioning_status_t *status)
+{
+    if ((status == NULL) ||
+        !app_gui_is_valid_provisioning_state(status->state)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_command_queue == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const app_gui_command_t command = {
+        .type = APP_GUI_COMMAND_UPDATE_PROVISIONING_STATUS,
+        .data.provisioning_status = *status,
+    };
+
+    if (xQueueSend(
+            s_command_queue,
+            &command,
+            0) != pdTRUE) {
+        ESP_LOGW(
+            TAG,
+            "GUI command queue is full; "
+            "provisioning status %s was not queued",
+            app_gui_provisioning_state_to_string(status->state));
+        return ESP_ERR_TIMEOUT;
+    }
 
     return ESP_OK;
 }
