@@ -15,7 +15,8 @@ The reusable component domain layout is documented in `components/README.md`.
 3. Initialize ESP-NETIF and the default ESP event loop.
 4. Initialize the LCD display driver and LVGL display integration.
 5. Mount the SD card and register the LVGL `S:` filesystem.
-6. Initialize `app_gui`, start its single UI task, and create the Wi-Fi screen.
+6. Initialize `app_gui` and start its single UI task. No screen is selected
+   until the coordinator resolves the final configuration state.
 7. Optionally start the diagnostic `performance_monitor`.
 8. Initialize `wifi_manager` and register its status callback.
 9. Initialize `app_network_coordinator` without scheduling its task.
@@ -23,7 +24,9 @@ The reusable component domain layout is documented in `components/README.md`.
    status callback. The telemetry queue now exists, but TLS has not started.
 11. Initialize `sensor_manager`, register its callback, and start DHT22
     sampling as a local service independent of network availability.
-12. Schedule the dedicated one-shot `app_network_coordinator` task.
+12. Schedule the dedicated one-shot `app_network_coordinator` task. It requests
+    `BOOT` for a verified configured path or `PROVISIONING` directly for
+    `NOT_CONFIGURED`.
 13. In the low-activity main loop, start `cloud_manager` only after the
     coordinator reaches `CONNECTING` for stored credentials or `ONLINE` after
     provisioning cleanup and adoption; retry task allocation after temporary
@@ -38,6 +41,7 @@ Startup errors are logged and return from `app_main()` instead of using active
 wifi_manager callback
     -> map runtime state to app_network_coordinator_wifi_event_t
     -> update coordinator CONNECTING / ONLINE / OFFLINE state
+    -> verified normal ONLINE transition requests WIFI_STATUS
     -> map wifi_manager_status_t to ui_wifi_status_t
     -> app_gui_post_wifi_status()
 
@@ -60,6 +64,7 @@ provisioning_manager callback
 
 app_network_coordinator task
     -> resolve persistent configuration state
+    -> request BOOT or PROVISIONING through the GUI command queue
     -> connect stored credentials or run bounded BLE provisioning
     -> stop/deinitialize BLE and adopt the active connection
     -> publish CONNECTING or ONLINE readiness for deferred cloud startup
@@ -109,8 +114,9 @@ callback cannot post into an uninitialized cloud component.
   released its mutex. The application credential copy is then zeroized.
 - `provisioning_manager` owns only transient BLE transport and credential
   handoff; `config_manager` remains the durable storage authority.
-- `app_network_coordinator` owns boot policy in a dedicated task and does not
-  call GUI, cloud, or LVGL APIs.
+- `app_network_coordinator` owns boot and config-driven screen policy in a
+  dedicated task. It may post non-blocking `app_gui` screen requests but does
+  not call LVGL, create widgets, or render screens.
 - `sensor_manager` is a local service and continues sampling and updating the
   GUI while provisioning waits, times out, or network connectivity is absent.
 - The Wi-Fi callback forwards a short runtime event to the coordinator before
@@ -120,7 +126,10 @@ callback cannot post into an uninitialized cloud component.
   queue; posting does not perform authentication, TLS, or network I/O.
 - The display handle has static lifetime because `ui_manager_lvgl` borrows it.
 - `app_gui` owns the task that calls `lv_timer_handler()`.
-- Wi-Fi and sensor callbacks must not call LVGL.
+- `app_gui` owns all screen construction, cleanup, rendering, transitions, and
+  cached Wi-Fi/sensor/cloud UI models.
+- Wi-Fi, sensor, cloud, provisioning, and coordinator callbacks must not call
+  LVGL.
 - Sensor callbacks must not perform Firebase authentication or HTTP requests.
 - `firebase_auth` serializes token state; `cloud_manager` is its current network
   caller.
@@ -179,6 +188,8 @@ idf.py -p <PORT> flash monitor
   still required for sensor/GUI operation during provisioning, provisioning
   timeout and late-DHCP recovery, watchdog stability, reconnect, and Firebase
   recovery.
+- Phase 6.4.1 application screen orchestration is implemented with hardware
+  testing pending. This does not mark Phase 6.4 complete.
 - Firebase project setup and authenticated host testing are documented in
   `components/cloud/cloud_manager/README.txt` and `Test/TestFirebase_Auth.ps1`.
 - Never log or commit passwords, ID tokens, refresh tokens, service-account

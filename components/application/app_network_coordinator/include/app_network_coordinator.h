@@ -168,7 +168,8 @@ esp_err_t app_network_coordinator_start(void);
  *
  * This function performs only a short state update and may be called from a
  * normal task-context Wi-Fi status callback. It does not block, allocate
- * memory, call Wi-Fi APIs, or invoke GUI code.
+ * memory, call Wi-Fi APIs, or call LVGL. A verified normal transition to
+ * ONLINE may enqueue a non-blocking app_gui screen request.
  *
  * Runtime Wi-Fi events are intentionally ignored while the coordinator is
  * provisioning, resolving configuration, or in a terminal failure state.

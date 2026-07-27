@@ -1,50 +1,157 @@
-# app_gui Component Notes
+# app_gui
 
 ## Purpose
 
-`app_gui` owns application-facing LVGL screens, the GUI task, and the queues
-used to move Wi-Fi, sensor, and cloud snapshots into the LVGL context.
-`ui_manager_lvgl` continues to own LVGL initialization, the tick timer, display
-flush integration, and the non-recursive LVGL mutex.
+`app_gui` owns application screen models, asynchronous screen routing, LVGL
+objects, and the single UI task that services `lv_timer_handler()`.
+`ui_manager_lvgl` continues to own LVGL initialization, display integration,
+the tick timer, and the non-recursive LVGL mutex.
 
-## Source Organization
+Phase 6.4.1 centralizes all production screen creation, rendering, cleanup, and
+transitions in the `app_gui` UI task. Producers and application-policy
+components may only post screen commands or copied status snapshots.
 
-The implementation remains in one source file to keep the existing state and
-call sequence unchanged. `app_gui.c` is grouped into these responsibilities:
+## Application Screens
 
-- GUI core: queues, active screen ID, GUI task, stack monitoring, and LVGL
-  timer handling.
-- Wi-Fi UI: Wi-Fi widgets, state formatting, update processing, and the
-  reusable 10-second screen timer.
-- Sensor UI: temperature/humidity widgets, state formatting, and sensor queue
-  processing.
-- Cloud UI: cloud state formatting, retained dashboard status, and cloud queue
-  processing.
-- Demo UI: optional static and moving-label demonstrations.
+| Screen ID | Phase 6.4.1 role |
+|---|---|
+| `APP_GUI_SCREEN_NONE` | Internal state before the first successful route; never a public request target. |
+| `APP_GUI_SCREEN_BOOT` | Static `Smart Gateway` / `Starting...` placeholder. |
+| `APP_GUI_SCREEN_PROVISIONING` | Static `Wi-Fi Setup` / `Preparing setup...` placeholder. |
+| `APP_GUI_SCREEN_WIFI_STATUS` | Existing Wi-Fi mode, SSID, and IPv4 screen. |
+| `APP_GUI_SCREEN_SENSOR_DASHBOARD` | Existing sensor dashboard with Wi-Fi and cloud summaries. |
 
-## What Is Implemented
+The old `APP_GUI_SCREEN_WIFI` and `APP_GUI_SCREEN_SENSOR` identifiers were
+renamed directly. No compatibility aliases are retained.
 
-- A 24 KB GUI task that runs every 33 ms and is the only project task that
-  calls `lv_timer_handler()`.
-- A length-one Wi-Fi queue updated with `xQueueOverwrite()`, so only the newest
-  pending Wi-Fi snapshot is retained.
-- A length-five sensor queue updated without waiting; a full queue causes that
-  sample to be dropped.
-- A length-one cloud queue updated with `xQueueOverwrite()`, so transient cloud
-  state changes cannot block the cloud task.
-- Thread-safe tracking of `NONE`, `WIFI`, and `SENSOR` screen IDs.
-- A Wi-Fi screen showing mode, SSID, and IPv4 address.
-- A compact 160x128 Smart Room dashboard with a framed header, two-column
-  layout, temperature/humidity readings, Wi-Fi summary, cloud status, and
-  sensor health.
-- A reusable LVGL timer that requests the Sensor screen after 10 seconds
-  without a new Wi-Fi event.
-- In-place screen rebuilding on one active LVGL root, avoiding an intermediate
-  default-white screen and a second-root allocation peak.
-- Retention of the latest sensor snapshot so the dashboard can be populated
-  immediately when the Wi-Fi screen times out.
-- Stack high-water logging every 60 seconds.
-- Guards against starting a second GUI task or a second demo task.
+## Queues And Public API
+
+`app_gui_init()` creates all queues as one initialization transaction:
+
+- Command queue: length 8, element type `app_gui_command_t`.
+- Wi-Fi status queue: length 1, newest snapshot overwrites the pending value.
+- Sensor status queue: length 5, producers never wait.
+- Cloud status queue: length 1, newest snapshot overwrites the pending value.
+
+If any allocation fails, every queue created by that attempt is deleted, all
+handles return to `NULL`, and `app_gui_init()` returns `ESP_ERR_NO_MEM`.
+
+| API | Responsibility |
+|---|---|
+| `app_gui_init()` | Create command and status queues. |
+| `app_gui_start_ui_task()` | Start the 24 KB, priority-5 UI task. |
+| `app_gui_request_screen()` | Validate and enqueue a non-blocking asynchronous screen request. |
+| `app_gui_get_screen_id()` | Copy the authoritative active-screen ID under a critical section. |
+| `app_gui_post_wifi_status()` | Replace the pending Wi-Fi model without calling LVGL. |
+| `app_gui_post_sensor_status()` | Queue a sensor model without calling LVGL. |
+| `app_gui_post_cloud_status()` | Replace the pending cloud model without calling LVGL. |
+
+`app_gui_request_screen()` is safe from normal task and task-context callback
+code. It does not wait for construction and is not ISR-safe. `ESP_OK` means
+only that the command was queued. It returns `ESP_ERR_TIMEOUT` when the command
+queue is full.
+
+## UI Task And Router
+
+Every 33 ms the UI task performs:
+
+```text
+drain screen commands in FIFO order
+-> consume/cache/render status queues
+-> take LVGL mutex
+-> lv_timer_handler()
+-> release LVGL mutex
+```
+
+`app_gui_activate_screen()` is the only normal-runtime writer of the
+authoritative active-screen ID. For each non-duplicate request it:
+
+1. Keeps the current root loaded.
+2. Creates and builds a separate target root.
+3. Preserves the current root and widget references if target construction or
+   Wi-Fi timer allocation fails.
+4. Loads the target only after successful construction.
+5. Updates the active-screen ID only after the target is valid.
+6. Pauses timers that belong to inactive screens.
+7. Replaces every widget reference with the new screen's references.
+8. Renders the latest cached model for the target.
+9. Deletes the previous inactive root.
+
+A request for the already-active screen is accepted but does not rebuild the
+screen or restart its timer. Cached data may be rendered again.
+
+## LVGL Mutex Contract
+
+The router uses contract A:
+
+```text
+app_gui UI task
+    -> acquire non-recursive LVGL mutex
+    -> call private no-lock screen builders and renderers
+    -> release LVGL mutex
+```
+
+Status handlers acquire the mutex only when rendering a model on its active
+screen. Producers, coordinator code, and ESP/Wi-Fi/provisioning/cloud/sensor
+callbacks never call LVGL.
+
+The Wi-Fi timeout callback already runs inside `lv_timer_handler()` while the
+mutex is held. It therefore only posts a non-blocking
+`APP_GUI_SCREEN_SENSOR_DASHBOARD` command and pauses the timer. The command is
+processed during the next UI iteration; the callback never tries to take the
+mutex recursively.
+
+## Model Caching
+
+The GUI retains the latest complete:
+
+- `ui_wifi_status_t` plus an availability flag;
+- `ui_sensor_status_t` plus an availability flag;
+- `ui_cloud_status_t` plus an availability flag.
+
+Status events never choose a screen:
+
+- Wi-Fi updates render only on `WIFI_STATUS` or update the Wi-Fi summary on
+  `SENSOR_DASHBOARD`.
+- Sensor updates render only on `SENSOR_DASHBOARD`.
+- Cloud updates render only on `SENSOR_DASHBOARD`.
+- Updates received for inactive screens only refresh cached models and never
+  touch deleted LVGL pointers.
+
+Entering `WIFI_STATUS` renders the latest Wi-Fi model. Entering
+`SENSOR_DASHBOARD` renders the latest sensor, Wi-Fi summary, and cloud models.
+
+## Application Routing
+
+The network coordinator owns config-driven and normal-network routing policy.
+It posts screen requests but never renders or calls LVGL.
+
+| Trigger | Route or behavior |
+|---|---|
+| Config `VALID` after verification/migration | `BOOT` -> `WIFI_STATUS` after verified normal `GOT_IP` -> `SENSOR_DASHBOARD` after the existing timeout |
+| Config `NOT_CONFIGURED` | `PROVISIONING` placeholder directly |
+| Config migration | Resolve migration, then use `BOOT` for the final valid path |
+| Config inspection or unrecoverable integrity error | Best-effort `BOOT` placeholder plus safe error logging |
+| Wi-Fi status update | Cache/render only; no implicit screen change |
+| Sensor status update | Cache/render only; no implicit screen change |
+| Cloud status update | Cache/render only; no implicit screen change |
+| Wi-Fi screen timeout | Explicit deferred `SENSOR_DASHBOARD` request |
+
+The coordinator ignores transient provisioning Wi-Fi events while it remains
+in `PROVISIONING`. Only a normal runtime transition from `CONNECTING` or
+`OFFLINE` to `ONLINE` queues `WIFI_STATUS`. Successful provisioning-to-screen
+state integration remains deferred to Phase 6.4.4.
+
+## Error Handling
+
+- Invalid or `NONE` screen requests return `ESP_ERR_INVALID_ARG`.
+- Requests before `app_gui_init()` return `ESP_ERR_INVALID_STATE`.
+- A full command queue returns `ESP_ERR_TIMEOUT`.
+- Missing LVGL roots return `ESP_ERR_INVALID_STATE`.
+- Widget or timer allocation failures return `ESP_ERR_NO_MEM`.
+- Target construction failure is logged by the UI task and leaves the
+  previously visible screen and active-screen ID unchanged.
+- Screen failures do not reboot the device or change network policy.
 
 ## Initialization Order
 
@@ -52,136 +159,25 @@ call sequence unchanged. `app_gui.c` is grouped into these responsibilities:
 ESP_ERROR_CHECK(ui_manager_lvgl_init(&display_handle));
 ESP_ERROR_CHECK(app_gui_init());
 ESP_ERROR_CHECK(app_gui_start_ui_task());
-ESP_ERROR_CHECK(app_gui_create_wifi_screen());
+ESP_ERROR_CHECK(app_network_coordinator_init(&network_config));
+ESP_ERROR_CHECK(app_network_coordinator_start());
 ```
 
-The GUI task must keep running for queued updates, LVGL timers, rendering, and
-animations to progress.
+`main` does not create an initial screen directly. The coordinator requests the
+initial screen only after resolving the final configuration state.
 
-## Public API
+## Phase 6.4.1 Status
 
-| API | Current role |
-| --- | --- |
-| `app_gui_init()` | Create the Wi-Fi, sensor, and cloud status queues. |
-| `app_gui_start_ui_task()` | Start the application GUI/LVGL timer task. |
-| `app_gui_create_wifi_screen()` | Rebuild the active root with Wi-Fi widgets while internally holding the LVGL mutex. |
-| `app_gui_post_wifi_status()` | Replace the pending Wi-Fi snapshot without waiting. |
-| `app_gui_create_sensor_screen()` | Rebuild the active root with sensor widgets while internally holding the LVGL mutex. |
-| `app_gui_post_sensor_status()` | Append a sensor snapshot without waiting. |
-| `app_gui_post_cloud_status()` | Replace the pending cloud snapshot without waiting. |
-| `app_gui_set_screen_id()` | Update only the tracked screen ID. |
-| `app_gui_get_screen_id()` | Read the tracked screen ID under a critical section. |
-| `app_gui_clear_screen()` | Clear the active root in place; the caller must serialize LVGL access. |
-| `app_gui_create_demo_screen()` | Create the static `LVGL OK` demo. |
-| `app_gui_start_running_demo_task()` | Start the optional moving-label demo task. |
+**IMPLEMENTED / HARDWARE TEST PENDING**
 
-## Wi-Fi Flow
+Phase 6.4.1 intentionally does not implement:
 
-```text
-wifi_manager event
-    -> main callback maps wifi_manager_status_t to ui_wifi_status_t
-    -> app_gui_post_wifi_status()
-    -> GUI task receives the newest pending snapshot
-    -> Wi-Fi screen is created if necessary
-    -> 10-second timer is restarted
-    -> Mode, SSID, and IP labels are updated
-```
+- QR code or `lv_qrcode`;
+- provisioning payload, service name, PoP, or security changes;
+- provisioning progress/retry/timeout UI;
+- successful provisioning-to-`WIFI_STATUS` routing;
+- factory reset, touch navigation, animation, progress bar, or dashboard
+  redesign;
+- BLE lifecycle, Wi-Fi retry, Firebase, or cloud-task changes.
 
-The timer callback runs from `lv_timer_handler()` while the GUI task owns the
-non-recursive LVGL mutex. It records a Sensor-screen request and pauses itself
-without deleting the visible Wi-Fi widgets. On the next GUI iteration, the
-request is handled before rendering and the active root is rebuilt directly as
-the Sensor screen.
-
-## Sensor Flow
-
-```text
-sensor_manager task
-    -> main callback maps sensor_manager_status_t to ui_sensor_status_t
-    -> app_gui_post_sensor_status()
-    -> GUI task receives one pending snapshot
-    -> latest sensor snapshot is retained
-    -> Sensor screen is created when the active ID is NONE or Wi-Fi times out
-    -> Temperature, humidity, and state labels are updated
-```
-
-An active Wi-Fi screen has priority over sensor snapshots until its timer
-expires. The current Wi-Fi screen remains visible until the GUI task can
-rebuild that same root as the Sensor screen. If a sensor snapshot is available,
-its values are restored during the same GUI iteration; otherwise the Sensor
-screen uses placeholders until the first sample arrives. A subsequent Wi-Fi
-event cancels a pending Sensor transition and rebuilds the same root as the
-Wi-Fi screen.
-When sensor data is invalid or stale, the temperature and humidity labels
-display `-`. The same placeholder is displayed immediately when
-`sensor_manager` posts its `-1.0f` failed-read sentinel, even during the
-temporary `DEGRADED` window before the stale timeout expires.
-
-The sensor dashboard is arranged as:
-
-```text
-Smart Room                         WiFi [dot] C [dot]
-----------------------------------------------------
-temperature        | Wi-Fi: Online/Offline/--
-                   | Cloud: Wait/Sync/Online/Retry/Auth/Error
-humidity           | Sensor: OK/Warn/Error/Stale
-```
-
-The Wi-Fi row and header dot use the latest status consumed by the GUI task.
-The Cloud row and header dot use the latest cloud-manager status consumed by
-the GUI task. That retained summary is restored whenever the Sensor screen is
-created again.
-
-## Cloud Flow
-
-```text
-cloud_manager state or upload result changes
-    -> main callback maps cloud_manager_status_t to ui_cloud_status_t
-    -> app_gui_post_cloud_status()
-    -> GUI task receives the newest pending snapshot
-    -> Cloud row and header dot are updated on the Sensor screen
-```
-
-Displayed states are `Wait`, `Sync`, `Online`, `Retry`, `Auth`, and `Error`.
-The Cloud indicator remains `--` only until the first manager status reaches
-the GUI queue.
-
-## Thread-Safety Contract
-
-- Status post APIs never call LVGL and return without waiting.
-- Screen creation, internal label updates, and queue-driven screen/timer
-  transitions acquire the LVGL mutex.
-- `app_gui_clear_screen()` deliberately does not acquire the mutex. Call it
-  only while already holding the mutex, from the mutex-protected LVGL timer
-  callback path, or from another path that exclusively owns LVGL access.
-- Wi-Fi timeout handling records only a small deferred-transition flag while
-  inside `lv_timer_handler()`; it never attempts to take the LVGL mutex again.
-- The LVGL mutex is non-recursive. A timer callback running inside
-  `lv_timer_handler()` must not lock it again.
-- The screen-state critical section protects the screen ID, retained status
-  summaries, and the deferred Sensor-screen request, but not LVGL objects.
-- Callback producers must copy status through the queue and must not call LVGL
-  directly.
-
-## Current Limitations
-
-- There is no stop/deinit API. Task handles are retained only to prevent
-  duplicate task creation.
-- The sensor queue processes one queued snapshot per GUI iteration rather than
-  collapsing directly to the newest snapshot.
-- RSSI and disconnect reason are transported but not displayed.
-- Failed sensor readings currently depend on the private `-1.0f` producer/UI
-  convention in addition to `data_valid` and `data_stale`.
-- `app_gui_clear_screen()` reuses the active root but still relies on its
-  caller to satisfy the LVGL ownership contract.
-- The optional demo task is retained for development only. It stops itself if
-  another screen transition deletes its label.
-
-## Future Attention
-
-- Add an explicit GUI command queue only when more asynchronous screen types
-  require centralized transition policy.
-- Add a stop/deinit path only when runtime shutdown is required.
-- Decide whether sensor updates should preserve history or overwrite older
-  pending snapshots.
-- Add RSSI presentation when it is useful to the product UI.
+Phase 6.4 is not complete.
