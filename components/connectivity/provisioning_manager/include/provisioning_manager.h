@@ -91,7 +91,64 @@ typedef enum
     PROVISIONING_MANAGER_STATE_FAILED,
 } provisioning_manager_state_t;
 
+/**
+ * @brief Non-sensitive progress events emitted by the provisioning manager.
+ *
+ * These events describe BLE/framework lifecycle facts. Application policy,
+ * persistence, screen routing, and normal Wi-Fi ownership remain outside this
+ * component.
+ */
+typedef enum
+{
+    PROVISIONING_MANAGER_PROGRESS_STARTING = 0,
+    PROVISIONING_MANAGER_PROGRESS_WAITING_FOR_PHONE,
+    PROVISIONING_MANAGER_PROGRESS_CREDENTIAL_RECEIVED,
+    PROVISIONING_MANAGER_PROGRESS_WIFI_CONNECTING,
+    PROVISIONING_MANAGER_PROGRESS_WIFI_CREDENTIAL_FAILED,
+    PROVISIONING_MANAGER_PROGRESS_WIFI_CONNECTED,
+    PROVISIONING_MANAGER_PROGRESS_STOPPING,
+    PROVISIONING_MANAGER_PROGRESS_STOPPED,
+    PROVISIONING_MANAGER_PROGRESS_FAILED,
+} provisioning_manager_progress_t;
+
+/**
+ * @brief Copied, non-sensitive provisioning progress snapshot.
+ */
+typedef struct
+{
+    provisioning_manager_progress_t progress;
+    esp_err_t last_error;
+    uint16_t wifi_failure_reason;
+} provisioning_manager_progress_status_t;
+
+/**
+ * @brief Task-context callback for provisioning progress.
+ *
+ * The callback receives a copied snapshot and is invoked outside the manager's
+ * critical section. It must return promptly, must not call LVGL, and must not
+ * retain the supplied pointer.
+ */
+typedef void (*provisioning_manager_progress_callback_t)(
+    const provisioning_manager_progress_status_t *status,
+    void *user_data);
+
 /* Functions ---------------------------------------------------------------- */
+/**
+ * @brief Register the single provisioning progress callback.
+ *
+ * Register before starting provisioning. Re-registering the same callback and
+ * context is idempotent. Passing NULL unregisters the current callback.
+ *
+ * @param[in] callback Callback to register, or NULL to unregister.
+ * @param[in] user_data Opaque context returned with each callback.
+ *
+ * @return ESP_OK on success, or ESP_ERR_INVALID_STATE when a different
+ *         callback is already registered.
+ */
+esp_err_t provisioning_manager_register_progress_callback(
+    provisioning_manager_progress_callback_t callback,
+    void *user_data);
+
 /**
  * @brief Initialize the BLE provisioning framework and internal state.
  *

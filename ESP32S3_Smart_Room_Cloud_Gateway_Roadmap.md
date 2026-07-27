@@ -649,9 +649,32 @@ is not yet claimed, and Phase 6.3 remains in progress.
 - [x] Preserve provisioning, Wi-Fi manager, config manager, and LVGL ownership.
 - [ ] Confirm QR scanning and end-to-end BLE Wi-Fi provisioning on hardware.
 
-Phase 6.4.3 is implemented and build-verified. Phase 6.4.4 progress/status
-events and success/failure screen transitions remain deferred, and Phase 6.4
-is not complete.
+Phase 6.4.3 is implemented and build-verified. Its target-hardware acceptance
+remains pending, and Phase 6.4 is not complete.
+
+### Phase 6.4.4 Status - Implemented / Hardware Test Pending
+
+- [x] Publish copied, non-sensitive provisioning manager progress outside its
+  lifecycle critical section.
+- [x] Bridge the existing single Wi-Fi callback into real association, DHCP,
+  and disconnect provisioning states without promoting application `ONLINE`.
+- [x] Deliver provisioning status through a dedicated length-one overwrite
+  queue rather than the screen-command queue.
+- [x] Make the GUI QR cache session-owned and clear it only through explicit
+  session invalidation.
+- [x] Keep ordinary credential failure non-terminal so the same BLE session
+  can accept another phone submission.
+- [x] Map verified persistence, cleanup, and adoption to
+  `SAVING_CONFIG -> CLEANING_UP -> SUCCESS`.
+- [x] Hold `SUCCESS` for 1500 ms, request `WIFI_STATUS`, and preserve the
+  existing timeout route to `SENSOR_DASHBOARD`.
+- [x] Keep automatic `RETRYING` and session restart outside this checkpoint.
+- [ ] Confirm progress ordering, wrong-password retry within the same BLE
+  session, timeout cleanup, success dwell, and final routing on hardware.
+
+Phase 6.4.4 is implemented and build-verified. Hardware acceptance remains
+pending, automatic retry/restart remains Phase 6.4.5 work, and Phase 6.4 is not
+complete.
 
 ### Tasks
 
@@ -661,7 +684,7 @@ is not complete.
 - [x] Save credentials to NVS.
 - [x] Stop BLE after provisioning.
 - [x] Connect Wi-Fi using provisioned credentials.
-- [ ] Show provisioning status on LVGL.
+- [x] Show provisioning status on LVGL.
 
 ### Example UI
 
@@ -885,7 +908,7 @@ Use this section to track daily/weekly progress.
 | 3 | Sensor + UI update | Done |  |  | Sensor queue, stale/error behavior, and LCD updates hardware-accepted. |
 | 4 | Firebase upload | Done |  | 2026-07-19 | Hardware upload, Firebase data, failure handling, and LCD Cloud status accepted. |
 | 5 | NVS config storage | Done |  | 2026-07-26 | Persistence, integrity, migration, and recovery tests accepted. |
-| 6 | BLE provisioning | In progress |  |  | Phases 6.1/6.2 and checkpoints 6.3.2/6.3.3 complete; 6.3.4 and 6.4.3 implemented with hardware verification pending. |
+| 6 | BLE provisioning | In progress |  |  | Phases 6.1/6.2 and checkpoints 6.3.2/6.3.3 complete; 6.3.4, 6.4.3, and 6.4.4 implemented with hardware verification pending. |
 | 7 | Factory reset | Not started |  |  |  |
 | 8 | Reconnect + retry | Not started |  |  |  |
 | 9 | Portfolio polish | Not started |  |  |  |

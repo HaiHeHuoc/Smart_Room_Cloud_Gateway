@@ -83,6 +83,9 @@ static char s_active_qr_payload
 
 static bool s_active_qr_payload_available = false;
 
+static provisioning_manager_progress_callback_t s_progress_callback = NULL;
+static void *s_progress_callback_user_data = NULL;
+
 /* Function Prototypes ------------------------------------------------------ */
 /**
  * @brief Securely overwrite a buffer that may contain sensitive data.
@@ -132,6 +135,18 @@ static void provisioning_manager_clear_active_identity_locked(void);
  */
 static void provisioning_manager_set_state(
     provisioning_manager_state_t state);
+
+/**
+ * @brief Publish copied progress outside the manager critical section.
+ *
+ * @param[in] progress Progress event to publish.
+ * @param[in] last_error Associated ESP-IDF error, or ESP_OK.
+ * @param[in] wifi_failure_reason Framework Wi-Fi failure reason, or zero.
+ */
+static void provisioning_manager_publish_progress(
+    provisioning_manager_progress_t progress,
+    esp_err_t last_error,
+    uint16_t wifi_failure_reason);
 
 /**
  * @brief De-initialize the framework outside its direct event callback.
@@ -418,6 +433,38 @@ static void provisioning_manager_set_state(
     portEXIT_CRITICAL(&s_state_lock);
 }
 
+static void provisioning_manager_publish_progress(
+    provisioning_manager_progress_t progress,
+    esp_err_t last_error,
+    uint16_t wifi_failure_reason)
+{
+    provisioning_manager_progress_callback_t callback = NULL;
+    void *callback_user_data = NULL;
+
+    portENTER_CRITICAL(&s_state_lock);
+
+    callback = s_progress_callback;
+    callback_user_data = s_progress_callback_user_data;
+
+    portEXIT_CRITICAL(&s_state_lock);
+
+    if (callback == NULL)
+    {
+        return;
+    }
+
+    const provisioning_manager_progress_status_t status =
+    {
+        .progress = progress,
+        .last_error = last_error,
+        .wifi_failure_reason = wifi_failure_reason,
+    };
+
+    callback(
+        &status,
+        callback_user_data);
+}
+
 static void provisioning_manager_cleanup_task(
     void *arg)
 {
@@ -439,6 +486,11 @@ static void provisioning_manager_cleanup_task(
             TAG,
             "Failed to de-initialize provisioning framework: %s",
             esp_err_to_name(ret));
+
+        provisioning_manager_publish_progress(
+            PROVISIONING_MANAGER_PROGRESS_FAILED,
+            ret,
+            0U);
     }
 
     vTaskDelete(NULL);
@@ -498,6 +550,11 @@ static void provisioning_manager_event_callback(
                     TAG,
                     "Received invalid Wi-Fi credentials");
 
+                provisioning_manager_publish_progress(
+                    PROVISIONING_MANAGER_PROGRESS_WIFI_CREDENTIAL_FAILED,
+                    copy_ret,
+                    0U);
+
                 break;
             }
 
@@ -525,10 +582,31 @@ static void provisioning_manager_event_callback(
                 TAG,
                 "Wi-Fi credentials received; awaiting connection result");
 
+            provisioning_manager_publish_progress(
+                PROVISIONING_MANAGER_PROGRESS_CREDENTIAL_RECEIVED,
+                ESP_OK,
+                0U);
+
+            provisioning_manager_publish_progress(
+                PROVISIONING_MANAGER_PROGRESS_WIFI_CONNECTING,
+                ESP_OK,
+                0U);
+
             break;
         }
 
         case NETWORK_PROV_WIFI_CRED_FAIL:
+        {
+            uint16_t wifi_failure_reason = 0U;
+
+            if (event_data != NULL)
+            {
+                wifi_failure_reason =
+                    (uint16_t)(
+                        *(const network_prov_wifi_sta_fail_reason_t *)
+                            event_data);
+            }
+
             portENTER_CRITICAL(&s_state_lock);
 
             provisioning_manager_zeroize(
@@ -544,7 +622,13 @@ static void provisioning_manager_event_callback(
                 TAG,
                 "Provisioned Wi-Fi connection failed; pending credentials "
                 "discarded");
+
+            provisioning_manager_publish_progress(
+                PROVISIONING_MANAGER_PROGRESS_WIFI_CREDENTIAL_FAILED,
+                ESP_ERR_INVALID_RESPONSE,
+                wifi_failure_reason);
             break;
+        }
 
         case NETWORK_PROV_WIFI_CRED_SUCCESS:
         {
@@ -594,6 +678,11 @@ static void provisioning_manager_event_callback(
                     "Provisioned connection succeeded but credential "
                     "handoff is unavailable");
 
+                provisioning_manager_publish_progress(
+                    PROVISIONING_MANAGER_PROGRESS_FAILED,
+                    ESP_ERR_INVALID_STATE,
+                    0U);
+
                 break;
             }
 
@@ -618,6 +707,11 @@ static void provisioning_manager_event_callback(
                     TAG,
                     "Failed to queue verified Wi-Fi credentials");
 
+                provisioning_manager_publish_progress(
+                    PROVISIONING_MANAGER_PROGRESS_FAILED,
+                    ESP_FAIL,
+                    0U);
+
                 break;
             }
 
@@ -625,6 +719,11 @@ static void provisioning_manager_event_callback(
                 TAG,
                 "Provisioned Wi-Fi connection succeeded; credentials ready "
                 "for application handoff");
+
+            provisioning_manager_publish_progress(
+                PROVISIONING_MANAGER_PROGRESS_WIFI_CONNECTED,
+                ESP_OK,
+                0U);
             break;
         }
 
@@ -638,6 +737,17 @@ static void provisioning_manager_event_callback(
              */
             provisioning_manager_set_state(
                 PROVISIONING_MANAGER_STATE_STOPPING);
+
+            portENTER_CRITICAL(&s_state_lock);
+
+            provisioning_manager_clear_active_identity_locked();
+
+            portEXIT_CRITICAL(&s_state_lock);
+
+            provisioning_manager_publish_progress(
+                PROVISIONING_MANAGER_PROGRESS_STOPPING,
+                ESP_OK,
+                0U);
 
             ESP_LOGI(
                 TAG,
@@ -676,6 +786,11 @@ static void provisioning_manager_event_callback(
                 ESP_LOGE(
                     TAG,
                     "Failed to create provisioning cleanup task");
+
+                provisioning_manager_publish_progress(
+                    PROVISIONING_MANAGER_PROGRESS_FAILED,
+                    ESP_ERR_NO_MEM,
+                    0U);
             }
 
             break;
@@ -698,6 +813,11 @@ static void provisioning_manager_event_callback(
             ESP_LOGI(
                 TAG,
                 "Provisioning manager de-initialized");
+
+            provisioning_manager_publish_progress(
+                PROVISIONING_MANAGER_PROGRESS_STOPPED,
+                ESP_OK,
+                0U);
             break;
 
         default:
@@ -720,6 +840,33 @@ provisioning_manager_get_state_snapshot(void)
 }
 
 /* Functions ---------------------------------------------------------------- */
+esp_err_t provisioning_manager_register_progress_callback(
+    provisioning_manager_progress_callback_t callback,
+    void *user_data)
+{
+    portENTER_CRITICAL(&s_state_lock);
+
+    if ((callback != NULL) &&
+        (s_progress_callback != NULL) &&
+        ((s_progress_callback != callback) ||
+         (s_progress_callback_user_data != user_data)))
+    {
+        portEXIT_CRITICAL(&s_state_lock);
+
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    s_progress_callback = callback;
+    s_progress_callback_user_data =
+        (callback != NULL)
+            ? user_data
+            : NULL;
+
+    portEXIT_CRITICAL(&s_state_lock);
+
+    return ESP_OK;
+}
+
 esp_err_t provisioning_manager_init(void)
 {
     provisioning_manager_state_t current_state;
@@ -807,6 +954,11 @@ esp_err_t provisioning_manager_init(void)
             TAG,
             "Failed to create provisioning credential queue");
 
+        provisioning_manager_publish_progress(
+            PROVISIONING_MANAGER_PROGRESS_FAILED,
+            ESP_ERR_NO_MEM,
+            0U);
+
         return ESP_ERR_NO_MEM;
     }
 
@@ -845,6 +997,11 @@ esp_err_t provisioning_manager_init(void)
             "Failed to initialize provisioning framework: %s",
             esp_err_to_name(ret));
 
+        provisioning_manager_publish_progress(
+            PROVISIONING_MANAGER_PROGRESS_FAILED,
+            ret,
+            0U);
+
         return ret;
     }
 
@@ -875,6 +1032,11 @@ esp_err_t provisioning_manager_start(void)
 
     portEXIT_CRITICAL(&s_state_lock);
 
+    provisioning_manager_publish_progress(
+        PROVISIONING_MANAGER_PROGRESS_STARTING,
+        ESP_OK,
+        0U);
+
     char service_name
         [PROVISIONING_MANAGER_SERVICE_NAME_BUFFER_SIZE] =
         {0};
@@ -893,6 +1055,11 @@ esp_err_t provisioning_manager_start(void)
             TAG,
             "Failed to build provisioning service name: %s",
             esp_err_to_name(ret));
+
+        provisioning_manager_publish_progress(
+            PROVISIONING_MANAGER_PROGRESS_FAILED,
+            ret,
+            0U);
 
         return ret;
     }
@@ -931,6 +1098,11 @@ esp_err_t provisioning_manager_start(void)
             TAG,
             "Failed to start BLE provisioning: %s",
             esp_err_to_name(ret));
+
+        provisioning_manager_publish_progress(
+            PROVISIONING_MANAGER_PROGRESS_FAILED,
+            ret,
+            0U);
 
         return ret;
     }
@@ -984,6 +1156,11 @@ esp_err_t provisioning_manager_start(void)
             "BLE provisioning QR payload is unavailable: %s",
             esp_err_to_name(qr_ret));
     }
+
+    provisioning_manager_publish_progress(
+        PROVISIONING_MANAGER_PROGRESS_WAITING_FOR_PHONE,
+        ESP_OK,
+        0U);
 
     return ESP_OK;
 }
@@ -1048,6 +1225,11 @@ esp_err_t provisioning_manager_stop(void)
     provisioning_manager_clear_active_identity_locked();
 
     portEXIT_CRITICAL(&s_state_lock);
+
+    provisioning_manager_publish_progress(
+        PROVISIONING_MANAGER_PROGRESS_STOPPING,
+        ESP_OK,
+        0U);
 
     /*
      * This API only initiates shutdown. Actual transport cleanup happens

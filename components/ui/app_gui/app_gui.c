@@ -20,6 +20,7 @@
 /* Macros ------------------------------------------------------------------- */
 #define APP_GUI_WIFI_SCREEN_TIMEOUT_MS 10000U
 #define APP_GUI_COMMAND_QUEUE_LENGTH 8U
+#define APP_GUI_PROVISIONING_STATUS_QUEUE_LENGTH 1U
 #define APP_GUI_PROVISIONING_QR_QUEUE_LENGTH 1U
 #define APP_GUI_WIFI_STATUS_QUEUE_LENGTH 1U
 #define APP_GUI_SENSOR_STATUS_QUEUE_LENGTH 5U
@@ -64,19 +65,19 @@
 typedef enum
 {
     APP_GUI_COMMAND_SHOW_SCREEN = 0,
-    APP_GUI_COMMAND_UPDATE_PROVISIONING_STATUS,
 } app_gui_command_type_t;
 
 typedef struct
 {
     app_gui_command_type_t type;
-
-    union
-    {
-        app_gui_screen_id_t screen_id;
-        ui_provisioning_status_t provisioning_status;
-    } data;
+    app_gui_screen_id_t screen_id;
 } app_gui_command_t;
+
+typedef struct
+{
+    bool payload_available;
+    ui_provisioning_qr_payload_t payload;
+} app_gui_provisioning_qr_message_t;
 
 typedef struct
 {
@@ -104,6 +105,7 @@ static const char *const TAG = "APP_GUI";
 /* Static Variables --------------------------------------------------------- */
 /* GUI task communication and active-screen tracking. */
 static QueueHandle_t s_command_queue = NULL;
+static QueueHandle_t s_provisioning_status_queue = NULL;
 static QueueHandle_t s_provisioning_qr_queue = NULL;
 static QueueHandle_t s_wifi_status_queue = NULL;
 static QueueHandle_t s_sensor_status_queue = NULL;
@@ -234,6 +236,7 @@ static esp_err_t app_gui_activate_screen(
     app_gui_screen_id_t target_screen);
 static void app_gui_process_provisioning_status(
     const ui_provisioning_status_t *status);
+static void app_gui_process_provisioning_status_queue(void);
 static void app_gui_process_commands(void);
 static void app_gui_process_provisioning_qr_payload(void);
 static void app_gui_process_sensor_status(void);
@@ -477,6 +480,11 @@ static void app_gui_cleanup_queues(void)
     if (s_command_queue != NULL) {
         vQueueDelete(s_command_queue);
         s_command_queue = NULL;
+    }
+
+    if (s_provisioning_status_queue != NULL) {
+        vQueueDelete(s_provisioning_status_queue);
+        s_provisioning_status_queue = NULL;
     }
 
     if (s_provisioning_qr_queue != NULL) {
@@ -1904,16 +1912,6 @@ static esp_err_t app_gui_activate_screen(
     lv_screen_load(target_root);
     app_gui_set_active_screen_id(target_screen);
 
-    if ((current_screen == APP_GUI_SCREEN_PROVISIONING) &&
-        (target_screen != APP_GUI_SCREEN_PROVISIONING)) {
-        taskENTER_CRITICAL(&s_screen_id_lock);
-        app_gui_zeroize(
-            &s_latest_provisioning_qr_payload,
-            sizeof(s_latest_provisioning_qr_payload));
-        s_latest_provisioning_qr_payload_available = false;
-        taskEXIT_CRITICAL(&s_screen_id_lock);
-    }
-
     app_gui_render_cached_status(target_screen);
 
     if (target_screen == APP_GUI_SCREEN_WIFI_STATUS) {
@@ -1964,6 +1962,21 @@ static void app_gui_process_provisioning_status(
         (unsigned int)status->wifi_disconnect_reason);
 }
 
+static void app_gui_process_provisioning_status_queue(void)
+{
+    ui_provisioning_status_t status = {0};
+
+    if ((s_provisioning_status_queue == NULL) ||
+        (xQueueReceive(
+            s_provisioning_status_queue,
+            &status,
+            0) != pdTRUE)) {
+        return;
+    }
+
+    app_gui_process_provisioning_status(&status);
+}
+
 static void app_gui_process_commands(void)
 {
     app_gui_command_t command = {0};
@@ -1981,24 +1994,19 @@ static void app_gui_process_commands(void)
             {
                 const esp_err_t ret =
                     app_gui_activate_screen(
-                        command.data.screen_id);
+                        command.screen_id);
 
                 if (ret != ESP_OK) {
                     ESP_LOGE(
                         TAG,
                         "Failed to activate screen %s: %s",
                         app_gui_screen_id_to_string(
-                            command.data.screen_id),
+                            command.screen_id),
                         esp_err_to_name(ret));
                 }
 
                 break;
             }
-
-            case APP_GUI_COMMAND_UPDATE_PROVISIONING_STATUS:
-                app_gui_process_provisioning_status(
-                    &command.data.provisioning_status);
-                break;
 
             default:
                 ESP_LOGW(
@@ -2012,27 +2020,58 @@ static void app_gui_process_commands(void)
 
 static void app_gui_process_provisioning_qr_payload(void)
 {
-    ui_provisioning_qr_payload_t payload = {0};
+    app_gui_provisioning_qr_message_t message = {0};
 
     if ((s_provisioning_qr_queue == NULL) ||
         (xQueueReceive(
             s_provisioning_qr_queue,
-            &payload,
+            &message,
             0) != pdTRUE)) {
         return;
     }
 
+    if (!message.payload_available) {
+        taskENTER_CRITICAL(&s_screen_id_lock);
+        app_gui_zeroize(
+            &s_latest_provisioning_qr_payload,
+            sizeof(s_latest_provisioning_qr_payload));
+        s_latest_provisioning_qr_payload_available = false;
+        taskEXIT_CRITICAL(&s_screen_id_lock);
+
+        app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
+
+        if ((app_gui_get_screen_id(&screen_id) == ESP_OK) &&
+            (screen_id == APP_GUI_SCREEN_PROVISIONING)) {
+            ui_manager_lvgl_wait_for_mutex();
+
+            if (s_provisioning_qr_code != NULL) {
+                lv_obj_add_flag(
+                    s_provisioning_qr_code,
+                    LV_OBJ_FLAG_HIDDEN);
+            }
+
+            ui_manager_lvgl_release_mutex();
+        }
+
+        app_gui_zeroize(
+            &message,
+            sizeof(message));
+
+        ESP_LOGD(TAG, "Provisioning QR payload cleared");
+        return;
+    }
+
     if (!app_gui_is_valid_provisioning_qr_payload(
-            &payload)) {
+            &message.payload)) {
         ESP_LOGW(TAG, "Ignoring invalid provisioning QR payload");
         app_gui_zeroize(
-            &payload,
-            sizeof(payload));
+            &message,
+            sizeof(message));
         return;
     }
 
     taskENTER_CRITICAL(&s_screen_id_lock);
-    s_latest_provisioning_qr_payload = payload;
+    s_latest_provisioning_qr_payload = message.payload;
     s_latest_provisioning_qr_payload_available = true;
     taskEXIT_CRITICAL(&s_screen_id_lock);
 
@@ -2042,15 +2081,15 @@ static void app_gui_process_provisioning_qr_payload(void)
         (screen_id == APP_GUI_SCREEN_PROVISIONING)) {
         ui_manager_lvgl_wait_for_mutex();
         app_gui_render_provisioning_qr_payload(
-            &payload);
+            &message.payload);
         ui_manager_lvgl_release_mutex();
     }
 
     ESP_LOGD(TAG, "Provisioning QR payload cached");
 
     app_gui_zeroize(
-        &payload,
-        sizeof(payload));
+        &message,
+        sizeof(message));
 }
 
 /* Sensor Queue Processing ------------------------------------------------- */
@@ -2206,6 +2245,8 @@ static void app_gui_process_lvgl(void)
 
     app_gui_process_provisioning_qr_payload();
 
+    app_gui_process_provisioning_status_queue();
+
     app_gui_process_sensor_status();
 
     app_gui_process_cloud_status();
@@ -2244,6 +2285,7 @@ static void app_gui_ui_task(void *param)
 esp_err_t app_gui_init(void)
 {
     if ((s_command_queue != NULL) ||
+        (s_provisioning_status_queue != NULL) ||
         (s_provisioning_qr_queue != NULL) ||
         (s_wifi_status_queue != NULL) ||
         (s_sensor_status_queue != NULL) ||
@@ -2263,10 +2305,21 @@ esp_err_t app_gui_init(void)
         return ESP_ERR_NO_MEM;
     }
 
+    s_provisioning_status_queue =
+        xQueueCreate(
+            APP_GUI_PROVISIONING_STATUS_QUEUE_LENGTH,
+            sizeof(ui_provisioning_status_t));
+
+    if (s_provisioning_status_queue == NULL) {
+        ESP_LOGE(TAG, "Failed to create provisioning status queue");
+        app_gui_cleanup_queues();
+        return ESP_ERR_NO_MEM;
+    }
+
     s_provisioning_qr_queue =
         xQueueCreate(
             APP_GUI_PROVISIONING_QR_QUEUE_LENGTH,
-            sizeof(ui_provisioning_qr_payload_t));
+            sizeof(app_gui_provisioning_qr_message_t));
 
     if (s_provisioning_qr_queue == NULL) {
         ESP_LOGE(TAG, "Failed to create provisioning QR queue");
@@ -2318,6 +2371,7 @@ esp_err_t app_gui_init(void)
 esp_err_t app_gui_start_ui_task(void)
 {
     if ((s_command_queue == NULL) ||
+        (s_provisioning_status_queue == NULL) ||
         (s_provisioning_qr_queue == NULL) ||
         (s_wifi_status_queue == NULL) ||
         (s_sensor_status_queue == NULL) ||
@@ -2364,25 +2418,18 @@ esp_err_t app_gui_post_provisioning_status(
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (s_command_queue == NULL) {
+    if (s_provisioning_status_queue == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    const app_gui_command_t command = {
-        .type = APP_GUI_COMMAND_UPDATE_PROVISIONING_STATUS,
-        .data.provisioning_status = *status,
-    };
-
-    if (xQueueSend(
-            s_command_queue,
-            &command,
-            0) != pdTRUE) {
+    if (xQueueOverwrite(
+            s_provisioning_status_queue,
+            status) != pdTRUE) {
         ESP_LOGW(
             TAG,
-            "GUI command queue is full; "
-            "provisioning status %s was not queued",
+            "Failed to post provisioning status %s",
             app_gui_provisioning_state_to_string(status->state));
-        return ESP_ERR_TIMEOUT;
+        return ESP_FAIL;
     }
 
     return ESP_OK;
@@ -2399,10 +2446,38 @@ esp_err_t app_gui_post_provisioning_qr_payload(
         return ESP_ERR_INVALID_STATE;
     }
 
+    const app_gui_provisioning_qr_message_t message = {
+        .payload_available = true,
+        .payload = *payload,
+    };
+
     if (xQueueOverwrite(
             s_provisioning_qr_queue,
-            payload) != pdTRUE) {
+            &message) != pdTRUE) {
         ESP_LOGW(TAG, "Failed to post provisioning QR payload");
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t app_gui_clear_provisioning_qr_payload(void)
+{
+    if (s_provisioning_qr_queue == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const app_gui_provisioning_qr_message_t message = {
+        .payload_available = false,
+        .payload = {
+            .payload = {0},
+        },
+    };
+
+    if (xQueueOverwrite(
+            s_provisioning_qr_queue,
+            &message) != pdTRUE) {
+        ESP_LOGW(TAG, "Failed to clear provisioning QR payload");
         return ESP_FAIL;
     }
 
@@ -2509,7 +2584,7 @@ esp_err_t app_gui_request_screen(
 
     const app_gui_command_t command = {
         .type = APP_GUI_COMMAND_SHOW_SCREEN,
-        .data.screen_id = screen_id,
+        .screen_id = screen_id,
     };
 
     if (xQueueSend(

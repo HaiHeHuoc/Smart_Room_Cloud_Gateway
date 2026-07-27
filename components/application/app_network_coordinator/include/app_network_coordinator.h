@@ -22,6 +22,11 @@ typedef enum
     APP_NETWORK_COORDINATOR_WIFI_EVENT_CONNECTING = 0,
 
     /**
+     * @brief Station association completed and DHCP is still pending.
+     */
+    APP_NETWORK_COORDINATOR_WIFI_EVENT_WAITING_FOR_IP,
+
+    /**
      * @brief The Station owns a valid IPv4 address.
      */
     APP_NETWORK_COORDINATOR_WIFI_EVENT_ONLINE,
@@ -171,12 +176,15 @@ esp_err_t app_network_coordinator_start(void);
  * memory, call Wi-Fi APIs, or call LVGL. A verified normal transition to
  * ONLINE may enqueue a non-blocking app_gui screen request.
  *
- * Runtime Wi-Fi events are intentionally ignored while the coordinator is
- * provisioning, resolving configuration, or in a terminal failure state.
+ * While provisioning, events are translated only into non-blocking GUI
+ * progress updates. They cannot promote application state to ONLINE, request
+ * the normal Wi-Fi screen, start cloud work, or enable reconnect ownership.
  * Provisioning becomes ONLINE only after persistence, BLE cleanup, and
  * wifi_manager connection adoption have completed.
  *
  * @param[in] event Runtime Wi-Fi event.
+ * @param[in] disconnect_reason Raw Wi-Fi disconnect reason for OFFLINE, or
+ *                              zero for other events.
  *
  * @return
  * - ESP_OK: Event was processed or intentionally ignored for the current
@@ -184,7 +192,8 @@ esp_err_t app_network_coordinator_start(void);
  * - ESP_ERR_INVALID_ARG: Event value is unsupported.
  */
 esp_err_t app_network_coordinator_notify_wifi_event(
-    app_network_coordinator_wifi_event_t event);
+    app_network_coordinator_wifi_event_t event,
+    uint16_t disconnect_reason);
 
 #ifdef __cplusplus
 }

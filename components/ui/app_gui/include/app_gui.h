@@ -185,15 +185,15 @@ esp_err_t app_gui_start_ui_task(void);
 /**
  * @brief Post a copied provisioning status to the GUI task without waiting.
  *
- * The status is copied into the GUI command queue. This function never calls
- * LVGL, does not retain @p status, and is safe from normal task and
- * task-context callback code. It is not ISR-safe and never changes the active
- * screen.
+ * The status is copied into a dedicated length-one latest-value queue. This
+ * function never calls LVGL, does not retain @p status, and is safe from
+ * normal task and task-context callback code. It is not ISR-safe and never
+ * changes the active screen.
  *
  * @param[in] status Non-sensitive provisioning UI snapshot to copy.
  * @return ESP_OK when queued, ESP_ERR_INVALID_ARG for NULL or an invalid
  *         provisioning state, ESP_ERR_INVALID_STATE before app_gui_init(), or
- *         ESP_ERR_TIMEOUT when the GUI command queue is full.
+ *         ESP_FAIL when the queue update fails unexpectedly.
  */
 esp_err_t app_gui_post_provisioning_status(
     const ui_provisioning_status_t *status);
@@ -213,6 +213,22 @@ esp_err_t app_gui_post_provisioning_status(
  */
 esp_err_t app_gui_post_provisioning_qr_payload(
     const ui_provisioning_qr_payload_t *payload);
+
+/**
+ * @brief Invalidate the session-owned provisioning QR payload.
+ *
+ * This posts an explicit unavailable message to the GUI task. The GUI task
+ * securely clears its cached payload and hides the QR widget if the
+ * provisioning screen is active. Generic screen transitions do not clear the
+ * session payload.
+ *
+ * This function never calls LVGL and is safe from normal task and
+ * task-context callback code. It is not ISR-safe.
+ *
+ * @return ESP_OK when queued, ESP_ERR_INVALID_STATE before app_gui_init(), or
+ *         ESP_FAIL when the queue update fails unexpectedly.
+ */
+esp_err_t app_gui_clear_provisioning_qr_payload(void);
 
 /* Wi-Fi Status API -------------------------------------------------------- */
 /**

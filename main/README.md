@@ -40,7 +40,8 @@ Startup errors are logged and return from `app_main()` instead of using active
 ```text
 wifi_manager callback
     -> map runtime state to app_network_coordinator_wifi_event_t
-    -> update coordinator CONNECTING / ONLINE / OFFLINE state
+    -> while provisioning, post CONNECTING_WIFI / WAITING_FOR_IP / FAILED only
+    -> otherwise update coordinator CONNECTING / ONLINE / OFFLINE state
     -> verified normal ONLINE transition requests WIFI_STATUS
     -> map wifi_manager_status_t to ui_wifi_status_t
     -> app_gui_post_wifi_status()
@@ -58,6 +59,7 @@ cloud_manager status callback
 
 provisioning_manager callback
     -> validate and hold credentials pending
+    -> publish copied, non-sensitive progress outside the manager lock
     -> release them only after Wi-Fi connection success
     -> app_network_coordinator persists and verifies through config_manager
     -> wifi_manager adopts the active Station connection
@@ -67,7 +69,9 @@ app_network_coordinator task
     -> request BOOT or PROVISIONING through the GUI command queue
     -> connect stored credentials or run bounded BLE provisioning
     -> after BLE starts, copy its exact QR JSON into the GUI QR queue
-    -> stop/deinitialize BLE and adopt the active connection
+    -> publish real progress through the GUI latest-value status queue
+    -> persist/verify, stop/deinitialize BLE, and adopt the active connection
+    -> clear session QR, show SUCCESS for 1500 ms, request WIFI_STATUS
     -> publish CONNECTING or ONLINE readiness for deferred cloud startup
 
 app_main cloud gate
@@ -97,6 +101,9 @@ callback cannot post into an uninitialized cloud component.
   finite.
 - BLE provisioning uses NimBLE, Security 1, five framework connection
   attempts, and the Espressif `v1`/`ble` QR schema.
+- Provisioning progress uses a dedicated length-one overwrite queue. A normal
+  credential failure leaves the same BLE session and QR available; automatic
+  `RETRYING` policy is deferred.
 - `sdkconfig.defaults` enables the 16 MB N16 flash layout, the custom
   partition table, BT/NimBLE, Security 1 support, required LVGL fonts, runtime
   statistics, the LVGL QR widget, and full cross-signed CA-bundle verification
@@ -128,13 +135,15 @@ callback cannot post into an uninitialized cloud component.
   GUI while provisioning waits, times out, or network connectivity is absent.
 - The Wi-Fi callback forwards a short runtime event to the coordinator before
   queueing the independent GUI snapshot. `wifi_manager` remains responsible
-  for connection and reconnect behavior.
+  for connection and reconnect behavior. Provisioning events cannot promote
+  coordinator state to `ONLINE` before persistence, cleanup, and adoption.
 - The sensor callback can always post to an initialized cloud latest-value
   queue; posting does not perform authentication, TLS, or network I/O.
 - The display handle has static lifetime because `ui_manager_lvgl` borrows it.
 - `app_gui` owns the task that calls `lv_timer_handler()`.
 - `app_gui` owns all screen construction, cleanup, rendering, transitions, and
-  cached provisioning QR/Wi-Fi/sensor/cloud UI models.
+  cached provisioning QR/Wi-Fi/sensor/cloud UI models. Its QR cache follows
+  session invalidation rather than generic screen departure.
 - Wi-Fi, sensor, cloud, provisioning, and coordinator callbacks must not call
   LVGL.
 - Sensor callbacks must not perform Firebase authentication or HTTP requests.
@@ -200,6 +209,11 @@ idf.py -p <PORT> flash monitor
 - Phase 6.4.3 Espressif-compatible BLE provisioning QR rendering is
   implemented and build-verified. QR scan and end-to-end provisioning remain
   pending on target hardware; Phase 6.4 is not complete.
+- Phase 6.4.4 real provisioning progress and verified success routing are
+  implemented and build-verified. Hardware acceptance is pending for wrong
+  credentials in the same BLE session, timeout cleanup, real-state visibility,
+  the 1500 ms success dwell, and final dashboard routing. Phase 6.4 remains
+  incomplete.
 - Firebase project setup and authenticated host testing are documented in
   `components/cloud/cloud_manager/README.txt` and `Test/TestFirebase_Auth.ps1`.
 - Never log or commit passwords, ID tokens, refresh tokens, service-account
