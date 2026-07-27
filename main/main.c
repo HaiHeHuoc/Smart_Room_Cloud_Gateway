@@ -256,18 +256,6 @@ void app_main(void)
         return;
     }
 
-    ret = app_gui_create_wifi_screen();
-
-    if (ret != ESP_OK)
-    {
-        ESP_LOGE(
-            TAG,
-            "Failed to create Wi-Fi GUI: %s",
-            esp_err_to_name(ret));
-
-        return;
-    }
-
     ESP_LOGI(TAG, "LVGL display initialized successfully");
 
 #if PERFORMANCE_MONITOR

@@ -6,7 +6,6 @@
 #include "freertos/task.h"
 
 #include "ui_manager_lvgl.h"
-#include "board_config.h"
 #include "app_gui.h"
 #include "esp_log.h"
 #include "esp_err.h"
@@ -15,11 +14,11 @@
 
 /* Macros ------------------------------------------------------------------- */
 #define APP_GUI_WIFI_SCREEN_TIMEOUT_MS 10000U
+#define APP_GUI_COMMAND_QUEUE_LENGTH 8U
 #define APP_GUI_WIFI_STATUS_QUEUE_LENGTH 1U
 #define APP_GUI_SENSOR_STATUS_QUEUE_LENGTH 5U
 #define APP_GUI_CLOUD_STATUS_QUEUE_LENGTH 1U
 #define APP_GUI_UI_TASK_STACK_SIZE_BYTES   (24U * 1024U)
-#define APP_GUI_DEMO_TASK_STACK_SIZE_BYTES (4U * 1024U)
 #define APP_GUI_TASK_PRIORITY              5U
 #define APP_GUI_TASK_PERIOD_MS              33U
 #define APP_GUI_STACK_LOG_PERIOD_MS         (60U * 1000U)
@@ -42,25 +41,54 @@
 #define APP_GUI_DASHBOARD_RIGHT_X_PX             82
 #define APP_GUI_DASHBOARD_RIGHT_WIDTH_PX         76
 
+/* Type Definitions --------------------------------------------------------- */
+typedef enum
+{
+    APP_GUI_COMMAND_SHOW_SCREEN = 0,
+} app_gui_command_type_t;
+
+typedef struct
+{
+    app_gui_command_type_t type;
+
+    union
+    {
+        app_gui_screen_id_t screen_id;
+    } data;
+} app_gui_command_t;
+
+typedef struct
+{
+    lv_obj_t *wifi_mode_label;
+    lv_obj_t *wifi_ssid_label;
+    lv_obj_t *wifi_ip_label;
+    lv_obj_t *sensor_temperature_label;
+    lv_obj_t *sensor_humidity_label;
+    lv_obj_t *sensor_state_label;
+    lv_obj_t *sensor_wifi_label;
+    lv_obj_t *sensor_wifi_dot;
+    lv_obj_t *sensor_cloud_label;
+    lv_obj_t *sensor_cloud_dot;
+} app_gui_widget_refs_t;
+
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "APP_GUI";
 
 /* Static Variables --------------------------------------------------------- */
 /* GUI task communication and active-screen tracking. */
+static QueueHandle_t s_command_queue = NULL;
 static QueueHandle_t s_wifi_status_queue = NULL;
 static QueueHandle_t s_sensor_status_queue = NULL;
 static QueueHandle_t s_cloud_status_queue = NULL;
 static TaskHandle_t s_ui_task_handle = NULL;
-static TaskHandle_t s_demo_task_handle = NULL;
 static app_gui_screen_id_t s_current_screen_id = APP_GUI_SCREEN_NONE;
 static portMUX_TYPE s_screen_id_lock = portMUX_INITIALIZER_UNLOCKED;
 static bool s_latest_wifi_status_available = false;
-static bool s_latest_wifi_online = false;
+static ui_wifi_status_t s_latest_wifi_status = {0};
 static bool s_latest_sensor_status_available = false;
 static ui_sensor_status_t s_latest_sensor_status = {0};
-static bool s_sensor_screen_requested = false;
 static bool s_latest_cloud_status_available = false;
-static ui_cloud_state_t s_latest_cloud_state = UI_CLOUD_STATE_UNKNOWN;
+static ui_cloud_status_t s_latest_cloud_status = {0};
 
 /* Wi-Fi object references are valid only while the Wi-Fi screen is active. */
 static lv_obj_t *s_wifi_mode_label = NULL;
@@ -72,12 +100,37 @@ static lv_timer_t *s_wifi_screen_timer = NULL;
 static lv_obj_t *s_sensor_temperature_label = NULL;
 static lv_obj_t *s_sensor_humidity_label = NULL;
 static lv_obj_t *s_sensor_state_label = NULL;
+static lv_obj_t *s_sensor_wifi_label = NULL;
+static lv_obj_t *s_sensor_wifi_dot = NULL;
 static lv_obj_t *s_sensor_cloud_label = NULL;
 static lv_obj_t *s_sensor_cloud_dot = NULL;
 
 /* Function Prototypes ------------------------------------------------------ */
+static bool app_gui_is_valid_screen_id(
+    app_gui_screen_id_t screen_id,
+    bool allow_none);
+static const char *app_gui_screen_id_to_string(
+    app_gui_screen_id_t screen_id);
+static void app_gui_cleanup_queues(void);
+static void app_gui_set_active_screen_id(
+    app_gui_screen_id_t screen_id);
+static void app_gui_capture_widget_refs(
+    app_gui_widget_refs_t *refs);
+static void app_gui_clear_widget_refs(void);
+static void app_gui_apply_widget_refs(
+    const app_gui_widget_refs_t *refs);
 static void app_gui_wifi_screen_timeout_cb(lv_timer_t *timer);
 static void app_gui_restart_wifi_screen_timer(void);
+static esp_err_t app_gui_create_boot_screen(
+    lv_obj_t *screen);
+static void app_gui_render_boot_status(
+    lv_obj_t *screen);
+static esp_err_t app_gui_create_provisioning_screen(
+    lv_obj_t *screen);
+static esp_err_t app_gui_create_wifi_screen(
+    lv_obj_t *screen);
+static esp_err_t app_gui_create_sensor_screen(
+    lv_obj_t *screen);
 static const char *app_gui_wifi_state_to_string(ui_wifi_state_t state);
 static lv_color_t app_gui_wifi_state_color(ui_wifi_state_t state);
 static const char *app_gui_sensor_state_to_string(ui_sensor_state_t state);
@@ -103,51 +156,149 @@ static lv_obj_t *app_gui_create_sensor_value_label(
     lv_obj_t *screen,
     int32_t y,
     const char *initial_text);
-static void app_gui_update_wifi_screen(const ui_wifi_status_t *status);
-static void app_gui_update_sensor_screen(const ui_sensor_status_t *status);
-static void app_gui_update_cloud_status(const ui_cloud_status_t *status);
+static void app_gui_render_wifi_status(
+    const ui_wifi_status_t *status);
+static void app_gui_render_sensor_status(
+    const ui_sensor_status_t *status);
+static void app_gui_render_sensor_wifi_status(
+    const ui_wifi_status_t *status);
+static void app_gui_render_cloud_status(
+    const ui_cloud_status_t *status);
+static void app_gui_render_cached_status(
+    app_gui_screen_id_t screen_id);
+static esp_err_t app_gui_activate_screen(
+    app_gui_screen_id_t target_screen);
+static void app_gui_process_commands(void);
 static void app_gui_process_sensor_status(void);
 static void app_gui_process_wifi_status(void);
 static void app_gui_process_cloud_status(void);
-static void app_gui_process_pending_sensor_screen(void);
 static void app_gui_log_stack_usage(const char *task_name);
 static void app_gui_process_lvgl(void);
 static void app_gui_ui_task(void *param);
-static void app_gui_running_demo(void *parameter);
-
-/* Application -------------------------------------------------------------- */
-void app_gui_create_demo_screen(void)
-{
-    /* All LVGL object access is serialized through the UI manager mutex. */
-    ui_manager_lvgl_wait_for_mutex();
-
-    lv_obj_t *screen = lv_screen_active();
-    if (screen == NULL) {
-        ESP_LOGE(TAG, "No active LVGL screen for demo GUI");
-        ui_manager_lvgl_release_mutex();
-        return;
-    }
-
-    lv_obj_set_style_bg_color(screen, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
-
-    lv_obj_t *label = lv_label_create(screen);
-    if (label == NULL) {
-        ESP_LOGE(TAG, "Failed to create demo label");
-        ui_manager_lvgl_release_mutex();
-        return;
-    }
-
-    lv_label_set_text(label, "LVGL OK");
-    lv_obj_set_style_text_color(label, lv_color_hex(0x00FF00), 0);
-    lv_obj_set_style_text_font(label, LV_FONT_DEFAULT, 0);
-    lv_obj_center(label);
-
-    (void)app_gui_set_screen_id(APP_GUI_SCREEN_NONE);
-
-    ui_manager_lvgl_release_mutex();
-}
 
 /* Static Functions --------------------------------------------------------- */
+/* GUI Core Helpers --------------------------------------------------------- */
+static bool app_gui_is_valid_screen_id(
+    app_gui_screen_id_t screen_id,
+    bool allow_none)
+{
+    return
+        ((allow_none && (screen_id == APP_GUI_SCREEN_NONE)) ||
+         (screen_id == APP_GUI_SCREEN_BOOT) ||
+         (screen_id == APP_GUI_SCREEN_PROVISIONING) ||
+         (screen_id == APP_GUI_SCREEN_WIFI_STATUS) ||
+         (screen_id == APP_GUI_SCREEN_SENSOR_DASHBOARD));
+}
+
+static const char *app_gui_screen_id_to_string(
+    app_gui_screen_id_t screen_id)
+{
+    switch (screen_id) {
+        case APP_GUI_SCREEN_NONE:
+            return "NONE";
+
+        case APP_GUI_SCREEN_BOOT:
+            return "BOOT";
+
+        case APP_GUI_SCREEN_PROVISIONING:
+            return "PROVISIONING";
+
+        case APP_GUI_SCREEN_WIFI_STATUS:
+            return "WIFI_STATUS";
+
+        case APP_GUI_SCREEN_SENSOR_DASHBOARD:
+            return "SENSOR_DASHBOARD";
+
+        default:
+            return "UNKNOWN";
+    }
+}
+
+static void app_gui_cleanup_queues(void)
+{
+    if (s_command_queue != NULL) {
+        vQueueDelete(s_command_queue);
+        s_command_queue = NULL;
+    }
+
+    if (s_wifi_status_queue != NULL) {
+        vQueueDelete(s_wifi_status_queue);
+        s_wifi_status_queue = NULL;
+    }
+
+    if (s_sensor_status_queue != NULL) {
+        vQueueDelete(s_sensor_status_queue);
+        s_sensor_status_queue = NULL;
+    }
+
+    if (s_cloud_status_queue != NULL) {
+        vQueueDelete(s_cloud_status_queue);
+        s_cloud_status_queue = NULL;
+    }
+}
+
+static void app_gui_set_active_screen_id(
+    app_gui_screen_id_t screen_id)
+{
+    taskENTER_CRITICAL(&s_screen_id_lock);
+    s_current_screen_id = screen_id;
+    taskEXIT_CRITICAL(&s_screen_id_lock);
+}
+
+static void app_gui_capture_widget_refs(
+    app_gui_widget_refs_t *refs)
+{
+    if (refs == NULL) {
+        return;
+    }
+
+    refs->wifi_mode_label = s_wifi_mode_label;
+    refs->wifi_ssid_label = s_wifi_ssid_label;
+    refs->wifi_ip_label = s_wifi_ip_label;
+    refs->sensor_temperature_label = s_sensor_temperature_label;
+    refs->sensor_humidity_label = s_sensor_humidity_label;
+    refs->sensor_state_label = s_sensor_state_label;
+    refs->sensor_wifi_label = s_sensor_wifi_label;
+    refs->sensor_wifi_dot = s_sensor_wifi_dot;
+    refs->sensor_cloud_label = s_sensor_cloud_label;
+    refs->sensor_cloud_dot = s_sensor_cloud_dot;
+}
+
+static void app_gui_clear_widget_refs(void)
+{
+    s_wifi_mode_label = NULL;
+    s_wifi_ssid_label = NULL;
+    s_wifi_ip_label = NULL;
+    s_sensor_temperature_label = NULL;
+    s_sensor_humidity_label = NULL;
+    s_sensor_state_label = NULL;
+    s_sensor_wifi_label = NULL;
+    s_sensor_wifi_dot = NULL;
+    s_sensor_cloud_label = NULL;
+    s_sensor_cloud_dot = NULL;
+}
+
+static void app_gui_apply_widget_refs(
+    const app_gui_widget_refs_t *refs)
+{
+    app_gui_clear_widget_refs();
+
+    if (refs == NULL) {
+        return;
+    }
+
+    s_wifi_mode_label = refs->wifi_mode_label;
+    s_wifi_ssid_label = refs->wifi_ssid_label;
+    s_wifi_ip_label = refs->wifi_ip_label;
+    s_sensor_temperature_label = refs->sensor_temperature_label;
+    s_sensor_humidity_label = refs->sensor_humidity_label;
+    s_sensor_state_label = refs->sensor_state_label;
+    s_sensor_wifi_label = refs->sensor_wifi_label;
+    s_sensor_wifi_dot = refs->sensor_wifi_dot;
+    s_sensor_cloud_label = refs->sensor_cloud_label;
+    s_sensor_cloud_dot = refs->sensor_cloud_dot;
+}
+
 /* Wi-Fi Screen Helpers ----------------------------------------------------- */
 static void app_gui_wifi_screen_timeout_cb(lv_timer_t *timer)
 {
@@ -159,16 +310,26 @@ static void app_gui_wifi_screen_timeout_cb(lv_timer_t *timer)
     app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
 
     if ((app_gui_get_screen_id(&screen_id) != ESP_OK) ||
-        (screen_id != APP_GUI_SCREEN_WIFI)) {
+        (screen_id != APP_GUI_SCREEN_WIFI_STATUS)) {
         lv_timer_pause(timer);
         return;
     }
 
-    taskENTER_CRITICAL(&s_screen_id_lock);
-    s_sensor_screen_requested = true;
-    taskEXIT_CRITICAL(&s_screen_id_lock);
+    const esp_err_t ret =
+        app_gui_request_screen(
+            APP_GUI_SCREEN_SENSOR_DASHBOARD);
 
-    ESP_LOGD(TAG, "Wi-Fi screen timeout; sensor screen requested");
+    if (ret != ESP_OK) {
+        ESP_LOGW(
+            TAG,
+            "Wi-Fi timeout screen request failed: %s",
+            esp_err_to_name(ret));
+    }
+    else {
+        ESP_LOGD(
+            TAG,
+            "Wi-Fi screen timeout; sensor dashboard queued");
+    }
 
     /* Make this timer behave like a reusable one-shot timer. */
     lv_timer_pause(timer);
@@ -433,29 +594,124 @@ static lv_obj_t *app_gui_create_sensor_value_label(
     return label;
 }
 
-/* Wi-Fi Screen Construction ----------------------------------------------- */
-esp_err_t app_gui_create_wifi_screen(void)
+/* Placeholder Screen Construction ----------------------------------------- */
+static esp_err_t app_gui_create_boot_screen(
+    lv_obj_t *screen)
 {
-
-    ui_manager_lvgl_wait_for_mutex();
-
-    lv_obj_t *screen = lv_screen_active();
     if (screen == NULL) {
-        ESP_LOGE(TAG, "No active LVGL screen for Wi-Fi GUI");
-        ui_manager_lvgl_release_mutex();
-        return ESP_ERR_INVALID_STATE;
+        return ESP_ERR_INVALID_ARG;
     }
 
-    lv_obj_clean(screen);
-    s_wifi_mode_label = NULL;
-    s_wifi_ssid_label = NULL;
-    s_wifi_ip_label = NULL;
-    s_sensor_temperature_label = NULL;
-    s_sensor_humidity_label = NULL;
-    s_sensor_state_label = NULL;
-    s_sensor_cloud_label = NULL;
-    s_sensor_cloud_dot = NULL;
-    (void)app_gui_set_screen_id(APP_GUI_SCREEN_NONE);
+    lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(
+        screen,
+        lv_color_hex(0x101619),
+        LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(screen, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(screen, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(screen, 0, LV_PART_MAIN);
+
+    lv_obj_t *title = lv_label_create(screen);
+    lv_obj_t *status = lv_label_create(screen);
+
+    if ((title == NULL) || (status == NULL)) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    lv_label_set_text(title, "Smart Gateway");
+    lv_obj_set_style_text_font(
+        title,
+        &lv_font_montserrat_20,
+        LV_PART_MAIN);
+    lv_obj_set_style_text_color(
+        title,
+        lv_color_hex(0xF2F5F7),
+        LV_PART_MAIN);
+    lv_obj_align(title, LV_ALIGN_CENTER, 0, -14);
+
+    app_gui_render_boot_status(status);
+
+    return ESP_OK;
+}
+
+static void app_gui_render_boot_status(
+    lv_obj_t *status_label)
+{
+    if (status_label == NULL) {
+        return;
+    }
+
+    lv_label_set_text(status_label, "Starting...");
+    lv_obj_set_style_text_font(
+        status_label,
+        &lv_font_montserrat_12,
+        LV_PART_MAIN);
+    lv_obj_set_style_text_color(
+        status_label,
+        lv_color_hex(0x8C989F),
+        LV_PART_MAIN);
+    lv_obj_align(status_label, LV_ALIGN_CENTER, 0, 14);
+}
+
+static esp_err_t app_gui_create_provisioning_screen(
+    lv_obj_t *screen)
+{
+    if (screen == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(
+        screen,
+        lv_color_hex(0x101619),
+        LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(screen, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(screen, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(screen, 0, LV_PART_MAIN);
+
+    lv_obj_t *title = lv_label_create(screen);
+    lv_obj_t *status = lv_label_create(screen);
+
+    if ((title == NULL) || (status == NULL)) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    lv_label_set_text(title, "Wi-Fi Setup");
+    lv_obj_set_style_text_font(
+        title,
+        &lv_font_montserrat_20,
+        LV_PART_MAIN);
+    lv_obj_set_style_text_color(
+        title,
+        lv_color_hex(0xF2F5F7),
+        LV_PART_MAIN);
+    lv_obj_align(title, LV_ALIGN_CENTER, 0, -14);
+
+    lv_label_set_text(status, "Preparing setup...");
+    lv_obj_set_style_text_font(
+        status,
+        &lv_font_montserrat_12,
+        LV_PART_MAIN);
+    lv_obj_set_style_text_color(
+        status,
+        lv_color_hex(0x8C989F),
+        LV_PART_MAIN);
+    lv_obj_align(status, LV_ALIGN_CENTER, 0, 14);
+
+    return ESP_OK;
+}
+
+/* Wi-Fi Screen Construction ----------------------------------------------- */
+static esp_err_t app_gui_create_wifi_screen(
+    lv_obj_t *screen)
+{
+    if (screen == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    app_gui_clear_widget_refs();
 
     lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_bg_color(screen,
@@ -468,7 +724,6 @@ esp_err_t app_gui_create_wifi_screen(void)
 
     lv_obj_t *title = lv_label_create(screen);
     if (title == NULL) {
-        ui_manager_lvgl_release_mutex();
         return ESP_ERR_NO_MEM;
     }
 
@@ -483,7 +738,6 @@ esp_err_t app_gui_create_wifi_screen(void)
 
     lv_obj_t *divider = lv_obj_create(screen);
     if (divider == NULL) {
-        ui_manager_lvgl_release_mutex();
         return ESP_ERR_NO_MEM;
     }
 
@@ -509,7 +763,6 @@ esp_err_t app_gui_create_wifi_screen(void)
          ++index) {
         lv_obj_t *field = lv_label_create(screen);
         if (field == NULL) {
-            ui_manager_lvgl_release_mutex();
             return ESP_ERR_NO_MEM;
         }
 
@@ -536,7 +789,6 @@ esp_err_t app_gui_create_wifi_screen(void)
         s_wifi_mode_label = NULL;
         s_wifi_ssid_label = NULL;
         s_wifi_ip_label = NULL;
-        ui_manager_lvgl_release_mutex();
         return ESP_ERR_NO_MEM;
     }
 
@@ -549,53 +801,18 @@ esp_err_t app_gui_create_wifi_screen(void)
         app_gui_wifi_state_color(UI_WIFI_STATE_IDLE),
         LV_PART_MAIN);
 
-    ESP_LOGD(TAG, "Wi-Fi status screen created");
-
-    if (s_wifi_screen_timer == NULL) {
-        s_wifi_screen_timer = lv_timer_create(
-            app_gui_wifi_screen_timeout_cb,
-            APP_GUI_WIFI_SCREEN_TIMEOUT_MS,
-            NULL
-        );
-    }
-
-    taskENTER_CRITICAL(&s_screen_id_lock);
-    s_sensor_screen_requested = false;
-    taskEXIT_CRITICAL(&s_screen_id_lock);
-
-    (void)app_gui_set_screen_id(APP_GUI_SCREEN_WIFI);
-    app_gui_restart_wifi_screen_timer();
-
-    ui_manager_lvgl_release_mutex();
     return ESP_OK;
 }
 
 /* Sensor Screen Construction ---------------------------------------------- */
-esp_err_t app_gui_create_sensor_screen(void)
+static esp_err_t app_gui_create_sensor_screen(
+    lv_obj_t *screen)
 {
-    ui_manager_lvgl_wait_for_mutex();
-
-    lv_obj_t *screen = lv_screen_active();
     if (screen == NULL) {
-        ESP_LOGE(TAG, "No active LVGL screen for sensor GUI");
-        ui_manager_lvgl_release_mutex();
-        return ESP_ERR_INVALID_STATE;
+        return ESP_ERR_INVALID_ARG;
     }
 
-    lv_obj_clean(screen);
-    s_wifi_mode_label = NULL;
-    s_wifi_ssid_label = NULL;
-    s_wifi_ip_label = NULL;
-    s_sensor_temperature_label = NULL;
-    s_sensor_humidity_label = NULL;
-    s_sensor_state_label = NULL;
-    s_sensor_cloud_label = NULL;
-    s_sensor_cloud_dot = NULL;
-    (void)app_gui_set_screen_id(APP_GUI_SCREEN_NONE);
-
-    if (s_wifi_screen_timer != NULL) {
-        lv_timer_pause(s_wifi_screen_timer);
-    }
+    app_gui_clear_widget_refs();
 
     lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_bg_color(screen,
@@ -617,9 +834,11 @@ esp_err_t app_gui_create_sensor_screen(void)
 
     taskENTER_CRITICAL(&s_screen_id_lock);
     wifi_status_available = s_latest_wifi_status_available;
-    wifi_online = s_latest_wifi_online;
+    wifi_online =
+        s_latest_wifi_status.state == UI_WIFI_STATE_CONNECTED &&
+        s_latest_wifi_status.has_ipv4_address;
     cloud_status_available = s_latest_cloud_status_available;
-    cloud_state = s_latest_cloud_state;
+    cloud_state = s_latest_cloud_status.state;
     taskEXIT_CRITICAL(&s_screen_id_lock);
 
     const lv_color_t inactive_color = lv_color_hex(0x7B858A);
@@ -636,7 +855,6 @@ esp_err_t app_gui_create_sensor_screen(void)
 
     lv_obj_t *title = lv_label_create(screen);
     if (title == NULL) {
-        ui_manager_lvgl_release_mutex();
         return ESP_ERR_NO_MEM;
     }
 
@@ -664,7 +882,7 @@ esp_err_t app_gui_create_sensor_screen(void)
         1,
         APP_GUI_DASHBOARD_HEIGHT_PX -
             APP_GUI_DASHBOARD_HEADER_HEIGHT_PX - 1);
-    lv_obj_t *wifi_dot = app_gui_create_dashboard_dot(
+    s_sensor_wifi_dot = app_gui_create_dashboard_dot(
         screen,
         128,
         10,
@@ -679,9 +897,8 @@ esp_err_t app_gui_create_sensor_screen(void)
         (cloud_header == NULL) ||
         (header_rule == NULL) ||
         (column_rule == NULL) ||
-        (wifi_dot == NULL) ||
+        (s_sensor_wifi_dot == NULL) ||
         (s_sensor_cloud_dot == NULL)) {
-        ui_manager_lvgl_release_mutex();
         return ESP_ERR_NO_MEM;
     }
 
@@ -711,7 +928,7 @@ esp_err_t app_gui_create_sensor_screen(void)
         app_gui_create_sensor_value_label(screen, 47, "-");
     s_sensor_humidity_label =
         app_gui_create_sensor_value_label(screen, 91, "-");
-    lv_obj_t *sensor_wifi_label =
+    s_sensor_wifi_label =
         app_gui_create_sensor_value_label(
             screen,
             38,
@@ -732,15 +949,10 @@ esp_err_t app_gui_create_sensor_screen(void)
 
     if ((s_sensor_temperature_label == NULL) ||
         (s_sensor_humidity_label == NULL) ||
-        (sensor_wifi_label == NULL) ||
+        (s_sensor_wifi_label == NULL) ||
         (s_sensor_cloud_label == NULL) ||
         (s_sensor_state_label == NULL)) {
-        s_sensor_temperature_label = NULL;
-        s_sensor_humidity_label = NULL;
-        s_sensor_state_label = NULL;
-        s_sensor_cloud_label = NULL;
-        s_sensor_cloud_dot = NULL;
-        ui_manager_lvgl_release_mutex();
+        app_gui_clear_widget_refs();
         return ESP_ERR_NO_MEM;
     }
 
@@ -766,7 +978,7 @@ esp_err_t app_gui_create_sensor_screen(void)
     }
 
     lv_obj_t *right_values[] = {
-        sensor_wifi_label,
+        s_sensor_wifi_label,
         s_sensor_cloud_label,
         s_sensor_state_label,
     };
@@ -789,7 +1001,7 @@ esp_err_t app_gui_create_sensor_screen(void)
     }
 
     lv_obj_set_style_text_color(
-        sensor_wifi_label,
+        s_sensor_wifi_label,
         wifi_color,
         LV_PART_MAIN);
     lv_obj_set_style_text_color(
@@ -802,30 +1014,20 @@ esp_err_t app_gui_create_sensor_screen(void)
         app_gui_sensor_state_color(UI_SENSOR_STATE_INITIALIZING),
         LV_PART_MAIN);
 
-    taskENTER_CRITICAL(&s_screen_id_lock);
-    s_sensor_screen_requested = false;
-    taskEXIT_CRITICAL(&s_screen_id_lock);
-
-    (void)app_gui_set_screen_id(APP_GUI_SCREEN_SENSOR);
-    ESP_LOGD(TAG, "Sensor status screen created");
-
-    ui_manager_lvgl_release_mutex();
     return ESP_OK;
 }
 
-/* Wi-Fi Screen Update ------------------------------------------------------ */
-static void app_gui_update_wifi_screen(const ui_wifi_status_t *status)
+/* Cached Model Rendering --------------------------------------------------- */
+static void app_gui_render_wifi_status(
+    const ui_wifi_status_t *status)
 {
     if (status == NULL) {
         return;
     }
 
-    ui_manager_lvgl_wait_for_mutex();
-
     if ((s_wifi_mode_label == NULL) ||
         (s_wifi_ssid_label == NULL) ||
         (s_wifi_ip_label == NULL)) {
-        ui_manager_lvgl_release_mutex();
         return;
     }
 
@@ -849,24 +1051,18 @@ static void app_gui_update_wifi_screen(const ui_wifi_status_t *status)
         (status->ipv4_address[0] != '\0')
             ? status->ipv4_address
             : "-");
-
-    ui_manager_lvgl_release_mutex();
 }
 
-/* Sensor Screen Update ---------------------------------------------------- */
-static void app_gui_update_sensor_screen(
+static void app_gui_render_sensor_status(
     const ui_sensor_status_t *status)
 {
     if (status == NULL) {
         return;
     }
 
-    ui_manager_lvgl_wait_for_mutex();
-
     if ((s_sensor_temperature_label == NULL) ||
         (s_sensor_humidity_label == NULL) ||
         (s_sensor_state_label == NULL)) {
-        ui_manager_lvgl_release_mutex();
         return;
     }
 
@@ -932,19 +1128,46 @@ static void app_gui_update_sensor_screen(
         s_sensor_state_label,
         app_gui_sensor_state_color(displayed_state),
         LV_PART_MAIN);
-
-    ui_manager_lvgl_release_mutex();
 }
 
-/* Cloud Status Update ----------------------------------------------------- */
-static void app_gui_update_cloud_status(
+static void app_gui_render_sensor_wifi_status(
+    const ui_wifi_status_t *status)
+{
+    if ((status == NULL) ||
+        (s_sensor_wifi_label == NULL) ||
+        (s_sensor_wifi_dot == NULL)) {
+        return;
+    }
+
+    const bool online =
+        status->state == UI_WIFI_STATE_CONNECTED &&
+        status->has_ipv4_address;
+    const lv_color_t state_color =
+        online
+            ? lv_color_hex(0x49C978)
+            : lv_color_hex(0xF06464);
+
+    lv_label_set_text(
+        s_sensor_wifi_label,
+        online
+            ? "Wi-Fi: Online"
+            : "Wi-Fi: Offline");
+    lv_obj_set_style_text_color(
+        s_sensor_wifi_label,
+        state_color,
+        LV_PART_MAIN);
+    lv_obj_set_style_bg_color(
+        s_sensor_wifi_dot,
+        state_color,
+        LV_PART_MAIN);
+}
+
+static void app_gui_render_cloud_status(
     const ui_cloud_status_t *status)
 {
     if (status == NULL) {
         return;
     }
-
-    ui_manager_lvgl_wait_for_mutex();
 
     if ((s_sensor_cloud_label != NULL) &&
         (s_sensor_cloud_dot != NULL)) {
@@ -963,8 +1186,195 @@ static void app_gui_update_cloud_status(
             state_color,
             LV_PART_MAIN);
     }
+}
 
+static void app_gui_render_cached_status(
+    app_gui_screen_id_t screen_id)
+{
+    bool wifi_available = false;
+    bool sensor_available = false;
+    bool cloud_available = false;
+    ui_wifi_status_t wifi_status = {0};
+    ui_sensor_status_t sensor_status = {0};
+    ui_cloud_status_t cloud_status = {0};
+
+    taskENTER_CRITICAL(&s_screen_id_lock);
+    wifi_available = s_latest_wifi_status_available;
+    wifi_status = s_latest_wifi_status;
+    sensor_available = s_latest_sensor_status_available;
+    sensor_status = s_latest_sensor_status;
+    cloud_available = s_latest_cloud_status_available;
+    cloud_status = s_latest_cloud_status;
+    taskEXIT_CRITICAL(&s_screen_id_lock);
+
+    if ((screen_id == APP_GUI_SCREEN_WIFI_STATUS) &&
+        wifi_available) {
+        app_gui_render_wifi_status(&wifi_status);
+        return;
+    }
+
+    if (screen_id != APP_GUI_SCREEN_SENSOR_DASHBOARD) {
+        return;
+    }
+
+    if (wifi_available) {
+        app_gui_render_sensor_wifi_status(&wifi_status);
+    }
+
+    if (sensor_available) {
+        app_gui_render_sensor_status(&sensor_status);
+    }
+
+    if (cloud_available) {
+        app_gui_render_cloud_status(&cloud_status);
+    }
+}
+
+/* Central Screen Router ---------------------------------------------------- */
+static esp_err_t app_gui_activate_screen(
+    app_gui_screen_id_t target_screen)
+{
+    if (!app_gui_is_valid_screen_id(target_screen, false)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    app_gui_screen_id_t current_screen = APP_GUI_SCREEN_NONE;
+    (void)app_gui_get_screen_id(&current_screen);
+
+    ui_manager_lvgl_wait_for_mutex();
+
+    if (target_screen == current_screen) {
+        app_gui_render_cached_status(target_screen);
+        ui_manager_lvgl_release_mutex();
+        ESP_LOGD(
+            TAG,
+            "Ignoring duplicate screen request: %s",
+            app_gui_screen_id_to_string(target_screen));
+        return ESP_OK;
+    }
+
+    lv_obj_t *current_root = lv_screen_active();
+
+    if (current_root == NULL) {
+        ui_manager_lvgl_release_mutex();
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    app_gui_widget_refs_t previous_refs = {0};
+    app_gui_capture_widget_refs(&previous_refs);
+    app_gui_clear_widget_refs();
+
+    lv_obj_t *target_root = lv_obj_create(NULL);
+
+    if (target_root == NULL) {
+        app_gui_apply_widget_refs(&previous_refs);
+        ui_manager_lvgl_release_mutex();
+        return ESP_ERR_NO_MEM;
+    }
+
+    esp_err_t ret = ESP_ERR_INVALID_ARG;
+
+    switch (target_screen) {
+        case APP_GUI_SCREEN_BOOT:
+            ret = app_gui_create_boot_screen(target_root);
+            break;
+
+        case APP_GUI_SCREEN_PROVISIONING:
+            ret = app_gui_create_provisioning_screen(target_root);
+            break;
+
+        case APP_GUI_SCREEN_WIFI_STATUS:
+            ret = app_gui_create_wifi_screen(target_root);
+            break;
+
+        case APP_GUI_SCREEN_SENSOR_DASHBOARD:
+            ret = app_gui_create_sensor_screen(target_root);
+            break;
+
+        case APP_GUI_SCREEN_NONE:
+        default:
+            ret = ESP_ERR_INVALID_ARG;
+            break;
+    }
+
+    if ((ret == ESP_OK) &&
+        (target_screen == APP_GUI_SCREEN_WIFI_STATUS) &&
+        (s_wifi_screen_timer == NULL)) {
+        s_wifi_screen_timer = lv_timer_create(
+            app_gui_wifi_screen_timeout_cb,
+            APP_GUI_WIFI_SCREEN_TIMEOUT_MS,
+            NULL);
+
+        if (s_wifi_screen_timer == NULL) {
+            ret = ESP_ERR_NO_MEM;
+        }
+    }
+
+    if (ret != ESP_OK) {
+        lv_obj_delete(target_root);
+        app_gui_apply_widget_refs(&previous_refs);
+        ui_manager_lvgl_release_mutex();
+        return ret;
+    }
+
+    if ((s_wifi_screen_timer != NULL) &&
+        (target_screen != APP_GUI_SCREEN_WIFI_STATUS)) {
+        lv_timer_pause(s_wifi_screen_timer);
+    }
+
+    lv_screen_load(target_root);
+    app_gui_set_active_screen_id(target_screen);
+    app_gui_render_cached_status(target_screen);
+
+    if (target_screen == APP_GUI_SCREEN_WIFI_STATUS) {
+        app_gui_restart_wifi_screen_timer();
+    }
+
+    lv_obj_delete(current_root);
     ui_manager_lvgl_release_mutex();
+
+    ESP_LOGI(
+        TAG,
+        "Application screen transition: %s -> %s",
+        app_gui_screen_id_to_string(current_screen),
+        app_gui_screen_id_to_string(target_screen));
+
+    return ESP_OK;
+}
+
+static void app_gui_process_commands(void)
+{
+    app_gui_command_t command = {0};
+
+    if (s_command_queue == NULL) {
+        return;
+    }
+
+    while (xQueueReceive(
+               s_command_queue,
+               &command,
+               0) == pdTRUE) {
+        if (command.type != APP_GUI_COMMAND_SHOW_SCREEN) {
+            ESP_LOGW(
+                TAG,
+                "Ignoring unknown GUI command: %d",
+                (int)command.type);
+            continue;
+        }
+
+        const esp_err_t ret =
+            app_gui_activate_screen(
+                command.data.screen_id);
+
+        if (ret != ESP_OK) {
+            ESP_LOGE(
+                TAG,
+                "Failed to activate screen %s: %s",
+                app_gui_screen_id_to_string(
+                    command.data.screen_id),
+                esp_err_to_name(ret));
+        }
+    }
 }
 
 /* Sensor Queue Processing ------------------------------------------------- */
@@ -987,23 +1397,11 @@ static void app_gui_process_sensor_status(void)
 
     app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
 
-    if (app_gui_get_screen_id(&screen_id) == ESP_OK) {
-        if (screen_id == APP_GUI_SCREEN_NONE) {
-            const esp_err_t ret = app_gui_create_sensor_screen();
-            if (ret != ESP_OK) {
-                ESP_LOGE(
-                    TAG,
-                    "Failed to create sensor screen: %s",
-                    esp_err_to_name(ret));
-            }
-            else {
-                screen_id = APP_GUI_SCREEN_SENSOR;
-            }
-        }
-
-        if (screen_id == APP_GUI_SCREEN_SENSOR) {
-            app_gui_update_sensor_screen(&sensor_status);
-        }
+    if ((app_gui_get_screen_id(&screen_id) == ESP_OK) &&
+        (screen_id == APP_GUI_SCREEN_SENSOR_DASHBOARD)) {
+        ui_manager_lvgl_wait_for_mutex();
+        app_gui_render_sensor_status(&sensor_status);
+        ui_manager_lvgl_release_mutex();
     }
 
     ESP_LOGD(
@@ -1036,14 +1434,16 @@ static void app_gui_process_cloud_status(void)
 
     taskENTER_CRITICAL(&s_screen_id_lock);
     s_latest_cloud_status_available = true;
-    s_latest_cloud_state = cloud_status.state;
+    s_latest_cloud_status = cloud_status;
     taskEXIT_CRITICAL(&s_screen_id_lock);
 
     app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
 
     if ((app_gui_get_screen_id(&screen_id) == ESP_OK) &&
-        (screen_id == APP_GUI_SCREEN_SENSOR)) {
-        app_gui_update_cloud_status(&cloud_status);
+        (screen_id == APP_GUI_SCREEN_SENSOR_DASHBOARD)) {
+        ui_manager_lvgl_wait_for_mutex();
+        app_gui_render_cloud_status(&cloud_status);
+        ui_manager_lvgl_release_mutex();
     }
 
     ESP_LOGD(
@@ -1067,38 +1467,32 @@ static void app_gui_process_wifi_status(void)
         return;
     }
 
-    /* Retain only the summary needed by the compact sensor dashboard. */
     taskENTER_CRITICAL(&s_screen_id_lock);
     s_latest_wifi_status_available = true;
-    s_latest_wifi_online =
-        wifi_status.state == UI_WIFI_STATE_CONNECTED &&
-        wifi_status.has_ipv4_address;
-    s_sensor_screen_requested = false;
+    s_latest_wifi_status = wifi_status;
     taskEXIT_CRITICAL(&s_screen_id_lock);
 
     app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
 
-    if ((app_gui_get_screen_id(&screen_id) == ESP_OK) &&
-        (screen_id != APP_GUI_SCREEN_WIFI))
-    {
-        (void)app_gui_create_wifi_screen();
+    if (app_gui_get_screen_id(&screen_id) == ESP_OK) {
+        if (screen_id == APP_GUI_SCREEN_WIFI_STATUS) {
+            ui_manager_lvgl_wait_for_mutex();
+            app_gui_render_wifi_status(&wifi_status);
+            app_gui_restart_wifi_screen_timer();
+            ui_manager_lvgl_release_mutex();
+        }
+        else if (screen_id == APP_GUI_SCREEN_SENSOR_DASHBOARD) {
+            ui_manager_lvgl_wait_for_mutex();
+            app_gui_render_sensor_wifi_status(&wifi_status);
+            ui_manager_lvgl_release_mutex();
+        }
     }
-
-    /* LVGL timer operations follow the same mutex contract as LVGL objects. */
-    ui_manager_lvgl_wait_for_mutex();
-    app_gui_restart_wifi_screen_timer();
-    ui_manager_lvgl_release_mutex();
-
-    app_gui_update_wifi_screen(&wifi_status);
 
     ESP_LOGD(
         TAG,
         "GUI received Wi-Fi status: "
-        "state=%d, ssid=%s, ip=%s, rssi=%d",
+        "state=%d, ip=%s, rssi=%d",
         (int)wifi_status.state,
-        wifi_status.ssid[0] != '\0'
-            ? wifi_status.ssid
-            : "<none>",
         wifi_status.has_ipv4_address
             ? wifi_status.ipv4_address
             : "<none>",
@@ -1107,52 +1501,6 @@ static void app_gui_process_wifi_status(void)
             : 0
     );
 
-    
-}
-
-/* Deferred Screen Transition ---------------------------------------------- */
-static void app_gui_process_pending_sensor_screen(void)
-{
-    bool screen_requested = false;
-    bool sensor_status_available = false;
-    ui_sensor_status_t sensor_status = {0};
-
-    taskENTER_CRITICAL(&s_screen_id_lock);
-
-    screen_requested = s_sensor_screen_requested;
-
-    if (screen_requested) {
-        s_sensor_screen_requested = false;
-        sensor_status_available = s_latest_sensor_status_available;
-        sensor_status = s_latest_sensor_status;
-    }
-
-    taskEXIT_CRITICAL(&s_screen_id_lock);
-
-    if (!screen_requested) {
-        return;
-    }
-
-    app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
-
-    if ((app_gui_get_screen_id(&screen_id) != ESP_OK) ||
-        (screen_id != APP_GUI_SCREEN_WIFI)) {
-        return;
-    }
-
-    const esp_err_t ret = app_gui_create_sensor_screen();
-
-    if (ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
-            "Failed to switch from Wi-Fi to sensor screen: %s",
-            esp_err_to_name(ret));
-        return;
-    }
-
-    if (sensor_status_available) {
-        app_gui_update_sensor_screen(&sensor_status);
-    }
 }
 
 /* GUI Task Core ----------------------------------------------------------- */
@@ -1177,14 +1525,14 @@ static void app_gui_log_stack_usage(const char *task_name)
 
 static void app_gui_process_lvgl(void)
 {
-    /* Queue handlers do not wait; LVGL timers are then serviced once. */
+    /* Route screens before status rendering and LVGL timer callbacks. */
+    app_gui_process_commands();
+
     app_gui_process_sensor_status();
 
     app_gui_process_cloud_status();
 
     app_gui_process_wifi_status();
-
-    app_gui_process_pending_sensor_screen();
 
     ui_manager_lvgl_wait_for_mutex();
 
@@ -1213,81 +1561,27 @@ static void app_gui_ui_task(void *param)
     }
 }
 
-/* Demo Task --------------------------------------------------------------- */
-static void app_gui_running_demo(void *parameter)
-{
-    (void)parameter;
-
-    const lv_align_t state[9] = {   
-    LV_ALIGN_TOP_LEFT,
-    LV_ALIGN_TOP_MID,
-    LV_ALIGN_TOP_RIGHT,
-    LV_ALIGN_LEFT_MID,
-    LV_ALIGN_CENTER,
-    LV_ALIGN_RIGHT_MID,
-    LV_ALIGN_BOTTOM_LEFT,
-    LV_ALIGN_BOTTOM_MID,
-    LV_ALIGN_BOTTOM_RIGHT,
-    };
-
-    ui_manager_lvgl_wait_for_mutex();
-    lv_obj_t *screen = lv_screen_active();
-    if (screen == NULL) {
-        ESP_LOGE(TAG, "No active LVGL screen for running demo");
-        ui_manager_lvgl_release_mutex();
-        s_demo_task_handle = NULL;
-        vTaskDelete(NULL);
-        return;
-    }
-
-    lv_obj_set_style_bg_color(screen, lv_color_hex(0xFFFFFF), LV_PART_MAIN); // Set background color to white 
-    lv_obj_t *label = lv_label_create(screen);
-    if (label == NULL) {
-        ESP_LOGE(TAG, "Failed to create running demo label");
-        ui_manager_lvgl_release_mutex();
-        s_demo_task_handle = NULL;
-        vTaskDelete(NULL);
-        return;
-    }
-
-    lv_label_set_text(label, "LVGL OK"); 
-    lv_obj_set_style_text_color(label, lv_color_hex(0xFF0000), 0);
-    lv_obj_set_style_text_font(label, LV_FONT_DEFAULT, 0); 
-    // lv_obj_center(label); 
-    lv_obj_set_align(label, state[0]);
-    ui_manager_lvgl_release_mutex();
-
-    uint8_t counter = 0;
-
-    while(1) { 
-        vTaskDelay(pdMS_TO_TICKS(500)); 
-        // Delay for 1 second 
-        ui_manager_lvgl_wait_for_mutex();
-        if (!lv_obj_is_valid(label)) {
-            ESP_LOGW(TAG, "Running demo stopped because its label was deleted");
-            ui_manager_lvgl_release_mutex();
-            s_demo_task_handle = NULL;
-            vTaskDelete(NULL);
-            return;
-        }
-
-        char text[20]; counter = (counter + 1) % 100; 
-        // Increment counter and wrap around at 100 
-        snprintf(text, sizeof(text), "Counter: %d", counter); 
-        lv_label_set_text(label, text);
-        // ESP_LOGI(TAG, "Updated label text to: %s", text); 
-        lv_obj_set_align(label, state[counter%9]);
-        ui_manager_lvgl_release_mutex();
-    } 
-}
-
 /* Functions ---------------------------------------------------------------- */
 /* Lifecycle ---------------------------------------------------------------- */
 esp_err_t app_gui_init(void)
 {
-    if (s_wifi_status_queue != NULL) {
+    if ((s_command_queue != NULL) ||
+        (s_wifi_status_queue != NULL) ||
+        (s_sensor_status_queue != NULL) ||
+        (s_cloud_status_queue != NULL)) {
         ESP_LOGW(TAG, "Application GUI is already initialized");
         return ESP_ERR_INVALID_STATE;
+    }
+
+    s_command_queue =
+        xQueueCreate(
+            APP_GUI_COMMAND_QUEUE_LENGTH,
+            sizeof(app_gui_command_t));
+
+    if (s_command_queue == NULL) {
+        ESP_LOGE(TAG, "Failed to create GUI command queue");
+        app_gui_cleanup_queues();
+        return ESP_ERR_NO_MEM;
     }
 
     s_wifi_status_queue =
@@ -1296,11 +1590,11 @@ esp_err_t app_gui_init(void)
             sizeof(ui_wifi_status_t)
         );
 
-    ESP_RETURN_ON_FALSE(s_wifi_status_queue != NULL,
-        ESP_ERR_INVALID_ARG,
-        TAG,
-        "Failed to create Wi-Fi GUI status queue"
-    );
+    if (s_wifi_status_queue == NULL) {
+        ESP_LOGE(TAG, "Failed to create Wi-Fi GUI status queue");
+        app_gui_cleanup_queues();
+        return ESP_ERR_NO_MEM;
+    }
 
     s_sensor_status_queue =
         xQueueCreate(
@@ -1308,11 +1602,11 @@ esp_err_t app_gui_init(void)
             sizeof(ui_sensor_status_t)
         );
 
-    ESP_RETURN_ON_FALSE(s_sensor_status_queue != NULL,
-        ESP_ERR_INVALID_ARG,
-        TAG,
-        "Failed to create Sensor GUI status queue"
-    );
+    if (s_sensor_status_queue == NULL) {
+        ESP_LOGE(TAG, "Failed to create Sensor GUI status queue");
+        app_gui_cleanup_queues();
+        return ESP_ERR_NO_MEM;
+    }
 
     s_cloud_status_queue =
         xQueueCreate(
@@ -1320,11 +1614,11 @@ esp_err_t app_gui_init(void)
             sizeof(ui_cloud_status_t)
         );
 
-    ESP_RETURN_ON_FALSE(s_cloud_status_queue != NULL,
-        ESP_ERR_INVALID_ARG,
-        TAG,
-        "Failed to create Cloud GUI status queue"
-    );
+    if (s_cloud_status_queue == NULL) {
+        ESP_LOGE(TAG, "Failed to create Cloud GUI status queue");
+        app_gui_cleanup_queues();
+        return ESP_ERR_NO_MEM;
+    }
 
     ESP_LOGI(TAG, "Application GUI initialized");
 
@@ -1333,7 +1627,10 @@ esp_err_t app_gui_init(void)
 
 esp_err_t app_gui_start_ui_task(void)
 {
-    if (s_wifi_status_queue == NULL) {
+    if ((s_command_queue == NULL) ||
+        (s_wifi_status_queue == NULL) ||
+        (s_sensor_status_queue == NULL) ||
+        (s_cloud_status_queue == NULL)) {
         ESP_LOGE(TAG, "Application GUI is not initialized");
         return ESP_ERR_INVALID_STATE;
     }
@@ -1367,42 +1664,6 @@ esp_err_t app_gui_start_ui_task(void)
     return ESP_OK;
 }
 
-/* Demo API ----------------------------------------------------------------- */
-esp_err_t app_gui_start_running_demo_task(void)
-{
-    if (s_wifi_status_queue == NULL) {
-        ESP_LOGE(TAG, "Application GUI is not initialized");
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    if (s_demo_task_handle != NULL) {
-        ESP_LOGW(TAG, "LVGL demo task is already running");
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    BaseType_t task_ret = xTaskCreate(
-        app_gui_running_demo,
-        "lvgl_demo",
-        APP_GUI_DEMO_TASK_STACK_SIZE_BYTES,
-        NULL,
-        APP_GUI_TASK_PRIORITY,
-        &s_demo_task_handle
-    );
-
-    if (task_ret != pdPASS) {
-        s_demo_task_handle = NULL;
-        ESP_LOGE(TAG,
-                 "Failed to create LVGL demo task with %u-byte stack",
-                 (unsigned int)APP_GUI_DEMO_TASK_STACK_SIZE_BYTES);
-        return ESP_ERR_NO_MEM;
-    }
-
-    ESP_LOGI(TAG,
-             "LVGL demo task started with %u-byte stack",
-             (unsigned int)APP_GUI_DEMO_TASK_STACK_SIZE_BYTES);
-
-    return ESP_OK;
-}
 /* Status Queue API --------------------------------------------------------- */
 esp_err_t app_gui_post_wifi_status(
     const ui_wifi_status_t *status)
@@ -1484,25 +1745,38 @@ esp_err_t app_gui_post_cloud_status(
     return ESP_OK;
 }
 
-/* Screen State API --------------------------------------------------------- */
-esp_err_t app_gui_set_screen_id(
+/* Screen Routing API ------------------------------------------------------- */
+esp_err_t app_gui_request_screen(
     app_gui_screen_id_t screen_id)
 {
-    ESP_RETURN_ON_FALSE(
-        (screen_id == APP_GUI_SCREEN_NONE) ||
-        (screen_id == APP_GUI_SCREEN_WIFI) ||
-        (screen_id == APP_GUI_SCREEN_SENSOR),
-        ESP_ERR_INVALID_ARG,
-        TAG,
-        "Invalid application screen ID: %d",
-        (int)screen_id
-    );
+    if (!app_gui_is_valid_screen_id(screen_id, false)) {
+        ESP_LOGW(
+            TAG,
+            "Invalid screen request target: %s (%d)",
+            app_gui_screen_id_to_string(screen_id),
+            (int)screen_id);
+        return ESP_ERR_INVALID_ARG;
+    }
 
-    taskENTER_CRITICAL(&s_screen_id_lock);
-    s_current_screen_id = screen_id;
-    taskEXIT_CRITICAL(&s_screen_id_lock);
+    if (s_command_queue == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
 
-    ESP_LOGD(TAG, "Application screen ID set to %d", (int)screen_id);
+    const app_gui_command_t command = {
+        .type = APP_GUI_COMMAND_SHOW_SCREEN,
+        .data.screen_id = screen_id,
+    };
+
+    if (xQueueSend(
+            s_command_queue,
+            &command,
+            0) != pdTRUE) {
+        ESP_LOGW(
+            TAG,
+            "GUI command queue is full; screen %s was not queued",
+            app_gui_screen_id_to_string(screen_id));
+        return ESP_ERR_TIMEOUT;
+    }
 
     return ESP_OK;
 }
@@ -1520,57 +1794,6 @@ esp_err_t app_gui_get_screen_id(
     taskENTER_CRITICAL(&s_screen_id_lock);
     *screen_id = s_current_screen_id;
     taskEXIT_CRITICAL(&s_screen_id_lock);
-
-    return ESP_OK;
-}
-
-/* Screen Lifecycle API ----------------------------------------------------- */
-esp_err_t app_gui_clear_screen(void)
-{
-    /*
-     * This function intentionally does not acquire the LVGL mutex. Callers
-     * must already serialize LVGL access as documented in app_gui.h.
-     */
-    lv_obj_t *current_screen = lv_screen_active();
-
-    ESP_RETURN_ON_FALSE(
-        current_screen != NULL,
-        ESP_ERR_INVALID_RESPONSE,
-        TAG,
-        "Failed to get current screen");
-
-    /*
-     * Reuse the active root instead of briefly owning two root screens. This
-     * avoids both the default white frame and the extra allocation peak.
-     */
-    lv_obj_clean(current_screen);
-    lv_obj_remove_flag(current_screen, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_bg_color(
-        current_screen,
-        lv_color_hex(0x202223),
-        LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(
-        current_screen,
-        LV_OPA_COVER,
-        LV_PART_MAIN);
-    lv_obj_set_style_border_width(current_screen, 0, LV_PART_MAIN);
-    lv_obj_set_style_radius(current_screen, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(current_screen, 0, LV_PART_MAIN);
-
-    s_wifi_mode_label = NULL;
-    s_wifi_ssid_label = NULL;
-    s_wifi_ip_label = NULL;
-    s_sensor_temperature_label = NULL;
-    s_sensor_humidity_label = NULL;
-    s_sensor_state_label = NULL;
-    s_sensor_cloud_label = NULL;
-    s_sensor_cloud_dot = NULL;
-
-    taskENTER_CRITICAL(&s_screen_id_lock);
-    s_sensor_screen_requested = false;
-    taskEXIT_CRITICAL(&s_screen_id_lock);
-
-    (void)app_gui_set_screen_id(APP_GUI_SCREEN_NONE);
 
     return ESP_OK;
 }

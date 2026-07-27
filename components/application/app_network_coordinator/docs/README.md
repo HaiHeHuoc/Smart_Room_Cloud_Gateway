@@ -15,6 +15,8 @@ The coordinator:
 - Migrates a supported legacy configuration before use.
 - Starts a stored Station connection when configuration is valid.
 - Starts bounded BLE provisioning only for `NOT_CONFIGURED`.
+- Requests the initial application screen from the final verified
+  configuration state.
 - Persists provisioned credentials through `config_manager`.
 - Verifies NVS state and credential read-back.
 - Waits for provisioning cleanup and asks `wifi_manager` to adopt the active
@@ -27,7 +29,8 @@ The coordinator does not:
 - Access NVS directly.
 - Own Wi-Fi event handlers or reconnect behavior.
 - Own BLE transport internals.
-- Call LVGL or GUI APIs.
+- Call LVGL, build screens, or render GUI objects. It may only post
+  asynchronous `app_gui` screen requests.
 - Log passwords, PoP values, tokens, or credential contents.
 
 ## Public API
@@ -83,6 +86,17 @@ the cloud gate, so BLE resources do not overlap with cloud TLS activity.
 | `UNSUPPORTED_VERSION` | Preserve data and fail. |
 | `UNKNOWN` | Fail without treating the device as unconfigured. |
 
+Screen routing follows the final result:
+
+- `NOT_CONFIGURED` queues the `PROVISIONING` placeholder before BLE
+  provisioning begins.
+- `VALID`, including a successfully migrated configuration, queues `BOOT`.
+- Inspection failures and non-provisionable integrity states make a
+  best-effort `BOOT` request before returning the existing policy error.
+- A normal stored-credential `CONNECTING -> ONLINE` transition queues
+  `WIFI_STATUS`.
+- Transient provisioning `GOT_IP` events remain ignored for screen routing.
+
 ## Threading And Security
 
 - Lifecycle state and copied configuration are protected by a short critical
@@ -92,15 +106,17 @@ the cloud gate, so BLE resources do not overlap with cloud TLS activity.
 - Manager, NVS, Wi-Fi, logging, and callback APIs are never called while that
   critical section is held.
 - `app_network_coordinator_notify_wifi_event()` performs no allocation,
-  blocking wait, Wi-Fi call, or GUI call; it is suitable for the normal
-  task-context Wi-Fi status callback.
+  blocking wait, Wi-Fi call, or LVGL call. A verified normal transition to
+  `ONLINE` may post one non-blocking `WIFI_STATUS` screen request, so the API
+  remains suitable for the normal task-context Wi-Fi status callback.
 - Provisioning waits use configured finite timeout and poll periods.
 - A session timeout receives one additional finite connection grace only when
   `provisioning_manager` reports that valid credentials are already in flight.
 - Temporary SSID/password buffers are securely overwritten on all completed
   paths.
-- GUI updates remain event-driven through the registered `wifi_manager`
-  callback and `app_gui` queue.
+- GUI status updates remain event-driven through the registered
+  `wifi_manager` callback. Config-driven initial routing and verified normal
+  `ONLINE` routing use the independent `app_gui` command queue.
 
 ## Configuration
 
@@ -153,6 +169,14 @@ Checkpoint 6.3.4 separates local-service startup from network-service task
 startup. It is implemented and build-verified, but hardware smoke tests have
 not yet confirmed sensor/GUI responsiveness during provisioning, timeout and
 watchdog behavior, late-DHCP recovery, reconnect, or Firebase upload recovery.
+
+## Phase 6.4.1 Integration
+
+Application screen orchestration is implemented and build validation is
+tracked with the `app_gui` component. Hardware testing is still required.
+This integration posts only screen commands and does not change config
+storage, BLE lifecycle, Wi-Fi reconnect behavior, or provisioning success UI.
+Phase 6.4 remains incomplete.
 
 ## Future Attention
 

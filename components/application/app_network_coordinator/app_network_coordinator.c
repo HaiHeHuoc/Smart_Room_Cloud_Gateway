@@ -9,6 +9,7 @@
 #include "esp_check.h"
 #include "esp_log.h"
 
+#include "app_gui.h"
 #include "config_manager.h"
 #include "provisioning_manager.h"
 #include "wifi_manager.h"
@@ -118,6 +119,16 @@ static void app_network_coordinator_set_state(
 static esp_err_t app_network_coordinator_run_boot_policy(void);
 
 /**
+ * @brief Queue the initial application screen for a verified config result.
+ *
+ * GUI routing is best-effort and never blocks or changes network policy.
+ *
+ * @param[in] state Final configuration state after supported migration.
+ */
+static void app_network_coordinator_request_initial_screen(
+    config_manager_wifi_config_state_t state);
+
+/**
  * @brief Run one-shot network boot orchestration without blocking app_main.
  *
  * @param[in] argument Unused.
@@ -181,6 +192,9 @@ static esp_err_t app_network_coordinator_run_boot_policy(void)
 
     if (ret != ESP_OK)
     {
+        app_network_coordinator_request_initial_screen(
+            CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN);
+
         ESP_LOGE(
             TAG,
             "Failed to resolve Wi-Fi configuration: %s",
@@ -190,6 +204,9 @@ static esp_err_t app_network_coordinator_run_boot_policy(void)
     }
 
     app_log_wifi_config_state(
+        config_state);
+
+    app_network_coordinator_request_initial_screen(
         config_state);
 
     ret =
@@ -211,6 +228,27 @@ static esp_err_t app_network_coordinator_run_boot_policy(void)
         "Network boot policy started successfully");
 
     return ESP_OK;
+}
+
+static void app_network_coordinator_request_initial_screen(
+    config_manager_wifi_config_state_t state)
+{
+    const app_gui_screen_id_t target_screen =
+        state == CONFIG_MANAGER_WIFI_CONFIG_STATE_NOT_CONFIGURED
+            ? APP_GUI_SCREEN_PROVISIONING
+            : APP_GUI_SCREEN_BOOT;
+
+    const esp_err_t ret =
+        app_gui_request_screen(target_screen);
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGW(
+            TAG,
+            "Failed to queue initial application screen %d: %s",
+            (int)target_screen,
+            esp_err_to_name(ret));
+    }
 }
 
 static void app_network_coordinator_set_state(
@@ -1005,6 +1043,22 @@ esp_err_t app_network_coordinator_notify_wifi_event(
                 previous_state),
             app_network_coordinator_state_to_string(
                 next_state));
+
+        if (next_state ==
+            APP_NETWORK_COORDINATOR_STATE_ONLINE)
+        {
+            const esp_err_t screen_ret =
+                app_gui_request_screen(
+                    APP_GUI_SCREEN_WIFI_STATUS);
+
+            if (screen_ret != ESP_OK)
+            {
+                ESP_LOGW(
+                    TAG,
+                    "Failed to queue Wi-Fi status screen: %s",
+                    esp_err_to_name(screen_ret));
+            }
+        }
     }
 
     return ESP_OK;

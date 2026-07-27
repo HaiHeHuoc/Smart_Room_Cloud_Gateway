@@ -7,17 +7,23 @@
 
 /* Common GUI Types -------------------------------------------------------- */
 
-/** @brief Application screen tracked independently of the LVGL root object. */
+/** @brief Logical application screen owned by the app_gui UI task. */
 typedef enum
 {
     /** No application screen is currently active. */
     APP_GUI_SCREEN_NONE = 0,
 
+    /** Minimal startup placeholder for configured and safe-error boot paths. */
+    APP_GUI_SCREEN_BOOT,
+
+    /** Minimal BLE Wi-Fi provisioning placeholder. */
+    APP_GUI_SCREEN_PROVISIONING,
+
     /** Wi-Fi status screen. */
-    APP_GUI_SCREEN_WIFI,
+    APP_GUI_SCREEN_WIFI_STATUS,
 
     /** Temperature and humidity sensor screen. */
-    APP_GUI_SCREEN_SENSOR,
+    APP_GUI_SCREEN_SENSOR_DASHBOARD,
 } app_gui_screen_id_t;
 
 /* Wi-Fi UI Types ---------------------------------------------------------- */
@@ -109,14 +115,13 @@ typedef struct
 /* Lifecycle API ----------------------------------------------------------- */
 
 /**
- * @brief Initialize the application GUI status queues.
+ * @brief Initialize the application GUI command and status queues.
  *
  * LVGL must already be initialized by ui_manager_lvgl_init(). Screen widgets
- * are created separately by app_gui_create_wifi_screen() or
- * app_gui_create_sensor_screen().
+ * are created asynchronously by the app_gui UI task after a screen request.
  *
  * @return ESP_OK on success, ESP_ERR_INVALID_STATE if already initialized,
- *         or ESP_ERR_INVALID_ARG if a queue cannot be created.
+ *         or ESP_ERR_NO_MEM if a queue cannot be created.
  */
 esp_err_t app_gui_init(void);
 
@@ -131,19 +136,7 @@ esp_err_t app_gui_init(void);
  */
 esp_err_t app_gui_start_ui_task(void);
 
-/* Wi-Fi Screen API -------------------------------------------------------- */
-
-/**
- * @brief Create and activate the Wi-Fi status screen.
- *
- * This function acquires the LVGL mutex, rebuilds the active root screen in
- * place, and releases the mutex after all Wi-Fi widgets are ready.
- *
- * @return ESP_OK on success, ESP_ERR_INVALID_STATE if LVGL has no active
- *         screen, or ESP_ERR_NO_MEM if a widget cannot be created.
- */
-esp_err_t app_gui_create_wifi_screen(void);
-
+/* Wi-Fi Status API -------------------------------------------------------- */
 /**
  * @brief Send the latest Wi-Fi status to the application GUI task.
  *
@@ -159,24 +152,7 @@ esp_err_t app_gui_create_wifi_screen(void);
 esp_err_t app_gui_post_wifi_status(
     const ui_wifi_status_t *status);
 
-/* Sensor Screen API ------------------------------------------------------- */
-
-/**
- * @brief Create and activate the compact Smart Room sensor dashboard.
- *
- * The landscape dashboard contains a header, Wi-Fi/cloud indicators,
- * temperature and humidity values, and Wi-Fi/cloud/sensor status rows. This
- * function acquires and releases the LVGL mutex internally. Sensor updates
- * posted through app_gui_post_sensor_status() are applied by the GUI task.
- * Cloud updates posted through app_gui_post_cloud_status() follow the same
- * queue-driven GUI-task ownership model. The active root screen is reused, so
- * this operation does not allocate and load a second LVGL root.
- *
- * @return ESP_OK on success, ESP_ERR_INVALID_STATE if LVGL has no active
- *         screen, or ESP_ERR_NO_MEM if a widget cannot be created.
- */
-esp_err_t app_gui_create_sensor_screen(void);
-
+/* Sensor Status API ------------------------------------------------------- */
 /**
  * @brief Post a sensor status snapshot to the GUI task without waiting.
  *
@@ -202,18 +178,23 @@ esp_err_t app_gui_post_sensor_status(
 esp_err_t app_gui_post_cloud_status(
     const ui_cloud_status_t *status);
 
-/* Screen Management API --------------------------------------------------- */
+/* Screen Routing API ------------------------------------------------------ */
 
 /**
- * @brief Set the ID of the currently active application screen.
+ * @brief Request an application screen transition without waiting.
  *
- * This API updates the tracked screen ID only. It does not create, load, or
- * delete an LVGL screen.
+ * The request is copied to the GUI command queue. Only the app_gui UI task
+ * creates, renders, or replaces LVGL screens. This function never calls LVGL,
+ * does not wait for screen construction, and is safe from normal task and
+ * task-context callback code. It is not ISR-safe.
  *
- * @param screen_id Screen ID to store.
- * @return ESP_OK on success, or ESP_ERR_INVALID_ARG for an unknown ID.
+ * @param[in] screen_id BOOT, PROVISIONING, WIFI_STATUS, or
+ *            SENSOR_DASHBOARD. NONE is not an external target.
+ * @return ESP_OK when queued, ESP_ERR_INVALID_ARG for an invalid target,
+ *         ESP_ERR_INVALID_STATE before app_gui_init(), or ESP_ERR_TIMEOUT
+ *         when the command queue is full.
  */
-esp_err_t app_gui_set_screen_id(
+esp_err_t app_gui_request_screen(
     app_gui_screen_id_t screen_id);
 
 /**
@@ -224,34 +205,3 @@ esp_err_t app_gui_set_screen_id(
  */
 esp_err_t app_gui_get_screen_id(
     app_gui_screen_id_t *screen_id);
-
-/**
- * @brief Clear the active LVGL root and leave a dark empty screen.
- *
- * The caller must already own the LVGL mutex, or call this function from an
- * LVGL callback executed by the mutex-protected app GUI task. Do not acquire
- * the same non-recursive mutex again from such a callback. The active root is
- * reused; this function does not allocate or load a replacement root screen.
- *
- * @return ESP_OK on success, or ESP_ERR_INVALID_RESPONSE if no active screen
- *         exists.
- */
-esp_err_t app_gui_clear_screen(void);
-
-/* Demo API ---------------------------------------------------------------- */
-
-/**
- * @brief Create a simple screen with a centered "LVGL OK" label.
- *
- * This function acquires and releases the LVGL mutex internally.
- */
-void app_gui_create_demo_screen(void);
-
-/**
- * @brief Start the optional moving-label demonstration task.
- *
- * @return ESP_OK on success, ESP_ERR_INVALID_STATE before app_gui_init() or
- *         when the demo task is already running, or ESP_ERR_NO_MEM if task
- *         creation fails.
- */
-esp_err_t app_gui_start_running_demo_task(void);
