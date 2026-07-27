@@ -25,6 +25,14 @@
 
 #define PROVISIONING_MANAGER_CREDENTIAL_QUEUE_LENGTH 1U
 
+/*
+ * Match CONFIG_EXAMPLE_PROV_MGR_CONNECTION_CNT from Espressif's wifi_prov
+ * example. These attempts belong to the provisioning framework while it
+ * validates one received credential set; they do not replace wifi_manager's
+ * normal reconnect policy after application adoption.
+ */
+#define PROVISIONING_MANAGER_WIFI_CONNECTION_ATTEMPTS 5U
+
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "PROVISIONING_MANAGER";
 
@@ -41,6 +49,16 @@ static const char PROVISIONING_SERVICE_NAME_PREFIX[] =
 static const char PROVISIONING_SECURITY1_POP[] =
     "smartgw-setup";
 
+static const char PROVISIONING_QR_VERSION[] =
+    "v1";
+
+static const char PROVISIONING_QR_TRANSPORT[] =
+    "ble";
+
+static const char PROVISIONING_QR_JSON_FORMAT[] =
+    "{\"ver\":\"%s\",\"name\":\"%s\",\"pop\":\"%s\","
+    "\"transport\":\"%s\"}";
+
 /* Static Variables --------------------------------------------------------- */
 static portMUX_TYPE s_state_lock =
     portMUX_INITIALIZER_UNLOCKED;
@@ -56,6 +74,14 @@ static provisioning_manager_wifi_credentials_t s_pending_credentials = {0};
 
 static bool s_pending_credentials_valid = false;
 static bool s_wifi_handoff_pending = false;
+
+static char s_active_service_name
+    [PROVISIONING_MANAGER_SERVICE_NAME_BUFFER_SIZE] = {0};
+
+static char s_active_qr_payload
+    [PROVISIONING_MANAGER_QR_PAYLOAD_BUFFER_SIZE] = {0};
+
+static bool s_active_qr_payload_available = false;
 
 /* Function Prototypes ------------------------------------------------------ */
 /**
@@ -79,6 +105,25 @@ static void provisioning_manager_zeroize(
 static esp_err_t provisioning_manager_build_service_name(
     char *service_name,
     size_t service_name_size);
+
+/**
+ * @brief Build bounded provisioning JSON from the active service identity.
+ *
+ * @param[in] service_name Service name passed to the provisioning framework.
+ * @param[out] payload Destination for the null-terminated JSON.
+ * @param[in] payload_size Destination size in bytes.
+ *
+ * @return ESP_OK on success, or an error for invalid input or truncation.
+ */
+static esp_err_t provisioning_manager_build_qr_payload(
+    const char *service_name,
+    char *payload,
+    size_t payload_size);
+
+/**
+ * @brief Clear cached service identity while s_state_lock is held.
+ */
+static void provisioning_manager_clear_active_identity_locked(void);
 
 /**
  * @brief Replace the current lifecycle state atomically.
@@ -259,6 +304,110 @@ static esp_err_t provisioning_manager_build_service_name(
     return ESP_OK;
 }
 
+static bool provisioning_manager_is_json_token_safe(
+    const char *value)
+{
+    if ((value == NULL) ||
+        (value[0] == '\0'))
+    {
+        return false;
+    }
+
+    const unsigned char *character =
+        (const unsigned char *)value;
+
+    while (*character != '\0')
+    {
+        /*
+         * The formatter does not escape JSON strings. Restrict onboarding
+         * identity tokens so a future device-specific PoP cannot produce
+         * malformed JSON or inject another field.
+         */
+        if ((*character < 0x20U) ||
+            (*character > 0x7EU) ||
+            (*character == (unsigned char)'"') ||
+            (*character == (unsigned char)'\\'))
+        {
+            return false;
+        }
+
+        character++;
+    }
+
+    return true;
+}
+
+static esp_err_t provisioning_manager_build_qr_payload(
+    const char *service_name,
+    char *payload,
+    size_t payload_size)
+{
+    if ((service_name == NULL) ||
+        (payload == NULL) ||
+        (payload_size <
+         PROVISIONING_MANAGER_QR_PAYLOAD_BUFFER_SIZE))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    payload[0] = '\0';
+
+    if (!provisioning_manager_is_json_token_safe(
+            PROVISIONING_QR_VERSION) ||
+        !provisioning_manager_is_json_token_safe(
+            service_name) ||
+        !provisioning_manager_is_json_token_safe(
+            PROVISIONING_SECURITY1_POP) ||
+        !provisioning_manager_is_json_token_safe(
+            PROVISIONING_QR_TRANSPORT))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const int written =
+        snprintf(
+            payload,
+            payload_size,
+            PROVISIONING_QR_JSON_FORMAT,
+            PROVISIONING_QR_VERSION,
+            service_name,
+            PROVISIONING_SECURITY1_POP,
+            PROVISIONING_QR_TRANSPORT);
+
+    if (written < 0)
+    {
+        provisioning_manager_zeroize(
+            payload,
+            payload_size);
+
+        return ESP_FAIL;
+    }
+
+    if ((size_t)written >= payload_size)
+    {
+        provisioning_manager_zeroize(
+            payload,
+            payload_size);
+
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    return ESP_OK;
+}
+
+static void provisioning_manager_clear_active_identity_locked(void)
+{
+    provisioning_manager_zeroize(
+        s_active_service_name,
+        sizeof(s_active_service_name));
+
+    provisioning_manager_zeroize(
+        s_active_qr_payload,
+        sizeof(s_active_qr_payload));
+
+    s_active_qr_payload_available = false;
+}
+
 static void provisioning_manager_set_state(
     provisioning_manager_state_t state)
 {
@@ -279,8 +428,12 @@ static void provisioning_manager_cleanup_task(
 
     if (ret != ESP_OK)
     {
-        provisioning_manager_set_state(
-            PROVISIONING_MANAGER_STATE_FAILED);
+        portENTER_CRITICAL(&s_state_lock);
+
+        provisioning_manager_clear_active_identity_locked();
+        s_state = PROVISIONING_MANAGER_STATE_FAILED;
+
+        portEXIT_CRITICAL(&s_state_lock);
 
         ESP_LOGE(
             TAG,
@@ -514,6 +667,7 @@ static void provisioning_manager_event_callback(
 
                 s_pending_credentials_valid = false;
                 s_wifi_handoff_pending = false;
+                provisioning_manager_clear_active_identity_locked();
                 s_state =
                     PROVISIONING_MANAGER_STATE_FAILED;
 
@@ -536,6 +690,7 @@ static void provisioning_manager_event_callback(
 
             s_pending_credentials_valid = false;
             s_wifi_handoff_pending = false;
+            provisioning_manager_clear_active_identity_locked();
             s_state = PROVISIONING_MANAGER_STATE_STOPPED;
 
             portEXIT_CRITICAL(&s_state_lock);
@@ -606,11 +761,18 @@ esp_err_t provisioning_manager_init(void)
 
     s_pending_credentials_valid = false;
     s_wifi_handoff_pending = false;
+    provisioning_manager_clear_active_identity_locked();
 
     portEXIT_CRITICAL(&s_state_lock);
 
     network_prov_mgr_config_t config =
     {
+        .network_prov_wifi_conn_cfg =
+        {
+            .wifi_conn_attempts =
+                PROVISIONING_MANAGER_WIFI_CONNECTION_ATTEMPTS,
+        },
+
         .scheme =
             network_prov_scheme_ble,
 
@@ -744,6 +906,15 @@ esp_err_t provisioning_manager_start(void)
     const network_prov_security1_params_t *security_params =
         PROVISIONING_SECURITY1_POP;
 
+    /*
+     * Security 1 logs session material at INFO level in the upstream
+     * implementation. Preserve warnings while keeping that material out of
+     * normal serial output.
+     */
+    esp_log_level_set(
+        "security1",
+        ESP_LOG_WARN);
+
     ret =
         network_prov_mgr_start_provisioning(
             NETWORK_PROV_SECURITY_1,
@@ -764,13 +935,92 @@ esp_err_t provisioning_manager_start(void)
         return ret;
     }
 
-    provisioning_manager_set_state(
-        PROVISIONING_MANAGER_STATE_ACTIVE);
+    char qr_payload
+        [PROVISIONING_MANAGER_QR_PAYLOAD_BUFFER_SIZE] =
+        {0};
+
+    const esp_err_t qr_ret =
+        provisioning_manager_build_qr_payload(
+            service_name,
+            qr_payload,
+            sizeof(qr_payload));
+
+    portENTER_CRITICAL(&s_state_lock);
+
+    provisioning_manager_clear_active_identity_locked();
+
+    memcpy(
+        s_active_service_name,
+        service_name,
+        sizeof(s_active_service_name));
+
+    if (qr_ret == ESP_OK)
+    {
+        memcpy(
+            s_active_qr_payload,
+            qr_payload,
+            sizeof(s_active_qr_payload));
+
+        s_active_qr_payload_available = true;
+    }
+
+    s_state = PROVISIONING_MANAGER_STATE_ACTIVE;
+
+    portEXIT_CRITICAL(&s_state_lock);
+
+    provisioning_manager_zeroize(
+        qr_payload,
+        sizeof(qr_payload));
 
     ESP_LOGI(
         TAG,
         "BLE provisioning active with service name: %s",
         service_name);
+
+    if (qr_ret != ESP_OK)
+    {
+        ESP_LOGW(
+            TAG,
+            "BLE provisioning QR payload is unavailable: %s",
+            esp_err_to_name(qr_ret));
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t provisioning_manager_get_qr_payload(
+    char *payload,
+    size_t payload_size)
+{
+    if ((payload == NULL) ||
+        (payload_size <
+         PROVISIONING_MANAGER_QR_PAYLOAD_BUFFER_SIZE))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    payload[0] = '\0';
+
+    portENTER_CRITICAL(&s_state_lock);
+
+    if ((s_state != PROVISIONING_MANAGER_STATE_ACTIVE) ||
+        !s_active_qr_payload_available)
+    {
+        portEXIT_CRITICAL(&s_state_lock);
+
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    memcpy(
+        payload,
+        s_active_qr_payload,
+        sizeof(s_active_qr_payload));
+
+    portEXIT_CRITICAL(&s_state_lock);
+
+    payload[
+        PROVISIONING_MANAGER_QR_PAYLOAD_BUFFER_SIZE - 1U] =
+        '\0';
 
     return ESP_OK;
 }
@@ -794,6 +1044,8 @@ esp_err_t provisioning_manager_stop(void)
 
     s_state =
         PROVISIONING_MANAGER_STATE_STOPPING;
+
+    provisioning_manager_clear_active_identity_locked();
 
     portEXIT_CRITICAL(&s_state_lock);
 

@@ -4,5 +4,6 @@ idf_component_register(
     PRIV_REQUIRES
         common
         dht
+        esp_timer
         sensor_DHT22
 )

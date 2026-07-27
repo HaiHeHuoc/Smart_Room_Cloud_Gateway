@@ -1,5 +1,6 @@
 /* Includes ----------------------------------------------------------------- */
 #include <stdio.h>
+#include <string.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -12,9 +13,14 @@
 #include "esp_check.h"
 #include "lvgl.h"
 
+#if !LV_USE_QRCODE
+#error "Phase 6.4.3 requires CONFIG_LV_USE_QRCODE=y"
+#endif
+
 /* Macros ------------------------------------------------------------------- */
 #define APP_GUI_WIFI_SCREEN_TIMEOUT_MS 10000U
 #define APP_GUI_COMMAND_QUEUE_LENGTH 8U
+#define APP_GUI_PROVISIONING_QR_QUEUE_LENGTH 1U
 #define APP_GUI_WIFI_STATUS_QUEUE_LENGTH 1U
 #define APP_GUI_SENSOR_STATUS_QUEUE_LENGTH 5U
 #define APP_GUI_CLOUD_STATUS_QUEUE_LENGTH 1U
@@ -29,11 +35,16 @@
 #define APP_GUI_SENSOR_VALUE_WIDTH_PX          92
 #define APP_GUI_SENSOR_VALUE_HEIGHT_PX         18
 
-/* Provisioning layout reserves an 80x80 QR region for Phase 6.4.3. */
-#define APP_GUI_PROVISIONING_QR_X_PX             4
-#define APP_GUI_PROVISIONING_QR_Y_PX            40
-#define APP_GUI_PROVISIONING_QR_SIZE_PX         80
-#define APP_GUI_PROVISIONING_TEXT_X_PX          90
+/*
+ * The 73-byte Security 1 payload needs QR version 5 at LVGL's medium ECC:
+ * 37 modules x 2 pixels = 74 pixels. A 92-pixel white container leaves a
+ * 9-pixel quiet zone on each side and fills the remaining screen height.
+ */
+#define APP_GUI_PROVISIONING_QR_CONTAINER_X_PX     0
+#define APP_GUI_PROVISIONING_QR_CONTAINER_Y_PX    36
+#define APP_GUI_PROVISIONING_QR_CONTAINER_SIZE_PX 92
+#define APP_GUI_PROVISIONING_QR_CANVAS_SIZE_PX    74
+#define APP_GUI_PROVISIONING_TEXT_X_PX            94
 #define APP_GUI_PROVISIONING_TEXT_WIDTH_PX      66
 #define APP_GUI_PROVISIONING_INDICATOR_SIZE_PX   8
 
@@ -69,6 +80,8 @@ typedef struct
 
 typedef struct
 {
+    lv_obj_t *provisioning_qr_container;
+    lv_obj_t *provisioning_qr_code;
     lv_obj_t *provisioning_title_label;
     lv_obj_t *provisioning_instruction_label;
     lv_obj_t *provisioning_status_label;
@@ -91,6 +104,7 @@ static const char *const TAG = "APP_GUI";
 /* Static Variables --------------------------------------------------------- */
 /* GUI task communication and active-screen tracking. */
 static QueueHandle_t s_command_queue = NULL;
+static QueueHandle_t s_provisioning_qr_queue = NULL;
 static QueueHandle_t s_wifi_status_queue = NULL;
 static QueueHandle_t s_sensor_status_queue = NULL;
 static QueueHandle_t s_cloud_status_queue = NULL;
@@ -103,6 +117,9 @@ static ui_provisioning_status_t s_latest_provisioning_status = {
     .last_error = ESP_OK,
     .wifi_disconnect_reason = 0U,
 };
+static bool s_latest_provisioning_qr_payload_available = false;
+static ui_provisioning_qr_payload_t
+    s_latest_provisioning_qr_payload = {0};
 static bool s_latest_wifi_status_available = false;
 static ui_wifi_status_t s_latest_wifi_status = {0};
 static bool s_latest_sensor_status_available = false;
@@ -111,6 +128,8 @@ static bool s_latest_cloud_status_available = false;
 static ui_cloud_status_t s_latest_cloud_status = {0};
 
 /* Provisioning references are valid only while its screen is active. */
+static lv_obj_t *s_provisioning_qr_container = NULL;
+static lv_obj_t *s_provisioning_qr_code = NULL;
 static lv_obj_t *s_provisioning_title_label = NULL;
 static lv_obj_t *s_provisioning_instruction_label = NULL;
 static lv_obj_t *s_provisioning_status_label = NULL;
@@ -135,8 +154,13 @@ static lv_obj_t *s_sensor_cloud_dot = NULL;
 static bool app_gui_is_valid_screen_id(
     app_gui_screen_id_t screen_id,
     bool allow_none);
+static void app_gui_zeroize(
+    void *buffer,
+    size_t size);
 static bool app_gui_is_valid_provisioning_state(
     ui_provisioning_state_t state);
+static bool app_gui_is_valid_provisioning_qr_payload(
+    const ui_provisioning_qr_payload_t *payload);
 static const char *app_gui_screen_id_to_string(
     app_gui_screen_id_t screen_id);
 static const char *app_gui_provisioning_state_to_string(
@@ -163,6 +187,8 @@ static void app_gui_render_boot_status(
     lv_obj_t *screen);
 static esp_err_t app_gui_create_provisioning_screen(
     lv_obj_t *screen);
+static void app_gui_render_provisioning_qr_payload(
+    const ui_provisioning_qr_payload_t *payload);
 static void app_gui_render_provisioning_status(
     const ui_provisioning_status_t *status);
 static esp_err_t app_gui_create_wifi_screen(
@@ -209,6 +235,7 @@ static esp_err_t app_gui_activate_screen(
 static void app_gui_process_provisioning_status(
     const ui_provisioning_status_t *status);
 static void app_gui_process_commands(void);
+static void app_gui_process_provisioning_qr_payload(void);
 static void app_gui_process_sensor_status(void);
 static void app_gui_process_wifi_status(void);
 static void app_gui_process_cloud_status(void);
@@ -230,12 +257,47 @@ static bool app_gui_is_valid_screen_id(
          (screen_id == APP_GUI_SCREEN_SENSOR_DASHBOARD));
 }
 
+static void app_gui_zeroize(
+    void *buffer,
+    size_t size)
+{
+    if ((buffer == NULL) ||
+        (size == 0U)) {
+        return;
+    }
+
+    volatile uint8_t *cursor =
+        (volatile uint8_t *)buffer;
+
+    while (size > 0U) {
+        *cursor = 0U;
+        cursor++;
+        size--;
+    }
+}
+
 static bool app_gui_is_valid_provisioning_state(
     ui_provisioning_state_t state)
 {
     return
         (state >= UI_PROVISIONING_STATE_STARTING) &&
         (state <= UI_PROVISIONING_STATE_RETRYING);
+}
+
+static bool app_gui_is_valid_provisioning_qr_payload(
+    const ui_provisioning_qr_payload_t *payload)
+{
+    if ((payload == NULL) ||
+        (payload->payload[0] == '\0'))
+    {
+        return false;
+    }
+
+    return
+        strnlen(
+            payload->payload,
+            sizeof(payload->payload)) <
+        sizeof(payload->payload);
 }
 
 static const char *app_gui_screen_id_to_string(
@@ -417,6 +479,11 @@ static void app_gui_cleanup_queues(void)
         s_command_queue = NULL;
     }
 
+    if (s_provisioning_qr_queue != NULL) {
+        vQueueDelete(s_provisioning_qr_queue);
+        s_provisioning_qr_queue = NULL;
+    }
+
     if (s_wifi_status_queue != NULL) {
         vQueueDelete(s_wifi_status_queue);
         s_wifi_status_queue = NULL;
@@ -448,6 +515,10 @@ static void app_gui_capture_widget_refs(
         return;
     }
 
+    refs->provisioning_qr_container =
+        s_provisioning_qr_container;
+    refs->provisioning_qr_code =
+        s_provisioning_qr_code;
     refs->provisioning_title_label = s_provisioning_title_label;
     refs->provisioning_instruction_label =
         s_provisioning_instruction_label;
@@ -468,6 +539,8 @@ static void app_gui_capture_widget_refs(
 
 static void app_gui_clear_widget_refs(void)
 {
+    s_provisioning_qr_container = NULL;
+    s_provisioning_qr_code = NULL;
     s_provisioning_title_label = NULL;
     s_provisioning_instruction_label = NULL;
     s_provisioning_status_label = NULL;
@@ -493,6 +566,10 @@ static void app_gui_apply_widget_refs(
         return;
     }
 
+    s_provisioning_qr_container =
+        refs->provisioning_qr_container;
+    s_provisioning_qr_code =
+        refs->provisioning_qr_code;
     s_provisioning_title_label = refs->provisioning_title_label;
     s_provisioning_instruction_label =
         refs->provisioning_instruction_label;
@@ -947,37 +1024,90 @@ static esp_err_t app_gui_create_provisioning_screen(
         lv_color_hex(0x344047),
         LV_PART_MAIN);
 
-    lv_obj_t *qr_region = lv_obj_create(screen);
+    s_provisioning_qr_container =
+        lv_obj_create(screen);
 
-    if (qr_region == NULL) {
-        ESP_LOGE(TAG, "Failed to create reserved QR region");
+    if (s_provisioning_qr_container == NULL) {
+        ESP_LOGE(TAG, "Failed to create provisioning QR container");
         return ESP_ERR_NO_MEM;
     }
 
-    lv_obj_remove_flag(qr_region, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_style_all(
+        s_provisioning_qr_container);
+    lv_obj_remove_flag(
+        s_provisioning_qr_container,
+        LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(
-        qr_region,
-        APP_GUI_PROVISIONING_QR_SIZE_PX,
-        APP_GUI_PROVISIONING_QR_SIZE_PX);
+        s_provisioning_qr_container,
+        APP_GUI_PROVISIONING_QR_CONTAINER_SIZE_PX,
+        APP_GUI_PROVISIONING_QR_CONTAINER_SIZE_PX);
     lv_obj_set_pos(
-        qr_region,
-        APP_GUI_PROVISIONING_QR_X_PX,
-        APP_GUI_PROVISIONING_QR_Y_PX);
+        s_provisioning_qr_container,
+        APP_GUI_PROVISIONING_QR_CONTAINER_X_PX,
+        APP_GUI_PROVISIONING_QR_CONTAINER_Y_PX);
     lv_obj_set_style_bg_color(
-        qr_region,
-        lv_color_hex(0x182125),
+        s_provisioning_qr_container,
+        lv_color_white(),
         LV_PART_MAIN);
     lv_obj_set_style_bg_opa(
-        qr_region,
+        s_provisioning_qr_container,
         LV_OPA_COVER,
         LV_PART_MAIN);
-    lv_obj_set_style_border_width(qr_region, 1, LV_PART_MAIN);
-    lv_obj_set_style_border_color(
-        qr_region,
-        lv_color_hex(0x4DB6E5),
+    lv_obj_set_style_border_width(
+        s_provisioning_qr_container,
+        0,
         LV_PART_MAIN);
-    lv_obj_set_style_radius(qr_region, 2, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(qr_region, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(
+        s_provisioning_qr_container,
+        0,
+        LV_PART_MAIN);
+    lv_obj_set_style_pad_all(
+        s_provisioning_qr_container,
+        0,
+        LV_PART_MAIN);
+
+    s_provisioning_qr_code =
+        lv_qrcode_create(
+            s_provisioning_qr_container);
+
+    if (s_provisioning_qr_code == NULL) {
+        ESP_LOGE(TAG, "Failed to create provisioning QR code");
+        return ESP_ERR_NO_MEM;
+    }
+
+    lv_qrcode_set_size(
+        s_provisioning_qr_code,
+        APP_GUI_PROVISIONING_QR_CANVAS_SIZE_PX);
+    lv_qrcode_set_dark_color(
+        s_provisioning_qr_code,
+        lv_color_black());
+    lv_qrcode_set_light_color(
+        s_provisioning_qr_code,
+        lv_color_white());
+
+    /*
+     * The white parent supplies a measured quiet zone. Keeping it outside the
+     * encoded canvas preserves exact 2x2 square modules.
+     */
+    lv_qrcode_set_quiet_zone(
+        s_provisioning_qr_code,
+        false);
+    lv_obj_center(
+        s_provisioning_qr_code);
+    lv_obj_update_layout(
+        s_provisioning_qr_code);
+
+    if ((lv_obj_get_width(s_provisioning_qr_code) !=
+         APP_GUI_PROVISIONING_QR_CANVAS_SIZE_PX) ||
+        (lv_obj_get_height(s_provisioning_qr_code) !=
+         APP_GUI_PROVISIONING_QR_CANVAS_SIZE_PX)) {
+        ESP_LOGE(TAG, "Failed to allocate provisioning QR canvas");
+        return ESP_ERR_NO_MEM;
+    }
+
+    lv_obj_add_flag(
+        s_provisioning_qr_code,
+        LV_OBJ_FLAG_HIDDEN);
 
     s_provisioning_instruction_label =
         lv_label_create(screen);
@@ -1046,6 +1176,39 @@ static esp_err_t app_gui_create_provisioning_screen(
         LV_PART_MAIN);
 
     return ESP_OK;
+}
+
+static void app_gui_render_provisioning_qr_payload(
+    const ui_provisioning_qr_payload_t *payload)
+{
+    if (!app_gui_is_valid_provisioning_qr_payload(payload) ||
+        (s_provisioning_qr_container == NULL) ||
+        (s_provisioning_qr_code == NULL)) {
+        return;
+    }
+
+    const size_t payload_length =
+        strnlen(
+            payload->payload,
+            sizeof(payload->payload));
+
+    const lv_result_t result =
+        lv_qrcode_update(
+            s_provisioning_qr_code,
+            payload->payload,
+            (uint32_t)payload_length);
+
+    if (result != LV_RESULT_OK) {
+        lv_obj_add_flag(
+            s_provisioning_qr_code,
+            LV_OBJ_FLAG_HIDDEN);
+        ESP_LOGE(TAG, "Failed to encode provisioning QR payload");
+        return;
+    }
+
+    lv_obj_remove_flag(
+        s_provisioning_qr_code,
+        LV_OBJ_FLAG_HIDDEN);
 }
 
 static void app_gui_render_provisioning_status(
@@ -1567,6 +1730,7 @@ static void app_gui_render_cached_status(
     app_gui_screen_id_t screen_id)
 {
     bool provisioning_available = false;
+    bool provisioning_qr_available = false;
     bool wifi_available = false;
     bool sensor_available = false;
     bool cloud_available = false;
@@ -1575,6 +1739,7 @@ static void app_gui_render_cached_status(
         .last_error = ESP_OK,
         .wifi_disconnect_reason = 0U,
     };
+    ui_provisioning_qr_payload_t provisioning_qr_payload = {0};
     ui_wifi_status_t wifi_status = {0};
     ui_sensor_status_t sensor_status = {0};
     ui_cloud_status_t cloud_status = {0};
@@ -1584,6 +1749,12 @@ static void app_gui_render_cached_status(
         s_latest_provisioning_status_available;
     provisioning_status =
         s_latest_provisioning_status;
+    if (screen_id == APP_GUI_SCREEN_PROVISIONING) {
+        provisioning_qr_available =
+            s_latest_provisioning_qr_payload_available;
+        provisioning_qr_payload =
+            s_latest_provisioning_qr_payload;
+    }
     wifi_available = s_latest_wifi_status_available;
     wifi_status = s_latest_wifi_status;
     sensor_available = s_latest_sensor_status_available;
@@ -1602,6 +1773,16 @@ static void app_gui_render_cached_status(
 
         app_gui_render_provisioning_status(
             &provisioning_status);
+
+        if (provisioning_qr_available) {
+            app_gui_render_provisioning_qr_payload(
+                &provisioning_qr_payload);
+        }
+
+        app_gui_zeroize(
+            &provisioning_qr_payload,
+            sizeof(provisioning_qr_payload));
+
         return;
     }
 
@@ -1722,6 +1903,17 @@ static esp_err_t app_gui_activate_screen(
 
     lv_screen_load(target_root);
     app_gui_set_active_screen_id(target_screen);
+
+    if ((current_screen == APP_GUI_SCREEN_PROVISIONING) &&
+        (target_screen != APP_GUI_SCREEN_PROVISIONING)) {
+        taskENTER_CRITICAL(&s_screen_id_lock);
+        app_gui_zeroize(
+            &s_latest_provisioning_qr_payload,
+            sizeof(s_latest_provisioning_qr_payload));
+        s_latest_provisioning_qr_payload_available = false;
+        taskEXIT_CRITICAL(&s_screen_id_lock);
+    }
+
     app_gui_render_cached_status(target_screen);
 
     if (target_screen == APP_GUI_SCREEN_WIFI_STATUS) {
@@ -1816,6 +2008,49 @@ static void app_gui_process_commands(void)
                 break;
         }
     }
+}
+
+static void app_gui_process_provisioning_qr_payload(void)
+{
+    ui_provisioning_qr_payload_t payload = {0};
+
+    if ((s_provisioning_qr_queue == NULL) ||
+        (xQueueReceive(
+            s_provisioning_qr_queue,
+            &payload,
+            0) != pdTRUE)) {
+        return;
+    }
+
+    if (!app_gui_is_valid_provisioning_qr_payload(
+            &payload)) {
+        ESP_LOGW(TAG, "Ignoring invalid provisioning QR payload");
+        app_gui_zeroize(
+            &payload,
+            sizeof(payload));
+        return;
+    }
+
+    taskENTER_CRITICAL(&s_screen_id_lock);
+    s_latest_provisioning_qr_payload = payload;
+    s_latest_provisioning_qr_payload_available = true;
+    taskEXIT_CRITICAL(&s_screen_id_lock);
+
+    app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
+
+    if ((app_gui_get_screen_id(&screen_id) == ESP_OK) &&
+        (screen_id == APP_GUI_SCREEN_PROVISIONING)) {
+        ui_manager_lvgl_wait_for_mutex();
+        app_gui_render_provisioning_qr_payload(
+            &payload);
+        ui_manager_lvgl_release_mutex();
+    }
+
+    ESP_LOGD(TAG, "Provisioning QR payload cached");
+
+    app_gui_zeroize(
+        &payload,
+        sizeof(payload));
 }
 
 /* Sensor Queue Processing ------------------------------------------------- */
@@ -1969,6 +2204,8 @@ static void app_gui_process_lvgl(void)
     /* Route screens before status rendering and LVGL timer callbacks. */
     app_gui_process_commands();
 
+    app_gui_process_provisioning_qr_payload();
+
     app_gui_process_sensor_status();
 
     app_gui_process_cloud_status();
@@ -2007,6 +2244,7 @@ static void app_gui_ui_task(void *param)
 esp_err_t app_gui_init(void)
 {
     if ((s_command_queue != NULL) ||
+        (s_provisioning_qr_queue != NULL) ||
         (s_wifi_status_queue != NULL) ||
         (s_sensor_status_queue != NULL) ||
         (s_cloud_status_queue != NULL)) {
@@ -2021,6 +2259,17 @@ esp_err_t app_gui_init(void)
 
     if (s_command_queue == NULL) {
         ESP_LOGE(TAG, "Failed to create GUI command queue");
+        app_gui_cleanup_queues();
+        return ESP_ERR_NO_MEM;
+    }
+
+    s_provisioning_qr_queue =
+        xQueueCreate(
+            APP_GUI_PROVISIONING_QR_QUEUE_LENGTH,
+            sizeof(ui_provisioning_qr_payload_t));
+
+    if (s_provisioning_qr_queue == NULL) {
+        ESP_LOGE(TAG, "Failed to create provisioning QR queue");
         app_gui_cleanup_queues();
         return ESP_ERR_NO_MEM;
     }
@@ -2069,6 +2318,7 @@ esp_err_t app_gui_init(void)
 esp_err_t app_gui_start_ui_task(void)
 {
     if ((s_command_queue == NULL) ||
+        (s_provisioning_qr_queue == NULL) ||
         (s_wifi_status_queue == NULL) ||
         (s_sensor_status_queue == NULL) ||
         (s_cloud_status_queue == NULL)) {
@@ -2133,6 +2383,27 @@ esp_err_t app_gui_post_provisioning_status(
             "provisioning status %s was not queued",
             app_gui_provisioning_state_to_string(status->state));
         return ESP_ERR_TIMEOUT;
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t app_gui_post_provisioning_qr_payload(
+    const ui_provisioning_qr_payload_t *payload)
+{
+    if (!app_gui_is_valid_provisioning_qr_payload(payload)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_provisioning_qr_queue == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (xQueueOverwrite(
+            s_provisioning_qr_queue,
+            payload) != pdTRUE) {
+        ESP_LOGW(TAG, "Failed to post provisioning QR payload");
+        return ESP_FAIL;
     }
 
     return ESP_OK;

@@ -8,7 +8,8 @@ credentials, releases BLE resources asynchronously, and exposes verified
 credentials without owning persistent storage or reconnect policy.
 
 Phase 6.2 is complete. The application starts this component only when
-`config_manager` reports `NOT_CONFIGURED`.
+`config_manager` reports `NOT_CONFIGURED`. Phase 6.4.3 adds a bounded copy API
+for the QR payload of the service that is actually active.
 
 ## Component Structure
 
@@ -27,6 +28,11 @@ components/connectivity/provisioning_manager/
 - Initializes Espressif Network Provisioning Manager with the BLE scheme.
 - Uses Security 1 with a temporary development Proof of Possession.
 - Builds the BLE service name as `PROV_` plus the last three Station MAC bytes.
+- Matches the official `wifi_prov` example's five framework connection
+  attempts for each received credential set.
+- Builds the official Security 1 QR JSON only after the BLE service starts.
+- Caches the exact active service identity and exposes only a caller-owned QR
+  payload copy while the service remains `ACTIVE`.
 - Starts BLE provisioning only from the `READY` state.
 - Prevents concurrent callers from claiming the same lifecycle transition.
 - Deep-copies and validates framework-owned credentials on receipt.
@@ -62,6 +68,7 @@ The application manifest currently selects
 |---|---|
 | `provisioning_manager_init()` | Initialize the BLE scheme and enter `READY` |
 | `provisioning_manager_start()` | Start advertising and enter `ACTIVE` |
+| `provisioning_manager_get_qr_payload()` | Copy the active BLE service's QR JSON into caller-owned storage |
 | `provisioning_manager_stop()` | Begin asynchronous shutdown |
 | `provisioning_manager_get_state()` | Copy the current lifecycle state |
 | `provisioning_manager_is_wifi_handoff_pending()` | Report whether received credentials are still connecting or awaiting application consumption |
@@ -69,6 +76,33 @@ The application manifest currently selects
 
 All public APIs return `esp_err_t`. The component does not call
 `ESP_ERROR_CHECK()` and leaves policy decisions to the application.
+`provisioning_manager_get_qr_payload()` requires a
+`PROVISIONING_MANAGER_QR_PAYLOAD_BUFFER_SIZE` buffer, never returns an internal
+pointer, and returns `ESP_ERR_INVALID_STATE` outside an active session.
+
+## Espressif wifi_prov Alignment
+
+The implementation follows
+`managed_components/espressif__network_provisioning/examples/wifi_prov` for
+the interoperable provisioning contract:
+
+- BLE transport through `network_prov_scheme_ble`;
+- NimBLE controller configuration;
+- Security 1 with Proof of Possession;
+- `NETWORK_PROV_SCHEME_BLE_EVENT_HANDLER_FREE_BTDM`;
+- five framework Wi-Fi connection attempts;
+- QR version `v1` and transport `ble`;
+- QR JSON schema:
+
+```json
+{"ver":"v1","name":"PROV_XXXXXX","pop":"<development-pop>","transport":"ble"}
+```
+
+The application intentionally does not copy the example's global event
+handler, direct `esp_wifi_connect()` call, credential logging, custom endpoint,
+or provisioning-state reset callback. Those behaviors would cross the
+existing `wifi_manager`, coordinator, security, or Phase 6.4 ownership
+boundaries.
 
 ## State Lifecycle
 
@@ -136,6 +170,12 @@ de-initialization. `NETWORK_PROV_DEINIT` then moves the component to `STOPPED`.
 If the cleanup task cannot be created, the component enters `FAILED` instead
 of remaining indefinitely in `STOPPING`.
 
+The active service name and QR payload are cleared when stop begins and on
+startup, cleanup, or de-initialization failure. QR construction failure does
+not stop an otherwise valid BLE session; the coordinator reports the
+best-effort GUI publication failure and provisioning can still continue
+manually.
+
 ## Basic Usage
 
 ```c
@@ -148,6 +188,12 @@ ret = provisioning_manager_start();
 if (ret != ESP_OK) {
     return ret;
 }
+
+char qr_payload[PROVISIONING_MANAGER_QR_PAYLOAD_BUFFER_SIZE];
+ret = provisioning_manager_get_qr_payload(
+    qr_payload,
+    sizeof(qr_payload));
+/* Copy to the UI queue, then securely clear this caller-owned buffer. */
 
 provisioning_manager_wifi_credentials_t credentials;
 ret = provisioning_manager_receive_wifi_credentials(&credentials, 120000U);
@@ -186,6 +232,10 @@ provisioning.
 
 - The current Proof of Possession is a development value compiled into
   firmware. It is not a production credential.
+- The QR payload contains that PoP. It is copied only into bounded transient
+  buffers and must never be logged.
+- The upstream `security1` log tag is reduced to `WARN` before a session so
+  normal serial output does not print session key material.
 - Production devices should use a device-specific value obtained from
   protected configuration or manufacturing data.
 - Do not log or document real Proofs of Possession, SSIDs, passwords, tokens,
@@ -198,6 +248,7 @@ This component owns:
 
 - BLE provisioning scheme lifecycle.
 - Provisioning service naming and current Security 1 setup.
+- Exact active QR identity and payload construction.
 - Lifecycle state synchronization.
 - Transient validation and credential handoff after connection success.
 - BLE stop and framework cleanup.
@@ -214,6 +265,7 @@ This component does not own:
 ```text
 I (...) PROVISIONING_MANAGER: Provisioning manager initialized
 I (...) PROVISIONING_MANAGER: BLE provisioning active with service name: PROV_XXXXXX
+I (...) APP_NETWORK_COORDINATOR: Active provisioning QR payload queued for GUI
 I (...) PROVISIONING_MANAGER: Provisioning stop requested
 I (...) PROVISIONING_MANAGER: Provisioning service stopped
 I (...) PROVISIONING_MANAGER: Provisioning manager de-initialized
@@ -235,3 +287,12 @@ I (...) PROVISIONING_MANAGER: Provisioning manager de-initialized
 - The `6.2.3B-4` injected NVS persistence failure and retry recovery test
   passed on hardware.
 - The temporary fault-injection code was removed after acceptance.
+
+## Phase 6.4.3 Status
+
+**IMPLEMENTED / HARDWARE TEST PENDING**
+
+The QR contract, active-session copy API, five framework connection attempts,
+NimBLE/Security1 defaults, and build have been verified statically. A phone
+scan, BLE handshake, Wi-Fi authentication, NVS persistence, and cleanup still
+require target-hardware acceptance.

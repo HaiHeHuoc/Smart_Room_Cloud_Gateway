@@ -13,6 +13,9 @@ components may only post screen commands or copied status snapshots.
 Phase 6.4.2 adds the provisioning-screen visual foundation, UI-only state
 model, copied status command, cache, and stable renderer without connecting
 them to the real BLE provisioning lifecycle.
+Phase 6.4.3 replaces the reserved region with the official LVGL QR widget,
+adds a dedicated copied-payload queue, and renders the active Espressif
+Security 1 provisioning payload.
 
 ## Application Screens
 
@@ -20,7 +23,7 @@ them to the real BLE provisioning lifecycle.
 |---|---|
 | `APP_GUI_SCREEN_NONE` | Internal state before the first successful route; never a public request target. |
 | `APP_GUI_SCREEN_BOOT` | Static `Smart Gateway` / `Starting...` placeholder. |
-| `APP_GUI_SCREEN_PROVISIONING` | Stable provisioning layout with a reserved QR region, instruction/status labels, and state indicator. |
+| `APP_GUI_SCREEN_PROVISIONING` | Stable provisioning layout with a scannable QR code, instruction/status labels, and state indicator. |
 | `APP_GUI_SCREEN_WIFI_STATUS` | Existing Wi-Fi mode, SSID, and IPv4 screen. |
 | `APP_GUI_SCREEN_SENSOR_DASHBOARD` | Existing sensor dashboard with Wi-Fi and cloud summaries. |
 
@@ -33,6 +36,8 @@ renamed directly. No compatibility aliases are retained.
 
 - Command queue: length 8, carrying copied screen requests and provisioning
   status updates.
+- Provisioning QR queue: length 1, newest complete payload overwrites the
+  pending value.
 - Wi-Fi status queue: length 1, newest snapshot overwrites the pending value.
 - Sensor status queue: length 5, producers never wait.
 - Cloud status queue: length 1, newest snapshot overwrites the pending value.
@@ -47,6 +52,7 @@ handles return to `NULL`, and `app_gui_init()` returns `ESP_ERR_NO_MEM`.
 | `app_gui_request_screen()` | Validate and enqueue a non-blocking asynchronous screen request. |
 | `app_gui_get_screen_id()` | Copy the authoritative active-screen ID under a critical section. |
 | `app_gui_post_provisioning_status()` | Validate and copy a non-sensitive provisioning model into the command queue. |
+| `app_gui_post_provisioning_qr_payload()` | Validate and copy the active Security 1 QR payload into the dedicated latest-value queue. |
 | `app_gui_post_wifi_status()` | Replace the pending Wi-Fi model without calling LVGL. |
 | `app_gui_post_sensor_status()` | Queue a sensor model without calling LVGL. |
 | `app_gui_post_cloud_status()` | Replace the pending cloud model without calling LVGL. |
@@ -62,12 +68,17 @@ activates a screen. The payload contains only UI state, `esp_err_t`, and a
 disconnect reason; it contains no SSID, password, PoP, token, raw framework
 object, or manager-owned pointer.
 
+`app_gui_post_provisioning_qr_payload()` also never retains the caller's
+pointer, calls LVGL, or changes screens. Its copied payload is sensitive
+because it contains the development PoP and must not be logged.
+
 ## UI Task And Router
 
 Every 33 ms the UI task performs:
 
 ```text
 drain screen commands in FIFO order
+-> consume/cache/render provisioning QR
 -> consume/cache/render status queues
 -> take LVGL mutex
 -> lv_timer_handler()
@@ -117,6 +128,7 @@ mutex recursively.
 The GUI retains the latest complete:
 
 - `ui_provisioning_status_t` plus an availability flag;
+- `ui_provisioning_qr_payload_t` plus an availability flag;
 - `ui_wifi_status_t` plus an availability flag;
 - `ui_sensor_status_t` plus an availability flag;
 - `ui_cloud_status_t` plus an availability flag.
@@ -132,11 +144,12 @@ Status events never choose a screen:
   touch deleted LVGL pointers.
 
 Entering `PROVISIONING` renders the latest provisioning model, or the default
-`STARTING` model before the first update. Entering `WIFI_STATUS` renders the
-latest Wi-Fi model. Entering
+`STARTING` model before the first update, and renders the latest valid QR
+payload when available. Entering `WIFI_STATUS` renders the latest Wi-Fi model.
+Entering
 `SENSOR_DASHBOARD` renders the latest sensor, Wi-Fi summary, and cloud models.
 
-## Provisioning UI Foundation
+## Provisioning UI And QR
 
 ### UI-only model
 
@@ -159,18 +172,19 @@ last_error = ESP_OK
 wifi_disconnect_reason = 0
 ```
 
-Current asynchronous flow:
+Current QR flow:
 
 ```text
-producer or temporary manual test
-    -> app_gui_post_provisioning_status()
-    -> GUI command queue
+active provisioning_manager service
+    -> coordinator copies exact QR JSON
+    -> app_gui_post_provisioning_qr_payload()
+    -> dedicated length-one GUI queue
     -> app_gui UI task
-    -> cached provisioning model
-    -> render only when PROVISIONING is active
+    -> lv_qrcode_update()
 ```
 
-No production producer is connected in Phase 6.4.2.
+Provisioning progress still uses the Phase 6.4.2 UI-only model; no production
+progress producer is connected until Phase 6.4.4.
 
 ### 160x128 layout
 
@@ -178,19 +192,36 @@ No production producer is connected in Phase 6.4.2.
 +--------------------------------------+
 | Wi-Fi Setup                       [o] |
 |--------------------------------------|
-| +------------------+  instruction    |
-| |                  |                 |
-| | reserved 80x80   |  status         |
-| | QR region        |                 |
-| |                  |                 |
-| +------------------+                 |
+| +---------------------+ instruction  |
+| |                     |              |
+| |  74x74 QR symbol    | status       |
+| |  in white 92x92     |              |
+| |  quiet-zone holder  |              |
+| +---------------------+              |
 +--------------------------------------+
 ```
 
-The left region at `(4, 40)` reserves exactly `80 x 80` pixels for the future
-Phase 6.4.3 QR object. Phase 6.4.2 does not create a QR widget or display
-temporary QR text. The right column stays within `x=90..155`; all objects stay
-within the 160x128 logical display.
+The white container occupies `(0, 36)` through `(91, 127)`. The QR symbol is
+`74 x 74` and centered, leaving a 9-pixel white quiet zone on every side.
+The current 73-byte Security 1 payload is QR version 5 at LVGL medium error
+correction: 37 modules scaled by an exact 2 pixels per module. This is the
+largest integer module scale that fits the 160x128 layout while preserving at
+least the required four-module quiet zone. Disabling the widget's internal
+quiet zone prevents it from shrinking the symbol; the measured white parent
+provides that zone instead.
+
+The right column begins at `x=94`; all objects remain within the 160x128
+logical display. The QR object is created once with the screen and stays hidden
+until a valid payload has been encoded. The current QR canvas consumes roughly
+0.9 KiB plus LVGL object metadata. Encoding version 5 temporarily allocates two
+173-byte work buffers. Application-side payload storage is bounded to 192
+bytes per manager/cache/queue copy, requires no PSRAM, and is never persisted
+to NVS.
+
+GUI task-local QR copies are securely overwritten after rendering. The cached
+copy is securely cleared after a successful transition away from
+`PROVISIONING`; the manager independently clears its active copy when BLE stop
+begins.
 
 The title, instruction, status, and state indicator are created once when the
 screen is activated. Status updates modify only their text and colors. There
@@ -243,10 +274,13 @@ state integration remains deferred to Phase 6.4.4.
 
 - Invalid or `NONE` screen requests return `ESP_ERR_INVALID_ARG`.
 - NULL or invalid provisioning status returns `ESP_ERR_INVALID_ARG`.
+- NULL, empty, or unterminated QR payload returns `ESP_ERR_INVALID_ARG`.
 - Requests before `app_gui_init()` return `ESP_ERR_INVALID_STATE`.
 - A full command queue returns `ESP_ERR_TIMEOUT`.
 - Missing LVGL roots return `ESP_ERR_INVALID_STATE`.
 - Widget or timer allocation failures return `ESP_ERR_NO_MEM`.
+- QR encoding failure hides the QR object, emits only a generic error, and
+  never prints the payload.
 - Target construction failure is logged by the UI task and leaves the
   previously visible screen and active-screen ID unchanged.
 - Screen failures do not reboot the device or change network policy.
@@ -292,6 +326,24 @@ Phase 6.4.2 intentionally does not implement:
 - BLE, Wi-Fi manager, config manager, cloud, Firebase, factory-reset, touch,
   animation, progress-bar, or dashboard changes.
 
+## Phase 6.4.3 Status
+
+**IMPLEMENTED / HARDWARE TEST PENDING**
+
+Implemented:
+
+- Espressif-compatible Security 1 QR JSON from the active BLE service;
+- dedicated copied-payload queue and cache;
+- official LVGL 9 `lv_qrcode` widget;
+- maximum 2-pixel integer module scale with a measured quiet zone;
+- coordinator publication only after provisioning start succeeds;
+- no QR payload, PoP, password, or credential logging.
+
+Phase 6.4.3 intentionally does not implement provisioning progress producers,
+automatic success/failure screen transitions, timeout recovery UI, factory
+reset, touch, animation, progress bars, or dashboard redesign. Those remain
+outside this checkpoint.
+
 ## Manual Acceptance Tests
 
 Run any temporary state driver outside the UI task, call only public
@@ -311,5 +363,12 @@ Run any temporary state driver outside the UI task, call only public
    white flash, or lost cached status.
 6. Cycle states for at least 15 minutes; verify no heap-growth trend, stack
    warning, watchdog, LVGL assertion, or crash.
+7. On a reset device, scan the displayed QR with Espressif Provisioning,
+   verify the app resolves the advertised `PROV_XXXXXX` service without manual
+   PoP entry, and provision Wi-Fi successfully.
+8. Repeat with a long SSID/password and from normal viewing distance; verify
+   module edges and the full white quiet zone remain visible.
+9. Verify the serial log contains no QR JSON, PoP, password, session key
+   material, or credentials.
 
 Phase 6.4 is not complete.

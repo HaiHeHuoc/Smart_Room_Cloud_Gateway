@@ -66,6 +66,7 @@ app_network_coordinator task
     -> resolve persistent configuration state
     -> request BOOT or PROVISIONING through the GUI command queue
     -> connect stored credentials or run bounded BLE provisioning
+    -> after BLE starts, copy its exact QR JSON into the GUI QR queue
     -> stop/deinitialize BLE and adopt the active connection
     -> publish CONNECTING or ONLINE readiness for deferred cloud startup
 
@@ -94,6 +95,12 @@ callback cannot post into an uninitialized cloud component.
   deadline expires with a credential handoff already in flight, it allows one
   additional 30-second connection grace. Framework cleanup polling remains
   finite.
+- BLE provisioning uses NimBLE, Security 1, five framework connection
+  attempts, and the Espressif `v1`/`ble` QR schema.
+- `sdkconfig.defaults` enables the 16 MB N16 flash layout, the custom
+  partition table, BT/NimBLE, Security 1 support, required LVGL fonts, runtime
+  statistics, the LVGL QR widget, and full cross-signed CA-bundle verification
+  for current Google/Firebase TLS chains.
 - The one-shot network coordinator task uses a 6 KB stack at priority 4.
 - The 12 KB cloud task is allocated only after stored connection startup or
   successful provisioning cleanup and adoption.
@@ -127,7 +134,7 @@ callback cannot post into an uninitialized cloud component.
 - The display handle has static lifetime because `ui_manager_lvgl` borrows it.
 - `app_gui` owns the task that calls `lv_timer_handler()`.
 - `app_gui` owns all screen construction, cleanup, rendering, transitions, and
-  cached Wi-Fi/sensor/cloud UI models.
+  cached provisioning QR/Wi-Fi/sensor/cloud UI models.
 - Wi-Fi, sensor, cloud, provisioning, and coordinator callbacks must not call
   LVGL.
 - Sensor callbacks must not perform Firebase authentication or HTTP requests.
@@ -190,6 +197,9 @@ idf.py -p <PORT> flash monitor
   recovery.
 - Phase 6.4.1 application screen orchestration is implemented with hardware
   testing pending. This does not mark Phase 6.4 complete.
+- Phase 6.4.3 Espressif-compatible BLE provisioning QR rendering is
+  implemented and build-verified. QR scan and end-to-end provisioning remain
+  pending on target hardware; Phase 6.4 is not complete.
 - Firebase project setup and authenticated host testing are documented in
   `components/cloud/cloud_manager/README.txt` and `Test/TestFirebase_Auth.ps1`.
 - Never log or commit passwords, ID tokens, refresh tokens, service-account

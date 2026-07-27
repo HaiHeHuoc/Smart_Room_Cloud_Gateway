@@ -18,6 +18,8 @@ callback, or LVGL callback.
 - Optional exact UID validation after sign-in.
 - Proactive refresh margin, defaulting to 300 seconds.
 - HTTPS certificate verification through `esp_crt_bundle_attach`.
+- Full default CA bundle with cross-signed certificate verification, required
+  for current Google/Firebase alternate certificate chains.
 - Bounded request, response, credential, token, and URL buffers.
 - JSON parsing through cJSON without logging tokens or credentials.
 - URL encoding for the refresh token request body.
@@ -114,6 +116,9 @@ therefore not required for the current expiration calculation.
 
 ## Security Notes
 
+- Keep `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y`; do not
+  replace bundle validation with a pinned Google intermediate or disabled
+  certificate verification.
 - A Firebase Web API key identifies the project but is not an administrator
   secret.
 - Device passwords are sensitive and are currently compiled into the firmware

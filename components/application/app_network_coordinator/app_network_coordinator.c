@@ -24,6 +24,11 @@
 #define APP_NETWORK_COORDINATOR_TASK_PRIORITY \
     4U
 
+_Static_assert(
+    UI_PROVISIONING_QR_PAYLOAD_BUFFER_SIZE >=
+        PROVISIONING_MANAGER_QR_PAYLOAD_BUFFER_SIZE,
+    "app_gui QR payload buffer is smaller than provisioning_manager output");
+
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "APP_NETWORK_COORDINATOR";
 
@@ -75,6 +80,14 @@ static void app_log_wifi_config_state(
 static void app_zeroize(
     void *buffer,
     size_t size);
+
+/**
+ * @brief Copy the active provisioning QR payload into the GUI queue.
+ *
+ * QR publication is best-effort and never changes network state. The
+ * temporary copy is cleared before return and its contents are never logged.
+ */
+static void app_publish_provisioning_qr_payload(void);
 
 /**
  * @brief Persist provisioned credentials and verify NVS state and read-back.
@@ -275,6 +288,51 @@ static void app_zeroize(
     }
 }
 
+static void app_publish_provisioning_qr_payload(void)
+{
+    ui_provisioning_qr_payload_t qr_payload = {0};
+
+    esp_err_t ret =
+        provisioning_manager_get_qr_payload(
+            qr_payload.payload,
+            sizeof(qr_payload.payload));
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGW(
+            TAG,
+            "Active provisioning QR payload is unavailable: %s",
+            esp_err_to_name(ret));
+
+        app_zeroize(
+            &qr_payload,
+            sizeof(qr_payload));
+
+        return;
+    }
+
+    ret =
+        app_gui_post_provisioning_qr_payload(
+            &qr_payload);
+
+    app_zeroize(
+        &qr_payload,
+        sizeof(qr_payload));
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGW(
+            TAG,
+            "Failed to queue active provisioning QR payload: %s",
+            esp_err_to_name(ret));
+        return;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Active provisioning QR payload queued for GUI");
+}
+
 static void app_log_wifi_config_state(
     config_manager_wifi_config_state_t state)
 {
@@ -460,6 +518,8 @@ static esp_err_t app_run_wifi_provisioning(void)
     {
         return ret;
     }
+
+    app_publish_provisioning_qr_payload();
 
     provisioning_manager_wifi_credentials_t credentials =
         {0};
