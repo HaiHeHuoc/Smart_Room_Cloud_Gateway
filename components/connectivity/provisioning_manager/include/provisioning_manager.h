@@ -1,6 +1,7 @@
 #pragma once
 
 /* Includes ----------------------------------------------------------------- */
+#include <stddef.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -20,6 +21,9 @@
 /** Storage size for a null-terminated Wi-Fi password. */
 #define PROVISIONING_MANAGER_WIFI_PASSWORD_BUFFER_SIZE \
     (PROVISIONING_MANAGER_WIFI_PASSWORD_MAX_LEN + 1U)
+
+/** Caller-owned storage required for a provisioning QR JSON payload. */
+#define PROVISIONING_MANAGER_QR_PAYLOAD_BUFFER_SIZE 192U
 
 #ifdef __cplusplus
 extern "C" {
@@ -117,6 +121,30 @@ esp_err_t provisioning_manager_init(void);
  * - Other ESP-IDF errors returned while creating or starting the service.
  */
 esp_err_t provisioning_manager_start(void);
+
+/**
+ * @brief Copy the QR payload for the currently active BLE service.
+ *
+ * The payload contains the exact service name, Security 1 PoP, and transport
+ * used by provisioning_manager_start(). It therefore contains sensitive
+ * onboarding material and must not be logged. The caller owns the returned
+ * copy and should clear it promptly after use.
+ *
+ * This API is thread-safe, does not call LVGL, and never returns an internal
+ * pointer.
+ *
+ * @param[out] payload Destination for the null-terminated JSON payload.
+ * @param[in] payload_size Destination size. It must be at least
+ *                        PROVISIONING_MANAGER_QR_PAYLOAD_BUFFER_SIZE.
+ *
+ * @return
+ * - ESP_OK: Active payload copied and null-terminated.
+ * - ESP_ERR_INVALID_ARG: @p payload is NULL or the buffer is undersized.
+ * - ESP_ERR_INVALID_STATE: No valid active provisioning payload exists.
+ */
+esp_err_t provisioning_manager_get_qr_payload(
+    char *payload,
+    size_t payload_size);
 
 /**
  * @brief Request asynchronous provisioning shutdown and resource cleanup.

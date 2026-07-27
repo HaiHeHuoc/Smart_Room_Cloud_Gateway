@@ -28,6 +28,9 @@ typedef enum
 
 /* Provisioning UI Types -------------------------------------------------- */
 
+/** Storage size for one null-terminated BLE provisioning QR payload. */
+#define UI_PROVISIONING_QR_PAYLOAD_BUFFER_SIZE 192U
+
 /** @brief UI-only states rendered by the BLE Wi-Fi provisioning screen. */
 typedef enum
 {
@@ -56,6 +59,16 @@ typedef struct
     esp_err_t last_error;
     uint16_t wifi_disconnect_reason;
 } ui_provisioning_status_t;
+
+/**
+ * @brief Caller-owned provisioning QR payload copied into the GUI queue.
+ *
+ * The payload can contain a Security 1 PoP and must not be logged.
+ */
+typedef struct
+{
+    char payload[UI_PROVISIONING_QR_PAYLOAD_BUFFER_SIZE];
+} ui_provisioning_qr_payload_t;
 
 /* Wi-Fi UI Types ---------------------------------------------------------- */
 
@@ -184,6 +197,22 @@ esp_err_t app_gui_start_ui_task(void);
  */
 esp_err_t app_gui_post_provisioning_status(
     const ui_provisioning_status_t *status);
+
+/**
+ * @brief Replace the pending provisioning QR payload without waiting.
+ *
+ * This function validates and copies the complete payload into a dedicated
+ * latest-value queue. It never retains @p payload, calls LVGL, or changes the
+ * active screen. It is safe from normal task and task-context callback code,
+ * but is not ISR-safe.
+ *
+ * @param[in] payload Null-terminated provisioning QR payload to copy.
+ * @return ESP_OK when copied, ESP_ERR_INVALID_ARG for NULL, empty, or
+ *         unterminated input, ESP_ERR_INVALID_STATE before app_gui_init(), or
+ *         ESP_FAIL when the queue update fails.
+ */
+esp_err_t app_gui_post_provisioning_qr_payload(
+    const ui_provisioning_qr_payload_t *payload);
 
 /* Wi-Fi Status API -------------------------------------------------------- */
 /**

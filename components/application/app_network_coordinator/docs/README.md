@@ -15,6 +15,8 @@ The coordinator:
 - Migrates a supported legacy configuration before use.
 - Starts a stored Station connection when configuration is valid.
 - Starts bounded BLE provisioning only for `NOT_CONFIGURED`.
+- Copies the exact active BLE QR payload into the GUI's dedicated latest-value
+  queue immediately after provisioning starts.
 - Requests the initial application screen from the final verified
   configuration state.
 - Persists provisioned credentials through `config_manager`.
@@ -30,7 +32,7 @@ The coordinator does not:
 - Own Wi-Fi event handlers or reconnect behavior.
 - Own BLE transport internals.
 - Call LVGL, build screens, or render GUI objects. It may only post
-  asynchronous `app_gui` screen requests.
+  asynchronous `app_gui` screen requests and copied QR models.
 - Log passwords, PoP values, tokens, or credential contents.
 
 ## Public API
@@ -63,6 +65,19 @@ the composition root forwards Wi-Fi manager snapshots so later connection,
 DHCP, disconnection, and retry events keep the coordinator state current.
 Provisioning events remain ignored until credentials are persisted, BLE is
 cleaned up, and the active connection is adopted.
+
+For an unconfigured device, startup ordering is:
+
+```text
+request PROVISIONING screen
+    -> initialize/start BLE service
+    -> copy active QR payload from provisioning_manager
+    -> post copied payload to app_gui
+    -> wait for framework-verified credentials
+```
+
+QR publication is best-effort and never promotes coordinator state, starts a
+Wi-Fi connection, or changes the active screen.
 
 `app_network_coordinator_start()` does not wait for provisioning. The dedicated
 task performs the bounded receive, persistence, cleanup, and adoption flow so
@@ -114,6 +129,8 @@ Screen routing follows the final result:
   `provisioning_manager` reports that valid credentials are already in flight.
 - Temporary SSID/password buffers are securely overwritten on all completed
   paths.
+- The temporary QR copy is overwritten immediately after its non-blocking GUI
+  post and its contents are never logged.
 - GUI status updates remain event-driven through the registered
   `wifi_manager` callback. Config-driven initial routing and verified normal
   `ONLINE` routing use the independent `app_gui` command queue.
@@ -177,6 +194,16 @@ tracked with the `app_gui` component. Hardware testing is still required.
 This integration posts only screen commands and does not change config
 storage, BLE lifecycle, Wi-Fi reconnect behavior, or provisioning success UI.
 Phase 6.4 remains incomplete.
+
+## Phase 6.4.3 Integration
+
+**IMPLEMENTED / HARDWARE TEST PENDING**
+
+After `provisioning_manager_start()` succeeds, the coordinator obtains the
+payload for that exact active service and posts it to `app_gui`. It preserves
+the existing bounded credential wait, persistence, BLE cleanup, Wi-Fi
+adoption, and screen-routing behavior. Phase 6.4.4 progress events and
+success/failure screen transitions remain intentionally deferred.
 
 ## Future Attention
 

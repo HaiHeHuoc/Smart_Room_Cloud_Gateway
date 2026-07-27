@@ -634,6 +634,25 @@ remains in progress; provisioning-status UI work is still pending.
 Checkpoint 6.3.4 is implemented and statically verified. Hardware acceptance
 is not yet claimed, and Phase 6.3 remains in progress.
 
+### Phase 6.4.3 Status - Implemented / Hardware Test Pending
+
+- [x] Build QR JSON from the exact active BLE service using Espressif's
+  `v1`, Security 1, and `ble` schema.
+- [x] Configure BT/NimBLE, Security 1, and LVGL QR support through
+  `sdkconfig.defaults`.
+- [x] Match the official `wifi_prov` example's five framework Wi-Fi
+  connection attempts.
+- [x] Copy the QR payload through coordinator and GUI-owned queues without
+  logging PoP or credentials.
+- [x] Render the QR with LVGL at the largest integer module scale that fits
+  the 160x128 screen and a standards-compliant quiet zone.
+- [x] Preserve provisioning, Wi-Fi manager, config manager, and LVGL ownership.
+- [ ] Confirm QR scanning and end-to-end BLE Wi-Fi provisioning on hardware.
+
+Phase 6.4.3 is implemented and build-verified. Phase 6.4.4 progress/status
+events and success/failure screen transitions remain deferred, and Phase 6.4
+is not complete.
+
 ### Tasks
 
 - [x] Add BLE provisioning component.
@@ -866,7 +885,7 @@ Use this section to track daily/weekly progress.
 | 3 | Sensor + UI update | Done |  |  | Sensor queue, stale/error behavior, and LCD updates hardware-accepted. |
 | 4 | Firebase upload | Done |  | 2026-07-19 | Hardware upload, Firebase data, failure handling, and LCD Cloud status accepted. |
 | 5 | NVS config storage | Done |  | 2026-07-26 | Persistence, integrity, migration, and recovery tests accepted. |
-| 6 | BLE provisioning | In progress |  |  | Phases 6.1/6.2 and checkpoints 6.3.2/6.3.3 complete; 6.3.4 implemented with hardware verification pending. |
+| 6 | BLE provisioning | In progress |  |  | Phases 6.1/6.2 and checkpoints 6.3.2/6.3.3 complete; 6.3.4 and 6.4.3 implemented with hardware verification pending. |
 | 7 | Factory reset | Not started |  |  |  |
 | 8 | Reconnect + retry | Not started |  |  |  |
 | 9 | Portfolio polish | Not started |  |  |  |
