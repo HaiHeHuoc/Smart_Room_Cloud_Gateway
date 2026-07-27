@@ -24,6 +24,9 @@
 #define APP_NETWORK_COORDINATOR_TASK_PRIORITY \
     4U
 
+#define APP_NETWORK_COORDINATOR_SUCCESS_DWELL_MS \
+    1500U
+
 _Static_assert(
     UI_PROVISIONING_QR_PAYLOAD_BUFFER_SIZE >=
         PROVISIONING_MANAGER_QR_PAYLOAD_BUFFER_SIZE,
@@ -41,6 +44,9 @@ static app_network_coordinator_config_t s_config =
 
 static portMUX_TYPE s_state_lock =
     portMUX_INITIALIZER_UNLOCKED;
+
+static uint16_t s_provisioning_disconnect_reason = 0U;
+static bool s_provisioning_success_dwell_active = false;
 
 /* Function Prototypes ------------------------------------------------------ */
 /**
@@ -88,6 +94,37 @@ static void app_zeroize(
  * temporary copy is cleared before return and its contents are never logged.
  */
 static void app_publish_provisioning_qr_payload(void);
+
+/**
+ * @brief Publish one non-sensitive provisioning UI snapshot without blocking.
+ */
+static void app_publish_provisioning_status(
+    ui_provisioning_state_t state,
+    esp_err_t last_error,
+    uint16_t wifi_disconnect_reason);
+
+/**
+ * @brief Invalidate the GUI QR cache without calling LVGL.
+ */
+static void app_clear_provisioning_qr_payload(void);
+
+/**
+ * @brief Translate manager lifecycle facts into provisioning GUI progress.
+ */
+static void app_provisioning_progress_callback(
+    const provisioning_manager_progress_status_t *status,
+    void *user_data);
+
+/**
+ * @brief Wait for manager cleanup to reach STOPPED with a finite timeout.
+ */
+static esp_err_t app_wait_for_provisioning_stop(
+    uint32_t timeout_ms);
+
+/**
+ * @brief Stop an active provisioning session and wait for cleanup.
+ */
+static esp_err_t app_cleanup_provisioning_session(void);
 
 /**
  * @brief Persist provisioned credentials and verify NVS state and read-back.
@@ -333,6 +370,233 @@ static void app_publish_provisioning_qr_payload(void)
         "Active provisioning QR payload queued for GUI");
 }
 
+static void app_publish_provisioning_status(
+    ui_provisioning_state_t state,
+    esp_err_t last_error,
+    uint16_t wifi_disconnect_reason)
+{
+    const ui_provisioning_status_t status =
+    {
+        .state = state,
+        .last_error = last_error,
+        .wifi_disconnect_reason = wifi_disconnect_reason,
+    };
+
+    const esp_err_t ret =
+        app_gui_post_provisioning_status(
+            &status);
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGW(
+            TAG,
+            "Failed to queue provisioning UI state %d: %s",
+            (int)state,
+            esp_err_to_name(ret));
+    }
+}
+
+static void app_clear_provisioning_qr_payload(void)
+{
+    const esp_err_t ret =
+        app_gui_clear_provisioning_qr_payload();
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGW(
+            TAG,
+            "Failed to invalidate provisioning QR payload: %s",
+            esp_err_to_name(ret));
+    }
+}
+
+static void app_provisioning_progress_callback(
+    const provisioning_manager_progress_status_t *status,
+    void *user_data)
+{
+    (void)user_data;
+
+    if (status == NULL)
+    {
+        return;
+    }
+
+    uint16_t provisioning_disconnect_reason = 0U;
+
+    portENTER_CRITICAL(&s_state_lock);
+
+    if ((status->progress ==
+         PROVISIONING_MANAGER_PROGRESS_STARTING) ||
+        (status->progress ==
+         PROVISIONING_MANAGER_PROGRESS_CREDENTIAL_RECEIVED))
+    {
+        s_provisioning_disconnect_reason = 0U;
+    }
+
+    provisioning_disconnect_reason =
+        s_provisioning_disconnect_reason;
+
+    portEXIT_CRITICAL(&s_state_lock);
+
+    switch (status->progress)
+    {
+        case PROVISIONING_MANAGER_PROGRESS_STARTING:
+            app_publish_provisioning_status(
+                UI_PROVISIONING_STATE_STARTING,
+                status->last_error,
+                0U);
+            break;
+
+        case PROVISIONING_MANAGER_PROGRESS_WAITING_FOR_PHONE:
+            app_publish_provisioning_status(
+                UI_PROVISIONING_STATE_WAITING_FOR_PHONE,
+                status->last_error,
+                0U);
+            break;
+
+        case PROVISIONING_MANAGER_PROGRESS_CREDENTIAL_RECEIVED:
+            app_publish_provisioning_status(
+                UI_PROVISIONING_STATE_CREDENTIAL_RECEIVED,
+                status->last_error,
+                0U);
+            break;
+
+        case PROVISIONING_MANAGER_PROGRESS_WIFI_CONNECTING:
+            app_publish_provisioning_status(
+                UI_PROVISIONING_STATE_CONNECTING_WIFI,
+                status->last_error,
+                0U);
+            break;
+
+        case PROVISIONING_MANAGER_PROGRESS_WIFI_CREDENTIAL_FAILED:
+            /*
+             * A normal credential failure is not terminal for the BLE
+             * session. Keep the QR cache valid so the phone can retry.
+             */
+            app_publish_provisioning_status(
+                UI_PROVISIONING_STATE_FAILED,
+                status->last_error,
+                provisioning_disconnect_reason);
+            break;
+
+        case PROVISIONING_MANAGER_PROGRESS_WIFI_CONNECTED:
+            app_publish_provisioning_status(
+                UI_PROVISIONING_STATE_WAITING_FOR_IP,
+                status->last_error,
+                0U);
+            break;
+
+        case PROVISIONING_MANAGER_PROGRESS_STOPPING:
+        case PROVISIONING_MANAGER_PROGRESS_STOPPED:
+            app_clear_provisioning_qr_payload();
+            break;
+
+        case PROVISIONING_MANAGER_PROGRESS_FAILED:
+            app_clear_provisioning_qr_payload();
+            app_publish_provisioning_status(
+                UI_PROVISIONING_STATE_FAILED,
+                status->last_error,
+                status->wifi_failure_reason);
+            break;
+
+        default:
+            break;
+    }
+}
+
+static esp_err_t app_wait_for_provisioning_stop(
+    uint32_t timeout_ms)
+{
+    const TickType_t wait_start_tick =
+        xTaskGetTickCount();
+
+    while (true)
+    {
+        provisioning_manager_state_t state =
+            PROVISIONING_MANAGER_STATE_UNINITIALIZED;
+
+        esp_err_t ret =
+            provisioning_manager_get_state(
+                &state);
+
+        if (ret != ESP_OK)
+        {
+            return ret;
+        }
+
+        if (state == PROVISIONING_MANAGER_STATE_STOPPED)
+        {
+            return ESP_OK;
+        }
+
+        if (state == PROVISIONING_MANAGER_STATE_FAILED)
+        {
+            return ESP_FAIL;
+        }
+
+        const TickType_t elapsed_ticks =
+            xTaskGetTickCount() -
+            wait_start_tick;
+
+        if (elapsed_ticks >=
+            pdMS_TO_TICKS(timeout_ms))
+        {
+            return ESP_ERR_TIMEOUT;
+        }
+
+        vTaskDelay(
+            pdMS_TO_TICKS(
+                s_config.provisioning_poll_period_ms));
+    }
+}
+
+static esp_err_t app_cleanup_provisioning_session(void)
+{
+    app_clear_provisioning_qr_payload();
+
+    provisioning_manager_state_t state =
+        PROVISIONING_MANAGER_STATE_UNINITIALIZED;
+
+    esp_err_t ret =
+        provisioning_manager_get_state(
+            &state);
+
+    if (ret != ESP_OK)
+    {
+        return ret;
+    }
+
+    if (state == PROVISIONING_MANAGER_STATE_ACTIVE)
+    {
+        ret = provisioning_manager_stop();
+
+        if (ret != ESP_OK)
+        {
+            return ret;
+        }
+
+        state = PROVISIONING_MANAGER_STATE_STOPPING;
+    }
+
+    if (state == PROVISIONING_MANAGER_STATE_STOPPED)
+    {
+        return ESP_OK;
+    }
+
+    if (state == PROVISIONING_MANAGER_STATE_FAILED)
+    {
+        return ESP_FAIL;
+    }
+
+    if (state != PROVISIONING_MANAGER_STATE_STOPPING)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    return app_wait_for_provisioning_stop(
+        s_config.provisioning_timeout_ms);
+}
+
 static void app_log_wifi_config_state(
     config_manager_wifi_config_state_t state)
 {
@@ -504,10 +768,41 @@ cleanup:
 static esp_err_t app_run_wifi_provisioning(void)
 {
     esp_err_t ret =
+        provisioning_manager_register_progress_callback(
+            app_provisioning_progress_callback,
+            NULL);
+
+    if (ret != ESP_OK)
+    {
+        app_publish_provisioning_status(
+            UI_PROVISIONING_STATE_FAILED,
+            ret,
+            0U);
+
+        return ret;
+    }
+
+    /*
+     * A new session owns a new QR identity. Invalidate any stale GUI cache
+     * before the manager publishes this session's payload.
+     */
+    app_clear_provisioning_qr_payload();
+    app_publish_provisioning_status(
+        UI_PROVISIONING_STATE_STARTING,
+        ESP_OK,
+        0U);
+
+    ret =
         provisioning_manager_init();
 
     if (ret != ESP_OK)
     {
+        app_clear_provisioning_qr_payload();
+        app_publish_provisioning_status(
+            UI_PROVISIONING_STATE_FAILED,
+            ret,
+            0U);
+
         return ret;
     }
 
@@ -516,10 +811,20 @@ static esp_err_t app_run_wifi_provisioning(void)
 
     if (ret != ESP_OK)
     {
+        app_clear_provisioning_qr_payload();
+        app_publish_provisioning_status(
+            UI_PROVISIONING_STATE_FAILED,
+            ret,
+            0U);
+
         return ret;
     }
 
     app_publish_provisioning_qr_payload();
+    app_publish_provisioning_status(
+        UI_PROVISIONING_STATE_WAITING_FOR_PHONE,
+        ESP_OK,
+        0U);
 
     provisioning_manager_wifi_credentials_t credentials =
         {0};
@@ -558,6 +863,11 @@ static esp_err_t app_run_wifi_provisioning(void)
                 (unsigned long)
                     s_config.provisioning_connection_grace_ms);
 
+            app_publish_provisioning_status(
+                UI_PROVISIONING_STATE_WAITING_FOR_IP,
+                ESP_OK,
+                0U);
+
             connection_grace_used = true;
 
             ret =
@@ -573,16 +883,30 @@ static esp_err_t app_run_wifi_provisioning(void)
             &credentials,
             sizeof(credentials));
 
-        /*
-         * Request cleanup only when the provisioning service remains active.
-         */
-        provisioning_manager_state_t state =
-            PROVISIONING_MANAGER_STATE_UNINITIALIZED;
-
-        if ((provisioning_manager_get_state(&state) == ESP_OK) &&
-            (state == PROVISIONING_MANAGER_STATE_ACTIVE))
+        if (ret == ESP_ERR_TIMEOUT)
         {
-            (void)provisioning_manager_stop();
+            app_publish_provisioning_status(
+                UI_PROVISIONING_STATE_TIMEOUT,
+                ret,
+                0U);
+        }
+        else
+        {
+            app_publish_provisioning_status(
+                UI_PROVISIONING_STATE_FAILED,
+                ret,
+                0U);
+        }
+
+        const esp_err_t cleanup_ret =
+            app_cleanup_provisioning_session();
+
+        if (cleanup_ret != ESP_OK)
+        {
+            ESP_LOGW(
+                TAG,
+                "Provisioning cleanup after receive failure did not complete: %s",
+                esp_err_to_name(cleanup_ret));
         }
 
         return ret;
@@ -595,6 +919,11 @@ static esp_err_t app_run_wifi_provisioning(void)
             "Provisioning Wi-Fi handoff completed during connection grace");
     }
 
+    app_publish_provisioning_status(
+        UI_PROVISIONING_STATE_SAVING_CONFIG,
+        ESP_OK,
+        0U);
+
     ret =
         app_persist_and_verify_provisioned_wifi(
             &credentials);
@@ -605,90 +934,152 @@ static esp_err_t app_run_wifi_provisioning(void)
 
     if (ret != ESP_OK)
     {
+        app_publish_provisioning_status(
+            UI_PROVISIONING_STATE_FAILED,
+            ret,
+            0U);
+
+        const esp_err_t cleanup_ret =
+            app_cleanup_provisioning_session();
+
+        if (cleanup_ret != ESP_OK)
+        {
+            ESP_LOGW(
+                TAG,
+                "Provisioning cleanup after persistence failure did not complete: %s",
+                esp_err_to_name(cleanup_ret));
+        }
+
         return ret;
     }
 
-    TickType_t wait_start_tick =
-        xTaskGetTickCount();
+    app_publish_provisioning_status(
+        UI_PROVISIONING_STATE_CLEANING_UP,
+        ESP_OK,
+        0U);
 
-    while (1)
+    ret =
+        app_wait_for_provisioning_stop(
+            s_config.provisioning_timeout_ms);
+
+    if (ret != ESP_OK)
     {
-        provisioning_manager_state_t provisioning_state =
-            PROVISIONING_MANAGER_STATE_UNINITIALIZED;
+        app_clear_provisioning_qr_payload();
+        app_publish_provisioning_status(
+            (ret == ESP_ERR_TIMEOUT)
+                ? UI_PROVISIONING_STATE_TIMEOUT
+                : UI_PROVISIONING_STATE_FAILED,
+            ret,
+            0U);
 
-        ret =
-            provisioning_manager_get_state(
-                &provisioning_state);
+        const esp_err_t cleanup_ret =
+            app_cleanup_provisioning_session();
 
-        if (ret != ESP_OK)
+        if (cleanup_ret != ESP_OK)
         {
-            return ret;
-        }
-
-        if (provisioning_state ==
-            PROVISIONING_MANAGER_STATE_STOPPED)
-        {
-            wifi_manager_status_t wifi_status = {0};
-
-            ret =
-                wifi_manager_get_status(
-                    &wifi_status);
-
-            if (ret != ESP_OK)
-            {
-                return ret;
-            }
-
-            if ((wifi_status.state ==
-                 WIFI_MANAGER_STATE_CONNECTED) &&
-                wifi_status.has_ipv4_address)
-            {
-                ret =
-                    wifi_manager_adopt_active_connection();
-
-                if (ret != ESP_OK)
-                {
-                    ESP_LOGE(
-                        TAG,
-                        "Failed to hand provisioning connection to Wi-Fi manager: %s",
-                        esp_err_to_name(ret));
-
-                    return ret;
-                }
-
-                ESP_LOGI(
-                    TAG,
-                    "Wi-Fi provisioning completed successfully");
-
-                return ESP_OK;
-            }
-        }
-
-        if (provisioning_state ==
-            PROVISIONING_MANAGER_STATE_FAILED)
-        {
-            return ESP_FAIL;
-        }
-
-        TickType_t elapsed_ticks =
-            xTaskGetTickCount() -
-            wait_start_tick;
-
-        if (elapsed_ticks >=
-            pdMS_TO_TICKS(
-                s_config.provisioning_timeout_ms))
-        {
-            ESP_LOGE(
+            ESP_LOGW(
                 TAG,
-                "Timed out waiting for provisioning completion");
-
-            return ESP_ERR_TIMEOUT;
+                "Provisioning cleanup did not reach STOPPED: %s",
+                esp_err_to_name(cleanup_ret));
         }
 
-        vTaskDelay(
-            pdMS_TO_TICKS(
-                s_config.provisioning_poll_period_ms));
+        return ret;
     }
+
+    wifi_manager_status_t wifi_status = {0};
+
+    ret =
+        wifi_manager_get_status(
+            &wifi_status);
+
+    if (ret != ESP_OK)
+    {
+        app_publish_provisioning_status(
+            UI_PROVISIONING_STATE_FAILED,
+            ret,
+            0U);
+
+        return ret;
+    }
+
+    if ((wifi_status.state !=
+         WIFI_MANAGER_STATE_CONNECTED) ||
+        !wifi_status.has_ipv4_address)
+    {
+        ret = ESP_ERR_INVALID_STATE;
+
+        app_publish_provisioning_status(
+            UI_PROVISIONING_STATE_FAILED,
+            ret,
+            wifi_status.disconnect_reason);
+
+        return ret;
+    }
+
+    ret =
+        wifi_manager_adopt_active_connection();
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to hand provisioning connection to Wi-Fi manager: %s",
+            esp_err_to_name(ret));
+
+        app_publish_provisioning_status(
+            UI_PROVISIONING_STATE_FAILED,
+            ret,
+            wifi_status.disconnect_reason);
+
+        return ret;
+    }
+
+    /*
+     * Normal Wi-Fi ownership begins at adoption, not after the UI dwell.
+     * Runtime disconnect/reconnect callbacks must be able to update state
+     * during the 1500 ms success presentation.
+     */
+    portENTER_CRITICAL(&s_state_lock);
+
+    s_state =
+        APP_NETWORK_COORDINATOR_STATE_ONLINE;
+    s_provisioning_success_dwell_active = true;
+
+    portEXIT_CRITICAL(&s_state_lock);
+
+    app_clear_provisioning_qr_payload();
+    app_publish_provisioning_status(
+        UI_PROVISIONING_STATE_SUCCESS,
+        ESP_OK,
+        0U);
+
+    ESP_LOGI(
+        TAG,
+        "Wi-Fi provisioning completed successfully");
+
+    vTaskDelay(
+        pdMS_TO_TICKS(
+            APP_NETWORK_COORDINATOR_SUCCESS_DWELL_MS));
+
+    const esp_err_t screen_ret =
+        app_gui_request_screen(
+            APP_GUI_SCREEN_WIFI_STATUS);
+
+    if (screen_ret != ESP_OK)
+    {
+        ESP_LOGW(
+            TAG,
+            "Failed to queue post-provisioning Wi-Fi status screen: %s",
+            esp_err_to_name(screen_ret));
+    }
+
+    portENTER_CRITICAL(&s_state_lock);
+
+    s_provisioning_success_dwell_active = false;
+
+    portEXIT_CRITICAL(&s_state_lock);
+
+    return ESP_OK;
 }
 
 static esp_err_t app_apply_wifi_boot_policy(
@@ -727,12 +1118,6 @@ static esp_err_t app_apply_wifi_boot_policy(
 
             esp_err_t ret =
                 app_run_wifi_provisioning();
-
-            if (ret == ESP_OK)
-            {
-                app_network_coordinator_set_state(
-                    APP_NETWORK_COORDINATOR_STATE_ONLINE);
-            }
 
             return ret;
         }
@@ -923,6 +1308,8 @@ esp_err_t app_network_coordinator_init(
     }
 
     s_config = *config;
+    s_provisioning_disconnect_reason = 0U;
+    s_provisioning_success_dwell_active = false;
     s_state = APP_NETWORK_COORDINATOR_STATE_READY;
 
     portEXIT_CRITICAL(&s_state_lock);
@@ -1039,13 +1426,15 @@ esp_err_t app_network_coordinator_start(void)
 }
 
 esp_err_t app_network_coordinator_notify_wifi_event(
-    app_network_coordinator_wifi_event_t event)
+    app_network_coordinator_wifi_event_t event,
+    uint16_t disconnect_reason)
 {
     app_network_coordinator_state_t next_state;
 
     switch (event)
     {
         case APP_NETWORK_COORDINATOR_WIFI_EVENT_CONNECTING:
+        case APP_NETWORK_COORDINATOR_WIFI_EVENT_WAITING_FOR_IP:
             next_state =
                 APP_NETWORK_COORDINATOR_STATE_CONNECTING;
             break;
@@ -1066,10 +1455,25 @@ esp_err_t app_network_coordinator_notify_wifi_event(
 
     app_network_coordinator_state_t previous_state;
     bool state_changed = false;
+    bool provisioning_active = false;
+    bool success_dwell_active = false;
 
     portENTER_CRITICAL(&s_state_lock);
 
     previous_state = s_state;
+    provisioning_active =
+        (s_state ==
+         APP_NETWORK_COORDINATOR_STATE_PROVISIONING);
+    success_dwell_active =
+        s_provisioning_success_dwell_active;
+
+    if (provisioning_active &&
+        (event ==
+         APP_NETWORK_COORDINATOR_WIFI_EVENT_OFFLINE))
+    {
+        s_provisioning_disconnect_reason =
+            disconnect_reason;
+    }
 
     /*
      * Runtime Wi-Fi events are valid only after normal Station ownership has
@@ -1094,6 +1498,39 @@ esp_err_t app_network_coordinator_notify_wifi_event(
 
     portEXIT_CRITICAL(&s_state_lock);
 
+    if (provisioning_active)
+    {
+        switch (event)
+        {
+            case APP_NETWORK_COORDINATOR_WIFI_EVENT_CONNECTING:
+                app_publish_provisioning_status(
+                    UI_PROVISIONING_STATE_CONNECTING_WIFI,
+                    ESP_OK,
+                    0U);
+                break;
+
+            case APP_NETWORK_COORDINATOR_WIFI_EVENT_WAITING_FOR_IP:
+                app_publish_provisioning_status(
+                    UI_PROVISIONING_STATE_WAITING_FOR_IP,
+                    ESP_OK,
+                    0U);
+                break;
+
+            case APP_NETWORK_COORDINATOR_WIFI_EVENT_OFFLINE:
+                app_publish_provisioning_status(
+                    UI_PROVISIONING_STATE_FAILED,
+                    ESP_FAIL,
+                    disconnect_reason);
+                break;
+
+            case APP_NETWORK_COORDINATOR_WIFI_EVENT_ONLINE:
+            default:
+                break;
+        }
+
+        return ESP_OK;
+    }
+
     if (state_changed)
     {
         ESP_LOGI(
@@ -1105,7 +1542,8 @@ esp_err_t app_network_coordinator_notify_wifi_event(
                 next_state));
 
         if (next_state ==
-            APP_NETWORK_COORDINATOR_STATE_ONLINE)
+            APP_NETWORK_COORDINATOR_STATE_ONLINE &&
+            !success_dwell_active)
         {
             const esp_err_t screen_ret =
                 app_gui_request_screen(

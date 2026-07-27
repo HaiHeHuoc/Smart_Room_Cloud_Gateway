@@ -9,7 +9,8 @@ credentials without owning persistent storage or reconnect policy.
 
 Phase 6.2 is complete. The application starts this component only when
 `config_manager` reports `NOT_CONFIGURED`. Phase 6.4.3 adds a bounded copy API
-for the QR payload of the service that is actually active.
+for the QR payload of the service that is actually active. Phase 6.4.4 adds a
+single copied progress callback for application orchestration.
 
 ## Component Structure
 
@@ -41,6 +42,11 @@ components/connectivity/provisioning_manager/
   policy can distinguish idle provisioning from an in-flight Wi-Fi attempt.
 - Discards pending credentials after a failed connection attempt.
 - Delivers one verified copy through a length-one FreeRTOS queue.
+- Publishes non-sensitive `STARTING`, waiting, credential, Wi-Fi result,
+  stopping, stopped, and terminal-failure progress snapshots.
+- Invokes the single registered progress callback outside the state critical
+  section; the callback never receives credentials, QR JSON, or a manager-owned
+  pointer.
 - Requests provisioning shutdown asynchronously.
 - De-initializes the framework after `NETWORK_PROV_END`.
 - Releases BTDM resources through
@@ -66,6 +72,7 @@ The application manifest currently selects
 
 | API | Responsibility |
 |---|---|
+| `provisioning_manager_register_progress_callback()` | Register, idempotently retain, or unregister the single copied progress callback |
 | `provisioning_manager_init()` | Initialize the BLE scheme and enter `READY` |
 | `provisioning_manager_start()` | Start advertising and enter `ACTIVE` |
 | `provisioning_manager_get_qr_payload()` | Copy the active BLE service's QR JSON into caller-owned storage |
@@ -142,8 +149,9 @@ NETWORK_PROV_WIFI_CRED_SUCCESS
 The queue holds an independent copy. The caller must clear its output after
 persistence or on every error path. The component never calls
 `config_manager`, `wifi_manager`, GUI, cloud, or reboot APIs from its callback.
-The progress API returns only a boolean and never exposes SSID or password
-contents.
+The handoff-pending API returns only a boolean. Progress snapshots contain only
+an enum, `esp_err_t`, and the framework's non-sensitive Wi-Fi failure reason;
+they never expose SSID or password contents.
 
 ## Timeout Boundary Handling
 
@@ -159,6 +167,11 @@ credentials or treating an unadopted Station connection as application-ready.
 The component protects only lifecycle state and short pending-credential copy
 operations with `s_state_lock`. No BLE, Wi-Fi, logging, queue, task-creation,
 or framework API is called while that spinlock is held.
+
+The progress callback and its context are copied while the lock is held, then
+the callback is invoked after the lock is released. The callback runs in normal
+task context, must return promptly, must not retain its snapshot pointer, and
+must not call LVGL.
 
 The upstream framework invokes the direct `NETWORK_PROV_END` callback while it
 still owns an internal mutex. Calling `network_prov_mgr_deinit()` directly from
@@ -179,7 +192,11 @@ manually.
 ## Basic Usage
 
 ```c
-esp_err_t ret = provisioning_manager_init();
+esp_err_t ret = provisioning_manager_register_progress_callback(
+    application_progress_callback,
+    NULL);
+
+ret = provisioning_manager_init();
 if (ret != ESP_OK) {
     return ret;
 }
@@ -210,7 +227,7 @@ ret = provisioning_manager_get_state(&state);
 The caller should poll with a finite delay and timeout. A tight polling loop
 would waste CPU and flood the state log.
 
-## Current Phase 6.2 Integration
+## Production Integration
 
 The production provisioning path in `main.c`:
 
@@ -223,6 +240,8 @@ The production provisioning path in `main.c`:
 6. Waits for BLE cleanup and the active Station connection.
 7. Lets `wifi_manager` adopt the connection and own later Wi-Fi events.
 8. Clears every application credential copy.
+9. Maps manager progress to the GUI through coordinator-owned latest-value
+   status publication.
 
 Integrity states such as `INCOMPLETE`, `INVALID_DATA`, and
 `UNSUPPORTED_VERSION` are preserved and do not automatically start
@@ -274,7 +293,7 @@ I (...) PROVISIONING_MANAGER: Provisioning manager de-initialized
 ## Future Attention
 
 - Replace the development Proof of Possession with a production strategy.
-- Add dedicated provisioning-state presentation in a later approved phase.
+- Add automatic retry/restart policy only in the approved Phase 6.4.5 scope.
 - Add factory-reset and reprovisioning policy in Sprint 7.
 - Add focused automated tests around callback ordering where the upstream
   framework can be isolated.
@@ -296,3 +315,13 @@ The QR contract, active-session copy API, five framework connection attempts,
 NimBLE/Security1 defaults, and build have been verified statically. A phone
 scan, BLE handshake, Wi-Fi authentication, NVS persistence, and cleanup still
 require target-hardware acceptance.
+
+## Phase 6.4.4 Status
+
+**IMPLEMENTED / HARDWARE TEST PENDING**
+
+The manager now exposes the copied lifecycle facts required by the coordinator.
+Normal credential failure remains non-terminal for the current BLE session;
+terminal manager failures and stop/deinit invalidate the active session
+identity. Build validation passed, while callback ordering, retry-within-session,
+timeout, and successful cleanup still require target-hardware acceptance.

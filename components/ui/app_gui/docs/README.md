@@ -16,6 +16,8 @@ them to the real BLE provisioning lifecycle.
 Phase 6.4.3 replaces the reserved region with the official LVGL QR widget,
 adds a dedicated copied-payload queue, and renders the active Espressif
 Security 1 provisioning payload.
+Phase 6.4.4 connects the model to real manager/coordinator/Wi-Fi progress and
+adds verified success routing.
 
 ## Application Screens
 
@@ -34,10 +36,11 @@ renamed directly. No compatibility aliases are retained.
 
 `app_gui_init()` creates all queues as one initialization transaction:
 
-- Command queue: length 8, carrying copied screen requests and provisioning
-  status updates.
-- Provisioning QR queue: length 1, newest complete payload overwrites the
+- Command queue: length 8, carrying copied screen requests only.
+- Provisioning status queue: length 1, newest complete snapshot overwrites the
   pending value.
+- Provisioning QR queue: length 1, newest payload-or-unavailable message
+  overwrites the pending value.
 - Wi-Fi status queue: length 1, newest snapshot overwrites the pending value.
 - Sensor status queue: length 5, producers never wait.
 - Cloud status queue: length 1, newest snapshot overwrites the pending value.
@@ -51,8 +54,9 @@ handles return to `NULL`, and `app_gui_init()` returns `ESP_ERR_NO_MEM`.
 | `app_gui_start_ui_task()` | Start the 24 KB, priority-5 UI task. |
 | `app_gui_request_screen()` | Validate and enqueue a non-blocking asynchronous screen request. |
 | `app_gui_get_screen_id()` | Copy the authoritative active-screen ID under a critical section. |
-| `app_gui_post_provisioning_status()` | Validate and copy a non-sensitive provisioning model into the command queue. |
+| `app_gui_post_provisioning_status()` | Validate and overwrite the pending non-sensitive provisioning model. |
 | `app_gui_post_provisioning_qr_payload()` | Validate and copy the active Security 1 QR payload into the dedicated latest-value queue. |
+| `app_gui_clear_provisioning_qr_payload()` | Post explicit session invalidation; the GUI task clears its cache and hides the QR widget. |
 | `app_gui_post_wifi_status()` | Replace the pending Wi-Fi model without calling LVGL. |
 | `app_gui_post_sensor_status()` | Queue a sensor model without calling LVGL. |
 | `app_gui_post_cloud_status()` | Replace the pending cloud model without calling LVGL. |
@@ -62,15 +66,18 @@ code. It does not wait for construction and is not ISR-safe. `ESP_OK` means
 only that the command was queued. It returns `ESP_ERR_TIMEOUT` when the command
 queue is full.
 
-`app_gui_post_provisioning_status()` has the same non-blocking task/callback
-contract. It never retains the caller's pointer, never calls LVGL, and never
-activates a screen. The payload contains only UI state, `esp_err_t`, and a
-disconnect reason; it contains no SSID, password, PoP, token, raw framework
-object, or manager-owned pointer.
+`app_gui_post_provisioning_status()` uses `xQueueOverwrite()` on its dedicated
+length-one queue. Rapid progress can coalesce, but an older state can never
+fill the screen-command queue or displace a screen transition. It never
+retains the caller's pointer, calls LVGL, or activates a screen. The payload
+contains only UI state, `esp_err_t`, and a disconnect reason; it contains no
+SSID, password, PoP, token, raw framework object, or manager-owned pointer.
 
 `app_gui_post_provisioning_qr_payload()` also never retains the caller's
 pointer, calls LVGL, or changes screens. Its copied payload is sensitive
 because it contains the development PoP and must not be logged.
+`app_gui_clear_provisioning_qr_payload()` follows the same producer contract;
+only the GUI task clears cached QR bytes or touches the QR widget.
 
 ## UI Task And Router
 
@@ -79,6 +86,7 @@ Every 33 ms the UI task performs:
 ```text
 drain screen commands in FIFO order
 -> consume/cache/render provisioning QR
+-> consume/cache/render latest provisioning status
 -> consume/cache/render status queues
 -> take LVGL mutex
 -> lv_timer_handler()
@@ -183,8 +191,24 @@ active provisioning_manager service
     -> lv_qrcode_update()
 ```
 
-Provisioning progress still uses the Phase 6.4.2 UI-only model; no production
-progress producer is connected until Phase 6.4.4.
+The QR cache belongs to the provisioning session, not to one screen instance.
+Leaving `PROVISIONING` does not clear it. A coordinator/manager terminal stop,
+failure, timeout, or successful handoff posts an unavailable message; the GUI
+task then zeroizes the cache and hides the QR object when that screen is
+active. Ordinary credential failure keeps the same QR available so the phone
+can submit another credential set in the same BLE session.
+
+Real progress flow:
+
+```text
+provisioning_manager copied progress
+    + existing wifi_manager callback bridge
+    + coordinator persistence/cleanup/adoption policy
+    -> ui_provisioning_status_t
+    -> dedicated length-one status queue
+    -> app_gui UI task
+    -> text/color render only when PROVISIONING is active
+```
 
 ### 160x128 layout
 
@@ -219,9 +243,8 @@ bytes per manager/cache/queue copy, requires no PSRAM, and is never persisted
 to NVS.
 
 GUI task-local QR copies are securely overwritten after rendering. The cached
-copy is securely cleared after a successful transition away from
-`PROVISIONING`; the manager independently clears its active copy when BLE stop
-begins.
+copy is securely cleared only by an explicit session-unavailable message. The
+manager independently clears its active copy when BLE stop begins.
 
 The title, instruction, status, and state indicator are created once when the
 screen is activated. Status updates modify only their text and colors. There
@@ -260,15 +283,18 @@ It posts screen requests but never renders or calls LVGL.
 | Config migration | Resolve migration, then use `BOOT` for the final valid path |
 | Config inspection or unrecoverable integrity error | Best-effort `BOOT` placeholder plus safe error logging |
 | Provisioning status update | Cache/render only; no implicit screen change |
+| Verified provisioning success | `SUCCESS` dwell for 1500 ms -> explicit `WIFI_STATUS` request |
 | Wi-Fi status update | Cache/render only; no implicit screen change |
 | Sensor status update | Cache/render only; no implicit screen change |
 | Cloud status update | Cache/render only; no implicit screen change |
 | Wi-Fi screen timeout | Explicit deferred `SENSOR_DASHBOARD` request |
 
-The coordinator ignores transient provisioning Wi-Fi events while it remains
-in `PROVISIONING`. Only a normal runtime transition from `CONNECTING` or
-`OFFLINE` to `ONLINE` queues `WIFI_STATUS`. Successful provisioning-to-screen
-state integration remains deferred to Phase 6.4.4.
+While the coordinator remains in `PROVISIONING`, association, DHCP, and
+disconnect events update only the provisioning model. They cannot promote the
+application to `ONLINE` or request a normal screen. After verified persistence,
+BLE cleanup, and connection adoption, the coordinator posts `SUCCESS`, waits
+1500 ms, and requests `WIFI_STATUS`; its existing 10-second timer later requests
+`SENSOR_DASHBOARD`.
 
 ## Error Handling
 
@@ -277,6 +303,8 @@ state integration remains deferred to Phase 6.4.4.
 - NULL, empty, or unterminated QR payload returns `ESP_ERR_INVALID_ARG`.
 - Requests before `app_gui_init()` return `ESP_ERR_INVALID_STATE`.
 - A full command queue returns `ESP_ERR_TIMEOUT`.
+- Provisioning status and QR queues use length-one overwrite; an unexpected
+  overwrite failure returns `ESP_FAIL`.
 - Missing LVGL roots return `ESP_ERR_INVALID_STATE`.
 - Widget or timer allocation failures return `ESP_ERR_NO_MEM`.
 - QR encoding failure hides the QR object, emits only a generic error, and
@@ -344,6 +372,24 @@ automatic success/failure screen transitions, timeout recovery UI, factory
 reset, touch, animation, progress bars, or dashboard redesign. Those remain
 outside this checkpoint.
 
+## Phase 6.4.4 Status
+
+**IMPLEMENTED / HARDWARE TEST PENDING**
+
+Implemented:
+
+- dedicated length-one overwrite queue for real provisioning status;
+- session-owned QR cache with explicit secure invalidation;
+- manager, Wi-Fi callback, and coordinator progress mapping;
+- non-terminal `FAILED` presentation for an ordinary credential failure;
+- bounded `TIMEOUT` cleanup;
+- verified `SAVING_CONFIG -> CLEANING_UP -> SUCCESS` flow;
+- `SUCCESS` dwell followed by `WIFI_STATUS`, then the existing dashboard timer.
+
+Automatic retry/restart and the `RETRYING` producer remain intentionally
+deferred to Phase 6.4.5. Factory reset, touch, animation, progress bars, and
+dashboard redesign remain outside this checkpoint.
+
 ## Manual Acceptance Tests
 
 Run any temporary state driver outside the UI task, call only public
@@ -351,11 +397,11 @@ Run any temporary state driver outside the UI task, call only public
 
 1. Activate `PROVISIONING`; verify `Wi-Fi Setup`, `Prepare your phone`, and
    `Starting setup...` with no clipping or white flash.
-2. Post all eleven provisioning states; verify text/color changes without
+2. Exercise all implemented provisioning states except `RETRYING`; verify
+   text/color changes without
    object recreation, crash, watchdog, or LVGL assertion.
-3. Activate `WIFI_STATUS`, post provisioning `SUCCESS`, verify Wi-Fi remains
-   active, then activate `PROVISIONING` and verify cached `SUCCESS` renders
-   immediately.
+3. Leave and re-enter `PROVISIONING` while BLE remains active; verify the same
+   QR is still rendered. Then explicitly clear it and verify the QR hides.
 4. Request `PROVISIONING` repeatedly; verify no duplicate objects, reset, leak,
    or crash.
 5. Cycle `PROVISIONING -> WIFI_STATUS -> PROVISIONING ->
@@ -370,5 +416,12 @@ Run any temporary state driver outside the UI task, call only public
    module edges and the full white quiet zone remain visible.
 9. Verify the serial log contains no QR JSON, PoP, password, session key
    material, or credentials.
+10. Submit a wrong password, verify `FAILED` is shown while the QR/session
+    remains usable, then submit correct credentials without rebooting.
+11. Verify successful provisioning shows `SAVING_CONFIG`, `CLEANING_UP`, and
+    `SUCCESS`, holds success for about 1500 ms, then shows `WIFI_STATUS` and
+    later `SENSOR_DASHBOARD`.
+12. Allow a session to expire; verify `TIMEOUT`, QR invalidation, bounded BLE
+    cleanup, and no automatic `RETRYING` transition.
 
 Phase 6.4 is not complete.

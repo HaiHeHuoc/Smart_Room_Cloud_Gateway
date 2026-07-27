@@ -17,6 +17,10 @@ The coordinator:
 - Starts bounded BLE provisioning only for `NOT_CONFIGURED`.
 - Copies the exact active BLE QR payload into the GUI's dedicated latest-value
   queue immediately after provisioning starts.
+- Registers the manager's single progress callback and maps copied lifecycle
+  facts into provisioning UI states.
+- Maps the existing Wi-Fi callback's association, DHCP, and disconnect
+  snapshots into provisioning progress without taking Wi-Fi ownership.
 - Requests the initial application screen from the final verified
   configuration state.
 - Persists provisioned credentials through `config_manager`.
@@ -32,7 +36,7 @@ The coordinator does not:
 - Own Wi-Fi event handlers or reconnect behavior.
 - Own BLE transport internals.
 - Call LVGL, build screens, or render GUI objects. It may only post
-  asynchronous `app_gui` screen requests and copied QR models.
+  asynchronous `app_gui` screen requests and copied status/QR models.
 - Log passwords, PoP values, tokens, or credential contents.
 
 ## Public API
@@ -43,7 +47,7 @@ The coordinator does not:
 | `app_network_coordinator_start()` | Schedule the one-shot coordinator task and return immediately. |
 | `app_network_coordinator_get_state()` | Copy the thread-safe lifecycle state. |
 | `app_network_coordinator_state_to_string()` | Convert a state to readable text. |
-| `app_network_coordinator_notify_wifi_event()` | Apply a short runtime Wi-Fi state notification after normal Station ownership begins. |
+| `app_network_coordinator_notify_wifi_event()` | Apply a short Wi-Fi notification to provisioning progress or normal runtime state, including the raw disconnect reason. |
 
 ## State Flow
 
@@ -63,17 +67,32 @@ UNINITIALIZED
 `ONLINE` requires a valid IPv4 address. After normal Station ownership begins,
 the composition root forwards Wi-Fi manager snapshots so later connection,
 DHCP, disconnection, and retry events keep the coordinator state current.
-Provisioning events remain ignored until credentials are persisted, BLE is
-cleaned up, and the active connection is adopted.
+During provisioning, Wi-Fi events update only the GUI progress model. They
+cannot promote coordinator state to `ONLINE`, request `WIFI_STATUS`, start
+cloud work, or enable reconnect ownership. The application becomes `ONLINE`
+only after credentials are persisted, BLE is cleaned up, and the active
+connection is adopted.
 
 For an unconfigured device, startup ordering is:
 
 ```text
 request PROVISIONING screen
+    -> STARTING
     -> initialize/start BLE service
     -> copy active QR payload from provisioning_manager
     -> post copied payload to app_gui
+    -> WAITING_FOR_PHONE
+    -> CREDENTIAL_RECEIVED
+    -> CONNECTING_WIFI
+    -> WAITING_FOR_IP
     -> wait for framework-verified credentials
+    -> SAVING_CONFIG
+    -> CLEANING_UP
+    -> adopt the valid Station/IPv4 connection
+    -> clear the session QR cache
+    -> SUCCESS
+    -> 1500 ms dwell
+    -> request WIFI_STATUS
 ```
 
 QR publication is best-effort and never promotes coordinator state, starts a
@@ -110,7 +129,8 @@ Screen routing follows the final result:
   best-effort `BOOT` request before returning the existing policy error.
 - A normal stored-credential `CONNECTING -> ONLINE` transition queues
   `WIFI_STATUS`.
-- Transient provisioning `GOT_IP` events remain ignored for screen routing.
+- Provisioning Wi-Fi events update progress only; the verified success path
+  requests `WIFI_STATUS` after cleanup, adoption, and a 1500 ms success dwell.
 
 ## Threading And Security
 
@@ -124,6 +144,8 @@ Screen routing follows the final result:
   blocking wait, Wi-Fi call, or LVGL call. A verified normal transition to
   `ONLINE` may post one non-blocking `WIFI_STATUS` screen request, so the API
   remains suitable for the normal task-context Wi-Fi status callback.
+- The manager progress callback posts only copied latest-value GUI messages.
+  It performs no wait, persistence, Wi-Fi operation, or LVGL call.
 - Provisioning waits use configured finite timeout and poll periods.
 - A session timeout receives one additional finite connection grace only when
   `provisioning_manager` reports that valid credentials are already in flight.
@@ -132,8 +154,9 @@ Screen routing follows the final result:
 - The temporary QR copy is overwritten immediately after its non-blocking GUI
   post and its contents are never logged.
 - GUI status updates remain event-driven through the registered
-  `wifi_manager` callback. Config-driven initial routing and verified normal
-  `ONLINE` routing use the independent `app_gui` command queue.
+  `wifi_manager` callback and the manager progress callback. Config-driven
+  initial routing and verified screen transitions use the independent
+  `app_gui` command queue.
 
 ## Configuration
 
@@ -162,7 +185,9 @@ verified credential queue
     -> config_manager persistence and read-back
     -> BLE stop/deinit
     -> wifi_manager adoption
-    -> coordinator ONLINE
+    -> coordinator ONLINE runtime tracking
+    -> provisioning SUCCESS for 1500 ms
+    -> WIFI_STATUS
     -> cloud start gate opens
 ```
 
@@ -202,8 +227,23 @@ Phase 6.4 remains incomplete.
 After `provisioning_manager_start()` succeeds, the coordinator obtains the
 payload for that exact active service and posts it to `app_gui`. It preserves
 the existing bounded credential wait, persistence, BLE cleanup, Wi-Fi
-adoption, and screen-routing behavior. Phase 6.4.4 progress events and
-success/failure screen transitions remain intentionally deferred.
+adoption, and screen-routing behavior.
+
+## Phase 6.4.4 Integration
+
+**IMPLEMENTED / HARDWARE TEST PENDING**
+
+The coordinator now publishes the real provisioning lifecycle, preserves the
+QR payload across ordinary screen transitions and credential failures, and
+clears it only when the session becomes invalid. A wrong credential set shows
+`FAILED` while the same BLE session remains available for another phone
+submission; no automatic `RETRYING` policy is implemented. Final timeout stops
+and cleans the session. Verified success persists and re-reads configuration,
+waits for manager cleanup, adopts the valid Station/IPv4 connection, shows
+`SUCCESS` for 1500 ms, then requests `WIFI_STATUS`. The existing Wi-Fi-screen
+timer continues to route to `SENSOR_DASHBOARD`. Coordinator runtime tracking
+begins at adoption, but normal `ONLINE` screen requests are suppressed during
+the success dwell so a reconnect cannot cut the success presentation short.
 
 ## Future Attention
 

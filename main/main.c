@@ -587,7 +587,8 @@ static void app_wifi_status_callback(
     {
         const esp_err_t coordinator_error =
             app_network_coordinator_notify_wifi_event(
-                network_event);
+                network_event,
+                status->disconnect_reason);
 
         if (coordinator_error != ESP_OK)
         {
@@ -835,16 +836,20 @@ static bool app_map_wifi_status_to_network_event(
     switch (status->state)
     {
         case WIFI_MANAGER_STATE_CONNECTING:
-        case WIFI_MANAGER_STATE_WAITING_FOR_IP:
             *event =
                 APP_NETWORK_COORDINATOR_WIFI_EVENT_CONNECTING;
+            return true;
+
+        case WIFI_MANAGER_STATE_WAITING_FOR_IP:
+            *event =
+                APP_NETWORK_COORDINATOR_WIFI_EVENT_WAITING_FOR_IP;
             return true;
 
         case WIFI_MANAGER_STATE_CONNECTED:
             *event =
                 status->has_ipv4_address
                     ? APP_NETWORK_COORDINATOR_WIFI_EVENT_ONLINE
-                    : APP_NETWORK_COORDINATOR_WIFI_EVENT_CONNECTING;
+                    : APP_NETWORK_COORDINATOR_WIFI_EVENT_WAITING_FOR_IP;
             return true;
 
         case WIFI_MANAGER_STATE_DISCONNECTED:
