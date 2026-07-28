@@ -18,6 +18,9 @@ adds a dedicated copied-payload queue, and renders the active Espressif
 Security 1 provisioning payload.
 Phase 6.4.4 connects the model to real manager/coordinator/Wi-Fi progress and
 adds verified success routing.
+Phase 6.4.5 makes provisioning status, QR updates, and QR invalidation
+generation-aware so delayed messages from an old session cannot corrupt the
+new session's screen model.
 
 ## Application Screens
 
@@ -70,14 +73,16 @@ queue is full.
 length-one queue. Rapid progress can coalesce, but an older state can never
 fill the screen-command queue or displace a screen transition. It never
 retains the caller's pointer, calls LVGL, or activates a screen. The payload
-contains only UI state, `esp_err_t`, and a disconnect reason; it contains no
-SSID, password, PoP, token, raw framework object, or manager-owned pointer.
+contains only a non-zero session generation, UI state, `esp_err_t`, and a
+disconnect reason; it contains no SSID, password, PoP, token, raw framework
+object, or manager-owned pointer.
 
 `app_gui_post_provisioning_qr_payload()` also never retains the caller's
 pointer, calls LVGL, or changes screens. Its copied payload is sensitive
 because it contains the development PoP and must not be logged.
 `app_gui_clear_provisioning_qr_payload()` follows the same producer contract;
-only the GUI task clears cached QR bytes or touches the QR widget.
+the caller supplies the non-zero session generation and only the GUI task
+clears cached QR bytes or touches the QR widget.
 
 ## UI Task And Router
 
@@ -141,6 +146,14 @@ The GUI retains the latest complete:
 - `ui_sensor_status_t` plus an availability flag;
 - `ui_cloud_status_t` plus an availability flag.
 
+It also retains the newest accepted provisioning generation. A strictly newer
+generation clears both old provisioning caches before its first status or QR
+message is applied. Status, QR update, and QR clear messages with an older
+generation are rejected at DEBUG level both before they can overwrite a
+pending newer queue value and again in the GUI consumer. Generation zero is
+invalid; numeric wrap skips zero, while generic long-distance wrap ordering is
+intentionally outside this bounded device-lifetime policy.
+
 Status events never choose a screen:
 
 - Provisioning updates render only on `PROVISIONING`.
@@ -163,6 +176,9 @@ Entering
 
 `ui_provisioning_status_t` carries:
 
+- `uint32_t session_generation` (non-zero);
+- `uint32_t session_number` (one-based active session);
+- `uint32_t session_limit` (configured maximum, including the first session);
 - `ui_provisioning_state_t state`;
 - `esp_err_t last_error`;
 - `uint16_t wifi_disconnect_reason`.
@@ -191,6 +207,11 @@ active provisioning_manager service
     -> lv_qrcode_update()
 ```
 
+`ui_provisioning_qr_payload_t` and explicit QR-clear messages carry the same
+generation. This two-layer ordering guard prevents an old `STOPPED`/`FAILED`
+clear from hiding the new QR and prevents an old terminal status from
+overwriting a new `WAITING_FOR_PHONE` state.
+
 The QR cache belongs to the provisioning session, not to one screen instance.
 Leaving `PROVISIONING` does not clear it. A coordinator/manager terminal stop,
 failure, timeout, or successful handoff posts an unavailable message; the GUI
@@ -216,11 +237,11 @@ provisioning_manager copied progress
 +--------------------------------------+
 | Wi-Fi Setup                       [o] |
 |--------------------------------------|
-| +---------------------+ instruction  |
+| +---------------------+ Session 1/3  |
 | |                     |              |
-| |  74x74 QR symbol    | status       |
+| |  74x74 QR symbol    | instruction  |
 | |  in white 92x92     |              |
-| |  quiet-zone holder  |              |
+| |  quiet-zone holder  | status       |
 | +---------------------+              |
 +--------------------------------------+
 ```
@@ -235,9 +256,11 @@ quiet zone prevents it from shrinking the symbol; the measured white parent
 provides that zone instead.
 
 The right column begins at `x=94`; all objects remain within the 160x128
-logical display. The QR object is created once with the screen and stays hidden
-until a valid payload has been encoded. The current QR canvas consumes roughly
-0.9 KiB plus LVGL object metadata. Encoding version 5 temporarily allocates two
+logical display. The instruction label prefixes its existing state text with
+`Session n/max`; no new LVGL object is created and QR size/quiet zone are
+unchanged. The QR object is created once with the screen and stays hidden until
+a valid payload has been encoded. The current QR canvas consumes roughly 0.9
+KiB plus LVGL object metadata. Encoding version 5 temporarily allocates two
 173-byte work buffers. Application-side payload storage is bounded to 192
 bytes per manager/cache/queue copy, requires no PSRAM, and is never persisted
 to NVS.
@@ -386,9 +409,28 @@ Implemented:
 - verified `SAVING_CONFIG -> CLEANING_UP -> SUCCESS` flow;
 - `SUCCESS` dwell followed by `WIFI_STATUS`, then the existing dashboard timer.
 
-Automatic retry/restart and the `RETRYING` producer remain intentionally
-deferred to Phase 6.4.5. Factory reset, touch, animation, progress bars, and
-dashboard redesign remain outside this checkpoint.
+Automatic retry/restart and the `RETRYING` producer were intentionally
+deferred to Phase 6.4.5 at this checkpoint. Factory reset, touch, animation,
+progress bars, and dashboard redesign remain outside Phase 6.4.4.
+
+## Phase 6.4.5 Status
+
+**IMPLEMENTED / HARDWARE TEST PENDING**
+
+Implemented:
+
+- non-zero session generation in provisioning status and QR models;
+- generation-aware explicit QR clear;
+- strict-newer generation cache invalidation;
+- stale status/QR/clear rejection before rendering;
+- `TIMEOUT -> CLEANING_UP -> RETRYING -> STARTING` presentation without
+  recreating the screen;
+- final exhaustion that leaves the Provisioning Screen active, hides the QR,
+  and preserves the final terminal state.
+
+Hardware must still verify message ordering under real BLE cleanup, QR
+replacement after retry, stale-event injection, and long-run LVGL/heap
+stability. Phase 6.4 remains incomplete.
 
 ## Manual Acceptance Tests
 
@@ -397,8 +439,8 @@ Run any temporary state driver outside the UI task, call only public
 
 1. Activate `PROVISIONING`; verify `Wi-Fi Setup`, `Prepare your phone`, and
    `Starting setup...` with no clipping or white flash.
-2. Exercise all implemented provisioning states except `RETRYING`; verify
-   text/color changes without
+2. Exercise all provisioning states including `RETRYING`; verify text/color
+   changes without
    object recreation, crash, watchdog, or LVGL assertion.
 3. Leave and re-enter `PROVISIONING` while BLE remains active; verify the same
    QR is still rendered. Then explicitly clear it and verify the QR hides.
@@ -421,7 +463,13 @@ Run any temporary state driver outside the UI task, call only public
 11. Verify successful provisioning shows `SAVING_CONFIG`, `CLEANING_UP`, and
     `SUCCESS`, holds success for about 1500 ms, then shows `WIFI_STATUS` and
     later `SENSOR_DASHBOARD`.
-12. Allow a session to expire; verify `TIMEOUT`, QR invalidation, bounded BLE
-    cleanup, and no automatic `RETRYING` transition.
+12. Allow a session to expire; verify `TIMEOUT`, failure dwell,
+    `CLEANING_UP`, `RETRYING`, a new QR, and `WAITING_FOR_PHONE` without a
+    screen rebuild or stale old QR.
+13. Delay an old generation's `FAILED`, `STOPPED`, and QR-clear messages until
+    the next generation is active; verify they cannot hide or overwrite the
+    new QR and `WAITING_FOR_PHONE`.
+14. Exhaust all configured sessions; verify the final QR stays hidden and the
+    final `TIMEOUT` or `FAILED` remains visible on the Provisioning Screen.
 
 Phase 6.4 is not complete.

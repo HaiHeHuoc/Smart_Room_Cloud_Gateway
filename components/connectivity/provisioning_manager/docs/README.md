@@ -10,7 +10,9 @@ credentials without owning persistent storage or reconnect policy.
 Phase 6.2 is complete. The application starts this component only when
 `config_manager` reports `NOT_CONFIGURED`. Phase 6.4.3 adds a bounded copy API
 for the QR payload of the service that is actually active. Phase 6.4.4 adds a
-single copied progress callback for application orchestration.
+single copied progress callback for application orchestration. Phase 6.4.5
+adds clean same-boot `STOPPED -> READY` reinitialization and session-generation
+metadata for bounded application retries.
 
 ## Component Structure
 
@@ -35,6 +37,10 @@ components/connectivity/provisioning_manager/
 - Caches the exact active service identity and exposes only a caller-owned QR
   payload copy while the service remains `ACTIVE`.
 - Starts BLE provisioning only from the `READY` state.
+- Reinitializes from either `UNINITIALIZED` or a fully cleaned `STOPPED` state
+  for a new non-zero session generation.
+- Reuses one retained credential queue and calls `xQueueReset()` before each
+  replacement session instead of allocating a queue per retry.
 - Prevents concurrent callers from claiming the same lifecycle transition.
 - Deep-copies and validates framework-owned credentials on receipt.
 - Keeps credentials pending until the framework reports Wi-Fi success.
@@ -43,14 +49,15 @@ components/connectivity/provisioning_manager/
 - Discards pending credentials after a failed connection attempt.
 - Delivers one verified copy through a length-one FreeRTOS queue.
 - Publishes non-sensitive `STARTING`, waiting, credential, Wi-Fi result,
-  stopping, stopped, and terminal-failure progress snapshots.
+  stopping, stopped, and terminal-failure progress snapshots with the exact
+  session generation that produced each event.
 - Invokes the single registered progress callback outside the state critical
   section; the callback never receives credentials, QR JSON, or a manager-owned
   pointer.
 - Requests provisioning shutdown asynchronously.
 - De-initializes the framework after `NETWORK_PROV_END`.
-- Releases BTDM resources through
-  `NETWORK_PROV_SCHEME_BLE_EVENT_HANDLER_FREE_BTDM`.
+- Retains BLE controller memory across intermediate clean stops and releases
+  it through an explicit terminal API after the retry envelope ends.
 - Exposes a thread-safe state snapshot for application-side polling.
 - Clears temporary credential copies and never logs passwords or PoP.
 
@@ -59,6 +66,7 @@ components/connectivity/provisioning_manager/
 | Dependency | Use |
 |---|---|
 | `esp_common` | Public `esp_err_t` API |
+| `bt` | Bluetooth memory retention and terminal release |
 | `esp_hw_support` | Station MAC address |
 | `esp_wifi` | Framework Wi-Fi credential type |
 | `freertos` | Queue, state spinlock, and one-shot cleanup task |
@@ -73,19 +81,21 @@ The application manifest currently selects
 | API | Responsibility |
 |---|---|
 | `provisioning_manager_register_progress_callback()` | Register, idempotently retain, or unregister the single copied progress callback |
-| `provisioning_manager_init()` | Initialize the BLE scheme and enter `READY` |
+| `provisioning_manager_init(generation)` | Initialize or cleanly reinitialize the BLE scheme and enter `READY` |
 | `provisioning_manager_start()` | Start advertising and enter `ACTIVE` |
-| `provisioning_manager_get_qr_payload()` | Copy the active BLE service's QR JSON into caller-owned storage |
+| `provisioning_manager_get_qr_payload(generation, ...)` | Copy the exact generation's active BLE QR JSON |
 | `provisioning_manager_stop()` | Begin asynchronous shutdown |
+| `provisioning_manager_release_ble_memory()` | Permanently release retained Bluetooth memory after the retry envelope |
 | `provisioning_manager_get_state()` | Copy the current lifecycle state |
 | `provisioning_manager_is_wifi_handoff_pending()` | Report whether received credentials are still connecting or awaiting application consumption |
 | `provisioning_manager_receive_wifi_credentials()` | Wait for credentials from a framework-confirmed connection |
 
 All public APIs return `esp_err_t`. The component does not call
 `ESP_ERROR_CHECK()` and leaves policy decisions to the application.
-`provisioning_manager_get_qr_payload()` requires a
+Generation zero is reserved. `provisioning_manager_get_qr_payload()` requires a
 `PROVISIONING_MANAGER_QR_PAYLOAD_BUFFER_SIZE` buffer, never returns an internal
-pointer, and returns `ESP_ERR_INVALID_STATE` outside an active session.
+pointer, and returns `ESP_ERR_INVALID_STATE` outside the matching active
+session.
 
 ## Espressif wifi_prov Alignment
 
@@ -96,7 +106,6 @@ the interoperable provisioning contract:
 - BLE transport through `network_prov_scheme_ble`;
 - NimBLE controller configuration;
 - Security 1 with Proof of Possession;
-- `NETWORK_PROV_SCHEME_BLE_EVENT_HANDLER_FREE_BTDM`;
 - five framework Wi-Fi connection attempts;
 - QR version `v1` and transport `ble`;
 - QR JSON schema:
@@ -107,26 +116,30 @@ the interoperable provisioning contract:
 
 The application intentionally does not copy the example's global event
 handler, direct `esp_wifi_connect()` call, credential logging, custom endpoint,
-or provisioning-state reset callback. Those behaviors would cross the
-existing `wifi_manager`, coordinator, security, or Phase 6.4 ownership
-boundaries.
+or provisioning-state reset callback. It also replaces the example's immediate
+`FREE_BTDM` policy with a small scheme callback that releases Classic BT once
+but retains BLE across the bounded same-boot retry envelope. Those behaviors
+preserve the existing `wifi_manager`, coordinator, security, and Phase 6.4
+ownership boundaries.
 
 ## State Lifecycle
 
 ```text
-UNINITIALIZED
-    |
-    v
-READY -> STARTING -> ACTIVE -> STOPPING -> STOPPED
-              \         \          \
-               +---------+-----------> FAILED
+UNINITIALIZED -> READY -> STARTING -> ACTIVE -> STOPPING -> STOPPED
+                   ^                                      |
+                   +--------- next generation ------------+
+                     \
+                      +-------------------------------> FAILED
 ```
 
 - `READY -> STARTING` and `ACTIVE -> STOPPING` are claimed atomically.
 - `STOPPING` covers BLE transport shutdown and framework de-initialization.
-- `STOPPED` is terminal for the current boot flow.
+- `STOPPED` is a clean barrier: framework deinitialization and the cleanup task
+  have completed, so the next generation may re-enter `READY`.
 - Initialization, startup, cleanup-task creation, or de-initialization errors
   enter `FAILED`.
+- `FAILED` is not silently reset. A new session is forbidden unless the
+  previous session reached `STOPPED`.
 
 ## Credential Handoff
 
@@ -150,8 +163,9 @@ The queue holds an independent copy. The caller must clear its output after
 persistence or on every error path. The component never calls
 `config_manager`, `wifi_manager`, GUI, cloud, or reboot APIs from its callback.
 The handoff-pending API returns only a boolean. Progress snapshots contain only
-an enum, `esp_err_t`, and the framework's non-sensitive Wi-Fi failure reason;
-they never expose SSID or password contents.
+a non-zero session generation, an enum, `esp_err_t`, and the framework's
+non-sensitive Wi-Fi failure reason; they never expose SSID or password
+contents.
 
 ## Timeout Boundary Handling
 
@@ -178,10 +192,24 @@ still owns an internal mutex. Calling `network_prov_mgr_deinit()` directly from
 that callback deadlocks. The component therefore creates a one-shot
 `prov_cleanup` task with a 4 KiB stack and priority 4. The callback returns,
 the framework releases its mutex, and the cleanup task safely performs
-de-initialization. `NETWORK_PROV_DEINIT` then moves the component to `STOPPED`.
+de-initialization. State remains `STOPPING` during `NETWORK_PROV_DEINIT`; only
+the cleanup task, after `network_prov_mgr_deinit()` returns, publishes
+`STOPPED`. This prevents a new session from racing a logically active cleanup
+task.
 
 If the cleanup task cannot be created, the component enters `FAILED` instead
 of remaining indefinitely in `STOPPING`.
+
+The progress callback registration and credential queue survive a clean stop.
+The next `init(generation)` clears pending credentials and handoff flags,
+resets the queue, clears active identity, and initializes the framework again.
+Each asynchronous terminal event uses a captured generation so a late old
+`STOPPED` callback cannot be relabeled as the new session.
+
+Classic Bluetooth memory is released once at first initialization. BLE
+controller memory is retained across intermediate retries, then
+`provisioning_manager_release_ble_memory()` releases BTDM memory after success,
+final exhaustion, or a nonretryable clean stop.
 
 The active service name and QR payload are cleared when stop begins and on
 startup, cleanup, or de-initialization failure. QR construction failure does
@@ -196,7 +224,9 @@ esp_err_t ret = provisioning_manager_register_progress_callback(
     application_progress_callback,
     NULL);
 
-ret = provisioning_manager_init();
+const uint32_t generation = 1U;
+
+ret = provisioning_manager_init(generation);
 if (ret != ESP_OK) {
     return ret;
 }
@@ -208,6 +238,7 @@ if (ret != ESP_OK) {
 
 char qr_payload[PROVISIONING_MANAGER_QR_PAYLOAD_BUFFER_SIZE];
 ret = provisioning_manager_get_qr_payload(
+    generation,
     qr_payload,
     sizeof(qr_payload));
 /* Copy to the UI queue, then securely clear this caller-owned buffer. */
@@ -222,6 +253,9 @@ if (ret != ESP_OK) {
 
 provisioning_manager_state_t state;
 ret = provisioning_manager_get_state(&state);
+
+/* Call only when no later same-boot provisioning session is allowed. */
+ret = provisioning_manager_release_ble_memory();
 ```
 
 The caller should poll with a finite delay and timeout. A tight polling loop
@@ -293,7 +327,6 @@ I (...) PROVISIONING_MANAGER: Provisioning manager de-initialized
 ## Future Attention
 
 - Replace the development Proof of Possession with a production strategy.
-- Add automatic retry/restart policy only in the approved Phase 6.4.5 scope.
 - Add factory-reset and reprovisioning policy in Sprint 7.
 - Add focused automated tests around callback ordering where the upstream
   framework can be isolated.
@@ -325,3 +358,15 @@ Normal credential failure remains non-terminal for the current BLE session;
 terminal manager failures and stop/deinit invalidate the active session
 identity. Build validation passed, while callback ordering, retry-within-session,
 timeout, and successful cleanup still require target-hardware acceptance.
+
+## Phase 6.4.5 Status
+
+**IMPLEMENTED / HARDWARE TEST PENDING**
+
+The manager now supports clean same-boot reinitialization from `STOPPED`,
+retains and resets one credential queue, preserves the single callback
+registration, attaches a non-zero generation to progress and QR snapshots,
+keeps `STOPPING` until the cleanup task has fully returned, and retains BLE
+memory only until the bounded retry envelope ends. Hardware must still verify
+that replacement BLE sessions advertise without reboot and repeated cycles do
+not leak controller, queue, or credential resources.

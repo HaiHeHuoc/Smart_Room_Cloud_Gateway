@@ -12,6 +12,7 @@
 #include "freertos/task.h"
 
 #include "esp_check.h"
+#include "esp_bt.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_wifi_types.h"
@@ -67,6 +68,11 @@ static provisioning_manager_state_t s_state =
     PROVISIONING_MANAGER_STATE_UNINITIALIZED;
 
 static bool s_initializing = false;
+static bool s_cleanup_in_progress = false;
+static uint32_t s_session_generation = 0U;
+static bool s_classic_bt_memory_release_attempted = false;
+static bool s_btdm_memory_released = false;
+static bool s_btdm_memory_releasing = false;
 
 static QueueHandle_t s_credentials_queue = NULL;
 
@@ -149,6 +155,18 @@ static void provisioning_manager_publish_progress(
     uint16_t wifi_failure_reason);
 
 /**
+ * @brief Publish progress for an already captured session generation.
+ *
+ * This is used by asynchronous cleanup so a following init cannot relabel
+ * the previous session's terminal event.
+ */
+static void provisioning_manager_publish_progress_for_generation(
+    uint32_t session_generation,
+    provisioning_manager_progress_t progress,
+    esp_err_t last_error,
+    uint16_t wifi_failure_reason);
+
+/**
  * @brief De-initialize the framework outside its direct event callback.
  *
  * The upstream manager invokes NETWORK_PROV_END while holding an internal
@@ -158,6 +176,14 @@ static void provisioning_manager_publish_progress(
  */
 static void provisioning_manager_cleanup_task(
     void *arg);
+
+/**
+ * @brief Release unused Classic BT memory once, retaining BLE for retries.
+ */
+static void provisioning_manager_scheme_event_callback(
+    void *user_data,
+    network_prov_cb_event_t event,
+    void *event_data);
 
 /**
  * @brief Receive lifecycle events directly from the provisioning framework.
@@ -438,6 +464,27 @@ static void provisioning_manager_publish_progress(
     esp_err_t last_error,
     uint16_t wifi_failure_reason)
 {
+    uint32_t session_generation = 0U;
+
+    portENTER_CRITICAL(&s_state_lock);
+
+    session_generation = s_session_generation;
+
+    portEXIT_CRITICAL(&s_state_lock);
+
+    provisioning_manager_publish_progress_for_generation(
+        session_generation,
+        progress,
+        last_error,
+        wifi_failure_reason);
+}
+
+static void provisioning_manager_publish_progress_for_generation(
+    uint32_t session_generation,
+    provisioning_manager_progress_t progress,
+    esp_err_t last_error,
+    uint16_t wifi_failure_reason)
+{
     provisioning_manager_progress_callback_t callback = NULL;
     void *callback_user_data = NULL;
 
@@ -455,6 +502,7 @@ static void provisioning_manager_publish_progress(
 
     const provisioning_manager_progress_status_t status =
     {
+        .session_generation = session_generation,
         .progress = progress,
         .last_error = last_error,
         .wifi_failure_reason = wifi_failure_reason,
@@ -469,31 +517,105 @@ static void provisioning_manager_cleanup_task(
     void *arg)
 {
     (void)arg;
+    uint32_t completed_generation = 0U;
 
     esp_err_t ret =
         network_prov_mgr_deinit();
 
-    if (ret != ESP_OK)
+    portENTER_CRITICAL(&s_state_lock);
+
+    provisioning_manager_zeroize(
+        &s_pending_credentials,
+        sizeof(s_pending_credentials));
+
+    s_pending_credentials_valid = false;
+    s_wifi_handoff_pending = false;
+    s_cleanup_in_progress = false;
+    completed_generation = s_session_generation;
+    provisioning_manager_clear_active_identity_locked();
+    s_state =
+        (ret == ESP_OK)
+            ? PROVISIONING_MANAGER_STATE_STOPPED
+            : PROVISIONING_MANAGER_STATE_FAILED;
+
+    portEXIT_CRITICAL(&s_state_lock);
+
+    if (ret == ESP_OK)
     {
-        portENTER_CRITICAL(&s_state_lock);
+        ESP_LOGI(
+            TAG,
+            "Provisioning manager de-initialized");
 
-        provisioning_manager_clear_active_identity_locked();
-        s_state = PROVISIONING_MANAGER_STATE_FAILED;
-
-        portEXIT_CRITICAL(&s_state_lock);
-
+        provisioning_manager_publish_progress_for_generation(
+            completed_generation,
+            PROVISIONING_MANAGER_PROGRESS_STOPPED,
+            ESP_OK,
+            0U);
+    }
+    else
+    {
         ESP_LOGE(
             TAG,
             "Failed to de-initialize provisioning framework: %s",
             esp_err_to_name(ret));
 
-        provisioning_manager_publish_progress(
+        provisioning_manager_publish_progress_for_generation(
+            completed_generation,
             PROVISIONING_MANAGER_PROGRESS_FAILED,
             ret,
             0U);
     }
 
     vTaskDelete(NULL);
+}
+
+static void provisioning_manager_scheme_event_callback(
+    void *user_data,
+    network_prov_cb_event_t event,
+    void *event_data)
+{
+    (void)user_data;
+    (void)event_data;
+
+    if (event != NETWORK_PROV_INIT)
+    {
+        return;
+    }
+
+    bool release_classic_memory = false;
+
+    portENTER_CRITICAL(&s_state_lock);
+
+    if (!s_classic_bt_memory_release_attempted)
+    {
+        s_classic_bt_memory_release_attempted = true;
+        release_classic_memory = true;
+    }
+
+    portEXIT_CRITICAL(&s_state_lock);
+
+    if (!release_classic_memory)
+    {
+        return;
+    }
+
+    const esp_err_t ret =
+        esp_bt_mem_release(
+            ESP_BT_MODE_CLASSIC_BT);
+
+    if (ret == ESP_OK)
+    {
+        ESP_LOGI(
+            TAG,
+            "Classic Bluetooth memory released; BLE retained for retries");
+    }
+    else
+    {
+        ESP_LOGW(
+            TAG,
+            "Classic Bluetooth memory release was unavailable: %s",
+            esp_err_to_name(ret));
+    }
 }
 
 static void provisioning_manager_event_callback(
@@ -741,6 +863,7 @@ static void provisioning_manager_event_callback(
             portENTER_CRITICAL(&s_state_lock);
 
             provisioning_manager_clear_active_identity_locked();
+            s_cleanup_in_progress = true;
 
             portEXIT_CRITICAL(&s_state_lock);
 
@@ -777,6 +900,7 @@ static void provisioning_manager_event_callback(
 
                 s_pending_credentials_valid = false;
                 s_wifi_handoff_pending = false;
+                s_cleanup_in_progress = false;
                 provisioning_manager_clear_active_identity_locked();
                 s_state =
                     PROVISIONING_MANAGER_STATE_FAILED;
@@ -797,27 +921,14 @@ static void provisioning_manager_event_callback(
         }
 
         case NETWORK_PROV_DEINIT:
-            portENTER_CRITICAL(&s_state_lock);
-
-            provisioning_manager_zeroize(
-                &s_pending_credentials,
-                sizeof(s_pending_credentials));
-
-            s_pending_credentials_valid = false;
-            s_wifi_handoff_pending = false;
-            provisioning_manager_clear_active_identity_locked();
-            s_state = PROVISIONING_MANAGER_STATE_STOPPED;
-
-            portEXIT_CRITICAL(&s_state_lock);
-
-            ESP_LOGI(
+            /*
+             * The cleanup task publishes STOPPED only after
+             * network_prov_mgr_deinit() has returned. Keeping STOPPING here
+             * prevents a new session from racing the old cleanup task.
+             */
+            ESP_LOGD(
                 TAG,
-                "Provisioning manager de-initialized");
-
-            provisioning_manager_publish_progress(
-                PROVISIONING_MANAGER_PROGRESS_STOPPED,
-                ESP_OK,
-                0U);
+                "Underlying provisioning framework de-initialized");
             break;
 
         default:
@@ -867,9 +978,17 @@ esp_err_t provisioning_manager_register_progress_callback(
     return ESP_OK;
 }
 
-esp_err_t provisioning_manager_init(void)
+esp_err_t provisioning_manager_init(
+    uint32_t session_generation)
 {
     provisioning_manager_state_t current_state;
+    QueueHandle_t credentials_queue = NULL;
+    bool credentials_queue_created = false;
+
+    if (session_generation == 0U)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
 
     portENTER_CRITICAL(&s_state_lock);
 
@@ -882,25 +1001,31 @@ esp_err_t provisioning_manager_init(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (current_state !=
-        PROVISIONING_MANAGER_STATE_UNINITIALIZED)
+    if ((current_state ==
+         PROVISIONING_MANAGER_STATE_READY) &&
+        (s_session_generation ==
+         session_generation))
     {
         portEXIT_CRITICAL(&s_state_lock);
-
-        /*
-         * Initialization is idempotent after a successful init.
-         * A failed lifecycle is not silently recovered by calling init again.
-         */
-        if (current_state ==
-            PROVISIONING_MANAGER_STATE_FAILED)
-        {
-            return ESP_ERR_INVALID_STATE;
-        }
 
         return ESP_OK;
     }
 
+    if (((current_state !=
+          PROVISIONING_MANAGER_STATE_UNINITIALIZED) &&
+        (current_state !=
+          PROVISIONING_MANAGER_STATE_STOPPED)) ||
+        s_cleanup_in_progress ||
+        s_btdm_memory_releasing ||
+        s_btdm_memory_released)
+    {
+        portEXIT_CRITICAL(&s_state_lock);
+
+        return ESP_ERR_INVALID_STATE;
+    }
+
     s_initializing = true;
+    s_session_generation = session_generation;
 
     provisioning_manager_zeroize(
         &s_pending_credentials,
@@ -909,6 +1034,7 @@ esp_err_t provisioning_manager_init(void)
     s_pending_credentials_valid = false;
     s_wifi_handoff_pending = false;
     provisioning_manager_clear_active_identity_locked();
+    credentials_queue = s_credentials_queue;
 
     portEXIT_CRITICAL(&s_state_lock);
 
@@ -924,7 +1050,13 @@ esp_err_t provisioning_manager_init(void)
             network_prov_scheme_ble,
 
         .scheme_event_handler =
-            NETWORK_PROV_SCHEME_BLE_EVENT_HANDLER_FREE_BTDM,
+        {
+            .event_cb =
+                provisioning_manager_scheme_event_callback,
+
+            .user_data =
+                NULL,
+        },
 
         .app_event_handler =
         {
@@ -936,10 +1068,36 @@ esp_err_t provisioning_manager_init(void)
         },
     };
 
-    QueueHandle_t credentials_queue =
-        xQueueCreate(
+    if (credentials_queue == NULL)
+    {
+        credentials_queue =
+            xQueueCreate(
             PROVISIONING_MANAGER_CREDENTIAL_QUEUE_LENGTH,
             sizeof(provisioning_manager_wifi_credentials_t));
+
+        credentials_queue_created =
+            (credentials_queue != NULL);
+    }
+    else if (xQueueReset(credentials_queue) != pdPASS)
+    {
+        portENTER_CRITICAL(&s_state_lock);
+
+        s_initializing = false;
+        s_state = PROVISIONING_MANAGER_STATE_FAILED;
+
+        portEXIT_CRITICAL(&s_state_lock);
+
+        ESP_LOGE(
+            TAG,
+            "Failed to reset provisioning credential queue");
+
+        provisioning_manager_publish_progress(
+            PROVISIONING_MANAGER_PROGRESS_FAILED,
+            ESP_FAIL,
+            0U);
+
+        return ESP_FAIL;
+    }
 
     if (credentials_queue == NULL)
     {
@@ -962,15 +1120,29 @@ esp_err_t provisioning_manager_init(void)
         return ESP_ERR_NO_MEM;
     }
 
+    portENTER_CRITICAL(&s_state_lock);
+
     s_credentials_queue = credentials_queue;
+
+    portEXIT_CRITICAL(&s_state_lock);
 
     esp_err_t ret =
         network_prov_mgr_init(config);
 
-    if (ret != ESP_OK)
+    if ((ret != ESP_OK) &&
+        credentials_queue_created)
     {
         vQueueDelete(credentials_queue);
-        s_credentials_queue = NULL;
+
+        portENTER_CRITICAL(&s_state_lock);
+
+        if (s_credentials_queue ==
+            credentials_queue)
+        {
+            s_credentials_queue = NULL;
+        }
+
+        portEXIT_CRITICAL(&s_state_lock);
     }
 
     portENTER_CRITICAL(&s_state_lock);
@@ -1091,20 +1263,69 @@ esp_err_t provisioning_manager_start(void)
 
     if (ret != ESP_OK)
     {
-        provisioning_manager_set_state(
-            PROVISIONING_MANAGER_STATE_FAILED);
+        uint32_t failed_generation = 0U;
+
+        portENTER_CRITICAL(&s_state_lock);
+
+        failed_generation = s_session_generation;
+        provisioning_manager_clear_active_identity_locked();
+        s_state = PROVISIONING_MANAGER_STATE_STOPPING;
+
+        portEXIT_CRITICAL(&s_state_lock);
 
         ESP_LOGE(
             TAG,
             "Failed to start BLE provisioning: %s",
             esp_err_to_name(ret));
 
-        provisioning_manager_publish_progress(
-            PROVISIONING_MANAGER_PROGRESS_FAILED,
-            ret,
+        provisioning_manager_publish_progress_for_generation(
+            failed_generation,
+            PROVISIONING_MANAGER_PROGRESS_STOPPING,
+            ESP_OK,
             0U);
 
-        return ret;
+        const esp_err_t cleanup_ret =
+            network_prov_mgr_deinit();
+
+        portENTER_CRITICAL(&s_state_lock);
+
+        provisioning_manager_zeroize(
+            &s_pending_credentials,
+            sizeof(s_pending_credentials));
+
+        s_pending_credentials_valid = false;
+        s_wifi_handoff_pending = false;
+        provisioning_manager_clear_active_identity_locked();
+        s_state =
+            (cleanup_ret == ESP_OK)
+                ? PROVISIONING_MANAGER_STATE_STOPPED
+                : PROVISIONING_MANAGER_STATE_FAILED;
+
+        portEXIT_CRITICAL(&s_state_lock);
+
+        if (cleanup_ret == ESP_OK)
+        {
+            provisioning_manager_publish_progress_for_generation(
+                failed_generation,
+                PROVISIONING_MANAGER_PROGRESS_STOPPED,
+                ESP_OK,
+                0U);
+
+            return ret;
+        }
+
+        ESP_LOGE(
+            TAG,
+            "Failed to clean provisioning framework after start error: %s",
+            esp_err_to_name(cleanup_ret));
+
+        provisioning_manager_publish_progress_for_generation(
+            failed_generation,
+            PROVISIONING_MANAGER_PROGRESS_FAILED,
+            cleanup_ret,
+            0U);
+
+        return cleanup_ret;
     }
 
     char qr_payload
@@ -1166,10 +1387,12 @@ esp_err_t provisioning_manager_start(void)
 }
 
 esp_err_t provisioning_manager_get_qr_payload(
+    uint32_t session_generation,
     char *payload,
     size_t payload_size)
 {
-    if ((payload == NULL) ||
+    if ((session_generation == 0U) ||
+        (payload == NULL) ||
         (payload_size <
          PROVISIONING_MANAGER_QR_PAYLOAD_BUFFER_SIZE))
     {
@@ -1181,6 +1404,7 @@ esp_err_t provisioning_manager_get_qr_payload(
     portENTER_CRITICAL(&s_state_lock);
 
     if ((s_state != PROVISIONING_MANAGER_STATE_ACTIVE) ||
+        (s_session_generation != session_generation) ||
         !s_active_qr_payload_available)
     {
         portEXIT_CRITICAL(&s_state_lock);
@@ -1240,6 +1464,66 @@ esp_err_t provisioning_manager_stop(void)
     ESP_LOGI(
         TAG,
         "Provisioning stop requested");
+
+    return ESP_OK;
+}
+
+esp_err_t provisioning_manager_release_ble_memory(void)
+{
+    portENTER_CRITICAL(&s_state_lock);
+
+    if (s_btdm_memory_released)
+    {
+        portEXIT_CRITICAL(&s_state_lock);
+
+        return ESP_OK;
+    }
+
+    if ((s_state !=
+         PROVISIONING_MANAGER_STATE_STOPPED) ||
+        s_initializing ||
+        s_cleanup_in_progress ||
+        s_btdm_memory_releasing)
+    {
+        portEXIT_CRITICAL(&s_state_lock);
+
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    s_btdm_memory_releasing = true;
+
+    portEXIT_CRITICAL(&s_state_lock);
+
+    const esp_err_t ret =
+        esp_bt_mem_release(
+            ESP_BT_MODE_BTDM);
+
+    if (ret != ESP_OK)
+    {
+        portENTER_CRITICAL(&s_state_lock);
+
+        s_btdm_memory_releasing = false;
+
+        portEXIT_CRITICAL(&s_state_lock);
+
+        ESP_LOGE(
+            TAG,
+            "Failed to release terminal Bluetooth memory: %s",
+            esp_err_to_name(ret));
+
+        return ret;
+    }
+
+    portENTER_CRITICAL(&s_state_lock);
+
+    s_btdm_memory_released = true;
+    s_btdm_memory_releasing = false;
+
+    portEXIT_CRITICAL(&s_state_lock);
+
+    ESP_LOGI(
+        TAG,
+        "Terminal Bluetooth memory released");
 
     return ESP_OK;
 }

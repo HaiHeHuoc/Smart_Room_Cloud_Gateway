@@ -48,6 +48,7 @@
 #define APP_GUI_PROVISIONING_TEXT_X_PX            94
 #define APP_GUI_PROVISIONING_TEXT_WIDTH_PX      66
 #define APP_GUI_PROVISIONING_INDICATOR_SIZE_PX   8
+#define APP_GUI_PROVISIONING_INSTRUCTION_BUFFER_SIZE 96U
 
 /* sensor_manager publishes this sentinel after a failed DHT22 read. */
 #define APP_GUI_SENSOR_FAILED_VALUE             (-1.0f)
@@ -115,6 +116,9 @@ static app_gui_screen_id_t s_current_screen_id = APP_GUI_SCREEN_NONE;
 static portMUX_TYPE s_screen_id_lock = portMUX_INITIALIZER_UNLOCKED;
 static bool s_latest_provisioning_status_available = false;
 static ui_provisioning_status_t s_latest_provisioning_status = {
+    .session_generation = 0U,
+    .session_number = 0U,
+    .session_limit = 0U,
     .state = UI_PROVISIONING_STATE_STARTING,
     .last_error = ESP_OK,
     .wifi_disconnect_reason = 0U,
@@ -122,6 +126,8 @@ static ui_provisioning_status_t s_latest_provisioning_status = {
 static bool s_latest_provisioning_qr_payload_available = false;
 static ui_provisioning_qr_payload_t
     s_latest_provisioning_qr_payload = {0};
+static uint32_t s_latest_provisioning_generation = 0U;
+static uint32_t s_newest_queued_provisioning_generation = 0U;
 static bool s_latest_wifi_status_available = false;
 static ui_wifi_status_t s_latest_wifi_status = {0};
 static bool s_latest_sensor_status_available = false;
@@ -163,6 +169,12 @@ static bool app_gui_is_valid_provisioning_state(
     ui_provisioning_state_t state);
 static bool app_gui_is_valid_provisioning_qr_payload(
     const ui_provisioning_qr_payload_t *payload);
+static bool app_gui_accept_provisioning_generation(
+    uint32_t session_generation,
+    bool *is_newer_generation);
+static bool app_gui_accept_queued_provisioning_generation(
+    uint32_t session_generation);
+static void app_gui_hide_provisioning_qr_if_active(void);
 static const char *app_gui_screen_id_to_string(
     app_gui_screen_id_t screen_id);
 static const char *app_gui_provisioning_state_to_string(
@@ -291,6 +303,7 @@ static bool app_gui_is_valid_provisioning_qr_payload(
     const ui_provisioning_qr_payload_t *payload)
 {
     if ((payload == NULL) ||
+        (payload->session_generation == 0U) ||
         (payload->payload[0] == '\0'))
     {
         return false;
@@ -301,6 +314,106 @@ static bool app_gui_is_valid_provisioning_qr_payload(
             payload->payload,
             sizeof(payload->payload)) <
         sizeof(payload->payload);
+}
+
+static bool app_gui_accept_provisioning_generation(
+    uint32_t session_generation,
+    bool *is_newer_generation)
+{
+    if ((session_generation == 0U) ||
+        (is_newer_generation == NULL))
+    {
+        return false;
+    }
+
+    *is_newer_generation = false;
+
+    taskENTER_CRITICAL(&s_screen_id_lock);
+
+    if ((s_latest_provisioning_generation != 0U) &&
+        (session_generation <
+         s_latest_provisioning_generation))
+    {
+        taskEXIT_CRITICAL(&s_screen_id_lock);
+
+        return false;
+    }
+
+    if (session_generation >
+        s_latest_provisioning_generation)
+    {
+        s_latest_provisioning_generation =
+            session_generation;
+        s_latest_provisioning_status_available = false;
+        s_latest_provisioning_qr_payload_available = false;
+
+        app_gui_zeroize(
+            &s_latest_provisioning_status,
+            sizeof(s_latest_provisioning_status));
+
+        app_gui_zeroize(
+            &s_latest_provisioning_qr_payload,
+            sizeof(s_latest_provisioning_qr_payload));
+
+        *is_newer_generation = true;
+    }
+
+    taskEXIT_CRITICAL(&s_screen_id_lock);
+
+    return true;
+}
+
+static bool app_gui_accept_queued_provisioning_generation(
+    uint32_t session_generation)
+{
+    if (session_generation == 0U)
+    {
+        return false;
+    }
+
+    taskENTER_CRITICAL(&s_screen_id_lock);
+
+    if ((s_newest_queued_provisioning_generation != 0U) &&
+        (session_generation <
+         s_newest_queued_provisioning_generation))
+    {
+        taskEXIT_CRITICAL(&s_screen_id_lock);
+
+        return false;
+    }
+
+    if (session_generation >
+        s_newest_queued_provisioning_generation)
+    {
+        s_newest_queued_provisioning_generation =
+            session_generation;
+    }
+
+    taskEXIT_CRITICAL(&s_screen_id_lock);
+
+    return true;
+}
+
+static void app_gui_hide_provisioning_qr_if_active(void)
+{
+    app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
+
+    if ((app_gui_get_screen_id(&screen_id) != ESP_OK) ||
+        (screen_id != APP_GUI_SCREEN_PROVISIONING))
+    {
+        return;
+    }
+
+    ui_manager_lvgl_wait_for_mutex();
+
+    if (s_provisioning_qr_code != NULL)
+    {
+        lv_obj_add_flag(
+            s_provisioning_qr_code,
+            LV_OBJ_FLAG_HIDDEN);
+    }
+
+    ui_manager_lvgl_release_mutex();
 }
 
 static const char *app_gui_screen_id_to_string(
@@ -1233,9 +1346,40 @@ static void app_gui_render_provisioning_status(
     const lv_color_t state_color =
         app_gui_provisioning_state_color(status->state);
 
+    const char *instruction =
+        app_gui_provisioning_instruction_text(
+            status->state);
+
+    char instruction_with_session
+        [APP_GUI_PROVISIONING_INSTRUCTION_BUFFER_SIZE] =
+        {0};
+
+    if ((status->session_number > 0U) &&
+        (status->session_limit > 0U) &&
+        (status->session_number <=
+         status->session_limit))
+    {
+        const int written =
+            snprintf(
+                instruction_with_session,
+                sizeof(instruction_with_session),
+                "Session %lu/%lu\n%s",
+                (unsigned long)status->session_number,
+                (unsigned long)status->session_limit,
+                instruction);
+
+        if ((written > 0) &&
+            ((size_t)written <
+             sizeof(instruction_with_session)))
+        {
+            instruction =
+                instruction_with_session;
+        }
+    }
+
     lv_label_set_text(
         s_provisioning_instruction_label,
-        app_gui_provisioning_instruction_text(status->state));
+        instruction);
     lv_label_set_text(
         s_provisioning_status_label,
         app_gui_provisioning_status_text(status->state));
@@ -1743,6 +1887,9 @@ static void app_gui_render_cached_status(
     bool sensor_available = false;
     bool cloud_available = false;
     ui_provisioning_status_t provisioning_status = {
+        .session_generation = 0U,
+        .session_number = 0U,
+        .session_limit = 0U,
         .state = UI_PROVISIONING_STATE_STARTING,
         .last_error = ESP_OK,
         .wifi_disconnect_reason = 0U,
@@ -1934,9 +2081,32 @@ static void app_gui_process_provisioning_status(
     const ui_provisioning_status_t *status)
 {
     if ((status == NULL) ||
+        (status->session_generation == 0U) ||
+        (status->session_number == 0U) ||
+        (status->session_limit == 0U) ||
+        (status->session_number >
+         status->session_limit) ||
         !app_gui_is_valid_provisioning_state(status->state)) {
         ESP_LOGW(TAG, "Ignoring invalid provisioning GUI status");
         return;
+    }
+
+    bool is_newer_generation = false;
+
+    if (!app_gui_accept_provisioning_generation(
+            status->session_generation,
+            &is_newer_generation))
+    {
+        ESP_LOGD(
+            TAG,
+            "Ignoring stale provisioning status generation %lu",
+            (unsigned long)status->session_generation);
+        return;
+    }
+
+    if (is_newer_generation)
+    {
+        app_gui_hide_provisioning_qr_if_active();
     }
 
     taskENTER_CRITICAL(&s_screen_id_lock);
@@ -1956,7 +2126,11 @@ static void app_gui_process_provisioning_status(
     ESP_LOGD(
         TAG,
         "GUI received provisioning status: "
-        "state=%s, error=%s, disconnect_reason=%u",
+        "generation=%lu, session=%lu/%lu, state=%s, "
+        "error=%s, disconnect_reason=%u",
+        (unsigned long)status->session_generation,
+        (unsigned long)status->session_number,
+        (unsigned long)status->session_limit,
         app_gui_provisioning_state_to_string(status->state),
         esp_err_to_name(status->last_error),
         (unsigned int)status->wifi_disconnect_reason);
@@ -2030,6 +2204,29 @@ static void app_gui_process_provisioning_qr_payload(void)
         return;
     }
 
+    bool is_newer_generation = false;
+
+    if (!app_gui_accept_provisioning_generation(
+            message.payload.session_generation,
+            &is_newer_generation))
+    {
+        ESP_LOGD(
+            TAG,
+            "Ignoring stale provisioning QR message generation %lu",
+            (unsigned long)
+                message.payload.session_generation);
+
+        app_gui_zeroize(
+            &message,
+            sizeof(message));
+        return;
+    }
+
+    if (is_newer_generation)
+    {
+        app_gui_hide_provisioning_qr_if_active();
+    }
+
     if (!message.payload_available) {
         taskENTER_CRITICAL(&s_screen_id_lock);
         app_gui_zeroize(
@@ -2038,26 +2235,17 @@ static void app_gui_process_provisioning_qr_payload(void)
         s_latest_provisioning_qr_payload_available = false;
         taskEXIT_CRITICAL(&s_screen_id_lock);
 
-        app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
-
-        if ((app_gui_get_screen_id(&screen_id) == ESP_OK) &&
-            (screen_id == APP_GUI_SCREEN_PROVISIONING)) {
-            ui_manager_lvgl_wait_for_mutex();
-
-            if (s_provisioning_qr_code != NULL) {
-                lv_obj_add_flag(
-                    s_provisioning_qr_code,
-                    LV_OBJ_FLAG_HIDDEN);
-            }
-
-            ui_manager_lvgl_release_mutex();
-        }
+        app_gui_hide_provisioning_qr_if_active();
 
         app_gui_zeroize(
             &message,
             sizeof(message));
 
-        ESP_LOGD(TAG, "Provisioning QR payload cleared");
+        ESP_LOGD(
+            TAG,
+            "Provisioning QR payload cleared for generation %lu",
+            (unsigned long)
+                s_latest_provisioning_generation);
         return;
     }
 
@@ -2085,7 +2273,11 @@ static void app_gui_process_provisioning_qr_payload(void)
         ui_manager_lvgl_release_mutex();
     }
 
-    ESP_LOGD(TAG, "Provisioning QR payload cached");
+    ESP_LOGD(
+        TAG,
+        "Provisioning QR payload cached for generation %lu",
+        (unsigned long)
+            message.payload.session_generation);
 
     app_gui_zeroize(
         &message,
@@ -2414,12 +2606,27 @@ esp_err_t app_gui_post_provisioning_status(
     const ui_provisioning_status_t *status)
 {
     if ((status == NULL) ||
+        (status->session_generation == 0U) ||
+        (status->session_number == 0U) ||
+        (status->session_limit == 0U) ||
+        (status->session_number >
+         status->session_limit) ||
         !app_gui_is_valid_provisioning_state(status->state)) {
         return ESP_ERR_INVALID_ARG;
     }
 
     if (s_provisioning_status_queue == NULL) {
         return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!app_gui_accept_queued_provisioning_generation(
+            status->session_generation))
+    {
+        ESP_LOGD(
+            TAG,
+            "Rejecting stale queued provisioning status generation %lu",
+            (unsigned long)status->session_generation);
+        return ESP_OK;
     }
 
     if (xQueueOverwrite(
@@ -2446,6 +2653,16 @@ esp_err_t app_gui_post_provisioning_qr_payload(
         return ESP_ERR_INVALID_STATE;
     }
 
+    if (!app_gui_accept_queued_provisioning_generation(
+            payload->session_generation))
+    {
+        ESP_LOGD(
+            TAG,
+            "Rejecting stale queued provisioning QR generation %lu",
+            (unsigned long)payload->session_generation);
+        return ESP_OK;
+    }
+
     const app_gui_provisioning_qr_message_t message = {
         .payload_available = true,
         .payload = *payload,
@@ -2461,15 +2678,31 @@ esp_err_t app_gui_post_provisioning_qr_payload(
     return ESP_OK;
 }
 
-esp_err_t app_gui_clear_provisioning_qr_payload(void)
+esp_err_t app_gui_clear_provisioning_qr_payload(
+    uint32_t session_generation)
 {
+    if (session_generation == 0U) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
     if (s_provisioning_qr_queue == NULL) {
         return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!app_gui_accept_queued_provisioning_generation(
+            session_generation))
+    {
+        ESP_LOGD(
+            TAG,
+            "Rejecting stale queued provisioning QR clear generation %lu",
+            (unsigned long)session_generation);
+        return ESP_OK;
     }
 
     const app_gui_provisioning_qr_message_t message = {
         .payload_available = false,
         .payload = {
+            .session_generation = session_generation,
             .payload = {0},
         },
     };

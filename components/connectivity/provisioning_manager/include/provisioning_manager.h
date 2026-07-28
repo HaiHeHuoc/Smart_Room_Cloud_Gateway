@@ -81,7 +81,9 @@ typedef enum
     /**
      * @brief Provisioning has stopped and released its runtime resources.
      *
-     * This is a terminal state for the current boot.
+     * Framework cleanup has fully completed. A new session generation may
+     * reinitialize from this state until Bluetooth memory is terminally
+     * released.
      */
     PROVISIONING_MANAGER_STATE_STOPPED,
 
@@ -116,6 +118,9 @@ typedef enum
  */
 typedef struct
 {
+    /** Non-zero identity of the provisioning session that emitted this event. */
+    uint32_t session_generation;
+
     provisioning_manager_progress_t progress;
     esp_err_t last_error;
     uint16_t wifi_failure_reason;
@@ -152,18 +157,26 @@ esp_err_t provisioning_manager_register_progress_callback(
 /**
  * @brief Initialize the BLE provisioning framework and internal state.
  *
- * Initialization is idempotent after a successful call. A lifecycle that has
- * entered PROVISIONING_MANAGER_STATE_FAILED is not silently reinitialized.
+ * Initialization is idempotent for the same generation while READY. A clean
+ * STOPPED lifecycle can be reinitialized for a new non-zero generation. The
+ * retained credential queue is reset before the framework is initialized for
+ * that next session. A lifecycle that has entered
+ * PROVISIONING_MANAGER_STATE_FAILED is not silently reinitialized.
  * The application must initialize the default ESP event loop and required
  * Wi-Fi infrastructure before calling this function.
  *
+ * @param[in] session_generation Non-zero monotonically increasing session
+ *                               identity owned by the application.
+ *
  * @return
  * - ESP_OK: Manager is initialized or was already initialized successfully.
- * - ESP_ERR_INVALID_STATE: Initialization is already running or the manager
- *   is in the terminal FAILED state.
+ * - ESP_ERR_INVALID_ARG: @p session_generation is zero.
+ * - ESP_ERR_INVALID_STATE: Initialization is already running, the manager is
+ *   not UNINITIALIZED/STOPPED/READY, or the manager is terminal FAILED.
  * - Other ESP-IDF errors returned by the provisioning framework.
  */
-esp_err_t provisioning_manager_init(void);
+esp_err_t provisioning_manager_init(
+    uint32_t session_generation);
 
 /**
  * @brief Start the BLE provisioning service.
@@ -190,16 +203,19 @@ esp_err_t provisioning_manager_start(void);
  * This API is thread-safe, does not call LVGL, and never returns an internal
  * pointer.
  *
+ * @param[in] session_generation Expected non-zero active session identity.
  * @param[out] payload Destination for the null-terminated JSON payload.
  * @param[in] payload_size Destination size. It must be at least
  *                        PROVISIONING_MANAGER_QR_PAYLOAD_BUFFER_SIZE.
  *
  * @return
  * - ESP_OK: Active payload copied and null-terminated.
- * - ESP_ERR_INVALID_ARG: @p payload is NULL or the buffer is undersized.
- * - ESP_ERR_INVALID_STATE: No valid active provisioning payload exists.
+ * - ESP_ERR_INVALID_ARG: The generation is zero, @p payload is NULL, or the
+ *   buffer is undersized.
+ * - ESP_ERR_INVALID_STATE: No valid payload exists for the expected session.
  */
 esp_err_t provisioning_manager_get_qr_payload(
+    uint32_t session_generation,
     char *payload,
     size_t payload_size);
 
@@ -215,6 +231,21 @@ esp_err_t provisioning_manager_get_qr_payload(
  * - ESP_ERR_INVALID_STATE: The manager is not in ACTIVE state.
  */
 esp_err_t provisioning_manager_stop(void);
+
+/**
+ * @brief Permanently release retained Bluetooth controller memory.
+ *
+ * Phase 6.4.5 retains Bluetooth memory across clean STOPPED-to-READY session
+ * retries. The coordinator calls this once, only after the complete retry
+ * envelope has ended and no same-boot provisioning session can follow.
+ *
+ * This operation is valid only from STOPPED, is idempotent after success, and
+ * makes later provisioning reinitialization unavailable until reboot.
+ *
+ * @return ESP_OK on success/already released, ESP_ERR_INVALID_STATE unless the
+ *         manager is cleanly STOPPED, or an ESP-IDF Bluetooth error.
+ */
+esp_err_t provisioning_manager_release_ble_memory(void);
 
 /**
  * @brief Copy the current lifecycle state.
