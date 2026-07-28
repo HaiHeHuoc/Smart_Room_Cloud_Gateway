@@ -1263,10 +1263,16 @@ esp_err_t provisioning_manager_start(void)
         provisioning_manager_publish_progress_for_generation(
             failed_generation,
             PROVISIONING_MANAGER_PROGRESS_FAILED,
-            cleanup_ret,
+            ret,
             0U);
 
-        return cleanup_ret;
+        /*
+         * Cleanup failure keeps the manager in FAILED so the framework is
+         * never reused unsafely. Return the original start error because it is
+         * the first operation that failed; cleanup_ret remains visible in the
+         * diagnostic above.
+         */
+        return ret;
     }
 
     char qr_payload

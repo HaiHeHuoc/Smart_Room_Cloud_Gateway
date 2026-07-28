@@ -57,9 +57,9 @@ ESP32 periodically uploads sensor data to Firebase
 | Sensor reading | P0 | Done | DHT22 manager and stale/error handling |
 | Firebase upload | P0 | Done | Authenticated Realtime Database REST PUT verified on hardware |
 | NVS config storage | P0 | Done | Integrity, persistence, migration, and recovery tests accepted |
-| BLE Wi-Fi provisioning | P1 | In progress | Phases 6.1/6.2 and checkpoints 6.3.2/6.3.3 complete; 6.3.4 implemented, hardware pending |
+| BLE Wi-Fi provisioning | P1 | In progress | Phase 6.4 implemented; final A-N hardware acceptance pending |
 | Button factory reset | P1 | Not started | Long press to erase config |
-| Wi-Fi reconnect strategy | P1 | Not started | Event-driven reconnect |
+| Wi-Fi reconnect strategy | P1 | Done | Event-driven exponential-backoff reconnect owned by `wifi_manager` |
 | Cloud retry queue | P1 | Done | Latest-value queue with bounded retry backoff |
 | MQTT | P2 | Not planned | Optional future feature |
 | OTA | P2 | Not planned | Final-stage optional feature |
@@ -71,11 +71,10 @@ Status values:
 Not started / In progress / Blocked / Done / Deferred
 ```
 
-**Current milestone (2026-07-25):** Sprint 5 persistent configuration
-implementation and build verification are complete. The previous 37-case
-hardware suite passed. The updated 38-case suite, reboot persistence, and
-production boot-state matrix remain pending before Sprint 5 can be marked
-fully verified.
+**Current milestone (2026-07-28):** Phase 6.4 provisioning UI, bounded session
+recovery, and cloud recovery are implemented. Static closure validation is
+tracked by Phase 6.4.7; the final A-N target-hardware matrix below remains
+pending before Phase 6.4 can be marked complete.
 
 ---
 
@@ -647,10 +646,11 @@ is not yet claimed, and Phase 6.3 remains in progress.
 - [x] Render the QR with LVGL at the largest integer module scale that fits
   the 160x128 screen and a standards-compliant quiet zone.
 - [x] Preserve provisioning, Wi-Fi manager, config manager, and LVGL ownership.
-- [ ] Confirm QR scanning and end-to-end BLE Wi-Fi provisioning on hardware.
+- [x] Confirm QR scanning and BLE Wi-Fi credential handoff on hardware.
 
-Phase 6.4.3 is implemented and build-verified. Its target-hardware acceptance
-remains pending, and Phase 6.4 is not complete.
+The user confirmed QR scanning and a successful provisioned Wi-Fi connection
+on target hardware. Cross-phase GUI, retry, cloud, and endurance acceptance
+remain covered by the final A-N matrix.
 
 ### Phase 6.4.4 Status - Implemented / Hardware Test Pending
 
@@ -674,7 +674,8 @@ remains pending, and Phase 6.4 is not complete.
 
 Phase 6.4.4 is implemented and build-verified. Hardware acceptance remains
 pending; automatic retry/restart was deferred to Phase 6.4.5 at that
-checkpoint, and Phase 6.4 is not complete.
+checkpoint and is now implemented. Final Phase 6.4 hardware acceptance remains
+pending.
 
 ### Phase 6.4.5 Status - Implemented / Hardware Test Pending
 
@@ -701,7 +702,7 @@ checkpoint, and Phase 6.4 is not complete.
   30-60-minute resource stability on hardware.
 
 Phase 6.4.5 is implemented and statically build-verified. Hardware acceptance
-remains pending, and Phase 6.4 is not complete.
+remains part of the final A-N matrix.
 
 ### Phase 6.4.6 Status - Implemented / Hardware Test Pending
 
@@ -730,7 +731,160 @@ remains pending, and Phase 6.4 is not complete.
   refresh, and two-hour resource stability on hardware.
 
 Phase 6.4.6 is implemented and statically build-verified. Hardware acceptance
-remains pending, and Phase 6.4 is not complete.
+remains part of the final A-N matrix.
+
+### Phase 6.4.7 Status - Implemented / Hardware Regression Pending
+
+- [x] Verify the Phase 6.4.1-6.4.6 prerequisite architecture and component
+  ownership.
+- [x] Review queues, callbacks, tasks, mutexes, generations, cleanup, boot
+  policy, provisioning retry, cloud recovery, and cloud-start gating.
+- [x] Remove stale closure documentation and confirm no temporary production
+  fault driver remains.
+- [x] Preserve the original BLE service-start error when subsequent framework
+  cleanup also fails, while keeping the manager in `FAILED`.
+- [x] Clean partial `ui_manager_lvgl` initialization resources and allow a
+  safe same-boot retry after initialization failure.
+- [x] Document the final ownership model, known limitations, and A-N hardware
+  regression matrix.
+- [ ] Execute the final A-N matrix on the ESP32-S3 target.
+
+**Phase 6.4.7 - IMPLEMENTED / HARDWARE REGRESSION PENDING**
+
+**Phase 6.4 - IMPLEMENTED / FINAL HARDWARE ACCEPTANCE PENDING**
+
+Build and static checks establish review readiness but do not prove BLE,
+Wi-Fi, LCD, TLS, Firebase, heap, or endurance behavior on the target. Only the
+matrix below can close the remaining hardware acceptance.
+
+### Phase 6.4 Final Hardware Acceptance Matrix
+
+Use a serial monitor at the default project log level. Do not enable logging
+that prints provisioning session material. Record the firmware revision,
+board, power source, AP/hotspot, phone provisioning application, and duration.
+
+#### A. Configured-device boot
+
+1. Reboot with a valid stored configuration.
+2. Verify `BOOT -> WIFI_STATUS -> SENSOR_DASHBOARD -> Cloud Online`.
+3. Verify BLE provisioning does not start.
+
+#### B. First-session provisioning success
+
+1. Erase only the application Wi-Fi configuration through an approved test
+   procedure.
+2. Verify direct `PROVISIONING` display with no `BOOT` flash and a scannable
+   QR.
+3. Submit correct credentials.
+4. Verify `SUCCESS -> WIFI_STATUS -> SENSOR_DASHBOARD -> Cloud Online`.
+
+#### C. Wrong password then correct password
+
+1. Submit a wrong password and verify `FAILED`.
+2. Verify the same BLE session, QR, and `Session 1/3` remain active with no
+   `RETRYING`.
+3. Submit the correct password and verify the normal success flow.
+
+#### D. Timeout and replacement session
+
+1. Let session 1 expire.
+2. Verify `TIMEOUT -> CLEANING_UP -> RETRYING`.
+3. Verify session 2 starts only after manager `STOPPED`, shows a current QR,
+   and accepts correct credentials to complete successfully.
+
+#### E. Retry exhaustion
+
+1. Let every configured session expire.
+2. Verify exactly the configured number of sessions, final `TIMEOUT` or
+   `FAILED`, hidden/invalidated QR, no extra session, no reboot, and no cloud
+   start.
+
+#### F. Reboot persistence
+
+1. Provision successfully, then power-cycle the board.
+2. Verify stored-config boot and no provisioning screen or BLE service.
+
+#### G. Runtime Wi-Fi disconnect
+
+1. During configured runtime, turn the AP/hotspot off and then on.
+2. Verify `wifi_manager` reconnect backoff restores Wi-Fi.
+3. Verify no provisioning screen, config erase, or coordinator provisioning
+   restart occurs.
+
+#### H. Cloud network recovery
+
+1. Begin at `Cloud Online`, turn the AP/hotspot off, and verify `Cloud Wait`.
+2. Restore the AP/hotspot and verify `Cloud Sync -> Cloud Online`.
+
+#### I. Internet-only failure
+
+1. Keep Wi-Fi associated with a valid IPv4 address while removing Internet
+   access.
+2. Verify `Cloud Retry` with bounded backoff.
+3. Restore Internet and verify `Cloud Online`.
+
+#### J. Cloud wake during long backoff
+
+1. Allow cloud retry to reach a long delay.
+2. Recover the network before the deadline.
+3. Verify prompt task wake, network-epoch client reset, newest telemetry
+   upload, and `Cloud Online`.
+
+#### K. Retryable HTTP or transport fault
+
+1. Use a controlled external failure that does not require production
+   fault-injection code.
+2. Verify transport/TLS/DNS failure or HTTP 408/429/5xx produces bounded
+   `Retry`, a clean client reset, and recovery to `Online`.
+
+#### L. Authentication recovery
+
+1. Reject the active token and verify bounded invalidation, token recovery,
+   and return to `Online`.
+2. Sustain an authorization rejection and verify terminal `Auth Error`
+   without a hot sign-in loop.
+
+#### M. Latest telemetry
+
+1. Produce several sensor samples during an outage and active retry.
+2. Restore service and verify the newest pending sample reaches Firebase;
+   historical samples are not expected.
+
+#### N. Endurance
+
+Run for at least 2 hours; 4-8 hours is recommended. During the run:
+
+- repeat Wi-Fi disconnect/reconnect;
+- repeat an Internet-only outage;
+- keep sensor updates active;
+- exercise cloud retry and recovery;
+- exercise screen transitions;
+- include at least one provisioning retry when practical.
+
+Acceptance for A-N requires:
+
+- no Guru Meditation, watchdog, stack overflow, or LVGL assertion;
+- no continuous heap-loss trend;
+- no duplicate task or callback;
+- no stale screen object or provisioning-session collision;
+- no cloud-client leak;
+- no sensitive serial output.
+
+### Phase 6.4 Known Limitations
+
+- No manual SSID/password entry UI or touch retry button.
+- No runtime user-triggered reprovisioning or factory-reset UI.
+- Proof of Possession is a static development value; there is no
+  device-specific protected manufacturing flow.
+- Firebase device credentials still depend on the current development
+  configuration model and must move to protected local configuration before
+  production/publication.
+- Telemetry is latest-value only; there is no offline history or SD-backed
+  cloud queue.
+- The one-shot cloud service has no public stop/deinit or operator restart API;
+  terminal `AUTH_ERROR` and deterministic `ERROR` remain latched.
+- MQTT, OTA, cloud command reception, a custom mobile app, and dashboard
+  redesign remain out of scope.
 
 ### Tasks
 
@@ -809,12 +963,12 @@ Status: Waiting for Wi-Fi config
 
 ### Tasks
 
-- [ ] Implement Wi-Fi reconnect backoff.
-- [ ] Detect disconnected state.
-- [ ] Pause Firebase upload when offline.
-- [ ] Add retry count.
-- [ ] Add simple cloud queue or latest-only retry.
-- [ ] Show offline/cloud error state on LVGL.
+- [x] Implement Wi-Fi reconnect backoff.
+- [x] Detect disconnected state.
+- [x] Pause Firebase upload when offline.
+- [x] Add retry count.
+- [x] Add simple cloud queue or latest-only retry.
+- [x] Show offline/cloud error state on LVGL.
 
 ### Done Criteria
 
@@ -964,9 +1118,9 @@ Use this section to track daily/weekly progress.
 | 3 | Sensor + UI update | Done |  |  | Sensor queue, stale/error behavior, and LCD updates hardware-accepted. |
 | 4 | Firebase upload | Done |  | 2026-07-19 | Hardware upload, Firebase data, failure handling, and LCD Cloud status accepted. |
 | 5 | NVS config storage | Done |  | 2026-07-26 | Persistence, integrity, migration, and recovery tests accepted. |
-| 6 | BLE provisioning | In progress |  |  | Phases 6.1/6.2 and checkpoints 6.3.2/6.3.3 complete; 6.3.4, 6.4.3, and 6.4.4 implemented with hardware verification pending. |
+| 6 | BLE provisioning | In progress |  |  | Phase 6.4 implemented; final A-N hardware acceptance pending. |
 | 7 | Factory reset | Not started |  |  |  |
-| 8 | Reconnect + retry | Not started |  |  |  |
+| 8 | Reconnect + retry | In progress |  |  | Wi-Fi/cloud recovery implemented; final target-hardware recovery and endurance acceptance pending. |
 | 9 | Portfolio polish | Not started |  |  |  |
 
 ---

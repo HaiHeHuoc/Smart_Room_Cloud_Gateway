@@ -300,6 +300,17 @@ heap, or token-refresh behavior.
   no watchdog, stack warning, duplicate task/client, stale transport, or
   downward heap trend.
 
+## Phase 6.4.7 Closure Status
+
+**IMPLEMENTED / HARDWARE REGRESSION PENDING**
+
+Static closure review confirms one cloud task, task-owned HTTP/TLS lifecycle,
+non-zero network epochs, wakeable bounded backoff, latest-value telemetry,
+client invalidation after network/authentication changes, bounded 401/403
+handling, and terminal classification for deterministic errors. Provisioning
+keeps task creation gated until cleanup and connection adoption complete. The
+project roadmap's A-N matrix is the final hardware acceptance procedure.
+
 ## Future Attention
 
 - Move device email/password out of shared source and into provisioning or

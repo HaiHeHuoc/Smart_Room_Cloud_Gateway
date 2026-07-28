@@ -349,11 +349,12 @@ ESP_ERROR_CHECK(app_network_coordinator_start());
 `main` does not create an initial screen directly. The coordinator requests the
 initial screen only after resolving the final configuration state.
 
-## Phase 6.4.1 Status
+## Phase 6.4.1 Historical Checkpoint
 
 **IMPLEMENTED / HARDWARE TEST PENDING**
 
-Phase 6.4.1 intentionally does not implement:
+At the 6.4.1 checkpoint, the following later-phase behavior was intentionally
+outside scope:
 
 - QR code or `lv_qrcode`;
 - provisioning payload, service name, PoP, or security changes;
@@ -363,11 +364,15 @@ Phase 6.4.1 intentionally does not implement:
   redesign;
 - BLE lifecycle, Wi-Fi retry, Firebase, or cloud-task changes.
 
-## Phase 6.4.2 Status
+QR rendering, real progress, success routing, and retry states were added by
+6.4.3 through 6.4.5 without changing the centralized router.
+
+## Phase 6.4.2 Historical Checkpoint
 
 **IMPLEMENTED / HARDWARE TEST PENDING**
 
-Phase 6.4.2 intentionally does not implement:
+At the 6.4.2 checkpoint, the following later-phase behavior was intentionally
+outside scope:
 
 - QR code, `lv_qrcode`, payload generation, service-name display, or QR
   configuration;
@@ -377,7 +382,10 @@ Phase 6.4.2 intentionally does not implement:
 - BLE, Wi-Fi manager, config manager, cloud, Firebase, factory-reset, touch,
   animation, progress-bar, or dashboard changes.
 
-## Phase 6.4.3 Status
+Those provisioning producers and policies are now integrated; factory reset,
+touch, animation, and dashboard redesign remain out of scope.
+
+## Phase 6.4.3 Historical Checkpoint
 
 **IMPLEMENTED / HARDWARE TEST PENDING**
 
@@ -390,12 +398,11 @@ Implemented:
 - coordinator publication only after provisioning start succeeds;
 - no QR payload, PoP, password, or credential logging.
 
-Phase 6.4.3 intentionally does not implement provisioning progress producers,
-automatic success/failure screen transitions, timeout recovery UI, factory
-reset, touch, animation, progress bars, or dashboard redesign. Those remain
-outside this checkpoint.
+Real provisioning producers, success/failure routing, and timeout recovery
+were added in 6.4.4 and 6.4.5. Factory reset, touch, animation, progress bars,
+and dashboard redesign remain outside Phase 6.4.
 
-## Phase 6.4.4 Status
+## Phase 6.4.4 Historical Checkpoint
 
 **IMPLEMENTED / HARDWARE TEST PENDING**
 
@@ -409,9 +416,9 @@ Implemented:
 - verified `SAVING_CONFIG -> CLEANING_UP -> SUCCESS` flow;
 - `SUCCESS` dwell followed by `WIFI_STATUS`, then the existing dashboard timer.
 
-Automatic retry/restart and the `RETRYING` producer were intentionally
-deferred to Phase 6.4.5 at this checkpoint. Factory reset, touch, animation,
-progress bars, and dashboard redesign remain outside Phase 6.4.4.
+Automatic retry/restart and the `RETRYING` producer were added in Phase 6.4.5.
+Factory reset, touch, animation, progress bars, and dashboard redesign remain
+outside Phase 6.4.
 
 ## Phase 6.4.5 Status
 
@@ -430,7 +437,7 @@ Implemented:
 
 Hardware must still verify message ordering under real BLE cleanup, QR
 replacement after retry, stale-event injection, and long-run LVGL/heap
-stability. Phase 6.4 remains incomplete.
+stability. Final Phase 6.4 hardware acceptance remains pending.
 
 ## Manual Acceptance Tests
 
@@ -472,4 +479,15 @@ Run any temporary state driver outside the UI task, call only public
 14. Exhaust all configured sessions; verify the final QR stays hidden and the
     final `TIMEOUT` or `FAILED` remains visible on the Provisioning Screen.
 
-Phase 6.4 is not complete.
+## Phase 6.4.7 Closure Status
+
+**IMPLEMENTED / HARDWARE REGRESSION PENDING**
+
+The UI task remains the sole owner of LVGL calls, screen roots, widgets,
+timers, generation-aware provisioning caches, and latest-value GUI queues.
+Generic screen changes do not invalidate an active session; only an explicit
+matching/newer generation clear can retire its QR. Construction failure keeps
+the previous screen and object references valid. The complete A-N hardware
+matrix is maintained in the project roadmap.
+
+**Phase 6.4 — IMPLEMENTED / FINAL HARDWARE ACCEPTANCE PENDING**

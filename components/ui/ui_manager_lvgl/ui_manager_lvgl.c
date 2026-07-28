@@ -111,6 +111,16 @@ static bool ui_manager_lvgl_color_trans_done_cb(esp_lcd_panel_io_handle_t panel_
 static void ui_manager_lvgl_swap_rgb565_bytes(uint16_t *buffer,
                                               uint32_t pixel_count);
 
+/**
+ * @brief Release resources allocated by an incomplete initialization.
+ *
+ * @param io_callback_registered True after the LCD transfer callback was
+ *        installed and therefore must be detached before deleting its
+ *        semaphore.
+ */
+static void ui_manager_lvgl_cleanup_failed_init(
+    bool io_callback_registered);
+
 /* Application -------------------------------------------------------------- */
 
 /**
@@ -122,6 +132,7 @@ static void ui_manager_lvgl_swap_rgb565_bytes(uint16_t *buffer,
 esp_err_t ui_manager_lvgl_init(display_driver_handle_t *display_handle)
 {
     esp_err_t ret = ESP_OK;
+    bool io_callback_registered = false;
 
     // Validate the display handle and its panel handle before proceeding
     ESP_RETURN_ON_FALSE(display_handle != NULL, ESP_ERR_INVALID_ARG, TAG, "Invalid display handle pointer");
@@ -136,39 +147,55 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t *display_handle)
 
     // Create a mutex for LVGL operations to ensure thread safety
     s_lvgl_mutex = xSemaphoreCreateMutex();
-    ESP_RETURN_ON_FALSE(s_lvgl_mutex != NULL, ESP_ERR_NO_MEM, TAG, "Failed to create LVGL mutex");
+    if (s_lvgl_mutex == NULL)
+    {
+        ret = ESP_ERR_NO_MEM;
+        ESP_LOGE(TAG, "Failed to create LVGL mutex");
+        goto cleanup;
+    }
 
     s_lvgl_flush_done_sem = xSemaphoreCreateBinary();
-    ESP_RETURN_ON_FALSE(s_lvgl_flush_done_sem != NULL, ESP_ERR_NO_MEM, TAG, "Failed to create LVGL flush semaphore");
+    if (s_lvgl_flush_done_sem == NULL)
+    {
+        ret = ESP_ERR_NO_MEM;
+        ESP_LOGE(TAG, "Failed to create LVGL flush semaphore");
+        goto cleanup;
+    }
 
     // Init lvgl core
     lv_init();
 
-    ESP_LOGW(TAG, "This is sizeof(lv_color_t): %d, sizeof(uint16_t): %d", sizeof(lv_color_t), sizeof(uint16_t));
+    ESP_LOGD(TAG, "sizeof(lv_color_t)=%d, sizeof(uint16_t)=%d", sizeof(lv_color_t), sizeof(uint16_t));
 
     s_lvgl_draw_buffer = heap_caps_malloc(LVGL_DRAW_BUFFER_SIZE, MALLOC_CAP_DMA);
 
-    ESP_RETURN_ON_FALSE(s_lvgl_draw_buffer != NULL,
-                        ESP_ERR_NO_MEM,
-                        TAG,
-                        "Failed to allocate LVGL draw buffer");
+    if (s_lvgl_draw_buffer == NULL)
+    {
+        ret = ESP_ERR_NO_MEM;
+        ESP_LOGE(TAG, "Failed to allocate LVGL draw buffer");
+        goto cleanup;
+    }
 
     #if LCD_ROTATE == LCD_RORATE_LANDSCAPE
         s_lvgl_rotate_buffer = heap_caps_malloc(LVGL_DRAW_BUFFER_SIZE,
                                                 MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
 
-        ESP_RETURN_ON_FALSE(s_lvgl_rotate_buffer != NULL,
-                            ESP_ERR_NO_MEM,
-                            TAG,
-                            "Failed to allocate LVGL rotate buffer");
+        if (s_lvgl_rotate_buffer == NULL)
+        {
+            ret = ESP_ERR_NO_MEM;
+            ESP_LOGE(TAG, "Failed to allocate LVGL rotate buffer");
+            goto cleanup;
+        }
     #endif
 
     s_lvgl_display = lv_display_create(LCD_H_RES, LCD_V_RES);
 
-    ESP_RETURN_ON_FALSE(s_lvgl_display != NULL,
-                        ESP_ERR_NO_MEM,
-                        TAG,
-                        "Failed to create LVGL display");
+    if (s_lvgl_display == NULL)
+    {
+        ret = ESP_ERR_NO_MEM;
+        ESP_LOGE(TAG, "Failed to create LVGL display");
+        goto cleanup;
+    }
 
     lv_display_set_buffers(s_lvgl_display,
                            s_lvgl_draw_buffer,
@@ -194,13 +221,22 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t *display_handle)
         .on_color_trans_done = ui_manager_lvgl_color_trans_done_cb,
     };
 
-    ESP_RETURN_ON_ERROR(
-        esp_lcd_panel_io_register_event_callbacks(display_handle->io_handle,
-                                                  &io_callbacks,
-                                                  s_lvgl_display),
-        TAG,
-        "Failed to register LCD IO callbacks"
-    );
+    ret =
+        esp_lcd_panel_io_register_event_callbacks(
+            display_handle->io_handle,
+            &io_callbacks,
+            s_lvgl_display);
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to register LCD IO callbacks: %s",
+            esp_err_to_name(ret));
+        goto cleanup;
+    }
+
+    io_callback_registered = true;
 
     // Create a periodic timer to call the LVGL tick increment function
     const esp_timer_create_args_t tick_timer_args = {
@@ -210,21 +246,107 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t *display_handle)
         .name = "lvgl_tick_timer"
     };
 
-    ESP_RETURN_ON_ERROR(esp_timer_create(&tick_timer_args, &s_lvgl_tick_timer), 
-                        TAG, 
-                        "Failed to create LVGL tick timer");
+    ret =
+        esp_timer_create(
+            &tick_timer_args,
+            &s_lvgl_tick_timer);
 
-    ESP_RETURN_ON_ERROR(esp_timer_start_periodic(s_lvgl_tick_timer,
-                                                 LVGL_TICK_PERIOD_MS * 1000),
-                        TAG,
-                        "Failed to start LVGL tick timer");
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to create LVGL tick timer: %s",
+            esp_err_to_name(ret));
+        goto cleanup;
+    }
+
+    ret =
+        esp_timer_start_periodic(
+            s_lvgl_tick_timer,
+            LVGL_TICK_PERIOD_MS * 1000);
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to start LVGL tick timer: %s",
+            esp_err_to_name(ret));
+        goto cleanup;
+    }
 
     ESP_LOGI(TAG, "LVGL core and tick timer initialized");
+
+    return ESP_OK;
+
+cleanup:
+    ui_manager_lvgl_cleanup_failed_init(
+        io_callback_registered);
 
     return ret;
 }
 
 /* Static Functions --------------------------------------------------------- */
+
+static void ui_manager_lvgl_cleanup_failed_init(
+    bool io_callback_registered)
+{
+    if (s_lvgl_tick_timer != NULL)
+    {
+        if (esp_timer_is_active(s_lvgl_tick_timer))
+        {
+            (void)esp_timer_stop(s_lvgl_tick_timer);
+        }
+
+        (void)esp_timer_delete(s_lvgl_tick_timer);
+        s_lvgl_tick_timer = NULL;
+    }
+
+    if (io_callback_registered &&
+        (s_display_handle != NULL) &&
+        (s_display_handle->io_handle != NULL))
+    {
+        const esp_lcd_panel_io_callbacks_t empty_callbacks = {0};
+
+        (void)esp_lcd_panel_io_register_event_callbacks(
+            s_display_handle->io_handle,
+            &empty_callbacks,
+            NULL);
+    }
+
+    if (s_lvgl_display != NULL)
+    {
+        lv_display_delete(s_lvgl_display);
+        s_lvgl_display = NULL;
+    }
+
+    #if LCD_ROTATE == LCD_RORATE_LANDSCAPE
+        if (s_lvgl_rotate_buffer != NULL)
+        {
+            heap_caps_free(s_lvgl_rotate_buffer);
+            s_lvgl_rotate_buffer = NULL;
+        }
+    #endif
+
+    if (s_lvgl_draw_buffer != NULL)
+    {
+        heap_caps_free(s_lvgl_draw_buffer);
+        s_lvgl_draw_buffer = NULL;
+    }
+
+    if (s_lvgl_flush_done_sem != NULL)
+    {
+        vSemaphoreDelete(s_lvgl_flush_done_sem);
+        s_lvgl_flush_done_sem = NULL;
+    }
+
+    if (s_lvgl_mutex != NULL)
+    {
+        vSemaphoreDelete(s_lvgl_mutex);
+        s_lvgl_mutex = NULL;
+    }
+
+    s_display_handle = NULL;
+}
 
 /**
  * @brief LVGL tick callback function. This function is called periodically by the ESP timer to increment the LVGL tick count.
