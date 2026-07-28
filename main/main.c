@@ -115,7 +115,9 @@ static const firebase_auth_config_t FIREBASE_AUTH_CONFIG =
 static esp_err_t network_platform_init(void);
 
 
-/** @brief Convert and forward Wi-Fi manager events to the GUI queue. */
+/**
+ * @brief Fan out Wi-Fi state to coordinator, GUI, and cloud network epoch.
+ */
 static void app_wifi_status_callback(
     const wifi_manager_status_t *status,
     void *user_data);
@@ -650,6 +652,20 @@ static void app_wifi_status_callback(
             "Failed to forward Wi-Fi status to UI: %s",
             esp_err_to_name(ret)
         );
+    }
+
+    const esp_err_t cloud_network_error =
+        cloud_manager_notify_network_state(
+            status->has_ipv4_address);
+
+    if ((cloud_network_error != ESP_OK) &&
+        (cloud_network_error !=
+         ESP_ERR_INVALID_STATE))
+    {
+        ESP_LOGW(
+            TAG,
+            "Failed to forward Wi-Fi state to cloud manager: %s",
+            esp_err_to_name(cloud_network_error));
     }
 
 

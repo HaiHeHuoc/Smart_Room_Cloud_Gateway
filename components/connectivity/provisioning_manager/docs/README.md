@@ -66,7 +66,7 @@ components/connectivity/provisioning_manager/
 | Dependency | Use |
 |---|---|
 | `esp_common` | Public `esp_err_t` API |
-| `bt` | Bluetooth memory retention and terminal release |
+| `bt` | ESP32-S3 BLE memory retention and terminal release |
 | `esp_hw_support` | Station MAC address |
 | `esp_wifi` | Framework Wi-Fi credential type |
 | `freertos` | Queue, state spinlock, and one-shot cleanup task |
@@ -85,7 +85,7 @@ The application manifest currently selects
 | `provisioning_manager_start()` | Start advertising and enter `ACTIVE` |
 | `provisioning_manager_get_qr_payload(generation, ...)` | Copy the exact generation's active BLE QR JSON |
 | `provisioning_manager_stop()` | Begin asynchronous shutdown |
-| `provisioning_manager_release_ble_memory()` | Permanently release retained Bluetooth memory after the retry envelope |
+| `provisioning_manager_release_ble_memory()` | Permanently release retained BLE memory after the retry envelope |
 | `provisioning_manager_get_state()` | Copy the current lifecycle state |
 | `provisioning_manager_is_wifi_handoff_pending()` | Report whether received credentials are still connecting or awaiting application consumption |
 | `provisioning_manager_receive_wifi_credentials()` | Wait for credentials from a framework-confirmed connection |
@@ -117,10 +117,12 @@ the interoperable provisioning contract:
 The application intentionally does not copy the example's global event
 handler, direct `esp_wifi_connect()` call, credential logging, custom endpoint,
 or provisioning-state reset callback. It also replaces the example's immediate
-`FREE_BTDM` policy with a small scheme callback that releases Classic BT once
-but retains BLE across the bounded same-boot retry envelope. Those behaviors
-preserve the existing `wifi_manager`, coordinator, security, and Phase 6.4
-ownership boundaries.
+`FREE_BTDM` policy with `NETWORK_PROV_EVENT_HANDLER_NONE`, retaining BLE across
+the bounded same-boot retry envelope. After the framework is fully
+deinitialized and no later session is allowed, the application explicitly
+releases the ESP32-S3 BLE-only allocation with
+`esp_bt_mem_release(ESP_BT_MODE_BLE)`. Those behaviors preserve the existing
+`wifi_manager`, coordinator, security, and Phase 6.4 ownership boundaries.
 
 ## State Lifecycle
 
@@ -206,10 +208,20 @@ resets the queue, clears active identity, and initializes the framework again.
 Each asynchronous terminal event uses a captured generation so a late old
 `STOPPED` callback cannot be relabeled as the new session.
 
-Classic Bluetooth memory is released once at first initialization. BLE
-controller memory is retained across intermediate retries, then
-`provisioning_manager_release_ble_memory()` releases BTDM memory after success,
-final exhaustion, or a nonretryable clean stop.
+The ESP32-S3 target is configured for NimBLE/BLE rather than Classic
+Bluetooth. No Classic-BT release is attempted at session initialization. BLE
+controller/host memory is retained across intermediate retries, then
+`provisioning_manager_release_ble_memory()` calls
+`esp_bt_mem_release(ESP_BT_MODE_BLE)` only from clean `STOPPED` after the full
+retry envelope terminates. The call is idempotent:
+`ESP_ERR_NOT_FOUND` is accepted as already released; other release failures
+increment a diagnostic counter and remain visible as warnings.
+
+Terminal memory reclamation is best-effort application cleanup. It cannot
+replace a storage, adoption, timeout, or configuration result. In particular,
+successful provisioning first verifies IPv4, adopts the Station connection,
+sets coordinator `ONLINE`, publishes `SUCCESS`, preserves the 1500 ms dwell
+and screen route, and only then attempts BLE memory release.
 
 The active service name and QR payload are cleared when stop begins and on
 startup, cleanup, or de-initialization failure. QR construction failure does
@@ -256,6 +268,7 @@ ret = provisioning_manager_get_state(&state);
 
 /* Call only when no later same-boot provisioning session is allowed. */
 ret = provisioning_manager_release_ble_memory();
+/* Log ret as cleanup diagnostics; do not replace the network result. */
 ```
 
 The caller should poll with a finite delay and timeout. A tight polling loop
@@ -328,6 +341,16 @@ I (...) PROVISIONING_MANAGER: Provisioning manager de-initialized
 
 - Replace the development Proof of Possession with a production strategy.
 - Add factory-reset and reprovisioning policy in Sprint 7.
+
+## Phase 6.4.6 BLE Release Correction
+
+**IMPLEMENTED / HARDWARE TEST PENDING**
+
+Static inspection of ESP-IDF 6.0.1, the ESP32-S3 target configuration, and the
+installed `network_provisioning` BLE scheme confirms the terminal release mode
+is `ESP_BT_MODE_BLE`. Hardware tests must still verify successful release,
+already-released handling, injected release failure, multi-session retention,
+and continued Wi-Fi/cloud success when optional reclamation fails.
 - Add focused automated tests around callback ordering where the upstream
   framework can be isolated.
 

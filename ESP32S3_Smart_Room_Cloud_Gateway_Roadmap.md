@@ -703,6 +703,35 @@ checkpoint, and Phase 6.4 is not complete.
 Phase 6.4.5 is implemented and statically build-verified. Hardware acceptance
 remains pending, and Phase 6.4 is not complete.
 
+### Phase 6.4.6 Status - Implemented / Hardware Test Pending
+
+- [x] Feed the cloud manager from the existing Wi-Fi callback through a
+  non-blocking IPv4 state and non-zero network epoch.
+- [x] Replace blind cloud retry delays with task-notification waits that wake
+  for network edges and telemetry without allowing telemetry hot loops.
+- [x] Reset the single task-owned HTTP client on network/token generation,
+  transport, HTTP 0/401/403/408/429/5xx, and terminal request failures.
+- [x] Classify cloud attempts explicitly instead of treating every HTTP status
+  zero as retryable.
+- [x] Add bounded HTTP 401 recovery and at most one forced token recovery for a
+  persistent HTTP 403 rejection.
+- [x] Split Firebase Authentication operation serialization from short
+  token/status state protection and expose observable token invalidation.
+- [x] Preserve the latest-value telemetry queue across retries and the
+  new-sample-during-request race.
+- [x] Correct the ESP32-S3/NimBLE terminal release to
+  `esp_bt_mem_release(ESP_BT_MODE_BLE)` after clean `STOPPED`.
+- [x] Make BLE memory reclamation best-effort so it cannot replace successful
+  adoption or an existing provisioning failure.
+- [x] Preserve one cloud task, one Wi-Fi callback, provisioning/cloud gating,
+  certificate verification, Firebase endpoint, and GUI mappings.
+- [ ] Confirm normal upload, reconnect-during-backoff, transport and HTTP
+  recovery, 401/403 policy, latest telemetry, provisioning regression, token
+  refresh, and two-hour resource stability on hardware.
+
+Phase 6.4.6 is implemented and statically build-verified. Hardware acceptance
+remains pending, and Phase 6.4 is not complete.
+
 ### Tasks
 
 - [x] Add BLE provisioning component.
