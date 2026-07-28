@@ -77,6 +77,15 @@ static const app_network_coordinator_config_t
 
     .provisioning_poll_period_ms =
         200U,
+
+    .provisioning_max_sessions =
+        3U,
+
+    .provisioning_retry_backoff_ms =
+        1500U,
+
+    .provisioning_failure_dwell_ms =
+        1000U,
 };
 
 /* Cloud state and its telemetry queue are initialized before sensor start. */

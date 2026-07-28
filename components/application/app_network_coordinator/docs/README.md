@@ -15,6 +15,8 @@ The coordinator:
 - Migrates a supported legacy configuration before use.
 - Starts a stored Station connection when configuration is valid.
 - Starts bounded BLE provisioning only for `NOT_CONFIGURED`.
+- Runs at most three provisioning sessions by default, including the initial
+  session, without recursion, reboot, or one task per retry.
 - Copies the exact active BLE QR payload into the GUI's dedicated latest-value
   queue immediately after provisioning starts.
 - Registers the manager's single progress callback and maps copied lifecycle
@@ -95,6 +97,25 @@ request PROVISIONING screen
     -> request WIFI_STATUS
 ```
 
+A retryable timeout or clean terminal session failure follows:
+
+```text
+TIMEOUT or FAILED
+    -> 1000 ms failure dwell
+    -> CLEANING_UP
+    -> manager STOPPED
+    -> generation-aware QR invalidation
+    -> RETRYING
+    -> 1500 ms backoff
+    -> STARTING with a new generation
+    -> new QR
+    -> WAITING_FOR_PHONE
+```
+
+The coordinator remains `PROVISIONING` throughout intermediate failures and
+backoff. It changes to `FAILED` only after retry exhaustion, a nonretryable
+failure, or cleanup that cannot reach `STOPPED`.
+
 QR publication is best-effort and never promotes coordinator state, starts a
 Wi-Fi connection, or changes the active screen.
 
@@ -165,13 +186,17 @@ static const app_network_coordinator_config_t config = {
     .provisioning_timeout_ms = 120000U,
     .provisioning_connection_grace_ms = 30000U,
     .provisioning_poll_period_ms = 200U,
+    .provisioning_max_sessions = 3U,
+    .provisioning_retry_backoff_ms = 1500U,
+    .provisioning_failure_dwell_ms = 1000U,
 };
 ```
 
-All timing values must be greater than zero. The coordinator copies this
-structure during initialization. The 30-second grace is not added when no
-credential handoff is pending, so an idle provisioning session still stops at
-its normal deadline.
+All values must be non-zero. The session count is bounded to 10 and timing
+values to 10 minutes; every delay must convert to at least one FreeRTOS tick.
+The coordinator copies this structure during initialization. The 30-second
+grace is not added when no credential handoff is pending, so an idle session
+still stops at its normal deadline.
 
 ## Late DHCP Recovery
 
@@ -233,21 +258,86 @@ adoption, and screen-routing behavior.
 
 **IMPLEMENTED / HARDWARE TEST PENDING**
 
-The coordinator now publishes the real provisioning lifecycle, preserves the
+At the Phase 6.4.4 checkpoint the coordinator published the real provisioning
+lifecycle, preserved the
 QR payload across ordinary screen transitions and credential failures, and
-clears it only when the session becomes invalid. A wrong credential set shows
+cleared it only when the session became invalid. A wrong credential set shows
 `FAILED` while the same BLE session remains available for another phone
-submission; no automatic `RETRYING` policy is implemented. Final timeout stops
-and cleans the session. Verified success persists and re-reads configuration,
+submission; automatic `RETRYING` was deferred to Phase 6.4.5. Verified success
+persists and re-reads configuration,
 waits for manager cleanup, adopts the valid Station/IPv4 connection, shows
 `SUCCESS` for 1500 ms, then requests `WIFI_STATUS`. The existing Wi-Fi-screen
 timer continues to route to `SENSOR_DASHBOARD`. Coordinator runtime tracking
 begins at adoption, but normal `ONLINE` screen requests are suppressed during
 the success dwell so a reconnect cannot cut the success presentation short.
 
+## Phase 6.4.5 Integration
+
+**IMPLEMENTED / HARDWARE TEST PENDING**
+
+The existing coordinator task now contains an outer bounded retry loop and a
+one-session function. Callback registration occurs once before the loop. Each
+session gets the next non-zero `uint32_t` generation; zero is reserved and is
+skipped if increment wraps. Manager progress is accepted only when its
+generation matches the coordinator's active generation. Every GUI status also
+carries the one-based session number and configured session limit, allowing
+the QR screen to show `Session n/max` throughout waiting, cleanup, retry, and
+success states.
+
+Before a replacement session, cleanup must reach `STOPPED`, handoff-pending
+must be false, and `config_manager` must still report `NOT_CONFIGURED`. The
+manager resets its retained credential queue during reinitialization. If
+configuration becomes `VALID`, no new BLE service starts; the coordinator uses
+the stored-configuration path instead. Intermediate retries retain BLE
+controller memory. Success, final exhaustion, and nonretryable clean stops
+release it once before normal memory-heavy work may proceed.
+
+| Result class | Examples | New phone session |
+|---|---|---|
+| `SUCCESS` | Persisted, cleaned, connection adopted | No |
+| `RETRYABLE_TIMEOUT` | No verified credentials before deadline/grace | Yes, while budget remains |
+| `RETRYABLE_SESSION_FAILURE` | Session stopped cleanly without a usable handoff | Yes, while budget remains |
+| `NONRETRYABLE_STORAGE_FAILURE` | Save, validation, or read-back failure | No |
+| `NONRETRYABLE_ADOPTION_FAILURE` | Persisted connection cannot be adopted | No |
+| `NONRETRYABLE_INTERNAL_FAILURE` | Init/start/queue/cleanup cannot be safely recovered | No |
+
+An ordinary wrong-password event is not a session result: the same BLE
+service and QR remain active, no retry count is consumed, and a later correct
+submission continues the current session. On final exhaustion the QR is
+cleared, final `TIMEOUT` or `FAILED` remains on `PROVISIONING`, coordinator
+state becomes `FAILED`, and cloud startup remains gated.
+
+### Phase 6.4.5 Manual Hardware Tests
+
+- **Test A — Timeout then automatic retry:** leave session 1 idle; verify
+  `TIMEOUT -> CLEANING_UP -> RETRYING -> STARTING -> WAITING_FOR_PHONE`, no
+  reboot, manager `STOPPED` before restart, discoverable session 2, a new QR
+  model, and no heap drop.
+- **Test B — Wrong password in the same session:** submit wrong then correct
+  credentials; verify no `RETRYING`, no session-count increment, QR remains,
+  and the same BLE service completes the success flow.
+- **Test C — Retry exhaustion:** allow all three default sessions to timeout;
+  verify exactly three sessions, no fourth service, final QR cleared, terminal
+  state remains visible, no reboot, and no cloud start.
+- **Test D — Successful second session:** timeout session 1 and provision
+  session 2; verify persistence/read-back, cleanup, adoption, about 1500 ms
+  `SUCCESS`, then `WIFI_STATUS` and `SENSOR_DASHBOARD`; reboot must use stored
+  credentials.
+- **Test E — Stale event injection:** deliver generation N status/QR clear
+  after N+1 is active; verify the old message is ignored, the new QR remains,
+  and `WAITING_FOR_PHONE` is not overwritten.
+- **Test F — NVS save failure:** inject `config_manager_save_wifi()` failure;
+  verify `FAILED`, no new session, no adoption/cloud/success, and temporary
+  credentials are cleared.
+- **Test G — Cleanup timeout:** prevent manager `STOPPED`; verify no retry, no
+  duplicate BLE manager, final `FAILED`, QR cleared, and bounded exit.
+- **Test H — Runtime stability:** repeat timeout/retry cycles for 30–60
+  minutes; verify no watchdog, LVGL assertion, stack warning, duplicate
+  callback/queue, continuous heap reduction, or BLE/NimBLE leak.
+
 ## Future Attention
 
-- Add cancellation or restart APIs only when runtime reprovisioning policy is
+- Add cancellation or runtime reprovisioning APIs only when separately
   approved.
 - Keep factory reset outside this component until Sprint 7 ownership is
   finalized.

@@ -55,6 +55,15 @@ typedef enum
  */
 typedef struct
 {
+    /** Non-zero identity of the provisioning session that owns this status. */
+    uint32_t session_generation;
+
+    /** One-based session number within the current bounded retry envelope. */
+    uint32_t session_number;
+
+    /** Maximum sessions in the current bounded retry envelope. */
+    uint32_t session_limit;
+
     ui_provisioning_state_t state;
     esp_err_t last_error;
     uint16_t wifi_disconnect_reason;
@@ -67,6 +76,9 @@ typedef struct
  */
 typedef struct
 {
+    /** Non-zero identity of the provisioning session that owns this payload. */
+    uint32_t session_generation;
+
     char payload[UI_PROVISIONING_QR_PAYLOAD_BUFFER_SIZE];
 } ui_provisioning_qr_payload_t;
 
@@ -191,9 +203,10 @@ esp_err_t app_gui_start_ui_task(void);
  * changes the active screen.
  *
  * @param[in] status Non-sensitive provisioning UI snapshot to copy.
- * @return ESP_OK when queued, ESP_ERR_INVALID_ARG for NULL or an invalid
- *         provisioning state, ESP_ERR_INVALID_STATE before app_gui_init(), or
- *         ESP_FAIL when the queue update fails unexpectedly.
+ * @return ESP_OK when queued, ESP_ERR_INVALID_ARG for NULL, a zero generation,
+ *         invalid session number/limit, or invalid provisioning state,
+ *         ESP_ERR_INVALID_STATE before app_gui_init(), or ESP_FAIL when the
+ *         queue update fails unexpectedly.
  */
 esp_err_t app_gui_post_provisioning_status(
     const ui_provisioning_status_t *status);
@@ -207,9 +220,9 @@ esp_err_t app_gui_post_provisioning_status(
  * but is not ISR-safe.
  *
  * @param[in] payload Null-terminated provisioning QR payload to copy.
- * @return ESP_OK when copied, ESP_ERR_INVALID_ARG for NULL, empty, or
- *         unterminated input, ESP_ERR_INVALID_STATE before app_gui_init(), or
- *         ESP_FAIL when the queue update fails.
+ * @return ESP_OK when copied, ESP_ERR_INVALID_ARG for NULL, zero generation,
+ *         empty, or unterminated input, ESP_ERR_INVALID_STATE before
+ *         app_gui_init(), or ESP_FAIL when the queue update fails.
  */
 esp_err_t app_gui_post_provisioning_qr_payload(
     const ui_provisioning_qr_payload_t *payload);
@@ -225,10 +238,15 @@ esp_err_t app_gui_post_provisioning_qr_payload(
  * This function never calls LVGL and is safe from normal task and
  * task-context callback code. It is not ISR-safe.
  *
- * @return ESP_OK when queued, ESP_ERR_INVALID_STATE before app_gui_init(), or
- *         ESP_FAIL when the queue update fails unexpectedly.
+ * @param[in] session_generation Non-zero session identity whose QR payload is
+ *                               being invalidated.
+ *
+ * @return ESP_OK when queued, ESP_ERR_INVALID_ARG for a zero generation,
+ *         ESP_ERR_INVALID_STATE before app_gui_init(), or ESP_FAIL when the
+ *         queue update fails unexpectedly.
  */
-esp_err_t app_gui_clear_provisioning_qr_payload(void);
+esp_err_t app_gui_clear_provisioning_qr_payload(
+    uint32_t session_generation);
 
 /* Wi-Fi Status API -------------------------------------------------------- */
 /**

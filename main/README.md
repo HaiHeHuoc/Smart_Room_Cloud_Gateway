@@ -99,11 +99,14 @@ callback cannot post into an uninitialized cloud component.
   deadline expires with a credential handoff already in flight, it allows one
   additional 30-second connection grace. Framework cleanup polling remains
   finite.
+- BLE provisioning allows at most three sessions including the initial
+  session. Retryable terminal failures dwell for 1000 ms, clean fully to
+  `STOPPED`, then use a 1500 ms `RETRYING` backoff before a new generation.
 - BLE provisioning uses NimBLE, Security 1, five framework connection
   attempts, and the Espressif `v1`/`ble` QR schema.
-- Provisioning progress uses a dedicated length-one overwrite queue. A normal
-  credential failure leaves the same BLE session and QR available; automatic
-  `RETRYING` policy is deferred.
+- Provisioning progress uses dedicated generation-aware length-one overwrite
+  queues. A normal credential failure leaves the same BLE session and QR
+  available and does not consume the session retry budget.
 - `sdkconfig.defaults` enables the 16 MB N16 flash layout, the custom
   partition table, BT/NimBLE, Security 1 support, required LVGL fonts, runtime
   statistics, the LVGL QR widget, and full cross-signed CA-bundle verification
@@ -213,6 +216,11 @@ idf.py -p <PORT> flash monitor
   implemented and build-verified. Hardware acceptance is pending for wrong
   credentials in the same BLE session, timeout cleanup, real-state visibility,
   the 1500 ms success dwell, and final dashboard routing. Phase 6.4 remains
+  incomplete.
+- Phase 6.4.5 bounded same-boot provisioning recovery is implemented with
+  hardware testing pending. Static validation covers the three-session budget,
+  `STOPPED -> READY` reinitialization, queue reuse/reset, generation filtering,
+  terminal Bluetooth memory release, and cloud gating. Phase 6.4 remains
   incomplete.
 - Firebase project setup and authenticated host testing are documented in
   `components/cloud/cloud_manager/README.txt` and `Test/TestFirebase_Auth.ps1`.

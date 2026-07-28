@@ -8,6 +8,7 @@ idf_component_register(
         esp_common
 
     PRIV_REQUIRES
+        bt
         esp_hw_support
         esp_wifi
         freertos

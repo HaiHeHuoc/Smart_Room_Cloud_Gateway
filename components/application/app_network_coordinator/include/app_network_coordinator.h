@@ -113,6 +113,21 @@ typedef struct
      * event-driven.
      */
     uint32_t provisioning_poll_period_ms;
+
+    /**
+     * @brief Maximum provisioning sessions, including the initial session.
+     */
+    uint32_t provisioning_max_sessions;
+
+    /**
+     * @brief Delay before starting each automatic replacement session.
+     */
+    uint32_t provisioning_retry_backoff_ms;
+
+    /**
+     * @brief Minimum dwell for TIMEOUT or FAILED before cleanup begins.
+     */
+    uint32_t provisioning_failure_dwell_ms;
 } app_network_coordinator_config_t;
 
 /* Functions ---------------------------------------------------------------- */
@@ -122,12 +137,13 @@ typedef struct
  * The configuration is copied. Initialization is accepted only from
  * APP_NETWORK_COORDINATOR_STATE_UNINITIALIZED.
  *
- * @param[in] config Provisioning timeout, connection grace, and cleanup
- *                   polling configuration.
+ * @param[in] config Provisioning timeout, connection grace, cleanup polling,
+ *                   retry budget, backoff, and failure dwell configuration.
  *
  * @return
  * - ESP_OK: Coordinator initialized and entered READY.
- * - ESP_ERR_INVALID_ARG: @p config is NULL or a timing value is zero.
+ * - ESP_ERR_INVALID_ARG: @p config is NULL, a value is zero, or a configured
+ *   retry/timing bound is exceeded.
  * - ESP_ERR_INVALID_STATE: Coordinator was already initialized.
  */
 esp_err_t app_network_coordinator_init(

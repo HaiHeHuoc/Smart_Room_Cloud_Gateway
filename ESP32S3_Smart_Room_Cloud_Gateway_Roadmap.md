@@ -673,8 +673,35 @@ remains pending, and Phase 6.4 is not complete.
   session, timeout cleanup, success dwell, and final routing on hardware.
 
 Phase 6.4.4 is implemented and build-verified. Hardware acceptance remains
-pending, automatic retry/restart remains Phase 6.4.5 work, and Phase 6.4 is not
-complete.
+pending; automatic retry/restart was deferred to Phase 6.4.5 at that
+checkpoint, and Phase 6.4 is not complete.
+
+### Phase 6.4.5 Status - Implemented / Hardware Test Pending
+
+- [x] Add a three-session default retry envelope with 1000 ms failure dwell
+  and 1500 ms retry backoff.
+- [x] Reinitialize `provisioning_manager` only after clean `STOPPED` and reuse
+  and reset its single credential queue.
+- [x] Keep wrong-password recovery inside the same BLE session without
+  consuming the outer session budget.
+- [x] Classify retryable timeout/session failure separately from storage,
+  adoption, and internal failures.
+- [x] Attach a non-zero generation to manager progress, GUI status, QR update,
+  and QR clear messages; reject stale generations.
+- [x] Show the active one-based provisioning session and configured maximum as
+  `Session n/max` on the QR screen without reducing QR size.
+- [x] Retain BLE controller memory between retries and release it when the
+  bounded envelope terminates.
+- [x] Preserve coordinator `PROVISIONING` and cloud gating during retry; keep
+  final exhaustion on the Provisioning Screen without reboot.
+- [x] Preserve the successful Phase 6.4.4 cleanup, adoption, success dwell,
+  and final screen routing.
+- [ ] Confirm timeout retry, same-session password correction, exhaustion,
+  second-session success, stale-event rejection, injected failures, and
+  30-60-minute resource stability on hardware.
+
+Phase 6.4.5 is implemented and statically build-verified. Hardware acceptance
+remains pending, and Phase 6.4 is not complete.
 
 ### Tasks
 
