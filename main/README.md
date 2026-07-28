@@ -223,8 +223,9 @@ idf.py -p <PORT> flash monitor
 - Phase 6.4.1 application screen orchestration is implemented with hardware
   testing pending. This does not mark Phase 6.4 complete.
 - Phase 6.4.3 Espressif-compatible BLE provisioning QR rendering is
-  implemented and build-verified. QR scan and end-to-end provisioning remain
-  pending on target hardware; Phase 6.4 is not complete.
+  implemented and build-verified. The user confirmed QR scanning and a
+  successful provisioned Wi-Fi connection on target hardware; the final
+  cross-phase regression matrix remains pending.
 - Phase 6.4.4 real provisioning progress and verified success routing are
   implemented and build-verified. Hardware acceptance is pending for wrong
   credentials in the same BLE session, timeout cleanup, real-state visibility,
@@ -239,11 +240,20 @@ idf.py -p <PORT> flash monitor
   Static validation covers network epochs, task wakeups, HTTP-client reset,
   attempt classification, bounded 401/403 recovery, split Firebase Auth mutex
   ownership, latest telemetry retention, and best-effort ESP32-S3 BLE release.
-  Phase 6.4 remains incomplete.
+  Final Phase 6.4 hardware acceptance remains pending.
+- Phase 6.4.7 closure is implemented with hardware regression pending.
+  `main` remains composition-only: one Wi-Fi callback fans copied snapshots to
+  coordinator, GUI, and cloud; cloud task creation stays gated until stored
+  connection startup or completed provisioning adoption. The project
+  roadmap's A-N matrix is the final acceptance procedure.
 - Firebase project setup and authenticated host testing are documented in
   `components/cloud/cloud_manager/README.txt` and `Test/TestFirebase_Auth.ps1`.
 - Never log or commit passwords, ID tokens, refresh tokens, service-account
   keys, or Firebase administrator credentials.
+
+**Phase 6.4.7 — IMPLEMENTED / HARDWARE REGRESSION PENDING**
+
+**Phase 6.4 — IMPLEMENTED / FINAL HARDWARE ACCEPTANCE PENDING**
 
 ## Future Attention
 

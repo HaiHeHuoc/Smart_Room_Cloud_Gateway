@@ -246,7 +246,8 @@ Application screen orchestration is implemented and build validation is
 tracked with the `app_gui` component. Hardware testing is still required.
 This integration posts only screen commands and does not change config
 storage, BLE lifecycle, Wi-Fi reconnect behavior, or provisioning success UI.
-Phase 6.4 remains incomplete.
+Later Phase 6.4 checkpoints add provisioning success, retry, and cloud
+recovery without changing this routing ownership.
 
 ## Phase 6.4.3 Integration
 
@@ -359,3 +360,21 @@ callback; `main` fans its copied IPv4 state to the coordinator, GUI, and cloud
 network epoch. The cloud task still cannot start in `PROVISIONING` or between
 Phase 6.4.5 sessions, and opens only at stored-connection `CONNECTING` or
 post-adoption `ONLINE`.
+
+## Phase 6.4.7 Closure Status
+
+**IMPLEMENTED / HARDWARE REGRESSION PENDING**
+
+Static closure review confirms that the coordinator alone owns config-state
+classification, the bounded outer provisioning retry policy, persistence
+verification, cleanup waiting, active-connection adoption, and application
+network state. It registers the manager progress callback once, rejects stale
+generations, requires `STOPPED` before retry, and never changes a valid runtime
+disconnect into BLE reprovisioning. UI publication and terminal BLE release
+remain best-effort diagnostics and cannot replace the primary network result.
+
+Configured boot requests `BOOT`, connects stored credentials, then follows
+valid IPv4 through `WIFI_STATUS` to the dashboard. `NOT_CONFIGURED` requests
+`PROVISIONING` directly. Integrity failures are preserved on the safe boot
+path without erasing configuration or starting cloud. The complete A-N
+hardware regression matrix is maintained in the project roadmap.

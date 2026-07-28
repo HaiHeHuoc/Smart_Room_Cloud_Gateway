@@ -93,12 +93,14 @@ ui_manager_lvgl_release_mutex();
   tasks that call LVGL directly must use the manager mutex.
 - Wi-Fi status queueing and the 24 KB LVGL timer task are owned by `app_gui`,
   not this component.
-- A second initialization attempt returns `ESP_ERR_INVALID_STATE` once the
-  mutex has been created. Initialization failures after partial allocation do
-  not currently release already-created resources, so retrying in the same
-  boot remains unsupported.
+- A second initialization attempt returns `ESP_ERR_INVALID_STATE` after
+  successful initialization.
+- A failed initialization unregisters any installed LCD transfer callback,
+  deletes its partial LVGL display and timer, frees both draw buffers, and
+  deletes its synchronization objects. A later caller may retry initialization
+  in the same boot.
 
 ## Future Attention
 
-- Add cleanup for partial initialization failures and a deinit path if display
-  shutdown or restart becomes necessary.
+- Add a public deinit path only if runtime display shutdown or restart becomes
+  necessary.

@@ -165,3 +165,14 @@ The mutex split and observable token invalidation support cloud recovery from
 rejected tokens without blocking status access behind network I/O. Hardware
 tests must still cover refresh, 401 recovery, persistent 403/credential
 failure, cleanup diagnostics, and the full token-expiry window.
+
+## Phase 6.4.7 Closure Status
+
+**IMPLEMENTED / HARDWARE REGRESSION PENDING**
+
+Authentication network operations remain serialized independently from the
+short token/status mutex. Sign-in, refresh, rejected-token invalidation, token
+generation, and secure temporary-buffer cleanup remain owned here; the cloud
+task owns retry policy and HTTP telemetry clients. The final A-N hardware
+matrix in the project roadmap covers rejected-token recovery and persistent
+authorization failure without a hot authentication loop.

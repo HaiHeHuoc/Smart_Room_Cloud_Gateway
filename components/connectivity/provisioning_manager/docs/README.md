@@ -202,6 +202,12 @@ task.
 If the cleanup task cannot be created, the component enters `FAILED` instead
 of remaining indefinitely in `STOPPING`.
 
+If BLE service startup fails, framework deinitialization is still attempted.
+A cleanup failure leaves the manager in `FAILED` and blocks reuse, while the
+API and terminal progress retain the original service-start error as the
+primary failure. The cleanup error remains available in a separate diagnostic
+log.
+
 The progress callback registration and credential queue survive a clean stop.
 The next `init(generation)` clears pending credentials and handoff flags,
 resets the queue, clears active identity, and initializes the framework again.
@@ -368,9 +374,10 @@ and continued Wi-Fi/cloud success when optional reclamation fails.
 **IMPLEMENTED / HARDWARE TEST PENDING**
 
 The QR contract, active-session copy API, five framework connection attempts,
-NimBLE/Security1 defaults, and build have been verified statically. A phone
-scan, BLE handshake, Wi-Fi authentication, NVS persistence, and cleanup still
-require target-hardware acceptance.
+NimBLE/Security1 defaults, and build have been verified statically. The user
+confirmed a phone QR scan and successful provisioned Wi-Fi connection on the
+target. Full callback ordering, persistence/reboot, replacement-session,
+cleanup, and endurance coverage remains in the final A-N hardware matrix.
 
 ## Phase 6.4.4 Status
 
@@ -393,3 +400,13 @@ keeps `STOPPING` until the cleanup task has fully returned, and retains BLE
 memory only until the bounded retry envelope ends. Hardware must still verify
 that replacement BLE sessions advertise without reboot and repeated cycles do
 not leak controller, queue, or credential resources.
+
+## Phase 6.4.7 Closure Status
+
+**IMPLEMENTED / HARDWARE REGRESSION PENDING**
+
+Static closure review confirms one retained credential queue, one progress
+callback, generation-bound QR/progress data, `STOPPED` before replacement
+sessions, credential zeroization, and BLE retention between retries. The
+Phase 6.4 final hardware matrix in the project roadmap remains the acceptance
+authority; no additional provisioning feature is introduced here.
