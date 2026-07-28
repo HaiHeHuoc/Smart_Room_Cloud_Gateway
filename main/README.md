@@ -43,6 +43,7 @@ wifi_manager callback
     -> while provisioning, post CONNECTING_WIFI / WAITING_FOR_IP / FAILED only
     -> otherwise update coordinator CONNECTING / ONLINE / OFFLINE state
     -> verified normal ONLINE transition requests WIFI_STATUS
+    -> publish has_ipv4 to cloud_manager's retained network epoch
     -> map wifi_manager_status_t to ui_wifi_status_t
     -> app_gui_post_wifi_status()
 
@@ -78,6 +79,12 @@ app_main cloud gate
     -> reject READY / STARTING / RESOLVING_CONFIG / PROVISIONING / FAILED
     -> accept CONNECTING for stored Wi-Fi or ONLINE after provisioning handoff
     -> cloud_manager_start()
+
+cloud task
+    -> wake on telemetry or Wi-Fi epoch edges
+    -> invalidate HTTP/TLS client on every changed network epoch
+    -> classify transport, HTTP, authentication, and deterministic failures
+    -> retry recoverable work with wakeable bounded backoff
 ```
 
 The callbacks copy their input and return quickly. The GUI task owns LVGL
@@ -114,6 +121,9 @@ callback cannot post into an uninitialized cloud component.
 - The one-shot network coordinator task uses a 6 KB stack at priority 4.
 - The 12 KB cloud task is allocated only after stored connection startup or
   successful provisioning cleanup and adoption.
+- Cloud retry waits start at 5000 ms, cap at 60000 ms, and are wakeable by a
+  network edge. A complete disconnect/reconnect during backoff advances the
+  non-zero epoch and invalidates the previous HTTP/TLS client.
 - `firebase_auth_init()` and `cloud_manager_init()` allocate only protected
   state and queues during startup; authentication and TLS remain deferred to
   the gated cloud task.
@@ -136,10 +146,13 @@ callback cannot post into an uninitialized cloud component.
   not call LVGL, create widgets, or render screens.
 - `sensor_manager` is a local service and continues sampling and updating the
   GUI while provisioning waits, times out, or network connectivity is absent.
-- The Wi-Fi callback forwards a short runtime event to the coordinator before
-  queueing the independent GUI snapshot. `wifi_manager` remains responsible
-  for connection and reconnect behavior. Provisioning events cannot promote
-  coordinator state to `ONLINE` before persistence, cleanup, and adoption.
+- The single Wi-Fi callback fans out a short runtime event to the coordinator,
+  a non-blocking IPv4 snapshot to `cloud_manager`, and an independent GUI
+  snapshot. `wifi_manager` remains responsible for connection and reconnect
+  behavior. The cloud notification performs no HTTP/TLS work and safely
+  retains edges before the cloud task exists. Provisioning events cannot
+  promote coordinator state to `ONLINE` before persistence, cleanup, and
+  adoption.
 - The sensor callback can always post to an initialized cloud latest-value
   queue; posting does not perform authentication, TLS, or network I/O.
 - The display handle has static lifetime because `ui_manager_lvgl` borrows it.
@@ -150,8 +163,8 @@ callback cannot post into an uninitialized cloud component.
 - Wi-Fi, sensor, cloud, provisioning, and coordinator callbacks must not call
   LVGL.
 - Sensor callbacks must not perform Firebase authentication or HTTP requests.
-- `firebase_auth` serializes token state; `cloud_manager` is its current network
-  caller.
+- `firebase_auth` serializes network operations separately from short
+  token/status state access; `cloud_manager` is its current network caller.
 - There is no coordinated runtime shutdown path. Services are one-shot and run
   for the life of the firmware.
 
@@ -220,8 +233,13 @@ idf.py -p <PORT> flash monitor
 - Phase 6.4.5 bounded same-boot provisioning recovery is implemented with
   hardware testing pending. Static validation covers the three-session budget,
   `STOPPED -> READY` reinitialization, queue reuse/reset, generation filtering,
-  terminal Bluetooth memory release, and cloud gating. Phase 6.4 remains
+  terminal BLE memory release, and cloud gating. Phase 6.4 remains
   incomplete.
+- Phase 6.4.6 cloud recovery is implemented with hardware testing pending.
+  Static validation covers network epochs, task wakeups, HTTP-client reset,
+  attempt classification, bounded 401/403 recovery, split Firebase Auth mutex
+  ownership, latest telemetry retention, and best-effort ESP32-S3 BLE release.
+  Phase 6.4 remains incomplete.
 - Firebase project setup and authenticated host testing are documented in
   `components/cloud/cloud_manager/README.txt` and `Test/TestFirebase_Auth.ps1`.
 - Never log or commit passwords, ID tokens, refresh tokens, service-account

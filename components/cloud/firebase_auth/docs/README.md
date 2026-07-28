@@ -23,8 +23,12 @@ callback, or LVGL callback.
 - Bounded request, response, credential, token, and URL buffers.
 - JSON parsing through cJSON without logging tokens or credentials.
 - URL encoding for the refresh token request body.
-- A mutex serializing token state and synchronous authentication requests.
-- Status snapshots with HTTP result and sign-in/refresh/failure counters.
+- A long-lived operation mutex that serializes synchronous sign-in/refresh and
+  owns the static HTTP request/response buffers.
+- A separate short-lived state mutex for atomic token/status copies and
+  mutations.
+- Status snapshots with HTTP result, token generation, and
+  sign-in/refresh/failure counters.
 - Refresh failure fallback to full sign-in only for credential errors, not for
   ordinary transport failures.
 
@@ -42,7 +46,7 @@ const firebase_auth_config_t auth_config = {
 ESP_ERROR_CHECK(firebase_auth_init(&auth_config));
 ```
 
-Initialization copies all configured strings and creates the mutex. It does
+Initialization copies all configured strings and creates both mutexes. It does
 not contact Firebase. The first call to `firebase_auth_get_valid_id_token()`
 performs sign-in when no cached token exists.
 
@@ -52,8 +56,8 @@ performs sign-in when no cached token exists.
 | --- | --- |
 | `firebase_auth_init()` | Copy credentials/policy and initialize protected token state. |
 | `firebase_auth_get_valid_id_token()` | Return a copied valid token, signing in or refreshing synchronously when required. |
-| `firebase_auth_invalidate_id_token()` | Clear only the cached ID token while preserving the refresh token. |
-| `firebase_auth_get_status()` | Copy state, token-presence flags, counters, HTTP status, and expiry uptime. |
+| `firebase_auth_invalidate_id_token()` | Atomically clear only the cached ID token, preserve the refresh token, advance token generation, and report acceptance. |
+| `firebase_auth_get_status()` | Copy state, token-presence flags, token generation, counters, HTTP status, and expiry uptime. |
 
 Use a destination sized by the public macro:
 
@@ -86,9 +90,12 @@ refresh credential rejected
     -> one full Email/Password sign-in
 ```
 
-`firebase_auth_invalidate_id_token()` is used after Firebase returns HTTP 401.
-The next token request first attempts refresh because the refresh token remains
-cached.
+`firebase_auth_invalidate_id_token()` is used after Firebase returns HTTP 401
+or for the single forced HTTP 403 recovery. It returns `esp_err_t`, advances a
+non-zero token generation, and preserves the refresh token. The next token
+request therefore attempts refresh first. A successful sign-in or refresh also
+advances the generation, allowing `cloud_manager` to reject an HTTP client
+configured for an obsolete authenticated identity.
 
 ## State Model
 
@@ -108,10 +115,16 @@ therefore not required for the current expiration calculation.
 - Authentication calls may block for the configured 15-second HTTP timeout.
 - Static buffers include an 8 KB response buffer, 4 KB request buffer, 4 KB ID
   token buffer, and 2 KB refresh token buffer.
-- The authentication mutex is held during synchronous sign-in/refresh so only
-  one caller can mutate token state.
-- `get_status()` and token invalidation use bounded mutex waits; token retrieval
-  waits until the active authentication operation completes.
+- The operation mutex is held during synchronous sign-in/refresh so only one
+  request uses the static URL, request, response, and refresh-snapshot buffers.
+- The state mutex is held only while copying or replacing token/status fields.
+  It is released before DNS, TLS, and HTTP work, so public status reads and ID
+  token invalidation do not wait behind the 15-second network timeout.
+- Token replacement is committed atomically under the state mutex; callers
+  never copy a partially updated token.
+- `get_status()` and token invalidation use bounded state-mutex waits. Token
+  retrieval still waits for the active authentication operation because the
+  component intentionally supports only one sign-in/refresh at a time.
 - There is no deinit API; initialization is one-shot.
 
 ## Security Notes
@@ -125,6 +138,9 @@ therefore not required for the current expiration calculation.
   through development configuration.
 - Never embed service-account keys, administrator credentials, private keys,
   ID tokens, or refresh tokens in firmware.
+- Authentication response/request buffers and temporary refresh-token copies
+  are overwritten after use. Cleanup failures are logged without logging the
+  request, response, URL query, credential, or token.
 - Restrict Realtime Database access with `auth.uid` rules for the expected
   device UID.
 - Move the device password to provisioning or protected local configuration
@@ -140,3 +156,12 @@ Firebase project setup and the verified PowerShell flow are documented in
   board security model is defined.
 - Add explicit credential rotation and deinit only when required by product
   lifecycle behavior.
+
+## Phase 6.4.6 Status
+
+**IMPLEMENTED / HARDWARE TEST PENDING**
+
+The mutex split and observable token invalidation support cloud recovery from
+rejected tokens without blocking status access behind network I/O. Hardware
+tests must still cover refresh, 401 recovery, persistent 403/credential
+failure, cleanup diagnostics, and the full token-expiry window.

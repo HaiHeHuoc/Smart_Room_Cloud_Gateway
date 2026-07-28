@@ -70,9 +70,9 @@ static provisioning_manager_state_t s_state =
 static bool s_initializing = false;
 static bool s_cleanup_in_progress = false;
 static uint32_t s_session_generation = 0U;
-static bool s_classic_bt_memory_release_attempted = false;
-static bool s_btdm_memory_released = false;
-static bool s_btdm_memory_releasing = false;
+static bool s_ble_memory_released = false;
+static bool s_ble_memory_releasing = false;
+static uint32_t s_ble_memory_release_failure_count = 0U;
 
 static QueueHandle_t s_credentials_queue = NULL;
 
@@ -176,14 +176,6 @@ static void provisioning_manager_publish_progress_for_generation(
  */
 static void provisioning_manager_cleanup_task(
     void *arg);
-
-/**
- * @brief Release unused Classic BT memory once, retaining BLE for retries.
- */
-static void provisioning_manager_scheme_event_callback(
-    void *user_data,
-    network_prov_cb_event_t event,
-    void *event_data);
 
 /**
  * @brief Receive lifecycle events directly from the provisioning framework.
@@ -567,55 +559,6 @@ static void provisioning_manager_cleanup_task(
     }
 
     vTaskDelete(NULL);
-}
-
-static void provisioning_manager_scheme_event_callback(
-    void *user_data,
-    network_prov_cb_event_t event,
-    void *event_data)
-{
-    (void)user_data;
-    (void)event_data;
-
-    if (event != NETWORK_PROV_INIT)
-    {
-        return;
-    }
-
-    bool release_classic_memory = false;
-
-    portENTER_CRITICAL(&s_state_lock);
-
-    if (!s_classic_bt_memory_release_attempted)
-    {
-        s_classic_bt_memory_release_attempted = true;
-        release_classic_memory = true;
-    }
-
-    portEXIT_CRITICAL(&s_state_lock);
-
-    if (!release_classic_memory)
-    {
-        return;
-    }
-
-    const esp_err_t ret =
-        esp_bt_mem_release(
-            ESP_BT_MODE_CLASSIC_BT);
-
-    if (ret == ESP_OK)
-    {
-        ESP_LOGI(
-            TAG,
-            "Classic Bluetooth memory released; BLE retained for retries");
-    }
-    else
-    {
-        ESP_LOGW(
-            TAG,
-            "Classic Bluetooth memory release was unavailable: %s",
-            esp_err_to_name(ret));
-    }
 }
 
 static void provisioning_manager_event_callback(
@@ -1016,8 +959,8 @@ esp_err_t provisioning_manager_init(
         (current_state !=
           PROVISIONING_MANAGER_STATE_STOPPED)) ||
         s_cleanup_in_progress ||
-        s_btdm_memory_releasing ||
-        s_btdm_memory_released)
+        s_ble_memory_releasing ||
+        s_ble_memory_released)
     {
         portEXIT_CRITICAL(&s_state_lock);
 
@@ -1049,14 +992,12 @@ esp_err_t provisioning_manager_init(
         .scheme =
             network_prov_scheme_ble,
 
+        /*
+         * ESP32-S3 is BLE-only. Retain BLE across intermediate manager
+         * deinitialization and release it explicitly after the retry envelope.
+         */
         .scheme_event_handler =
-        {
-            .event_cb =
-                provisioning_manager_scheme_event_callback,
-
-            .user_data =
-                NULL,
-        },
+            NETWORK_PROV_EVENT_HANDLER_NONE,
 
         .app_event_handler =
         {
@@ -1472,7 +1413,7 @@ esp_err_t provisioning_manager_release_ble_memory(void)
 {
     portENTER_CRITICAL(&s_state_lock);
 
-    if (s_btdm_memory_released)
+    if (s_ble_memory_released)
     {
         portEXIT_CRITICAL(&s_state_lock);
 
@@ -1483,47 +1424,64 @@ esp_err_t provisioning_manager_release_ble_memory(void)
          PROVISIONING_MANAGER_STATE_STOPPED) ||
         s_initializing ||
         s_cleanup_in_progress ||
-        s_btdm_memory_releasing)
+        s_ble_memory_releasing)
     {
         portEXIT_CRITICAL(&s_state_lock);
 
         return ESP_ERR_INVALID_STATE;
     }
 
-    s_btdm_memory_releasing = true;
+    s_ble_memory_releasing = true;
 
     portEXIT_CRITICAL(&s_state_lock);
 
     const esp_err_t ret =
         esp_bt_mem_release(
-            ESP_BT_MODE_BTDM);
+            ESP_BT_MODE_BLE);
 
-    if (ret != ESP_OK)
+    if ((ret != ESP_OK) &&
+        (ret != ESP_ERR_NOT_FOUND))
     {
+        uint32_t failure_count = 0U;
+
         portENTER_CRITICAL(&s_state_lock);
 
-        s_btdm_memory_releasing = false;
+        s_ble_memory_releasing = false;
+        s_ble_memory_release_failure_count++;
+        failure_count =
+            s_ble_memory_release_failure_count;
 
         portEXIT_CRITICAL(&s_state_lock);
 
-        ESP_LOGE(
+        ESP_LOGW(
             TAG,
-            "Failed to release terminal Bluetooth memory: %s",
-            esp_err_to_name(ret));
+            "Terminal BLE memory release unavailable: %s "
+            "(failure_count=%lu)",
+            esp_err_to_name(ret),
+            (unsigned long)failure_count);
 
         return ret;
     }
 
     portENTER_CRITICAL(&s_state_lock);
 
-    s_btdm_memory_released = true;
-    s_btdm_memory_releasing = false;
+    s_ble_memory_released = true;
+    s_ble_memory_releasing = false;
 
     portEXIT_CRITICAL(&s_state_lock);
 
-    ESP_LOGI(
-        TAG,
-        "Terminal Bluetooth memory released");
+    if (ret == ESP_ERR_NOT_FOUND)
+    {
+        ESP_LOGD(
+            TAG,
+            "Terminal BLE memory was already released");
+    }
+    else
+    {
+        ESP_LOGI(
+            TAG,
+            "Terminal BLE memory released");
+    }
 
     return ESP_OK;
 }

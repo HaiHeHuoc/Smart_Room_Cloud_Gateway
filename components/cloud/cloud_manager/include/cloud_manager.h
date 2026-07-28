@@ -34,6 +34,27 @@ typedef enum
     CLOUD_MANAGER_STATE_ERROR
 } cloud_manager_state_t;
 
+/** @brief Non-sensitive classification of the latest failed cloud attempt. */
+typedef enum
+{
+    /** No failure has been recorded, or the latest upload succeeded. */
+    CLOUD_MANAGER_FAILURE_NONE = 0,
+    /** The attempt could not continue because IPv4 was unavailable. */
+    CLOUD_MANAGER_FAILURE_WAIT_FOR_NETWORK,
+    /** DNS, socket, TLS, timeout, or other transport work may be retried. */
+    CLOUD_MANAGER_FAILURE_RETRYABLE_TRANSPORT,
+    /** HTTP 408, 429, or 5xx may be retried with backoff. */
+    CLOUD_MANAGER_FAILURE_RETRYABLE_HTTP,
+    /** HTTP 401/403 requires a bounded token recovery attempt. */
+    CLOUD_MANAGER_FAILURE_REAUTH_REQUIRED,
+    /** Firebase credentials or authorization remain rejected. */
+    CLOUD_MANAGER_FAILURE_AUTH_FATAL,
+    /** Request configuration or serialization is deterministically invalid. */
+    CLOUD_MANAGER_FAILURE_NONRETRYABLE_CONFIG,
+    /** An internal lifecycle or resource error must not be retried. */
+    CLOUD_MANAGER_FAILURE_NONRETRYABLE_INTERNAL
+} cloud_manager_failure_class_t;
+
 /** @brief Sensor snapshot copied into the cloud manager's latest-value queue. */
 typedef struct
 {
@@ -89,8 +110,20 @@ typedef struct
     /** Backoff delay selected for the next retry, in milliseconds. */
     uint32_t current_retry_delay_ms;
 
+    /** Uptime when the latest upload attempt started, in milliseconds. */
+    int64_t last_attempt_time_ms;
     /** Uptime of the latest successful upload, in milliseconds. */
     int64_t last_success_time_ms;
+
+    /** Number of reusable HTTP clients discarded after initialization. */
+    uint32_t http_client_reset_count;
+    /** Non-zero generation of the latest observed online/offline state. */
+    uint32_t network_epoch;
+    /** Number of accepted forced ID-token invalidations. */
+    uint32_t auth_recovery_count;
+
+    /** Classification of the latest failed attempt. */
+    cloud_manager_failure_class_t last_failure_class;
 } cloud_manager_status_t;
 
 /**
@@ -163,11 +196,29 @@ esp_err_t cloud_manager_register_status_callback(
     void *user_data);
 
 /**
+ * @brief Publish the latest IPv4-ready state to the cloud task.
+ *
+ * Call this from the existing task-context Wi-Fi status callback. The function
+ * performs no allocation, network operation, or wait. An online/offline edge
+ * advances a non-zero network epoch and wakes the cloud task when it exists.
+ * State and epoch changes are retained after cloud_manager_init() even before
+ * cloud_manager_start().
+ *
+ * @param[in] has_ipv4_address true only while Station owns a usable IPv4
+ *                             address.
+ * @return ESP_OK when retained, or ESP_ERR_INVALID_STATE before
+ *         cloud_manager_init().
+ */
+esp_err_t cloud_manager_notify_network_state(
+    bool has_ipv4_address);
+
+/**
  * @brief Replace pending telemetry with the newest sensor snapshot.
  *
  * This non-blocking API copies the structure into a queue of length one. It is
- * suitable for the sensor callback and does not perform network I/O. Posting
- * is supported after cloud_manager_init() and before cloud_manager_start().
+ * suitable for the sensor callback, wakes the cloud task when present, and
+ * does not perform network I/O. Posting is supported after
+ * cloud_manager_init() and before cloud_manager_start().
  *
  * @param[in] telemetry Snapshot to copy. Numeric values marked valid must be
  *            finite. The current payload still serializes finite values when

@@ -11,7 +11,6 @@ idf_component_register(
     PRIV_REQUIRES
         common
         firebase_auth
-        wifi_manager
         esp_http_client
         mbedtls
         log

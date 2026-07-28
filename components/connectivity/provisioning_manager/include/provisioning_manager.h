@@ -233,7 +233,7 @@ esp_err_t provisioning_manager_get_qr_payload(
 esp_err_t provisioning_manager_stop(void);
 
 /**
- * @brief Permanently release retained Bluetooth controller memory.
+ * @brief Permanently release retained BLE/NimBLE memory.
  *
  * Phase 6.4.5 retains Bluetooth memory across clean STOPPED-to-READY session
  * retries. The coordinator calls this once, only after the complete retry
@@ -241,6 +241,12 @@ esp_err_t provisioning_manager_stop(void);
  *
  * This operation is valid only from STOPPED, is idempotent after success, and
  * makes later provisioning reinitialization unavailable until reboot.
+ *
+ * For the ESP32-S3 BLE-only configuration this calls
+ * esp_bt_mem_release(ESP_BT_MODE_BLE) only after framework deinitialization.
+ * ESP_ERR_NOT_FOUND is treated as an already-released success. Other failures
+ * are counted for diagnostics and returned to the caller, which must treat
+ * memory reclamation as best-effort rather than a network result.
  *
  * @return ESP_OK on success/already released, ESP_ERR_INVALID_STATE unless the
  *         manager is cleanly STOPPED, or an ESP-IDF Bluetooth error.

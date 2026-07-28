@@ -91,10 +91,12 @@ request PROVISIONING screen
     -> SAVING_CONFIG
     -> CLEANING_UP
     -> adopt the valid Station/IPv4 connection
+    -> coordinator ONLINE
     -> clear the session QR cache
     -> SUCCESS
     -> 1500 ms dwell
     -> request WIFI_STATUS
+    -> best-effort terminal BLE memory release
 ```
 
 A retryable timeout or clean terminal session failure follows:
@@ -213,6 +215,7 @@ verified credential queue
     -> coordinator ONLINE runtime tracking
     -> provisioning SUCCESS for 1500 ms
     -> WIFI_STATUS
+    -> best-effort terminal BLE memory release
     -> cloud start gate opens
 ```
 
@@ -290,7 +293,11 @@ manager resets its retained credential queue during reinitialization. If
 configuration becomes `VALID`, no new BLE service starts; the coordinator uses
 the stored-configuration path instead. Intermediate retries retain BLE
 controller memory. Success, final exhaustion, and nonretryable clean stops
-release it once before normal memory-heavy work may proceed.
+attempt release once after the complete retry envelope. Release is
+best-effort: it cannot prevent adoption, replace the existing
+timeout/storage/adoption result, overwrite terminal UI state, or close the
+cloud start gate. On success, the established 1500 ms dwell and `WIFI_STATUS`
+route finish before the release diagnostic is evaluated.
 
 | Result class | Examples | New phone session |
 |---|---|---|
@@ -341,3 +348,14 @@ state becomes `FAILED`, and cloud startup remains gated.
   approved.
 - Keep factory reset outside this component until Sprint 7 ownership is
   finalized.
+
+## Phase 6.4.6 Integration
+
+**IMPLEMENTED / HARDWARE TEST PENDING**
+
+The coordinator preflight now treats ESP32-S3 BLE reclamation as optional
+terminal cleanup. The existing Wi-Fi callback remains the only runtime
+callback; `main` fans its copied IPv4 state to the coordinator, GUI, and cloud
+network epoch. The cloud task still cannot start in `PROVISIONING` or between
+Phase 6.4.5 sessions, and opens only at stored-connection `CONNECTING` or
+post-adoption `ONLINE`.

@@ -80,6 +80,14 @@ typedef struct
 
     /** ID token expiration in esp_timer uptime milliseconds. */
     int64_t token_expiry_uptime_ms;
+
+    /**
+     * Non-zero generation advanced after token replacement or invalidation.
+     *
+     * Callers may use this value to prevent reuse of a transport configured
+     * with an obsolete authenticated identity.
+     */
+    uint32_t token_generation;
 } firebase_auth_status_t;
 
 /* Functions ---------------------------------------------------------------- */
@@ -119,9 +127,13 @@ esp_err_t firebase_auth_get_valid_id_token(
  * @brief Invalidate only the cached ID token.
  *
  * The refresh token is preserved so the next request attempts token refresh.
- * Calling this function before initialization is a safe no-op.
+ * This function performs no network operation and uses only the short-lived
+ * token-state mutex.
+ *
+ * @return ESP_OK when invalidated, ESP_ERR_INVALID_STATE before
+ *         initialization, or ESP_ERR_TIMEOUT when token state is busy.
  */
-void firebase_auth_invalidate_id_token(void);
+esp_err_t firebase_auth_invalidate_id_token(void);
 
 /**
  * @brief Copy the current Firebase Authentication status.

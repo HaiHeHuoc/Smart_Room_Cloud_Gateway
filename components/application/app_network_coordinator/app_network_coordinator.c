@@ -159,6 +159,18 @@ static esp_err_t app_cleanup_provisioning_session(
     uint32_t session_generation);
 
 /**
+ * @brief Reclaim terminal BLE memory without changing the network outcome.
+ *
+ * The provisioning manager enforces STOPPED/controller-idle safety. Any
+ * remaining release failure is diagnostic only because persistence,
+ * connection, and adoption results have independent ownership.
+ *
+ * @param[in] context Non-sensitive lifecycle context for diagnostics.
+ */
+static void app_release_terminal_ble_memory_best_effort(
+    const char *context);
+
+/**
  * @brief Persist provisioned credentials and verify NVS state and read-back.
  *
  * @param[in] credentials Application-owned credential copy.
@@ -739,6 +751,24 @@ static esp_err_t app_cleanup_provisioning_session(
         s_config.provisioning_timeout_ms);
 }
 
+static void app_release_terminal_ble_memory_best_effort(
+    const char *context)
+{
+    const esp_err_t release_ret =
+        provisioning_manager_release_ble_memory();
+
+    if (release_ret != ESP_OK)
+    {
+        ESP_LOGW(
+            TAG,
+            "Terminal BLE memory cleanup did not change the %s outcome: %s",
+            (context != NULL)
+                ? context
+                : "network",
+            esp_err_to_name(release_ret));
+    }
+}
+
 static void app_log_wifi_config_state(
     config_manager_wifi_config_state_t state)
 {
@@ -1116,15 +1146,6 @@ app_run_one_wifi_provisioning_session(
         return outcome;
     }
 
-    ret =
-        provisioning_manager_release_ble_memory();
-
-    if (ret != ESP_OK)
-    {
-        outcome.error = ret;
-        return outcome;
-    }
-
     wifi_manager_status_t wifi_status = {0};
 
     ret =
@@ -1208,6 +1229,9 @@ app_run_one_wifi_provisioning_session(
 
     portEXIT_CRITICAL(&s_state_lock);
 
+    app_release_terminal_ble_memory_best_effort(
+        "successful provisioning");
+
     outcome.result = APP_PROVISIONING_RESULT_SUCCESS;
     outcome.error = ESP_OK;
 
@@ -1242,13 +1266,8 @@ static esp_err_t app_run_wifi_provisioning(void)
         {
             if (session_index > 0U)
             {
-                const esp_err_t release_ret =
-                    provisioning_manager_release_ble_memory();
-
-                if (release_ret != ESP_OK)
-                {
-                    return release_ret;
-                }
+                app_release_terminal_ble_memory_best_effort(
+                    "configuration inspection failure");
             }
 
             return ret;
@@ -1264,13 +1283,8 @@ static esp_err_t app_run_wifi_provisioning(void)
 
             if (session_index > 0U)
             {
-                ret =
-                    provisioning_manager_release_ble_memory();
-
-                if (ret != ESP_OK)
-                {
-                    return ret;
-                }
+                app_release_terminal_ble_memory_best_effort(
+                    "stored-configuration handoff");
             }
 
             ret =
@@ -1302,13 +1316,8 @@ static esp_err_t app_run_wifi_provisioning(void)
         {
             if (session_index > 0U)
             {
-                const esp_err_t release_ret =
-                    provisioning_manager_release_ble_memory();
-
-                if (release_ret != ESP_OK)
-                {
-                    return release_ret;
-                }
+                app_release_terminal_ble_memory_best_effort(
+                    "configuration integrity failure");
             }
 
             ESP_LOGE(
@@ -1490,13 +1499,10 @@ static esp_err_t app_run_wifi_provisioning(void)
                 TAG,
                 "Provisioning cleanup verification failed");
 
-            const esp_err_t release_ret =
-                provisioning_manager_release_ble_memory();
+            app_release_terminal_ble_memory_best_effort(
+                "cleanup verification failure");
 
-            return
-                (release_ret == ESP_OK)
-                    ? verification_error
-                    : release_ret;
+            return verification_error;
         }
 
         const bool retry_budget_available =
@@ -1506,19 +1512,10 @@ static esp_err_t app_run_wifi_provisioning(void)
         if (!retryable ||
             !retry_budget_available)
         {
-            const esp_err_t release_ret =
-                provisioning_manager_release_ble_memory();
-
-            if (release_ret != ESP_OK)
-            {
-                app_publish_provisioning_status(
-                    session_generation,
-                    UI_PROVISIONING_STATE_FAILED,
-                    release_ret,
-                    0U);
-
-                return release_ret;
-            }
+            app_release_terminal_ble_memory_best_effort(
+                retryable
+                    ? "retry-budget exhaustion"
+                    : "non-retryable provisioning failure");
 
             app_clear_provisioning_qr_payload(
                 session_generation);
