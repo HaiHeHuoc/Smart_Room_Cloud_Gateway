@@ -213,10 +213,10 @@ verified credential queue
     -> BLE stop/deinit
     -> wifi_manager adoption
     -> coordinator ONLINE runtime tracking
+    -> cloud start gate opens
     -> provisioning SUCCESS for 1500 ms
     -> WIFI_STATUS
     -> best-effort terminal BLE memory release
-    -> cloud start gate opens
 ```
 
 The coordinator never promotes a late Wi-Fi event directly from
@@ -298,7 +298,9 @@ attempt release once after the complete retry envelope. Release is
 best-effort: it cannot prevent adoption, replace the existing
 timeout/storage/adoption result, overwrite terminal UI state, or close the
 cloud start gate. On success, the established 1500 ms dwell and `WIFI_STATUS`
-route finish before the release diagnostic is evaluated.
+route finish before the release diagnostic is evaluated. The cloud gate opens
+at coordinator `ONLINE` after provisioning framework cleanup and connection
+adoption; it intentionally does not depend on optional BLE memory reclamation.
 
 | Result class | Examples | New phone session |
 |---|---|---|

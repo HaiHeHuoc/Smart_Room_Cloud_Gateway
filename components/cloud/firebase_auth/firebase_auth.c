@@ -88,6 +88,9 @@ static void firebase_auth_zeroize(
 
 static void firebase_auth_increment_generation_locked(void);
 
+static void firebase_auth_record_local_failure(
+    esp_err_t error);
+
 static esp_err_t firebase_auth_copy_string(
     char *destination,
     size_t destination_size,
@@ -148,6 +151,25 @@ static void firebase_auth_increment_generation_locked(void)
     {
         s_status.token_generation = 1U;
     }
+}
+
+static void firebase_auth_record_local_failure(
+    esp_err_t error)
+{
+    if (xSemaphoreTake(
+            s_state_mutex,
+            portMAX_DELAY) != pdTRUE)
+    {
+        return;
+    }
+
+    s_status.state =
+        FIREBASE_AUTH_STATE_INTERNAL_ERROR;
+    s_status.last_error = error;
+    s_status.last_http_status = 0;
+    s_status.failed_request_count++;
+
+    xSemaphoreGive(s_state_mutex);
 }
 
 static esp_err_t firebase_auth_copy_string(
@@ -571,6 +593,12 @@ static esp_err_t firebase_auth_sign_in(void)
     if (url_length < 0 ||
         url_length >= (int)sizeof(s_url_buffer))
     {
+        firebase_auth_zeroize(
+            s_url_buffer,
+            sizeof(s_url_buffer));
+        firebase_auth_record_local_failure(
+            ESP_ERR_INVALID_SIZE);
+
         return ESP_ERR_INVALID_SIZE;
     }
 
@@ -579,6 +607,12 @@ static esp_err_t firebase_auth_sign_in(void)
 
     if (request_root == NULL)
     {
+        firebase_auth_zeroize(
+            s_url_buffer,
+            sizeof(s_url_buffer));
+        firebase_auth_record_local_failure(
+            ESP_ERR_NO_MEM);
+
         return ESP_ERR_NO_MEM;
     }
 
@@ -599,6 +633,12 @@ static esp_err_t firebase_auth_sign_in(void)
     if (!request_valid)
     {
         cJSON_Delete(request_root);
+        firebase_auth_zeroize(
+            s_url_buffer,
+            sizeof(s_url_buffer));
+        firebase_auth_record_local_failure(
+            ESP_ERR_NO_MEM);
+
         return ESP_ERR_NO_MEM;
     }
 
@@ -609,6 +649,12 @@ static esp_err_t firebase_auth_sign_in(void)
 
     if (request_body == NULL)
     {
+        firebase_auth_zeroize(
+            s_url_buffer,
+            sizeof(s_url_buffer));
+        firebase_auth_record_local_failure(
+            ESP_ERR_NO_MEM);
+
         return ESP_ERR_NO_MEM;
     }
 
@@ -829,6 +875,18 @@ static esp_err_t firebase_auth_refresh(void)
 
     if (result != ESP_OK)
     {
+        firebase_auth_zeroize(
+            encoded_refresh_token,
+            sizeof(encoded_refresh_token));
+        firebase_auth_zeroize(
+            s_request_buffer,
+            sizeof(s_request_buffer));
+        firebase_auth_zeroize(
+            s_url_buffer,
+            sizeof(s_url_buffer));
+        firebase_auth_record_local_failure(
+            result);
+
         return result;
     }
 
@@ -849,6 +907,12 @@ static esp_err_t firebase_auth_refresh(void)
         firebase_auth_zeroize(
             s_request_buffer,
             sizeof(s_request_buffer));
+        firebase_auth_zeroize(
+            s_url_buffer,
+            sizeof(s_url_buffer));
+        firebase_auth_record_local_failure(
+            ESP_ERR_INVALID_SIZE);
+
         return ESP_ERR_INVALID_SIZE;
     }
 
@@ -862,6 +926,15 @@ static esp_err_t firebase_auth_refresh(void)
     if (url_length < 0 ||
         url_length >= (int)sizeof(s_url_buffer))
     {
+        firebase_auth_zeroize(
+            s_request_buffer,
+            sizeof(s_request_buffer));
+        firebase_auth_zeroize(
+            s_url_buffer,
+            sizeof(s_url_buffer));
+        firebase_auth_record_local_failure(
+            ESP_ERR_INVALID_SIZE);
+
         return ESP_ERR_INVALID_SIZE;
     }
 

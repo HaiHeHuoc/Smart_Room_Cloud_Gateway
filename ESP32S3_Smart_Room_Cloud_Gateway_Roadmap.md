@@ -743,8 +743,12 @@ remains part of the final A-N matrix.
   fault driver remains.
 - [x] Preserve the original BLE service-start error when subsequent framework
   cleanup also fails, while keeping the manager in `FAILED`.
+- [x] Overwrite retained FreeRTOS credential-queue storage after handoff,
+  before session reset, and at terminal BLE release.
 - [x] Clean partial `ui_manager_lvgl` initialization resources and allow a
   safe same-boot retry after initialization failure.
+- [x] Settle Firebase Auth diagnostics and clear partial request buffers when
+  sign-in/refresh fails before HTTP begins.
 - [x] Document the final ownership model, known limitations, and A-N hardware
   regression matrix.
 - [ ] Execute the final A-N matrix on the ESP32-S3 target.

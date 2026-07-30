@@ -26,6 +26,10 @@
 
 #define PROVISIONING_MANAGER_CREDENTIAL_QUEUE_LENGTH 1U
 
+_Static_assert(
+    PROVISIONING_MANAGER_CREDENTIAL_QUEUE_LENGTH == 1U,
+    "Credential queue clearing requires a length-one queue");
+
 /*
  * Match CONFIG_EXAMPLE_PROV_MGR_CONNECTION_CNT from Espressif's wifi_prov
  * example. These attempts belong to the provisioning framework while it
@@ -102,6 +106,23 @@ static void *s_progress_callback_user_data = NULL;
 static void provisioning_manager_zeroize(
     void *buffer,
     size_t size);
+
+/**
+ * @brief Overwrite and reset the retained credential queue.
+ *
+ * FreeRTOS queue receive/reset operations update queue indexes but do not
+ * guarantee erasure of the backing item storage. The queue has length one, so
+ * overwriting it with a zero item before reset removes any retained plaintext
+ * credential bytes.
+ *
+ * Call only when no new credential handoff can be produced concurrently.
+ *
+ * @param[in] credentials_queue Retained length-one credential queue.
+ *
+ * @return ESP_OK when the backing item and queue state were cleared.
+ */
+static esp_err_t provisioning_manager_clear_credentials_queue(
+    QueueHandle_t credentials_queue);
 
 /**
  * @brief Build a unique BLE service name from the Station MAC address.
@@ -224,6 +245,38 @@ static void provisioning_manager_zeroize(
         byte++;
         size--;
     }
+}
+
+static esp_err_t provisioning_manager_clear_credentials_queue(
+    QueueHandle_t credentials_queue)
+{
+    if (credentials_queue == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    provisioning_manager_wifi_credentials_t zero_credentials = {0};
+
+    const BaseType_t overwrite_ret =
+        xQueueOverwrite(
+            credentials_queue,
+            &zero_credentials);
+
+    provisioning_manager_zeroize(
+        &zero_credentials,
+        sizeof(zero_credentials));
+
+    if (overwrite_ret != pdPASS)
+    {
+        return ESP_FAIL;
+    }
+
+    if (xQueueReset(credentials_queue) != pdPASS)
+    {
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
 }
 
 static esp_err_t provisioning_manager_copy_wifi_credentials(
@@ -511,17 +564,31 @@ static void provisioning_manager_cleanup_task(
     (void)arg;
     uint32_t completed_generation = 0U;
 
-    esp_err_t ret =
+    const esp_err_t ret =
         network_prov_mgr_deinit();
 
     portENTER_CRITICAL(&s_state_lock);
+
+    const bool unverified_credentials_pending =
+        s_pending_credentials_valid;
 
     provisioning_manager_zeroize(
         &s_pending_credentials,
         sizeof(s_pending_credentials));
 
     s_pending_credentials_valid = false;
-    s_wifi_handoff_pending = false;
+
+    if (unverified_credentials_pending)
+    {
+        /*
+         * Cleanup canceled an in-flight, not-yet-verified credential set.
+         * A true handoff with no pending copy can instead represent verified
+         * credentials already queued for the application; preserve that flag
+         * until receive or terminal queue cleanup.
+         */
+        s_wifi_handoff_pending = false;
+    }
+
     s_cleanup_in_progress = false;
     completed_generation = s_session_generation;
     provisioning_manager_clear_active_identity_locked();
@@ -835,6 +902,8 @@ static void provisioning_manager_event_callback(
 
             if (task_ret != pdPASS)
             {
+                QueueHandle_t credentials_queue = NULL;
+
                 portENTER_CRITICAL(&s_state_lock);
 
                 provisioning_manager_zeroize(
@@ -847,12 +916,25 @@ static void provisioning_manager_event_callback(
                 provisioning_manager_clear_active_identity_locked();
                 s_state =
                     PROVISIONING_MANAGER_STATE_FAILED;
+                credentials_queue = s_credentials_queue;
 
                 portEXIT_CRITICAL(&s_state_lock);
+
+                const esp_err_t queue_cleanup_ret =
+                    provisioning_manager_clear_credentials_queue(
+                        credentials_queue);
 
                 ESP_LOGE(
                     TAG,
                     "Failed to create provisioning cleanup task");
+
+                if (queue_cleanup_ret != ESP_OK)
+                {
+                    ESP_LOGE(
+                        TAG,
+                        "Failed to clear retained provisioning credential "
+                        "queue");
+                }
 
                 provisioning_manager_publish_progress(
                     PROVISIONING_MANAGER_PROGRESS_FAILED,
@@ -1019,7 +1101,8 @@ esp_err_t provisioning_manager_init(
         credentials_queue_created =
             (credentials_queue != NULL);
     }
-    else if (xQueueReset(credentials_queue) != pdPASS)
+    else if (provisioning_manager_clear_credentials_queue(
+                 credentials_queue) != ESP_OK)
     {
         portENTER_CRITICAL(&s_state_lock);
 
@@ -1417,6 +1500,8 @@ esp_err_t provisioning_manager_stop(void)
 
 esp_err_t provisioning_manager_release_ble_memory(void)
 {
+    QueueHandle_t credentials_queue = NULL;
+
     portENTER_CRITICAL(&s_state_lock);
 
     if (s_ble_memory_released)
@@ -1438,6 +1523,32 @@ esp_err_t provisioning_manager_release_ble_memory(void)
     }
 
     s_ble_memory_releasing = true;
+    credentials_queue = s_credentials_queue;
+
+    portEXIT_CRITICAL(&s_state_lock);
+
+    const esp_err_t queue_cleanup_ret =
+        provisioning_manager_clear_credentials_queue(
+            credentials_queue);
+
+    if (queue_cleanup_ret != ESP_OK)
+    {
+        portENTER_CRITICAL(&s_state_lock);
+
+        s_ble_memory_releasing = false;
+
+        portEXIT_CRITICAL(&s_state_lock);
+
+        ESP_LOGE(
+            TAG,
+            "Failed to clear terminal provisioning credential queue");
+
+        return queue_cleanup_ret;
+    }
+
+    portENTER_CRITICAL(&s_state_lock);
+
+    s_wifi_handoff_pending = false;
 
     portEXIT_CRITICAL(&s_state_lock);
 
@@ -1569,6 +1680,29 @@ esp_err_t provisioning_manager_receive_wifi_credentials(
             sizeof(*credentials));
 
         return ESP_ERR_TIMEOUT;
+    }
+
+    const esp_err_t queue_cleanup_ret =
+        provisioning_manager_clear_credentials_queue(
+            credentials_queue);
+
+    if (queue_cleanup_ret != ESP_OK)
+    {
+        provisioning_manager_zeroize(
+            credentials,
+            sizeof(*credentials));
+
+        portENTER_CRITICAL(&s_state_lock);
+
+        s_wifi_handoff_pending = false;
+
+        portEXIT_CRITICAL(&s_state_lock);
+
+        ESP_LOGE(
+            TAG,
+            "Failed to clear delivered credential queue storage");
+
+        return queue_cleanup_ret;
     }
 
     portENTER_CRITICAL(&s_state_lock);
