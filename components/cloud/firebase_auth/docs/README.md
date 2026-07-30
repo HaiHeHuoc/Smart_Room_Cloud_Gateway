@@ -104,7 +104,7 @@ UNINITIALIZED
     -> INITIALIZED
     -> SIGNING_IN or REFRESHING
     -> AUTHENTICATED
-    -> CREDENTIAL_ERROR or NETWORK_ERROR on failure
+    -> CREDENTIAL_ERROR, NETWORK_ERROR, or INTERNAL_ERROR on failure
 ```
 
 The status expiry value uses `esp_timer` uptime, not wall-clock time. SNTP is
@@ -176,3 +176,10 @@ generation, and secure temporary-buffer cleanup remain owned here; the cloud
 task owns retry policy and HTTP telemetry clients. The final A-N hardware
 matrix in the project roadmap covers rejected-token recovery and persistent
 authorization failure without a hot authentication loop.
+
+Local URL, JSON, allocation, and refresh-token encoding failures also leave a
+terminal diagnostic snapshot instead of retaining `SIGNING_IN` or
+`REFRESHING`. They use `INTERNAL_ERROR`, allowing the cloud manager to classify
+the underlying `esp_err_t` without treating local failures as rejected
+credentials. Partial refresh request/token buffers are cleared before those
+errors return.

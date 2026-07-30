@@ -199,6 +199,12 @@ the cleanup task, after `network_prov_mgr_deinit()` returns, publishes
 `STOPPED`. This prevents a new session from racing a logically active cleanup
 task.
 
+Cleanup clears `handoff_pending` when it cancels an unverified in-flight
+credential copy. If a framework-confirmed credential item is already queued,
+cleanup preserves the flag until the application receives and scrubs that
+item, or terminal BLE release discards it. This prevents both phantom handoffs
+and loss of a successful handoff.
+
 If the cleanup task cannot be created, the component enters `FAILED` instead
 of remaining indefinitely in `STOPPING`.
 
@@ -227,7 +233,14 @@ Terminal memory reclamation is best-effort application cleanup. It cannot
 replace a storage, adoption, timeout, or configuration result. In particular,
 successful provisioning first verifies IPv4, adopts the Station connection,
 sets coordinator `ONLINE`, publishes `SUCCESS`, preserves the 1500 ms dwell
-and screen route, and only then attempts BLE memory release.
+and screen route, and only then attempts BLE memory release. Release failure
+remains diagnostic only and does not close the cloud gate or replace the
+network result.
+
+The retained length-one credential queue is explicitly overwritten with a
+zero item before every reset and after application delivery or terminal
+cleanup. This is required because FreeRTOS receive/reset operations do not
+guarantee erasure of the queue's backing item storage.
 
 The active service name and QR payload are cleared when stop begins and on
 startup, cleanup, or de-initialization failure. QR construction failure does

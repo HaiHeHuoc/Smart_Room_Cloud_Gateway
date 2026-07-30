@@ -32,7 +32,9 @@ typedef enum
     /** Credentials, UID validation, or token parsing failed. */
     FIREBASE_AUTH_STATE_CREDENTIAL_ERROR,
     /** A transport or server-side request failure occurred. */
-    FIREBASE_AUTH_STATE_NETWORK_ERROR
+    FIREBASE_AUTH_STATE_NETWORK_ERROR,
+    /** A local allocation, encoding, or request-construction failure occurred. */
+    FIREBASE_AUTH_STATE_INTERNAL_ERROR
 } firebase_auth_state_t;
 
 /** @brief Email/Password credentials and proactive token-refresh policy. */
