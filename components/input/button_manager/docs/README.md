@@ -3,17 +3,16 @@
 ## Purpose
 
 `button_manager` owns one polled GPIO button and publishes debounced press,
-release, and one-shot long-press events. Phase 7.1 provides input detection
-only. It does not erase configuration, restart provisioning, reboot, or call
-LVGL.
+release, and one-shot long-press events. It does not erase configuration,
+restart provisioning, reboot, or call LVGL.
 
 ## Ownership
 
 - `button_manager` owns GPIO input configuration, polling, debounce timing,
   hold timing, its task, and callback publication.
 - `main` owns component composition and maps copied events to application work.
-- Future factory-reset orchestration must call `config_manager` and network/UI
-  owners from an application task, never from the button callback.
+- `app_reset_coordinator` owns reset-input qualification and the factory-reset
+  transaction.
 - The callback must not perform blocking storage/network work or call LVGL.
 
 ## Configuration
@@ -39,8 +38,8 @@ internal pull-down. Hardware wiring must match this policy.
   initialization and before start.
 - `button_manager_start()` creates the permanent polling task and returns.
 
-Phase 7.1 intentionally has no stop, deinit, callback replacement, or status
-snapshot API.
+The component intentionally has no stop, deinit, callback replacement, or
+status snapshot API.
 
 ## Event Flow
 
@@ -50,7 +49,7 @@ GPIO sample every poll period
     -> candidate remains stable for debounce_ms
     -> publish PRESSED or RELEASED once
     -> while stably pressed, publish LONG_PRESS once at long_press_ms
-    -> main callback logs the copied event and returns
+    -> main callback copies/maps the event and returns
 ```
 
 `held_ms` is zero for `PRESSED`. For `RELEASED`, it is measured from the
@@ -67,8 +66,8 @@ debounced press to the beginning of the stable release candidate. For
 - Callback context: button polling task, never ISR context
 - Callback event pointer: temporary and valid only until callback return
 
-No mutex is required in Phase 7.1 because configuration and callback
-registration finish before the task starts and are immutable while running.
+No mutex is required because configuration and callback registration finish
+before the task starts and are immutable while running.
 
 ## Failure Behavior
 
@@ -86,7 +85,15 @@ accepted checkpoint covers GPIO 9 active-low polling, 40 ms debounce, single
 press/release events, one long-press event after approximately 5 seconds, and
 continued startup of unrelated services.
 
-Those actions remain outside `button_manager`. Persistent reset execution was
-added in Phase 7.3 and LVGL reset confirmation in Phase 7.4; active-provisioning
-reset arbitration is implemented by Phase 7.5 in `app_network_coordinator`;
-hardware race acceptance remains pending.
+Persistent reset execution was added in Phase 7.3, LVGL reset confirmation in
+Phase 7.4, and active-provisioning reset arbitration in Phase 7.5. Their final
+cross-phase regression and documentation closure is recorded by Phase 7.6.
+
+## Sprint 7 Closure
+
+**COMPLETE / HARDWARE ACCEPTANCE CONFIRMED BY USER**
+
+Sprint 7 was closed on 2026-08-02. The button component remained unchanged by
+Phase 7.6; only its documentation and public contract wording were refreshed.
+See [`PHASE_7_6_CLOSURE.md`](../../../PHASE_7_6_CLOSURE.md) for the integrated
+factory-reset acceptance record.
