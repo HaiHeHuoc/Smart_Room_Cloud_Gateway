@@ -148,10 +148,14 @@ Screen routing follows the final result:
 - `NOT_CONFIGURED` queues the `PROVISIONING` placeholder before BLE
   provisioning begins.
 - `VALID`, including a successfully migrated configuration, queues `BOOT`.
+  If stored Wi-Fi has not reached `ONLINE` after 60 seconds and the GUI is
+  still on `BOOT`, the coordinator queues `WIFI_STATUS`. That screen renders
+  the latest cached disconnected/retry state while `wifi_manager` continues
+  its existing reconnect policy.
 - Inspection failures and non-provisionable integrity states make a
   best-effort `BOOT` request before returning the existing policy error.
 - A normal stored-credential `CONNECTING -> ONLINE` transition queues
-  `WIFI_STATUS`.
+  `WIFI_STATUS` immediately, without waiting for the 60-second fallback.
 - Provisioning Wi-Fi events update progress only; the verified success path
   requests `WIFI_STATUS` after cleanup, adoption, and a 1500 ms success dwell.
 

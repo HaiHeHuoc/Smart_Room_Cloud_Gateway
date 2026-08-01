@@ -20,6 +20,8 @@ components/
 |-- display/
 |   |-- display_driver/
 |   `-- waveshare__esp_lcd_st7735/
+|-- input/
+|   `-- button_manager/
 |-- sensing/
 |   |-- sensor_manager/
 |   `-- sensor_DHT22/
@@ -49,6 +51,7 @@ targets.
 | Cloud | `cloud_manager`, `firebase_auth` | Authenticated Firebase telemetry |
 | Connectivity | `provisioning_manager`, `wifi_manager` | BLE provisioning and Wi-Fi connection lifecycle |
 | Display | `display_driver`, `waveshare__esp_lcd_st7735` | LCD bus and panel integration |
+| Input | `button_manager` | Debounced physical-button input and event publication |
 | Sensing | `sensor_manager`, `sensor_DHT22` | Sensor policy and DHT22 acquisition |
 | Storage | `config_manager`, `sd_card_manager` | Persistent configuration and SD-card access |
 | System | `common`, `performance_monitor` | Shared definitions and diagnostics |

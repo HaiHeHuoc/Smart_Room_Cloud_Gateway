@@ -936,11 +936,28 @@ Status: Waiting for Wi-Fi config
 
 **Goal:** Add a physical recovery path.
 
+### Phase 7.1 Status — Complete
+
+- [x] Add the independent `button_manager` component and input domain.
+- [x] Configure GPIO 9 as an active-low polled input with internal pull-up.
+- [x] Debounce stable press/release transitions using a 10 ms poll period and
+      40 ms debounce interval.
+- [x] Publish one copied `PRESSED`, `RELEASED`, and one-shot `LONG_PRESS` event
+      from the button task without blocking or calling LVGL.
+- [x] Integrate non-fatal button startup and diagnostic event handling in
+      `main` without taking over storage, Wi-Fi, provisioning, or GUI ownership.
+- [x] Document lifecycle, callback context, timing, ownership, and deferred work.
+
+Phase 7.1 was manually/hardware accepted by the user on 2026-08-01. This
+completes only physical input, debounce, and event publication. It does not
+complete Sprint 7: configuration clearing, provisioning restart, reset UI, and
+end-to-end recovery remain pending.
+
 ### Tasks
 
-- [ ] Add button input.
-- [ ] Implement debounce.
-- [ ] Detect long press, for example 5 seconds.
+- [x] Add button input.
+- [x] Implement debounce.
+- [x] Detect long press, for example 5 seconds.
 - [ ] Erase Wi-Fi config from NVS.
 - [ ] Restart provisioning mode.
 - [ ] Display reset confirmation/status on LVGL.
@@ -1017,6 +1034,679 @@ Status: Waiting for Wi-Fi config
 - Technical documentation
 - Embedded portfolio presentation
 - Interview storytelling
+
+---
+
+## Proposed Voice Assistant Extension — New
+
+The following Sprints 10-18 are an optional post-MVP syllabus. They do not
+change the scope, status, ordering, or priority of Sprints 0-9. Existing
+unfinished acceptance work remains higher priority.
+
+Feasibility assessment as of 2026-08-01:
+
+- The extension is feasible on ESP32-S3, subject to audio-hardware and resource
+  validation.
+- The reviewed baseline is exact component version
+  `espressif/esp_xiaozhi: "0.1.1"`. This release supports ESP-IDF 5.5 and 6.0+
+  and provides WebSocket/MQTT+UDP transport, PCM/OPUS/G.711 audio, and MCP.
+- Re-verify the official registry, changelog, API, license, service behavior,
+  and transitive dependency lock before Sprint 12 begins. Do not silently
+  float to a newer version.
+- Current firmware targets ESP-IDF 6.0.1, but PSRAM is not enabled in the live
+  `sdkconfig`. No I2S microphone, speaker, amplifier, codec, or audio GPIO map
+  is currently confirmed. These are gates, not assumptions.
+- `esp_xiaozhi` is a protocol dependency, not the application owner. Only the
+  project-owned `voice_assistant` component may include its headers or expose
+  its handles internally.
+- Xiaozhi-provided device information or OTA behavior must not replace the
+  existing application lifecycle, NVS schema, provisioning, cloud, or future
+  project-owned OTA policy.
+
+Official planning references reviewed on 2026-08-01:
+
+- Component v0.1.1 README:
+  <https://components.espressif.com/components/espressif/esp_xiaozhi/versions/0.1.1/readme?language=en>
+- Component v0.1.1 changelog and ESP-IDF 6 compatibility notes:
+  <https://components.espressif.com/components/espressif/esp_xiaozhi/versions/0.1.1/changelog?language=en>
+- Component v0.1.1 dependency list:
+  <https://components.espressif.com/components/espressif/esp_xiaozhi/versions/0.1.1/dependencies?language=en>
+- Official `xiaozhi_chat` example listing:
+  <https://components.espressif.com/components/espressif/esp_xiaozhi/versions/0.1.1/examples?language=en>
+
+### Required Dependency Order
+
+```text
+Sprints 0-9 and their pending acceptance
+    -> Sprint 10 audio hardware validation
+    -> Sprint 11 audio_manager
+    -> Sprint 12 esp_xiaozhi build and transport
+    -> Sprint 13 voice_assistant adapter
+    -> Sprint 14 push-to-talk MVP
+    -> Sprint 15 GUI voice integration
+    -> Sprint 16 MCP read-only tools
+    -> Sprint 17 MCP controlled actions
+    -> Sprint 18 wake word and advanced voice UX
+```
+
+### Preserved Ownership
+
+```text
+wifi_manager             owns Wi-Fi Station lifecycle and reconnect
+provisioning_manager     owns temporary BLE provisioning transport
+config_manager           owns persistent application configuration
+cloud_manager            owns Firebase telemetry
+audio_manager            owns microphone, speaker, I2S and PCM buffering
+voice_assistant          owns esp_xiaozhi lifecycle and protocol adaptation
+app_gui                  owns GUI models, queues and screens
+ui_manager_lvgl          owns LVGL runtime and synchronization
+device/application APIs  own validated device control
+```
+
+No Xiaozhi callback may call LVGL, a hardware driver, Wi-Fi connect/disconnect,
+NVS erase/write, provisioning start/stop, or reboot directly.
+
+---
+
+## Sprint 10 — Audio Hardware Validation — New / Not Started
+
+**Goal:** Prove microphone capture and speaker output independently before
+adding a production audio component or Xiaozhi dependency.
+
+### Placement And Dependencies
+
+- Begins only after the required Sprints 0-9 acceptance work is complete or
+  explicitly deferred.
+- Uses the stable LCD, LVGL, Wi-Fi, sensor, SD, button, and cloud baseline only
+  for coexistence testing.
+- Belongs here because network voice debugging is not meaningful until raw
+  audio input and output are known-good.
+
+### Scope
+
+- Select and document a supported digital I2S microphone and MAX98357A or
+  equivalent speaker path.
+- Confirm voltage, grounding, amplifier/speaker rating, I2S clocking, channel
+  format, sample width, sample rate, and safe GPIO allocation.
+- Create an isolated audio bring-up test application, not production firmware.
+- Capture known-duration PCM, inspect amplitude/DC offset/clipping, and play a
+  deterministic PCM or WAV tone.
+- Test RX, TX, sequential RX/TX, and the intended simultaneous mode.
+- Measure internal heap, largest internal block, DMA heap, CPU load, and stack
+  high-water marks with LCD/Wi-Fi/LVGL active.
+
+### Explicit Non-Goals
+
+- No `esp_xiaozhi`, MCP, wake word, cloud voice session, production
+  `audio_manager`, or GUI redesign.
+- No final audio GPIO values are added until wiring is physically verified.
+
+### Components And Expected Files
+
+- A standalone test application under `Test/` or an equivalent isolated test
+  location.
+- Planned board audio pin definitions only after hardware confirmation.
+- No existing manager takes ownership of audio.
+
+### Expected APIs And RTOS Objects
+
+- ESP-IDF I2S channel APIs are exercised directly only inside the test app.
+- Test-only RX/TX tasks, DMA buffers, and bounded queues or ring buffers may be
+  used; none becomes a production API in this sprint.
+
+### Resource And Hardware Risks
+
+- DMA-capable internal RAM, I2S clock/pin conflicts, PSRAM-disabled baseline,
+  amplifier noise, insufficient power, clipping, underrun, and microphone
+  overflow.
+- Required hardware: verified ESP32-S3 board variant, digital I2S microphone,
+  MAX98357A or documented alternative, speaker, and safe power supply.
+
+### Test Plan And Acceptance
+
+- [ ] Record and inspect at least 30 seconds of PCM without overflow.
+- [ ] Play a known tone/sample without underrun or audible corruption.
+- [ ] Run capture/playback with Wi-Fi, LVGL, sensor, SD, and cloud activity.
+- [ ] Record pin map, sample format, DMA configuration, heap deltas, CPU load,
+      task stacks, overflow/underrun counts, and hardware evidence.
+- [ ] Reboot and repeat at least 20 bring-up cycles without leaked resources.
+
+### Main Risks And Rollback
+
+- Stop if the selected board lacks enough free GPIO, DMA memory, or stable
+  power. Replace the audio hardware or use an external codec before proceeding.
+- Rollback is removal of the isolated test app; production firmware remains
+  unchanged.
+
+### Learning Topics
+
+- I2S RX/TX, PCM framing, DMA, audio clocks, signal integrity, and measurement.
+
+---
+
+## Sprint 11 — Production Audio Manager — New / Not Started
+
+**Goal:** Introduce a project-owned `audio_manager` that safely owns all
+production microphone, speaker, I2S, buffering, and audio status behavior.
+
+### Placement And Dependencies
+
+- Requires Sprint 10 hardware acceptance and a frozen audio format/pin map.
+- Creates the stable abstraction required before any external voice protocol
+  can consume or produce audio.
+
+### Scope
+
+- Add `components/audio/audio_manager/` with public header, implementation,
+  CMake, Kconfig where justified, and component documentation.
+- Provide bounded PCM capture and playback, start/stop/deinit, mute/volume
+  policy where hardware permits, and thread-safe status snapshots.
+- Define buffer ownership, blocking timeouts, overflow/underrun counters,
+  timestamps, and failure recovery.
+- Keep audio callbacks short and copy or transfer buffers using documented
+  lifetime rules.
+
+### Explicit Non-Goals
+
+- No Xiaozhi transport, ASR, TTS service, MCP, wake word, or direct LVGL calls.
+- No Wi-Fi, provisioning, Firebase, or device-control ownership.
+
+### Components, Files, And Expected APIs
+
+- New component: `audio_manager`.
+- Expected project APIs include `audio_manager_init()`, `start()`, `stop()`,
+  `deinit()`, `get_status()`, bounded capture/play submission, and callback or
+  queue registration using project-owned types.
+- Public headers expose no raw external voice-service types.
+
+### RTOS And Resource Design
+
+- Dedicated capture/playback tasks only when measurements justify them.
+- Bounded RX/TX ring buffers or queues, a short status mutex, finite API
+  timeouts, DMA buffers in capable internal RAM, and bulk PCM in PSRAM only
+  after PSRAM validation.
+- Document task priority relative to LVGL, Wi-Fi, cloud, sensor, and button
+  tasks; collect stack high-water marks.
+- Hardware remains the exact microphone/amplifier/speaker/pin map accepted in
+  Sprint 10; changing it requires renewed audio acceptance.
+
+### Test Plan And Acceptance
+
+- [ ] Unit-test configuration, lifecycle, timeout, and buffer ownership rules.
+- [ ] Run start/stop/deinit and RX/TX open/close for at least 1,000 cycles.
+- [ ] Demonstrate bounded overflow/underrun recovery under CPU/network load.
+- [ ] Verify no LVGL, Wi-Fi, provisioning, cloud, or NVS ownership leakage.
+- [ ] Record internal heap, largest block, DMA heap, PSRAM, CPU, and stack data.
+
+### Main Risks And Rollback
+
+- Risks: starvation, priority inversion, fragmented DMA heap, use-after-free,
+  audio drift, and blocking callbacks.
+- Compile-time-disable `audio_manager`; rollback removes only the audio domain
+  and board audio configuration.
+
+### Learning Topics
+
+- Component API design, buffer ownership, ring buffers, task scheduling, and
+  recoverable audio pipelines.
+
+---
+
+## Sprint 12 — Xiaozhi Build And Transport Validation — New / Not Started
+
+**Goal:** Pin and validate `esp_xiaozhi` in isolation without full voice UX.
+
+### Placement And Dependencies
+
+- Requires Sprint 11 audio-manager acceptance and stable Wi-Fi reconnect.
+- Separates dependency/API/transport risk from application integration risk.
+
+### Scope
+
+- Re-check the official registry and pin the reviewed exact version. Current
+  planning baseline:
+
+  ```yaml
+  dependencies:
+    espressif/esp_xiaozhi: "0.1.1"
+  ```
+
+- Record the component hash, license, ESP-IDF range, changelog, Kconfig, and
+  resolved lockfile versions for `cmake_utilities`, `cjson`,
+  `esp_websocket_client`, `mcp-c-sdk`, and managed `mqtt`.
+- Build an isolated transport test against ESP-IDF 6.0.1.
+- Validate init/start/connection/disconnection/stop/deinit, service activation,
+  WebSocket first, and MQTT+UDP only after the simpler transport is stable.
+- Measure TLS/transport heap, stacks, flash, reconnect behavior, and repeated
+  session cleanup.
+- Treat server-provided system commands and OTA information as untrusted facts;
+  do not execute them in this sprint.
+
+### Explicit Non-Goals
+
+- No production `voice_assistant`, microphone streaming, TTS playback, MCP
+  tools, wake word, replacement Wi-Fi logic, or replacement provisioning.
+
+### Components, Files, And Expected APIs
+
+- Isolated test app and its exact `idf_component.yml`/lockfile evidence.
+- No production component except an optional compile-time dependency probe.
+- Only official `esp_xiaozhi_chat_*` lifecycle and transport APIs are evaluated.
+
+### RTOS And Resource Design
+
+- Use the component's documented tasks/events plus test-owned bounded event
+  capture. Record all created tasks, event handlers, timers, sockets, queues,
+  stack high-water marks, and cleanup ownership.
+- Hardware requirement is the Sprint 10/11 audio platform and a board with
+  measured internal/DMA heap headroom; this sprint must not assume PSRAM.
+
+### Test Plan And Acceptance
+
+- [ ] Clean build resolves the exact reviewed dependency on ESP-IDF 6.0.1.
+- [ ] Connect/disconnect and start/stop/deinit pass at least 100 cycles.
+- [ ] Wi-Fi loss and recovery are tested during idle transport operation.
+- [ ] No credential, token, server secret, audio, or private payload is logged.
+- [ ] Baseline and peak heap/PSRAM/DMA/flash/task measurements are recorded.
+- [ ] Removing or disabling the dependency restores the pre-voice build.
+
+### Main Risks And Rollback
+
+- New/rapidly changing API, cloud-service availability, account/activation
+  requirements, transitive dependency conflicts, TLS memory, and protocol
+  reconnect competing with `wifi_manager`.
+- Rollback pins the previous lock or removes the isolated manifest; production
+  application behavior remains unchanged.
+
+### Learning Topics
+
+- Component Manager locks, dependency audits, WebSocket, MQTT+UDP, TLS memory,
+  and external service lifecycle testing.
+
+---
+
+## Sprint 13 — Voice Assistant Adapter — New / Not Started
+
+**Goal:** Add a project-owned `voice_assistant` boundary around
+`esp_xiaozhi` without exposing external types to the rest of the firmware.
+
+### Placement And Dependencies
+
+- Requires accepted Sprints 11 and 12.
+- Establishes ownership and lifecycle before end-to-end audio is enabled.
+
+### Scope
+
+- Add `components/voice/voice_assistant/` with compile-time enable/disable.
+- Map protocol events to project states: disabled, disconnected, idle,
+  listening, thinking, speaking, and error.
+- React to copied `wifi_manager` connectivity facts without calling Wi-Fi APIs.
+- Coordinate audio through `audio_manager` only.
+- Copy callback data into bounded project-owned events before callback return.
+- Reject or defer system commands; never reboot, erase NVS, or change hardware
+  directly from a Xiaozhi callback.
+
+### Explicit Non-Goals
+
+- No push-to-talk UX, GUI screen, MCP tools, actuator control, or wake word.
+- No `esp_xiaozhi` handle/type in `main`, `app_gui`, `audio_manager`, cloud,
+  sensor, storage, or connectivity public headers.
+
+### Components, Files, And Expected APIs
+
+- New `voice_assistant` component, public project types, docs, CMake, manifest,
+  and optional Kconfig gate.
+- Expected APIs include `voice_assistant_init()`, `start()`, `stop()`,
+  `deinit()`, `notify_network_state()`, `get_status()`, and one copied status
+  callback or event registration API.
+
+### RTOS And Resource Design
+
+- One adapter command queue and, only if required, one lifecycle task.
+- Short callback adapters, finite queue waits, status mutex, explicit event
+  ownership, and generation/epoch protection against stale transport events.
+- Hardware requirement is unchanged from the accepted audio platform; risks
+  are transport/TLS heap growth and task contention rather than new GPIO.
+
+### Test Plan And Acceptance
+
+- [ ] Host/component tests cover state transitions, stale events, queue-full,
+      network loss, repeated init/deinit, and disabled-feature behavior.
+- [ ] Production build proves only `voice_assistant` depends on `esp_xiaozhi`.
+- [ ] Callback paths contain no LVGL, Wi-Fi, NVS, provisioning, cloud upload,
+      hardware driver, or reboot calls.
+- [ ] Repeated lifecycle testing shows no task, handler, socket, or heap leak.
+
+### Main Risks And Rollback
+
+- Risks: external callback lifetime, duplicate events, teardown races, and an
+  adapter that grows into a second application controller.
+- Set the voice feature Kconfig option off; existing application continues
+  without creating voice resources.
+
+### Learning Topics
+
+- Adapter patterns, dependency inversion, callback lifetime, event epochs, and
+  optional-feature lifecycle design.
+
+---
+
+## Sprint 14 — Push-To-Talk Voice MVP — New / Not Started
+
+**Goal:** Deliver the first bounded end-to-end voice turn without wake word.
+
+### Placement And Dependencies
+
+- Requires accepted audio and adapter lifecycles from Sprints 11-13.
+- Push-to-talk limits always-listening privacy, CPU, memory, and echo risks.
+
+### Scope
+
+- Add a dedicated voice-action input distinct from the destructive factory
+  reset gesture, or define a conflict-free button policy with hardware proof.
+- Open an audio channel, start listening, stream microphone audio in the
+  required format, stop listening, receive TTS audio, and play it through
+  `audio_manager`.
+- Start with the simplest measured format/transport; introduce OPUS only when
+  bandwidth or service requirements justify it.
+- Add bounded conversation and audio-channel timeouts, cancellation, error
+  recovery, and repeated-turn metrics.
+
+### Explicit Non-Goals
+
+- No wake word, always-on microphone, MCP, actuator commands, or advanced GUI.
+- Factory-reset long press remains independent and higher safety priority.
+
+### Components, Files, And Expected APIs
+
+- Extend `voice_assistant`, `audio_manager`, `button_manager` event routing,
+  and application composition only.
+- Expected APIs include project-owned `begin_push_to_talk()`,
+  `end_push_to_talk()`, and `cancel()` operations with finite results.
+
+### RTOS And Resource Design
+
+- Bounded audio uplink/downlink ring buffers, no network operation in the
+  button callback, and explicit backpressure/drop policy.
+- Measure codec task CPU/stack, DMA memory, ring occupancy, overflow, underrun,
+  Wi-Fi throughput, cloud contention, and LVGL responsiveness.
+- Hardware additionally requires a safe push-to-talk input that cannot be
+  confused with the factory-reset gesture.
+
+### Test Plan And Acceptance
+
+- [ ] Complete at least 100 consecutive press/listen/think/speak turns.
+- [ ] Verify short press, release, cancellation, timeout, and double-trigger.
+- [ ] Test Wi-Fi loss during listening and speaking, then successful recovery.
+- [ ] Confirm factory-reset input cannot accidentally start or be blocked by
+      voice, and voice cannot erase configuration.
+- [ ] Verify microphone data is transmitted only during an explicit voice turn.
+- [ ] Run an endurance session with sensor, Firebase, LVGL, and reconnect active.
+
+### Main Risks And Rollback
+
+- Risks: radio/audio starvation, speaker feedback, privacy, buffer growth,
+  button gesture conflict, and service latency.
+- Compile-time-disable push-to-talk while retaining the independently tested
+  audio and transport layers.
+
+### Learning Topics
+
+- Streaming backpressure, half-duplex UX, cancellation, privacy boundaries,
+  audio codecs, and end-to-end latency.
+
+---
+
+## Sprint 15 — GUI Voice Integration — New / Not Started
+
+**Goal:** Present voice state through the existing queue-driven LVGL design.
+
+### Placement And Dependencies
+
+- Requires stable push-to-talk behavior from Sprint 14 so GUI does not conceal
+  protocol/audio defects.
+
+### Scope
+
+- Add copied GUI models for disconnected, idle, listening, thinking, speaking,
+  error, timeout, and disabled states.
+- Route state and bounded text/emotion facts through the existing GUI queue and
+  UI task.
+- Define screen priority with provisioning, Wi-Fi status, factory reset,
+  sensor dashboard, and cloud errors.
+- Add rate limiting/coalescing for rapid text or audio-state updates.
+
+### Explicit Non-Goals
+
+- No direct LVGL call from Xiaozhi/audio/button/network callbacks.
+- No UI ownership inside `voice_assistant` and no wake-word animation yet.
+
+### Components, Files, And Expected APIs
+
+- Extend `app_gui` project-owned models/queues/screens and application event
+  mapping; `voice_assistant` remains UI-agnostic.
+- Expected APIs are copied `app_gui_post_voice_status()` and explicit screen
+  requests using project types only.
+
+### RTOS And Resource Design
+
+- Length-one overwrite queue for latest status where event loss is safe;
+  bounded command queue for ordered actions; GUI task remains sole LVGL owner.
+- Measure LVGL heap, queue pressure, render latency, and dropped update count.
+- No new hardware is required beyond the accepted display and audio platform;
+  the 128x160 screen is the layout constraint.
+
+### Test Plan And Acceptance
+
+- [ ] Verify every state and error on the 128x160 display without clipping.
+- [ ] Stress rapid callback events and prove no LVGL call leaves the UI task.
+- [ ] Test voice transitions alongside provisioning, reconnect, cloud failure,
+      sensor updates, and factory-reset confirmation.
+- [ ] UI remains responsive during long TTS playback and network loss.
+
+### Main Risks And Rollback
+
+- Risks: screen-routing conflicts, queue flooding, stale text lifetime, and
+  excessive redraw/heap use.
+- Disable the voice screen/model while retaining serial/status diagnostics and
+  all existing screens.
+
+### Learning Topics
+
+- UI model isolation, event coalescing, screen arbitration, and callback-safe
+  visualization.
+
+---
+
+## Sprint 16 — MCP Read-Only Tools — New / Not Started
+
+**Goal:** Expose a small, audited set of read-only project facts to the agent.
+
+### Placement And Dependencies
+
+- Requires stable adapter and GUI flows from Sprints 13-15.
+- Read-only tools validate MCP schemas and callback behavior before any side
+  effect is permitted.
+
+### Scope
+
+- Start with temperature, humidity, Wi-Fi status, system status, current screen,
+  and non-sensitive device information only when corresponding project APIs
+  already exist.
+- MCP callbacks call manager public APIs and return bounded copied snapshots.
+- Define schema, timeout, stale/unavailable data, error mapping, rate limits,
+  and explicit sensitive-field exclusion.
+
+### Explicit Non-Goals
+
+- No GPIO/driver/LVGL access, actuator changes, NVS writes, credentials,
+  provisioning payloads, tokens, filesystem content, reboot, or OTA.
+
+### Components, Files, And Expected APIs
+
+- MCP registration remains private to `voice_assistant`, optionally split into
+  a private `voice_mcp_tools` source module.
+- Reuse `sensor_manager`, `wifi_manager`, `app_gui`, and approved system/device
+  snapshot APIs; add narrow read-only project APIs only when separately needed.
+
+### RTOS And Resource Design
+
+- MCP callbacks use finite manager timeouts and never wait on LVGL or perform
+  slow I/O. Queue work to an adapter task if a snapshot is not callback-safe.
+- Bound JSON/schema allocations and measure peak heap and callback latency.
+- No new hardware is required; unavailable sensors or status providers must
+  return explicit MCP errors instead of bypassing their manager APIs.
+
+### Test Plan And Acceptance
+
+- [ ] Unit-test valid, stale, unavailable, timeout, malformed, and concurrent
+      requests for every tool.
+- [ ] Verify returned data contains no credentials, secrets, tokens, QR payload,
+      private storage keys, or raw pointers.
+- [ ] Run repeated MCP queries during sensor faults, Wi-Fi loss, GUI changes,
+      cloud uploads, and audio streaming without deadlock.
+
+### Main Risks And Rollback
+
+- Risks: accidental data exposure, blocking manager calls, schema drift, and
+  heap fragmentation.
+- Register no MCP engine/tools when the feature gate is off; voice chat remains
+  usable without tools.
+
+### Learning Topics
+
+- MCP schemas, capability security, snapshot APIs, stale-data semantics, and
+  bounded serialization.
+
+---
+
+## Sprint 17 — MCP Controlled Device Actions — New / Not Started
+
+**Goal:** Add narrowly scoped, validated side effects only after read-only MCP
+is stable and project-owned actuator APIs exist.
+
+### Placement And Dependencies
+
+- Requires Sprint 16 acceptance and a separately approved device/application
+  control layer. If no actuator owner exists, this sprint remains deferred.
+- Side effects are last because they require authorization, validation,
+  synchronization, observability, and recovery guarantees.
+
+### Scope
+
+- Candidate actions: set light, fan, servo angle, display brightness, or switch
+  GUI screen only when an existing project manager owns that capability.
+- Validate ranges/enums, reject unsupported operations, apply finite timeout,
+  return confirmed result, synchronize state, and audit non-sensitive outcomes.
+- Add allowlist and local enable/disable policy; destructive actions such as
+  factory reset, credential erase, arbitrary GPIO, reboot, and OTA are excluded.
+
+### Explicit Non-Goals
+
+- MCP callbacks never touch drivers, LVGL, NVS, Wi-Fi, provisioning, Firebase,
+  or FreeRTOS task control directly.
+- Do not invent actuator hardware merely to satisfy this phase.
+
+### Components, Files, And Expected APIs
+
+- Private MCP tool registration in `voice_assistant`.
+- Existing or separately approved project-owned `device_manager`/application
+  APIs perform actions; `app_gui` screen changes still use its queue API.
+
+### RTOS And Resource Design
+
+- Commands enter bounded owner queues with request IDs, finite completion
+  timeouts, duplicate suppression where needed, and explicit late-result policy.
+- No lock is held while waiting for another component.
+- Hardware is conditional on the approved actuator set and its independent
+  electrical/safety acceptance; absence of actuator hardware defers the sprint.
+
+### Test Plan And Acceptance
+
+- [ ] Test minimum/maximum/out-of-range, unavailable hardware, timeout, duplicate,
+      concurrent, canceled, offline, and stale-result cases for every action.
+- [ ] Confirm the reported result matches physical hardware and retained state.
+- [ ] Prove forbidden destructive/system operations cannot be invoked.
+- [ ] Test manual/local control remains functional when MCP is disabled.
+
+### Main Risks And Rollback
+
+- Risks: unauthorized control, unsafe ranges, split-brain state, deadlock,
+  delayed action after timeout, and cloud prompt injection.
+- Disable action-tool registration while preserving read-only MCP and voice.
+
+### Learning Topics
+
+- Command authorization, validation, idempotency, owner queues, confirmations,
+  and safe AI-to-device boundaries.
+
+---
+
+## Sprint 18 — Wake Word And Advanced Voice UX — New / Not Started
+
+**Goal:** Add optional hands-free interaction only after push-to-talk, GUI, and
+tool boundaries are stable and measured.
+
+### Placement And Dependencies
+
+- Requires Sprints 10-17 acceptance or an explicit decision to omit MCP control.
+- Wake word comes last because always-on audio adds the highest CPU, memory,
+  privacy, coexistence, and acoustic complexity.
+
+### Scope
+
+- Evaluate exact ESP-SR, AFE, WakeNet, and model versions compatible with the
+  pinned ESP-IDF/toolchain and board memory.
+- Add wake word, VAD, conversation timeout, microphone mute, volume control,
+  interruption/cancel speaking, audio/GUI feedback, and optional bounded
+  offline fallback commands.
+- Define half/full-duplex policy and evaluate acoustic echo cancellation based
+  on actual microphone/speaker placement.
+- Add explicit privacy indicator and local disable control for always-on audio.
+
+### Explicit Non-Goals
+
+- No unreviewed model/version download, hidden always-on transmission, arbitrary
+  offline command execution, or replacement application architecture.
+- Detection remains local; audio transport opens only under documented policy.
+
+### Components, Files, And Expected APIs
+
+- Extend `audio_manager`, `voice_assistant`, `app_gui`, and board/Kconfig docs.
+- Optional private wake-word adapter isolates ESP-SR types from public project
+  APIs. Expected operations include enable/disable, mute, cancel, and copied
+  detection/status events.
+
+### RTOS And Resource Design
+
+- Dedicated AFE/wake processing only after CPU/core-affinity measurements.
+- Fixed-size audio windows/ring buffers, bounded queues, model storage plan,
+  stack high-water monitoring, and explicit priority below critical system
+  recovery paths while meeting audio deadlines.
+
+### Test Plan And Acceptance
+
+- [ ] Measure false accept/reject in quiet, speech, music, TV, and device-TTS
+      conditions at multiple distances.
+- [ ] Test at least 8 hours always-on and 1,000 wake/conversation cycles.
+- [ ] Verify mute/privacy indicator, interruption, timeout, Wi-Fi loss, service
+      loss, reboot, and repeated enable/disable/deinit.
+- [ ] Record CPU per core, internal/PSRAM/DMA heap, largest block, flash/model
+      size, task stacks, ring occupancy, overflow, underrun, and thermal/power
+      behavior with LVGL, cloud, sensor, SD, and reconnect active.
+
+### Main Risks And Rollback
+
+- Risks: insufficient PSRAM/internal DMA heap, CPU starvation, false wake,
+  acoustic feedback, privacy expectations, model flash size, and dependency
+  incompatibility.
+- Disable wake/AFE at compile time and retain the accepted push-to-talk path.
+  If voice is globally disabled, Sprints 0-9 behavior remains unchanged.
+
+### Learning Topics
+
+- ESP-SR, AFE, WakeNet, VAD, acoustic echo, always-on resource budgeting,
+  privacy UX, and long-duration embedded validation.
 
 ---
 
@@ -1123,9 +1813,18 @@ Use this section to track daily/weekly progress.
 | 4 | Firebase upload | Done |  | 2026-07-19 | Hardware upload, Firebase data, failure handling, and LCD Cloud status accepted. |
 | 5 | NVS config storage | Done |  | 2026-07-26 | Persistence, integrity, migration, and recovery tests accepted. |
 | 6 | BLE provisioning | In progress |  |  | Phase 6.4 implemented; final A-N hardware acceptance pending. |
-| 7 | Factory reset | Not started |  |  |  |
+| 7 | Factory reset | In progress |  |  | Phase 7.1 input/debounce/events hardware-accepted; reset action and recovery remain pending. |
 | 8 | Reconnect + retry | In progress |  |  | Wi-Fi/cloud recovery implemented; final target-hardware recovery and endurance acceptance pending. |
 | 9 | Portfolio polish | Not started |  |  |  |
+| 10 | Audio hardware validation | Proposed / Not started |  |  | New optional voice syllabus; hardware and GPIO gate. |
+| 11 | Production audio manager | Proposed / Not started |  |  | Requires Sprint 10 hardware acceptance. |
+| 12 | Xiaozhi build + transport | Proposed / Not started |  |  | Re-verify and exactly pin the reviewed dependency before implementation. |
+| 13 | Voice assistant adapter | Proposed / Not started |  |  | Only adapter may depend directly on `esp_xiaozhi`. |
+| 14 | Push-to-talk voice MVP | Proposed / Not started |  |  | Wake word intentionally deferred. |
+| 15 | GUI voice integration | Proposed / Not started |  |  | Queue-driven LVGL updates only. |
+| 16 | MCP read-only tools | Proposed / Not started |  |  | Public manager snapshots; no side effects. |
+| 17 | MCP controlled actions | Proposed / Not started |  |  | Conditional on approved project-owned actuator APIs. |
+| 18 | Wake word + advanced voice UX | Proposed / Not started |  |  | Requires resource and privacy acceptance. |
 
 ---
 

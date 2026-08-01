@@ -200,13 +200,13 @@ static esp_err_t sd_card_manager_list_files_recursive_internal(const char *dir_p
                         dir_path,
                         errno);
 
-    ESP_LOGI(TAG, "Scanning directory: %s, depth: %u",
+    ESP_LOGD(TAG, "Scanning directory: %s, depth: %u",
              dir_path,
              (unsigned int)current_depth);
 
     struct dirent *entry = NULL;
 
-    ESP_LOGI(TAG, "*******************************************************************");
+    ESP_LOGD(TAG, "*******************************************************************");
     while ((entry = readdir(dir)) != NULL) {
         /*
          * Skip current and parent directory entries if they exist.
@@ -243,7 +243,7 @@ static esp_err_t sd_card_manager_list_files_recursive_internal(const char *dir_p
         }
 
         if (S_ISDIR(file_stat.st_mode)) {
-            ESP_LOGI(TAG,
+            ESP_LOGD(TAG,
                      "[DIR ] depth=%u %s",
                      (unsigned int)current_depth,
                      full_path);
@@ -260,19 +260,19 @@ static esp_err_t sd_card_manager_list_files_recursive_internal(const char *dir_p
                 }
             }
         } else if (S_ISREG(file_stat.st_mode)) {
-            ESP_LOGI(TAG,
+            ESP_LOGD(TAG,
                      "[FILE] depth=%u %s, size: %ld bytes",
                      (unsigned int)current_depth,
                      full_path,
                      (long)file_stat.st_size);
         } else {
-            ESP_LOGI(TAG,
+            ESP_LOGD(TAG,
                      "[OTHER] depth=%u %s",
                      (unsigned int)current_depth,
                      full_path);
         }
     }
-    ESP_LOGI(TAG, "*******************************************************************");
+    ESP_LOGD(TAG, "*******************************************************************");
 
     closedir(dir);
 
@@ -352,7 +352,7 @@ esp_err_t sd_card_manager_write_test_file(void)
      */
     const char *file_path = SD_MOUNT_POINT "/hello.txt";
 
-    ESP_LOGI(TAG, "Opening file for writing: %s", file_path);
+    ESP_LOGD(TAG, "Opening file for writing: %s", file_path);
 
     FILE *file = fopen(file_path, "w");
     ESP_RETURN_ON_FALSE(file != NULL,
@@ -385,7 +385,7 @@ esp_err_t sd_card_manager_read_test_file(void)
 
     const char *file_path = SD_MOUNT_POINT "/hello.txt";
 
-    ESP_LOGI(TAG, "Opening file for reading: %s", file_path);
+    ESP_LOGD(TAG, "Opening file for reading: %s", file_path);
 
     FILE *file = fopen(file_path, "r");
     ESP_RETURN_ON_FALSE(file != NULL,
@@ -402,7 +402,7 @@ esp_err_t sd_card_manager_read_test_file(void)
 
     while (fgets(line, sizeof(line), file) != NULL)
     {
-        ESP_LOGI(TAG, "Read line: %s", line);
+        ESP_LOGD(TAG, "Read line: %s", line);
     }
 
     fclose(file);
@@ -436,7 +436,7 @@ esp_err_t sd_card_manager_list_files(const char *dir_path)
     uint32_t file_count = 0;
     uint32_t dir_count = 0;
 
-    ESP_LOGI(TAG, "*******************************************************************");
+    ESP_LOGD(TAG, "*******************************************************************");
     while ((entry = readdir(dir)) != NULL)
     {
         char full_path[SD_CARD_MANAGER_PATH_MAX_LEN] = {0};
@@ -469,24 +469,24 @@ esp_err_t sd_card_manager_list_files(const char *dir_path)
                     if (S_ISDIR(file_stat.st_mode))
                     {
                         dir_count++;
-                        ESP_LOGI(TAG, "[DIR ] %s", full_path);
+                        ESP_LOGD(TAG, "[DIR ] %s", full_path);
                     }
         else if (S_ISREG(file_stat.st_mode))
         {
             file_count++;
-            ESP_LOGI(TAG,
+            ESP_LOGD(TAG,
                 "[FILE] %s, size: %ld bytes",
                 full_path,
                 (long)file_stat.st_size);
             }
             else
             {
-                ESP_LOGI(TAG, "[OTHER] %s", full_path);
+                ESP_LOGD(TAG, "[OTHER] %s", full_path);
             }
         }
         
         closedir(dir);
-        ESP_LOGI(TAG, "*******************************************************************");
+        ESP_LOGD(TAG, "*******************************************************************");
         
         ESP_LOGI(TAG,
              "List done. Files: %lu, Directories: %lu",

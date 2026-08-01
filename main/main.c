@@ -49,6 +49,9 @@
 /* app network coordinator ------------------------------------------------- */
 #include "app_network_coordinator.h"
 
+/* Button manager ----------------------------------------------------------- */
+#include "button_manager.h"
+
 /* Macros ------------------------------------------------------------------- */
 #define PERFORMANCE_MONITOR 0
 
@@ -64,6 +67,24 @@ static const sensor_manager_config_t SENSOR_MANAGER_CONFIG =
 {
     .sample_period_ms = 2000U,
     .stale_timeout_ms = 10000U,
+};
+
+static const button_manager_config_t BUTTON_MANAGER_CONFIG =
+{
+    .gpio_num =
+        FACTORY_RESET_BUTTON_GPIO,
+
+    .active_level =
+        FACTORY_RESET_BUTTON_ACTIVE_LEVEL,
+
+    .poll_period_ms =
+        FACTORY_RESET_BUTTON_POLL_PERIOD_MS,
+
+    .debounce_ms =
+        FACTORY_RESET_BUTTON_DEBOUNCE_MS,
+
+    .long_press_ms =
+        FACTORY_RESET_BUTTON_LONG_PRESS_MS,
 };
 
 static const app_network_coordinator_config_t
@@ -114,6 +135,9 @@ static const firebase_auth_config_t FIREBASE_AUTH_CONFIG =
  */
 static esp_err_t network_platform_init(void);
 
+static void app_button_event_callback(
+    const button_manager_event_data_t *event_data,
+    void *user_context);
 
 /**
  * @brief Fan out Wi-Fi state to coordinator, GUI, and cloud network epoch.
@@ -281,6 +305,52 @@ void app_main(void)
             esp_err_to_name(monitor_ret));
     }
 #endif
+
+    /*
+     * Phase 7.1 button input is an independent local service.
+     *
+     * Failure disables only physical-button input; it does not prevent LCD,
+     * sensor, Wi-Fi, provisioning, or cloud services from starting.
+     */
+    esp_err_t button_ret =
+        button_manager_init(
+            &BUTTON_MANAGER_CONFIG);
+
+    if (button_ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to initialize button manager: %s",
+            esp_err_to_name(button_ret));
+    }
+    else
+    {
+        button_ret =
+            button_manager_register_callback(
+                app_button_event_callback,
+                NULL);
+
+        if (button_ret != ESP_OK)
+        {
+            ESP_LOGE(
+                TAG,
+                "Failed to register button callback: %s",
+                esp_err_to_name(button_ret));
+        }
+        else
+        {
+            button_ret =
+                button_manager_start();
+
+            if (button_ret != ESP_OK)
+            {
+                ESP_LOGE(
+                    TAG,
+                    "Failed to start button manager: %s",
+                    esp_err_to_name(button_ret));
+            }
+        }
+    }
 
     esp_err_t wifi_ret =
         wifi_manager_init();
@@ -904,4 +974,44 @@ static bool app_network_state_allows_cloud_start(
          APP_NETWORK_COORDINATOR_STATE_CONNECTING) ||
         (state ==
          APP_NETWORK_COORDINATOR_STATE_ONLINE);
+}
+
+static void app_button_event_callback(
+    const button_manager_event_data_t *event_data,
+    void *user_context)
+{
+    (void)user_context;
+
+    if (event_data == NULL)
+    {
+        return;
+    }
+
+    switch (event_data->event)
+    {
+        case BUTTON_MANAGER_EVENT_PRESSED:
+            ESP_LOGI(TAG, "Button pressed");
+            break;
+
+        case BUTTON_MANAGER_EVENT_RELEASED:
+            ESP_LOGD(
+                TAG,
+                "Button released: held=%" PRIu32 " ms",
+                event_data->held_ms);
+            break;
+
+        case BUTTON_MANAGER_EVENT_LONG_PRESS:
+            ESP_LOGI(
+                TAG,
+                "Button long press detected: held=%" PRIu32 " ms",
+                event_data->held_ms);
+            break;
+
+        default:
+            ESP_LOGW(
+                TAG,
+                "Unknown button event: %d",
+                (int)event_data->event);
+            break;
+    }
 }

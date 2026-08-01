@@ -28,6 +28,9 @@
 #define APP_NETWORK_COORDINATOR_SUCCESS_DWELL_MS \
     1500U
 
+#define APP_NETWORK_COORDINATOR_STORED_WIFI_BOOT_GRACE_MS \
+    (60U * 1000U)
+
 #define APP_NETWORK_COORDINATOR_MAX_SESSIONS \
     10U
 
@@ -243,6 +246,15 @@ static void app_network_coordinator_request_initial_screen(
     config_manager_wifi_config_state_t state);
 
 /**
+ * @brief Keep the stored-Wi-Fi boot screen for a bounded grace period.
+ *
+ * After the grace period, a device that is still on BOOT and has not reached
+ * ONLINE is routed to WIFI_STATUS. The GUI renders its cached Wi-Fi snapshot,
+ * while wifi_manager continues to own reconnection independently.
+ */
+static void app_network_coordinator_wait_for_stored_wifi_boot_grace(void);
+
+/**
  * @brief Run one-shot network boot orchestration without blocking app_main.
  *
  * @param[in] argument Unused.
@@ -275,6 +287,8 @@ static void app_network_coordinator_task(
     }
     else
     {
+        app_network_coordinator_wait_for_stored_wifi_boot_grace();
+
         app_network_coordinator_state_t final_state =
             APP_NETWORK_COORDINATOR_STATE_FAILED;
 
@@ -363,6 +377,56 @@ static void app_network_coordinator_request_initial_screen(
             (int)target_screen,
             esp_err_to_name(ret));
     }
+}
+
+static void app_network_coordinator_wait_for_stored_wifi_boot_grace(void)
+{
+    app_network_coordinator_state_t state =
+        APP_NETWORK_COORDINATOR_STATE_FAILED;
+
+    if ((app_network_coordinator_get_state(&state) != ESP_OK) ||
+        ((state != APP_NETWORK_COORDINATOR_STATE_CONNECTING) &&
+         (state != APP_NETWORK_COORDINATOR_STATE_OFFLINE)))
+    {
+        return;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Waiting up to %lu ms for stored Wi-Fi before leaving boot screen",
+        (unsigned long)
+            APP_NETWORK_COORDINATOR_STORED_WIFI_BOOT_GRACE_MS);
+
+    vTaskDelay(
+        pdMS_TO_TICKS(
+            APP_NETWORK_COORDINATOR_STORED_WIFI_BOOT_GRACE_MS));
+
+    app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
+
+    if ((app_network_coordinator_get_state(&state) != ESP_OK) ||
+        (state == APP_NETWORK_COORDINATOR_STATE_ONLINE) ||
+        (app_gui_get_screen_id(&screen_id) != ESP_OK) ||
+        (screen_id != APP_GUI_SCREEN_BOOT))
+    {
+        return;
+    }
+
+    const esp_err_t ret =
+        app_gui_request_screen(
+            APP_GUI_SCREEN_WIFI_STATUS);
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGW(
+            TAG,
+            "Failed to queue Wi-Fi status screen after boot grace: %s",
+            esp_err_to_name(ret));
+        return;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Stored Wi-Fi is still unavailable; leaving boot screen");
 }
 
 static void app_network_coordinator_set_state(

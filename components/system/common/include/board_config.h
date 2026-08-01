@@ -110,3 +110,15 @@
  * ========================================================================= */
 // DHT22
 #define DHT22_PIN_GPIO                  GPIO_NUM_4
+
+/* =========================================================================
+ * Button Manager
+ * ========================================================================= */
+
+#define FACTORY_RESET_BUTTON_GPIO               GPIO_NUM_9
+
+#define FACTORY_RESET_BUTTON_ACTIVE_LEVEL       0
+
+#define FACTORY_RESET_BUTTON_POLL_PERIOD_MS     10U
+#define FACTORY_RESET_BUTTON_DEBOUNCE_MS        40U
+#define FACTORY_RESET_BUTTON_LONG_PRESS_MS      5000U
