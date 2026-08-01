@@ -84,6 +84,7 @@ static provisioning_manager_wifi_credentials_t s_pending_credentials = {0};
 
 static bool s_pending_credentials_valid = false;
 static bool s_wifi_handoff_pending = false;
+static uint32_t s_wifi_handoff_generation = 0U;
 
 static char s_active_service_name
     [PROVISIONING_MANAGER_SERVICE_NAME_BUFFER_SIZE] = {0};
@@ -704,6 +705,13 @@ static void provisioning_manager_event_callback(
             s_pending_credentials_valid = true;
             s_wifi_handoff_pending = true;
 
+            s_wifi_handoff_generation++;
+
+            if (s_wifi_handoff_generation == 0U)
+            {
+                s_wifi_handoff_generation = 1U;
+            }
+
             portEXIT_CRITICAL(&s_state_lock);
 
             provisioning_manager_zeroize(
@@ -1058,6 +1066,7 @@ esp_err_t provisioning_manager_init(
 
     s_pending_credentials_valid = false;
     s_wifi_handoff_pending = false;
+    s_wifi_handoff_generation = 0U;
     provisioning_manager_clear_active_identity_locked();
     credentials_queue = s_credentials_queue;
 
@@ -1638,6 +1647,38 @@ esp_err_t provisioning_manager_is_wifi_handoff_pending(
 
     *handoff_pending =
         s_wifi_handoff_pending;
+
+    portEXIT_CRITICAL(&s_state_lock);
+
+    return ESP_OK;
+}
+
+esp_err_t provisioning_manager_get_wifi_handoff_status(
+    provisioning_manager_wifi_handoff_status_t *status)
+{
+    if (status == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    memset(
+        status,
+        0,
+        sizeof(*status));
+
+    portENTER_CRITICAL(&s_state_lock);
+
+    if (s_credentials_queue == NULL)
+    {
+        portEXIT_CRITICAL(&s_state_lock);
+
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    status->pending =
+        s_wifi_handoff_pending;
+    status->credential_generation =
+        s_wifi_handoff_generation;
 
     portEXIT_CRITICAL(&s_state_lock);
 

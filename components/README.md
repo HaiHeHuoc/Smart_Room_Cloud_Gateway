@@ -48,7 +48,7 @@ targets.
 
 | Domain | Components | Primary responsibility |
 |---|---|---|
-| Application | `app_network_coordinator`, `app_reset_coordinator` | Network boot policy and reset-input qualification |
+| Application | `app_network_coordinator`, `app_reset_coordinator` | Network boot policy plus reset qualification, active-provisioning quiescence, persistent reset execution, and reset-result orchestration |
 | Cloud | `cloud_manager`, `firebase_auth` | Authenticated Firebase telemetry |
 | Connectivity | `provisioning_manager`, `wifi_manager` | BLE provisioning and Wi-Fi connection lifecycle |
 | Display | `display_driver`, `waveshare__esp_lcd_st7735` | LCD bus and panel integration |

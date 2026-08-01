@@ -73,7 +73,10 @@ app_reset_coordinator task
     -> accept at most one reset request per physical press cycle
     -> clear the ESP-IDF driver-owned persistent Wi-Fi copy through wifi_manager
     -> clear and verify config_manager Wi-Fi state
-    -> reboot only after both cleanup layers succeed
+    -> queue a copied SUCCESS or FAILED result through app_gui
+    -> on verified success, wait at most 500 ms for the exact GUI acknowledgment
+    -> hold confirmed success for 1500 ms, otherwise use a 500 ms fallback
+    -> reboot after both cleanup layers succeed regardless of GUI availability
     -> boot coordinator selects provisioning from NOT_CONFIGURED
 
 provisioning_manager callback
@@ -106,9 +109,10 @@ cloud task
 ```
 
 The callbacks copy their input and return quickly. The GUI task owns LVGL
-updates, while the cloud task owns authentication and HTTPS requests. The
-cloud telemetry queue exists before the sensor task starts, so a sensor
-callback cannot post into an uninitialized cloud component.
+updates; the reset coordinator uses only public asynchronous GUI APIs and never
+calls LVGL. The cloud task owns authentication and HTTPS requests. The cloud
+telemetry queue exists before the sensor task starts, so a sensor callback
+cannot post into an uninitialized cloud component.
 
 ## Current Configuration
 
@@ -120,10 +124,12 @@ callback cannot post into an uninitialized cloud component.
   `devices/esp32s3-001/latest.json` in Firebase Realtime Database.
 - Wi-Fi credentials are loaded from `config_manager`; production code contains
   no hard-coded Wi-Fi SSID/password fallback.
-- BLE provisioning waits up to 120 seconds for verified credentials. If that
-  deadline expires with a credential handoff already in flight, it allows one
-  additional 30-second connection grace. Framework cleanup polling remains
-  finite.
+- BLE provisioning allows 120 seconds for an idle phone session. Every pending
+  credential handoff receives its own 30-second IPv4 deadline. On either
+  timeout the coordinator reaches framework `STOPPED` before a final verified
+  queue drain. If that drain is empty, the unadopted Station attempt is
+  detached before a replacement session, so timeout and late `GOT_IP` cannot
+  produce conflicting outcomes or leave association stuck without IPv4.
 - BLE provisioning allows at most three sessions including the initial
   session. Retryable terminal failures dwell for 1000 ms, clean fully to
   `STOPPED`, then use a 1500 ms `RETRYING` backoff before a new generation.
@@ -283,7 +289,16 @@ idf.py -p <PORT> flash monitor
   2026-08-01. The reset transaction clears and verifies application Wi-Fi
   state, removes the ESP-IDF driver-owned persistent copy, reboots into BLE
   provisioning, and obtains IPv4 after reprovisioning without `erase-flash`.
-  Reset-confirmation UI remains deferred.
+- Phase 7.4 reset-result UI is implemented and build-verified, with hardware
+  acceptance pending. Verified success receives a bounded display opportunity
+  before reboot; GUI failure cannot suppress the reboot. Persistent cleanup
+  failure shows a best-effort error, does not reboot, and remains retryable
+  after button release.
+- Phase 7.5 active-provisioning reset coordination is implemented and
+  build-verified, with hardware acceptance pending. A 10-second bounded
+  preparation closes the
+  reset gate and quiesces provisioning before either persistent Wi-Fi layer is
+  cleared; failure clears nothing and suppresses reboot.
 - Never log or commit passwords, ID tokens, refresh tokens, service-account
   keys, or Firebase administrator credentials.
 
@@ -299,3 +314,5 @@ idf.py -p <PORT> flash monitor
 - Add a coordinated application controller only when runtime stop/restart is
   required.
 - Replace development demo hooks only when their bring-up role is finished.
+- Complete the Phase 7.5 target-hardware lifecycle and credential-handoff race
+  matrix before accepting reset safety in every network state.

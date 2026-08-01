@@ -43,7 +43,10 @@ esp_err_t app_reset_coordinator_init(void);
  *
  * Call once after app_reset_coordinator_init(). The function returns after
  * task creation and does not wait for an input event. The component provides
- * no stop or deinitialization operation.
+ * no stop or deinitialization operation. The created task owns persistent
+ * reset execution, copied reset-result publication, bounded presentation
+ * waiting, and the verified-success reboot; callers never wait for these
+ * operations.
  *
  * @return ESP_OK on success, ESP_ERR_INVALID_STATE when not initialized, or
  *         ESP_ERR_NO_MEM when task creation fails.

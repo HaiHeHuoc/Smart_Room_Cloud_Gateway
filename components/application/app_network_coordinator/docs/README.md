@@ -23,6 +23,9 @@ The coordinator:
   facts into provisioning UI states.
 - Maps the existing Wi-Fi callback's association, DHCP, and disconnect
   snapshots into provisioning progress without taking Wi-Fi ownership.
+- Stops publishing the framework's verified `WIFI_CONNECTED` event as
+  `WAITING_FOR_IP`; the coordinator task owns the subsequent
+  `SAVING_CONFIG` transition.
 - Requests the initial application screen from the final verified
   configuration state.
 - Persists provisioned credentials through `config_manager`.
@@ -47,6 +50,7 @@ The coordinator does not:
 |---|---|
 | `app_network_coordinator_init()` | Copy timing configuration and enter `READY`. |
 | `app_network_coordinator_start()` | Schedule the one-shot coordinator task and return immediately. |
+| `app_network_coordinator_prepare_for_factory_reset()` | Close the reset gate, quiesce provisioning, and wait within one caller-supplied deadline for active reset-excluded work. |
 | `app_network_coordinator_get_state()` | Copy the thread-safe lifecycle state. |
 | `app_network_coordinator_state_to_string()` | Convert a state to readable text. |
 | `app_network_coordinator_notify_wifi_event()` | Apply a short Wi-Fi notification to provisioning progress or normal runtime state, including the raw disconnect reason. |
@@ -86,8 +90,8 @@ request PROVISIONING screen
     -> WAITING_FOR_PHONE
     -> CREDENTIAL_RECEIVED
     -> CONNECTING_WIFI
-    -> WAITING_FOR_IP
-    -> wait for framework-verified credentials
+    -> WAITING_FOR_IP after Station association
+    -> framework GOT_IP queues verified credentials
     -> SAVING_CONFIG
     -> CLEANING_UP
     -> adopt the valid Station/IPv4 connection
@@ -117,6 +121,35 @@ TIMEOUT or FAILED
 The coordinator remains `PROVISIONING` throughout intermediate failures and
 backoff. It changes to `FAILED` only after retry exhaustion, a nonretryable
 failure, or cleanup that cannot reach `STOPPED`.
+
+## Active Factory-Reset Coordination
+
+**PHASE 7.5 IMPLEMENTED / BUILD VERIFIED / HARDWARE ACCEPTANCE PENDING**
+
+`app_network_coordinator_prepare_for_factory_reset(timeout_ms)` is the
+synchronous task-context handoff to `app_reset_coordinator`. It sets an
+application reset gate before inspecting the provisioning manager. The gate
+prevents new boot resolution, stored connection startup, provisioning
+sessions, retries, credential persistence, adoption, normal success routing,
+and runtime Wi-Fi/dashboard routing.
+
+Short reset-exclusion claims protect operations whose external side effects
+must finish before erasure. The coordinator never holds its critical lock
+across manager, NVS, Wi-Fi, GUI, logging, or delay APIs. A credential already
+queued is received and securely cleared when the reset gate won before its
+handoff claim; a handoff that claimed first is allowed to finish, while reset
+waits and then clears persistence last.
+
+| Provisioning state | Preparation action |
+|---|---|
+| `UNINITIALIZED`, `READY`, `STOPPED` | Require no active exclusion and no pending handoff, then succeed. |
+| `STARTING`, `STOPPING` | Poll with the configured finite period until safe or timed out. |
+| `ACTIVE` | Request `provisioning_manager_stop()` at the atomic ACTIVE boundary, then wait for cleanup. |
+| `FAILED` | Fail safe; do not authorize persistent erasure. |
+
+Success leaves the gate asserted until reboot. Failure rolls back only a gate
+created by that call, does not erase configuration, and does not call Wi-Fi
+reset or GUI APIs. No new task, queue, or dynamic allocation is introduced.
 
 QR publication is best-effort and never promotes coordinator state, starts a
 Wi-Fi connection, or changes the active screen.
@@ -173,9 +206,14 @@ Screen routing follows the final result:
   remains suitable for the normal task-context Wi-Fi status callback.
 - The manager progress callback posts only copied latest-value GUI messages.
   It performs no wait, persistence, Wi-Fi operation, or LVGL call.
+- `PROVISIONING_MANAGER_PROGRESS_WIFI_CONNECTED` does not post another GUI
+  state. Upstream emits it only after `GOT_IP`; the coordinator task already
+  owns the following `SAVING_CONFIG` transition. This removes the old delayed
+  callback that could overwrite `SAVING_CONFIG` or `CLEANING_UP` with
+  `WAITING_FOR_IP`.
 - Provisioning waits use configured finite timeout and poll periods.
-- A session timeout receives one additional finite connection grace only when
-  `provisioning_manager` reports that valid credentials are already in flight.
+- Each credential-attempt generation receives one finite IPv4 deadline. An
+  idle session keeps its independent finite deadline.
 - Temporary SSID/password buffers are securely overwritten on all completed
   paths.
 - The temporary QR copy is overwritten immediately after its non-blocking GUI
@@ -200,16 +238,42 @@ static const app_network_coordinator_config_t config = {
 
 All values must be non-zero. The session count is bounded to 10 and timing
 values to 10 minutes; every delay must convert to at least one FreeRTOS tick.
-The coordinator copies this structure during initialization. The 30-second
-grace is not added when no credential handoff is pending, so an idle session
-still stops at its normal deadline.
+The coordinator copies this structure during initialization. The legacy
+`provisioning_connection_grace_ms` field is the complete IPv4 deadline for one
+pending credential handoff. It starts when the handoff becomes pending, so a
+credential received near the 120-second idle-session deadline still receives
+the full 30-second window.
 
 ## Late DHCP Recovery
 
-When the normal provisioning deadline and a framework `GOT_IP` event race,
-the coordinator checks only the non-sensitive handoff-pending snapshot. A
-pending handoff receives one bounded grace wait. Success still follows the
-normal security and ownership path:
+`wifi_manager` observes every Station association and verifies that the default
+DHCP client is active, but it does not disconnect a provisioning-owned attempt.
+The coordinator polls the non-sensitive handoff snapshot every 200 ms. A new
+credential generation starts its own 30-second IPv4 deadline; a failed
+credential attempt clears that timer so the same BLE session can accept
+another phone submission. The generation also detects a fast failed-A/new-B
+transition that occurs entirely between two polls, so B never inherits A's
+deadline.
+
+When either the idle-session deadline or the per-handoff IPv4 deadline expires,
+the coordinator first requests provisioning shutdown and waits for `STOPPED`.
+Only then does it perform one final non-blocking credential-queue drain. This
+creates a deterministic boundary:
+
+- `GOT_IP` before framework deinitialization leaves one verified credential
+  item, so the final drain continues the success path.
+- Framework deinitialization first unregisters the upstream IP handler, so a
+  later `GOT_IP` cannot create a successful handoff. After an empty final drain,
+  the coordinator asks `wifi_manager` to detach the unadopted Station attempt
+  and waits up to five seconds for `DISCONNECTED` before a replacement session
+  can start.
+
+If that detach event is not observed within five seconds, the result is an
+internal lifecycle failure rather than a retryable provisioning timeout. This
+prevents a new session from inheriting an unresolved driver operation or its
+late-IP suppression guard.
+
+Success still follows the normal security and ownership path:
 
 ```text
 verified credential queue
@@ -293,7 +357,8 @@ the QR screen to show `Session n/max` throughout waiting, cleanup, retry, and
 success states.
 
 Before a replacement session, cleanup must reach `STOPPED`, handoff-pending
-must be false, and `config_manager` must still report `NOT_CONFIGURED`. The
+must be false, an unadopted Station attempt must be detached, and
+`config_manager` must still report `NOT_CONFIGURED`. The
 manager resets its retained credential queue during reinitialization. If
 configuration becomes `VALID`, no new BLE service starts; the coordinator uses
 the stored-configuration path instead. Intermediate retries retain BLE
@@ -309,11 +374,11 @@ adoption; it intentionally does not depend on optional BLE memory reclamation.
 | Result class | Examples | New phone session |
 |---|---|---|
 | `SUCCESS` | Persisted, cleaned, connection adopted | No |
-| `RETRYABLE_TIMEOUT` | No verified credentials before deadline/grace | Yes, while budget remains |
+| `RETRYABLE_TIMEOUT` | Idle session or pending IPv4 handoff reached its bounded deadline | Yes, while budget remains |
 | `RETRYABLE_SESSION_FAILURE` | Session stopped cleanly without a usable handoff | Yes, while budget remains |
 | `NONRETRYABLE_STORAGE_FAILURE` | Save, validation, or read-back failure | No |
 | `NONRETRYABLE_ADOPTION_FAILURE` | Persisted connection cannot be adopted | No |
-| `NONRETRYABLE_INTERNAL_FAILURE` | Init/start/queue/cleanup cannot be safely recovered | No |
+| `NONRETRYABLE_INTERNAL_FAILURE` | Init/start/queue/cleanup or Station detach cannot be safely completed | No |
 
 An ordinary wrong-password event is not a session result: the same BLE
 service and QR remain active, no retry count is consumed, and a later correct
@@ -332,7 +397,8 @@ state becomes `FAILED`, and cloud startup remains gated.
   and the same BLE service completes the success flow.
 - **Test C — Retry exhaustion:** allow all three default sessions to timeout;
   verify exactly three sessions, no fourth service, final QR cleared, terminal
-  state remains visible, no reboot, and no cloud start.
+  state remains visible, Station is disconnected, no reboot, and no cloud
+  start.
 - **Test D — Successful second session:** timeout session 1 and provision
   session 2; verify persistence/read-back, cleanup, adoption, about 1500 ms
   `SUCCESS`, then `WIFI_STATUS` and `SENSOR_DASHBOARD`; reboot must use stored
@@ -353,8 +419,8 @@ state becomes `FAILED`, and cloud startup remains gated.
 
 - Add cancellation or runtime reprovisioning APIs only when separately
   approved.
-- Keep factory reset outside this component until Sprint 7 ownership is
-  finalized.
+- Complete Phase 7.5 hardware race testing before accepting reset safety in
+  every provisioning lifecycle state.
 
 ## Phase 6.4.6 Integration
 

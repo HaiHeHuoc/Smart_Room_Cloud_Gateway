@@ -24,6 +24,12 @@ typedef enum
 
     /** Temperature and humidity sensor screen. */
     APP_GUI_SCREEN_SENSOR_DASHBOARD,
+
+    /** Factory-reset success or failure result. */
+    APP_GUI_SCREEN_RESET_RESULT,
+
+    /** Exclusive upper bound for screen-ID validation and iteration. */
+    APP_GUI_SCREEN_MAX
 } app_gui_screen_id_t;
 
 /* Provisioning UI Types -------------------------------------------------- */
@@ -145,6 +151,30 @@ typedef struct
     /** Result of the most recent sensor read. */
     esp_err_t last_error;
 } ui_sensor_status_t;
+
+/* Reset Result UI Types --------------------------------------------------- */
+
+/** @brief Result of one persistent Wi-Fi reset transaction. */
+typedef enum
+{
+    UI_RESET_STATE_SUCCESS = 0,
+    UI_RESET_STATE_FAILED
+} ui_reset_state_t;
+
+/**
+ * @brief Reset result copied into the existing GUI command queue.
+ *
+ * SUCCESS requires last_error == ESP_OK.
+ * FAILED requires last_error != ESP_OK.
+ */
+typedef struct
+{
+    /** Non-zero identity of the reset transaction that produced this result. */
+    uint32_t transaction_id;
+
+    ui_reset_state_t state;
+    esp_err_t last_error;
+} ui_reset_status_t;
 
 /* Cloud UI Types ---------------------------------------------------------- */
 
@@ -290,6 +320,47 @@ esp_err_t app_gui_post_sensor_status(
 esp_err_t app_gui_post_cloud_status(
     const ui_cloud_status_t *status);
 
+/* Reset Result API -------------------------------------------------------- */
+
+/**
+ * @brief Queue a reset result and request the reset-result screen.
+ *
+ * The result is copied into the existing GUI command queue. Only the app_gui
+ * task accesses LVGL. This API does not wait and is not ISR-safe.
+ *
+ * @param[in] status Reset result to display.
+ *
+ * @return
+ * - ESP_OK when queued.
+ * - ESP_ERR_INVALID_ARG for a zero transaction ID or invalid state/error
+ *   combination.
+ * - ESP_ERR_INVALID_STATE before app_gui_init().
+ * - ESP_ERR_TIMEOUT when the GUI command queue is full.
+ */
+esp_err_t app_gui_show_reset_result(
+    const ui_reset_status_t *status);
+
+/**
+ * @brief Check whether one reset result completed a GUI presentation cycle.
+ *
+ * The UI task acknowledges a transaction only after its reset-result command
+ * successfully creates or updates the reset screen and a following
+ * `lv_timer_handler()` pass completes. This function only reads copied state;
+ * it does not call LVGL, does not wait, and is not ISR-safe.
+ *
+ * @param[in] transaction_id Non-zero transaction identity supplied in the
+ *                           previously queued reset status.
+ * @param[out] presented Set true only for the exact acknowledged transaction.
+ *
+ * @return
+ * - ESP_OK when the presentation state was inspected.
+ * - ESP_ERR_INVALID_ARG for a zero transaction ID or NULL output pointer.
+ * - ESP_ERR_INVALID_STATE before app_gui_init().
+ */
+esp_err_t app_gui_is_reset_result_presented(
+    uint32_t transaction_id,
+    bool *presented);
+
 /* Screen Routing API ------------------------------------------------------ */
 
 /**
@@ -301,7 +372,8 @@ esp_err_t app_gui_post_cloud_status(
  * task-context callback code. It is not ISR-safe.
  *
  * @param[in] screen_id BOOT, PROVISIONING, WIFI_STATUS, or
- *            SENSOR_DASHBOARD. NONE is not an external target.
+ *            SENSOR_DASHBOARD. NONE is not an external target. RESET_RESULT
+ *            must be requested through app_gui_show_reset_result().
  * @return ESP_OK when queued, ESP_ERR_INVALID_ARG for an invalid target,
  *         ESP_ERR_INVALID_STATE before app_gui_init(), or ESP_ERR_TIMEOUT
  *         when the command queue is full.

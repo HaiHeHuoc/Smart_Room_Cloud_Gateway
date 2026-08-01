@@ -58,7 +58,7 @@ ESP32 periodically uploads sensor data to Firebase
 | Firebase upload | P0 | Done | Authenticated Realtime Database REST PUT verified on hardware |
 | NVS config storage | P0 | Done | Integrity, persistence, migration, and recovery tests accepted |
 | BLE Wi-Fi provisioning | P1 | In progress | Phase 6.4 implemented; final A-N hardware acceptance pending |
-| Button factory reset | P1 | Not started | Long press to erase config |
+| Button factory reset | P1 | In progress | Phases 7.1-7.3 accepted; Phases 7.4-7.5 implemented with hardware acceptance pending |
 | Wi-Fi reconnect strategy | P1 | Done | Event-driven exponential-backoff reconnect owned by `wifi_manager` |
 | Cloud retry queue | P1 | Done | Latest-value queue with bounded retry backoff |
 | MQTT | P2 | Not planned | Optional future feature |
@@ -985,8 +985,59 @@ no provisioning, reboot, or reset-confirmation UI action is performed.
 
 Phase 7.3 was manually/hardware accepted by the user on 2026-08-01. This
 completes verified Wi-Fi reset and reboot-to-provisioning recovery. Sprint 7
-remains incomplete because reset-confirmation UI and reset coordination during
-an active provisioning credential handoff are still deferred.
+remains incomplete. Reset confirmation is implemented by Phase 7.4, and active
+provisioning reset coordination is implemented by Phase 7.5. Hardware
+acceptance remains pending for both checkpoints.
+
+### Phase 7.4 Status - Implemented / Hardware Acceptance Pending
+
+- [x] Add a dedicated `RESET_RESULT` screen for reset success and failure.
+- [x] Copy reset results through the existing GUI command queue; only the GUI
+      task creates or updates LVGL objects.
+- [x] Assign a non-zero boot-local transaction ID to each accepted reset and
+      acknowledge only the exact result rendered for that transaction.
+- [x] Publish acknowledgment only after reset content is rendered and the
+      following `lv_timer_handler()` pass completes.
+- [x] Wait at most 500 ms for acknowledgment and hold confirmed success for
+      1500 ms.
+- [x] Use a bounded 500 ms fallback when GUI queueing, construction, or
+      acknowledgment fails; GUI failure never suppresses a verified reboot.
+- [x] Keep persistent cleanup failures non-rebooting and retryable only after
+      `RELEASED` re-arms the input transaction.
+- [x] Preserve the previous screen and every widget reference when reset-screen
+      construction or cached rendering fails.
+- [x] Validate with `idf.py build` on ESP-IDF 6.0.1.
+- [ ] Validate success, failure, fallback, retry, stack, and heap behavior on
+      target hardware.
+
+Phase 7.4 is build-verified but is not complete until the hardware checklist
+passes. A GUI presentation acknowledgment proves a matching LVGL render plus a
+completed handler pass; it does not claim direct physical LCD flush feedback.
+
+### Phase 7.5 Status - Implemented / Hardware Acceptance Pending
+
+- [x] Add a bounded synchronous factory-reset preparation API to
+      `app_network_coordinator`.
+- [x] Close an application reset gate before provisioning lifecycle cleanup.
+- [x] Prevent new sessions, retries, persistence, adoption, and normal routing
+      after reset wins.
+- [x] Wait for an already-claimed credential handoff before persistent erasure.
+- [x] Stop ACTIVE provisioning and poll STARTING/STOPPING within one finite
+      10-second reset-coordinator deadline.
+- [x] Treat manager FAILED as fail-safe and roll back a newly claimed gate on
+      preparation failure.
+- [x] Keep preparation failure non-erasing and non-rebooting while preserving
+      the Phase 7.4 reset-result flow.
+- [x] Reuse existing tasks, queues, locks, and provisioning-manager APIs.
+- [x] Validate an ESP-IDF 6.0.1 clean build with project warning flags.
+- [ ] Validate reset from UNINITIALIZED, READY, STARTING, ACTIVE, STOPPING,
+      STOPPED, and FAILED manager states on target hardware.
+- [ ] Race reset against queued credentials, NVS persistence, cleanup,
+      connection adoption, and the success dwell on target hardware.
+
+Phase 7.5 is implemented but is not complete until the hardware race matrix
+passes. A successful preparation leaves the reset gate asserted until reboot;
+only then may driver and application Wi-Fi persistence be cleared.
 
 ### Tasks
 
@@ -995,7 +1046,7 @@ an active provisioning credential handoff are still deferred.
 - [x] Detect long press, for example 5 seconds.
 - [x] Erase Wi-Fi config from NVS.
 - [x] Restart provisioning mode.
-- [ ] Display reset confirmation/status on LVGL.
+- [x] Display reset confirmation/status on LVGL.
 
 ### Done Criteria
 
@@ -1848,7 +1899,7 @@ Use this section to track daily/weekly progress.
 | 4 | Firebase upload | Done |  | 2026-07-19 | Hardware upload, Firebase data, failure handling, and LCD Cloud status accepted. |
 | 5 | NVS config storage | Done |  | 2026-07-26 | Persistence, integrity, migration, and recovery tests accepted. |
 | 6 | BLE provisioning | In progress |  |  | Phase 6.4 implemented; final A-N hardware acceptance pending. |
-| 7 | Factory reset | In progress |  |  | Phases 7.1-7.3 configured-runtime erase/reboot/reprovision/IPv4 recovery hardware-accepted; reset UI and active-provisioning coordination remain pending. |
+| 7 | Factory reset | In progress |  |  | Phases 7.1-7.3 hardware-accepted; Phases 7.4-7.5 are implemented with hardware acceptance pending. |
 | 8 | Reconnect + retry | In progress |  |  | Wi-Fi/cloud recovery implemented; final target-hardware recovery and endurance acceptance pending. |
 | 9 | Portfolio polish | Not started |  |  |  |
 | 10 | Audio hardware validation | Proposed / Not started |  |  | New optional voice syllabus; hardware and GPIO gate. |

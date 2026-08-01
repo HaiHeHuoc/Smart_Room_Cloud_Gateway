@@ -209,6 +209,24 @@ esp_err_t wifi_manager_connect(
 esp_err_t wifi_manager_disconnect(void);
 
 /**
+ * @brief Disconnect a Station connection not yet owned by wifi_manager.
+ *
+ * This is a narrow provisioning-cleanup operation. Call it only after the
+ * provisioning framework has reached STOPPED and its final verified handoff
+ * queue is empty. Unlike wifi_manager_disconnect(), it does not set persistent
+ * manual-disconnect intent, so a later provisioning session may connect.
+ *
+ * The operation is rejected after credentials/reconnect ownership has been
+ * configured or adopted. Completion of an active driver disconnect remains
+ * asynchronous through WIFI_EVENT_STA_DISCONNECTED.
+ *
+ * @return ESP_OK when already inactive or when disconnect was requested,
+ *         ESP_ERR_INVALID_STATE before initialization or for an owned runtime
+ *         connection, or another ESP-IDF Wi-Fi error.
+ */
+esp_err_t wifi_manager_discard_unmanaged_connection(void);
+
+/**
  * @brief Erase persistent Wi-Fi settings owned by the ESP-IDF driver.
  *
  * The provisioning framework temporarily uses WIFI_STORAGE_FLASH and can

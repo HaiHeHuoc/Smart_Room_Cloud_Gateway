@@ -86,5 +86,7 @@ accepted checkpoint covers GPIO 9 active-low polling, 40 ms debounce, single
 press/release events, one long-press event after approximately 5 seconds, and
 continued startup of unrelated services.
 
-Factory-reset execution, NVS clearing, provisioning restart, and LVGL reset
-confirmation remain deferred to later Sprint 7 checkpoints.
+Those actions remain outside `button_manager`. Persistent reset execution was
+added in Phase 7.3 and LVGL reset confirmation in Phase 7.4; active-provisioning
+reset arbitration is implemented by Phase 7.5 in `app_network_coordinator`;
+hardware race acceptance remains pending.

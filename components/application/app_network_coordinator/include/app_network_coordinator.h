@@ -99,10 +99,13 @@ typedef struct
     uint32_t provisioning_timeout_ms;
 
     /**
-     * @brief Additional wait for an in-flight provisioning Wi-Fi connection.
+     * @brief Maximum time for one received credential handoff to obtain IPv4.
      *
-     * This grace is used only when the main provisioning deadline expires
-     * after valid credentials have already entered the connection handoff.
+     * The deadline starts when a credential handoff becomes pending. It is
+     * independent of the idle-session deadline, so credentials received near
+     * the end of a session still receive the complete bounded IPv4 window.
+     * On expiry the coordinator quiesces the provisioning framework before
+     * classifying the attempt or starting a replacement session.
      */
     uint32_t provisioning_connection_grace_ms;
 
@@ -125,7 +128,10 @@ typedef struct
     uint32_t provisioning_retry_backoff_ms;
 
     /**
-     * @brief Minimum dwell for TIMEOUT or FAILED before cleanup begins.
+     * @brief Minimum terminal TIMEOUT or FAILED presentation dwell.
+     *
+     * A deadline path may already have quiesced the framework before this
+     * dwell in order to close a concurrent GOT_IP race safely.
      */
     uint32_t provisioning_failure_dwell_ms;
 } app_network_coordinator_config_t;
@@ -137,8 +143,8 @@ typedef struct
  * The configuration is copied. Initialization is accepted only from
  * APP_NETWORK_COORDINATOR_STATE_UNINITIALIZED.
  *
- * @param[in] config Provisioning timeout, connection grace, cleanup polling,
- *                   retry budget, backoff, and failure dwell configuration.
+ * @param[in] config Idle-session timeout, pending-handoff IPv4 deadline,
+ *                   cleanup polling, retry budget/backoff, and failure dwell.
  *
  * @return
  * - ESP_OK: Coordinator initialized and entered READY.
@@ -185,6 +191,42 @@ const char *app_network_coordinator_state_to_string(
  *         coordinator is READY, or ESP_ERR_NO_MEM when task creation fails.
  */
 esp_err_t app_network_coordinator_start(void);
+
+/**
+ * @brief Quiesce network provisioning before a factory-reset transaction.
+ *
+ * This synchronous task-context API atomically prevents new provisioning
+ * session starts and credential handoff claims, then waits for any operation
+ * already holding the reset-exclusion claim to finish. An ACTIVE provisioning
+ * service is asked to stop, and STARTING/STOPPING lifecycle transitions are
+ * polled with a finite delay until the framework can no longer produce a new
+ * credential handoff.
+ *
+ * ESP_OK is a terminal handoff to the reset coordinator: the reset gate stays
+ * asserted until reboot. The caller may then clear driver-owned persistence
+ * and application Wi-Fi configuration. If preparation fails, a gate claimed
+ * by that call is rolled back; this function never erases configuration,
+ * calls Wi-Fi reset APIs, allocates resources, creates a task, or calls LVGL.
+ *
+ * The API is not ISR-safe and must not be called concurrently. The
+ * app_reset_coordinator task is its sole application owner.
+ *
+ * @param[in] timeout_ms Non-zero total preparation deadline. It must convert
+ *                       to at least one FreeRTOS tick and must not exceed the
+ *                       coordinator's supported timing bound.
+ *
+ * @return
+ * - ESP_OK: Provisioning cannot start or produce another credential handoff
+ *   before reboot, and no credential persistence transaction is active.
+ * - ESP_ERR_INVALID_ARG: @p timeout_ms is zero, unrepresentable, or too large.
+ * - ESP_ERR_INVALID_STATE: Coordinator is not initialized or safe lifecycle
+ *   proof is unavailable.
+ * - ESP_ERR_TIMEOUT: The reset-exclusion claim or provisioning cleanup did
+ *   not become safe before the deadline.
+ * - Other ESP-IDF errors returned while inspecting or stopping provisioning.
+ */
+esp_err_t app_network_coordinator_prepare_for_factory_reset(
+    uint32_t timeout_ms);
 
 /**
  * @brief Notify the coordinator of one runtime Wi-Fi state event.

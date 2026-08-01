@@ -21,16 +21,19 @@ adds verified success routing.
 Phase 6.4.5 makes provisioning status, QR updates, and QR invalidation
 generation-aware so delayed messages from an old session cannot corrupt the
 new session's screen model.
+Phase 7.4 adds a modal factory-reset result screen plus an exact,
+transaction-aware presentation acknowledgment for controlled restart timing.
 
 ## Application Screens
 
-| Screen ID | Phase 6.4.1 role |
+| Screen ID | Current role |
 |---|---|
 | `APP_GUI_SCREEN_NONE` | Internal state before the first successful route; never a public request target. |
 | `APP_GUI_SCREEN_BOOT` | Static `Smart Gateway` / `Starting...` placeholder. |
 | `APP_GUI_SCREEN_PROVISIONING` | Stable provisioning layout with a scannable QR code, instruction/status labels, and state indicator. |
 | `APP_GUI_SCREEN_WIFI_STATUS` | Existing Wi-Fi mode, SSID, and IPv4 screen. |
 | `APP_GUI_SCREEN_SENSOR_DASHBOARD` | Existing sensor dashboard with Wi-Fi and cloud summaries. |
+| `APP_GUI_SCREEN_RESET_RESULT` | Factory-reset success or failure result; entered only through `app_gui_show_reset_result()`. |
 
 The old `APP_GUI_SCREEN_WIFI` and `APP_GUI_SCREEN_SENSOR` identifiers were
 renamed directly. No compatibility aliases are retained.
@@ -39,7 +42,8 @@ renamed directly. No compatibility aliases are retained.
 
 `app_gui_init()` creates all queues as one initialization transaction:
 
-- Command queue: length 8, carrying copied screen requests only.
+- Command queue: length 8, carrying copied screen requests and copied
+  reset-result commands.
 - Provisioning status queue: length 1, newest complete snapshot overwrites the
   pending value.
 - Provisioning QR queue: length 1, newest payload-or-unavailable message
@@ -63,11 +67,20 @@ handles return to `NULL`, and `app_gui_init()` returns `ESP_ERR_NO_MEM`.
 | `app_gui_post_wifi_status()` | Replace the pending Wi-Fi model without calling LVGL. |
 | `app_gui_post_sensor_status()` | Queue a sensor model without calling LVGL. |
 | `app_gui_post_cloud_status()` | Replace the pending cloud model without calling LVGL. |
+| `app_gui_show_reset_result()` | Validate, copy, and enqueue one reset result without calling LVGL. |
+| `app_gui_is_reset_result_presented()` | Non-blockingly inspect whether the exact transaction completed a GUI presentation cycle. |
 
 `app_gui_request_screen()` is safe from normal task and task-context callback
 code. It does not wait for construction and is not ISR-safe. `ESP_OK` means
 only that the command was queued. It returns `ESP_ERR_TIMEOUT` when the command
-queue is full.
+queue is full. The generic request API rejects `APP_GUI_SCREEN_RESET_RESULT`;
+only a validated reset-result command may enter that screen.
+
+`app_gui_show_reset_result()` follows the same copied, zero-wait producer
+contract. `SUCCESS` is valid only with `ESP_OK`; `FAILED` requires a non-OK
+error. `app_gui_is_reset_result_presented()` reads a transaction ID under the
+short GUI state critical section and never waits, takes the LVGL mutex, or
+calls LVGL.
 
 `app_gui_post_provisioning_status()` uses `xQueueOverwrite()` on its dedicated
 length-one queue. Rapid progress can coalesce, but an older state can never
@@ -96,6 +109,7 @@ drain screen commands in FIFO order
 -> take LVGL mutex
 -> lv_timer_handler()
 -> release LVGL mutex
+-> acknowledge the latest matching reset transaction rendered in this pass
 ```
 
 `app_gui_activate_screen()` is the only normal-runtime writer of the
@@ -103,14 +117,14 @@ authoritative active-screen ID. For each non-duplicate request it:
 
 1. Keeps the current root loaded.
 2. Creates and builds a separate target root.
-3. Preserves the current root and widget references if target construction or
-   Wi-Fi timer allocation fails.
-4. Loads the target only after successful construction.
-5. Updates the active-screen ID only after the target is valid.
-6. Pauses timers that belong to inactive screens.
-7. Replaces every widget reference with the new screen's references.
-8. Renders the latest cached model for the target.
-9. Deletes the previous inactive root.
+3. Renders the latest cached model into the completed target root.
+4. Preserves the current root and restores its widget references if target
+   construction, cached rendering, or Wi-Fi timer allocation fails.
+5. Loads the target only after construction and rendering succeed.
+6. Updates the active-screen ID only after the target is valid.
+7. Pauses timers that belong to inactive screens.
+8. Keeps the new screen's widget references and deletes the previous inactive
+   root.
 
 A request for the already-active screen is accepted but does not rebuild the
 screen or restart its timer. Cached data may be rendered again.
@@ -145,6 +159,7 @@ The GUI retains the latest complete:
 - `ui_wifi_status_t` plus an availability flag;
 - `ui_sensor_status_t` plus an availability flag;
 - `ui_cloud_status_t` plus an availability flag.
+- `ui_reset_status_t` plus an availability flag.
 
 It also retains the newest accepted provisioning generation. A strictly newer
 generation clears both old provisioning caches before its first status or QR
@@ -161,6 +176,7 @@ Status events never choose a screen:
   `SENSOR_DASHBOARD`.
 - Sensor updates render only on `SENSOR_DASHBOARD`.
 - Cloud updates render only on `SENSOR_DASHBOARD`.
+- Reset results render only through the reset-result command and screen.
 - Updates received for inactive screens only refresh cached models and never
   touch deleted LVGL pointers.
 
@@ -169,6 +185,37 @@ Entering `PROVISIONING` renders the latest provisioning model, or the default
 payload when available. Entering `WIFI_STATUS` renders the latest Wi-Fi model.
 Entering
 `SENSOR_DASHBOARD` renders the latest sensor, Wi-Fi summary, and cloud models.
+
+## Phase 7.4 Reset Result UI
+
+The reset coordinator supplies a non-zero boot-local transaction ID with every
+terminal reset result. The command queue copies the complete result. Only the
+UI task validates its cached copy, creates or updates the reset screen, and
+touches LVGL objects.
+
+```text
+validated reset result
+    -> render status into a complete target root
+    -> load RESET_RESULT and lock ordinary routing
+    -> run the following lv_timer_handler() pass
+    -> publish acknowledgment for the exact transaction ID
+```
+
+Success shows `Wi-Fi cleared` and `Restarting into setup...` in green. Failure
+shows `Reset failed`, the non-sensitive `esp_err_t` name, and a release/retry
+instruction in red. Both results are modal: ordinary screen commands are
+ignored, while a newer reset-result command remains allowed so a failed attempt
+can be replaced after release and retry.
+
+`presented` means that the matching content was applied to valid LVGL objects
+and the next `lv_timer_handler()` call returned. It is not a physical LCD
+transfer acknowledgment. The reset coordinator waits at most 500 ms for this
+signal, holds confirmed success for 1500 ms, and otherwise uses its finite
+500 ms reboot fallback. Queue, construction, or acknowledgment failure cannot
+suppress reboot after persistent cleanup has been verified. A storage failure
+never reboots.
+
+**Phase 7.4 is implemented and build-verified; hardware acceptance is pending.**
 
 ## Provisioning UI And QR
 
@@ -311,6 +358,7 @@ It posts screen requests but never renders or calls LVGL.
 | Sensor status update | Cache/render only; no implicit screen change |
 | Cloud status update | Cache/render only; no implicit screen change |
 | Wi-Fi screen timeout | Explicit deferred `SENSOR_DASHBOARD` request |
+| Reset result | Dedicated copied command -> modal `RESET_RESULT`; ordinary routing remains blocked, while a newer reset result may replace the current one before verified success reboots |
 
 While the coordinator remains in `PROVISIONING`, association, DHCP, and
 disconnect events update only the provisioning model. They cannot promote the
@@ -324,6 +372,8 @@ BLE cleanup, and connection adoption, the coordinator posts `SUCCESS`, waits
 - Invalid or `NONE` screen requests return `ESP_ERR_INVALID_ARG`.
 - NULL or invalid provisioning status returns `ESP_ERR_INVALID_ARG`.
 - NULL, empty, or unterminated QR payload returns `ESP_ERR_INVALID_ARG`.
+- A zero reset transaction ID or inconsistent reset state/error pair returns
+  `ESP_ERR_INVALID_ARG`.
 - Requests before `app_gui_init()` return `ESP_ERR_INVALID_STATE`.
 - A full command queue returns `ESP_ERR_TIMEOUT`.
 - Provisioning status and QR queues use length-one overwrite; an unexpected
@@ -334,7 +384,10 @@ BLE cleanup, and connection adoption, the coordinator posts `SUCCESS`, waits
   never prints the payload.
 - Target construction failure is logged by the UI task and leaves the
   previously visible screen and active-screen ID unchanged.
-- Screen failures do not reboot the device or change network policy.
+- Screen failures do not themselves trigger or suppress reboot and do not
+  change network policy.
+- Reset-screen failure leaves the previous root and widget references valid;
+  the reset coordinator owns the finite reboot fallback.
 
 ## Initialization Order
 
@@ -478,6 +531,20 @@ Run any temporary state driver outside the UI task, call only public
     new QR and `WAITING_FOR_PHONE`.
 14. Exhaust all configured sessions; verify the final QR stays hidden and the
     final `TIMEOUT` or `FAILED` remains visible on the Provisioning Screen.
+15. From normal configured runtime, hold the reset button; verify the green
+    reset-success screen appears before reboot and remains readable for about
+    1500 ms after its presentation acknowledgment.
+16. Inject driver cleanup, application clear, and verification failures one at
+    a time; verify the red failure result, no reboot, and re-arm only after
+    button release.
+17. Fill the GUI command queue or inject reset-screen construction failure;
+    after verified persistent cleanup, verify the bounded fallback still
+    reboots without a watchdog or reset loop.
+18. After a displayed failure, release and long-press again; verify the newer
+    transaction replaces the old result and only its exact acknowledgment can
+    select the 1500 ms dwell.
+19. Repeat successful and failed cycles while monitoring UI-task stack and
+    heap minima; verify no stale pointer, LVGL assertion, or growth trend.
 
 ## Phase 6.4.7 Closure Status
 
