@@ -127,20 +127,6 @@ typedef struct
 } provisioning_manager_progress_status_t;
 
 /**
- * @brief Non-sensitive identity and state of the current credential handoff.
- *
- * @p credential_generation increments for every valid credential set received
- * in one provisioning-manager lifecycle. It lets a polling coordinator detect
- * a fast failed-attempt-to-new-attempt transition even when @p pending is true
- * in both observations.
- */
-typedef struct
-{
-    bool pending;
-    uint32_t credential_generation;
-} provisioning_manager_wifi_handoff_status_t;
-
-/**
  * @brief Task-context callback for provisioning progress.
  *
  * The callback receives a copied snapshot and is invoked outside the manager's
@@ -285,9 +271,10 @@ esp_err_t provisioning_manager_get_state(
  * @brief Check whether a credential-to-connection handoff is in progress.
  *
  * The result becomes true after valid credentials are received and remains
- * true while the framework connects or until verified credentials are
- * consumed by provisioning_manager_receive_wifi_credentials(). A failed
- * connection clears it.
+ * true while the framework connects, during an explicitly armed post-STOPPED
+ * late handoff, or until verified credentials are consumed by
+ * provisioning_manager_receive_wifi_credentials(). A failed connection or
+ * explicit late discard clears it.
  *
  * This API returns only progress metadata and never exposes credential data.
  * It is thread-safe and does not block on provisioning events.
@@ -303,20 +290,78 @@ esp_err_t provisioning_manager_is_wifi_handoff_pending(
     bool *handoff_pending);
 
 /**
- * @brief Copy the current credential-handoff state and monotonic identity.
+ * @brief Retain the active session's unverified credentials across teardown.
  *
- * The snapshot contains no SSID or password. A non-zero generation identifies
- * the latest valid credential set received in the current provisioning
- * lifecycle; it remains unchanged when that attempt completes or fails.
- * This API is thread-safe and non-blocking.
+ * This narrow recovery API is used only when the normal provisioning session
+ * and its IPv4 grace have expired while a credential handoff is still
+ * pending. It binds the retained RAM-only credential copy to
+ * @p session_generation so asynchronous framework cleanup can preserve it for
+ * one bounded post-STOPPED DHCP reconciliation window.
  *
- * @param[out] status Destination for the copied handoff snapshot.
+ * No credential becomes application-visible and nothing is persisted by this
+ * operation. Calling it for the same generation is idempotent. It also
+ * succeeds when the handoff has concurrently advanced to the verified queue,
+ * allowing the caller to reconcile that queue after teardown.
  *
- * @return ESP_OK, ESP_ERR_INVALID_ARG when @p status is NULL, or
- *         ESP_ERR_INVALID_STATE before the credential queue is initialized.
+ * @param[in] session_generation Expected non-zero active session identity.
+ *
+ * @return
+ * - ESP_OK: Late handoff retention was armed or verification already won the
+ *   boundary race.
+ * - ESP_ERR_INVALID_ARG: @p session_generation is zero.
+ * - ESP_ERR_INVALID_STATE: The generation does not match, no handoff is
+ *   pending, or the lifecycle cannot be reconciled safely.
  */
-esp_err_t provisioning_manager_get_wifi_handoff_status(
-    provisioning_manager_wifi_handoff_status_t *status);
+esp_err_t provisioning_manager_arm_late_wifi_handoff(
+    uint32_t session_generation);
+
+/**
+ * @brief Promote a retained late handoff after independent IPv4 verification.
+ *
+ * Valid only after provisioning cleanup has reached STOPPED. The supplied
+ * connected SSID is compared exactly with the generation-bound pending SSID.
+ * On a match, the retained credential copy is moved to the same verified queue
+ * consumed by provisioning_manager_receive_wifi_credentials(). The password
+ * remains internal and RAM-only until the application consumes that queue.
+ *
+ * This function must be called from task context, not from an ISR. The caller
+ * must serialize it with factory-reset preparation through the application
+ * reset-exclusion policy.
+ *
+ * @param[in] session_generation Expected non-zero retained session identity.
+ * @param[in] connected_ssid Null-terminated SSID reported by the Wi-Fi owner
+ *                           for the Station connection that has IPv4.
+ *
+ * @return
+ * - ESP_OK: SSID matched and credentials were queued as verified.
+ * - ESP_ERR_INVALID_ARG: An argument is invalid or the SSID is malformed.
+ * - ESP_ERR_INVALID_STATE: No matching STOPPED late handoff is retained.
+ * - ESP_ERR_INVALID_RESPONSE: The connected SSID does not match the retained
+ *   credential set.
+ * - ESP_FAIL: The verified queue could not accept the credential copy.
+ */
+esp_err_t provisioning_manager_confirm_late_wifi_handoff(
+    uint32_t session_generation,
+    const char *connected_ssid);
+
+/**
+ * @brief Securely discard one retained generation-bound late handoff.
+ *
+ * This operation zeroizes only an explicitly armed, unverified RAM credential
+ * copy. It is valid during or after teardown so timeout, cleanup-error, and
+ * factory-reset paths can remove sensitive data without waiting for another
+ * framework event. Verified queue data remains owned by
+ * provisioning_manager_receive_wifi_credentials() and must be drained
+ * separately.
+ *
+ * @param[in] session_generation Expected non-zero retained session identity.
+ *
+ * @return ESP_OK when the matching retained copy was zeroized,
+ *         ESP_ERR_INVALID_ARG for generation zero, or ESP_ERR_INVALID_STATE
+ *         when no matching armed late handoff exists.
+ */
+esp_err_t provisioning_manager_discard_late_wifi_handoff(
+    uint32_t session_generation);
 
 /**
  * @brief Wait for and copy the latest provisioned Wi-Fi credentials.

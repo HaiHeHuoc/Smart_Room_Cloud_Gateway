@@ -92,7 +92,11 @@ app_network_coordinator task
     -> connect stored credentials or run bounded BLE provisioning
     -> after BLE starts, copy its exact QR JSON into the GUI QR queue
     -> publish real progress through the GUI latest-value status queue
-    -> persist/verify, stop/deinitialize BLE, and adopt the active connection
+    -> if the pending handoff exhausts its IPv4 grace, stop/deinitialize BLE
+    -> allow the associated Station one bounded 5-second DHCP settle window
+    -> accept only a matching active SSID plus a valid IPv4 address
+    -> persist/verify and adopt only the confirmed active connection
+    -> on failure, zeroize credentials and wait up to 5 seconds for Station detach
     -> clear session QR, show SUCCESS for 1500 ms, request WIFI_STATUS
     -> publish CONNECTING or ONLINE readiness for deferred cloud startup
 
@@ -124,24 +128,32 @@ cannot post into an uninitialized cloud component.
   `devices/esp32s3-001/latest.json` in Firebase Realtime Database.
 - Wi-Fi credentials are loaded from `config_manager`; production code contains
   no hard-coded Wi-Fi SSID/password fallback.
-- BLE provisioning allows 120 seconds for an idle phone session. Every pending
-  credential handoff receives its own 30-second IPv4 deadline. On either
-  timeout the coordinator reaches framework `STOPPED` before a final verified
-  queue drain. If that drain is empty, the unadopted Station attempt is
-  detached before a replacement session, so timeout and late `GOT_IP` cannot
-  produce conflicting outcomes or leave association stuck without IPv4.
+- BLE provisioning allows 120 seconds for one phone/session attempt. A Wi-Fi
+  handoff still pending at that boundary receives one additional 30-second IPv4
+  grace. If IPv4 is still pending, the coordinator stops and deinitializes BLE,
+  drains the final verified handoff, and gives the already-associated Station a
+  bounded 5-second DHCP settle window. Credentials are accepted only when the
+  active Station SSID matches the candidate SSID and a valid IPv4 address is
+  present. Failure zeroizes the candidate, requests Station detach, and waits
+  up to 5 seconds for `DISCONNECTED`/`READY` before retry.
 - BLE provisioning allows at most three sessions including the initial
   session. Retryable terminal failures dwell for 1000 ms, clean fully to
   `STOPPED`, then use a 1500 ms `RETRYING` backoff before a new generation.
 - BLE provisioning uses NimBLE, Security 1, five framework connection
   attempts, and the Espressif `v1`/`ble` QR schema.
 - Provisioning progress uses dedicated generation-aware length-one overwrite
-  queues. A normal credential failure leaves the same BLE session and QR
-  available and does not consume the session retry budget.
-- `sdkconfig.defaults` enables the 16 MB N16 flash layout, the custom
-  partition table, BT/NimBLE, Security 1 support, required LVGL fonts, runtime
-  statistics, the LVGL QR widget, and full cross-signed CA-bundle verification
-  for current Google/Firebase TLS chains.
+  queues. A credential failure is again a non-terminal coordinator progress
+  event, matching `e66adb3`; bounded session timeout still owns cleanup/retry.
+- `sdkconfig.defaults` targets the N16R8 board: 16 MB flash plus 8 MiB Octal
+  PSRAM at 80 MHz. NimBLE's dynamic pools explicitly use the external-memory
+  allocator. Ordinary allocations larger than 16 KB also prefer PSRAM, while
+  32 KB of internal heap is reserved for internal/DMA-capable requests.
+  Wi-Fi/lwIP is not explicitly redirected with
+  `CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP`; LCD DMA buffers and Phase 7 task
+  stacks are not moved to PSRAM.
+  The same defaults also enable the custom partition table, Security 1,
+  required LVGL fonts, runtime statistics, the LVGL QR widget, and full
+  cross-signed CA-bundle verification for current Google/Firebase TLS chains.
 - The one-shot network coordinator task uses a 6 KB stack at priority 4.
 - The 12 KB cloud task is allocated only after stored connection startup or
   successful provisioning cleanup and adoption.
@@ -258,9 +270,9 @@ idf.py -p <PORT> flash monitor
   cross-phase regression matrix remains pending.
 - Phase 6.4.4 real provisioning progress and verified success routing are
   implemented and build-verified. Hardware acceptance is pending for wrong
-  credentials in the same BLE session, timeout cleanup, real-state visibility,
-  the 1500 ms success dwell, and final dashboard routing. Phase 6.4 remains
-  incomplete.
+  credentials followed by a clean replacement session, timeout cleanup,
+  real-state visibility, the 1500 ms success dwell, and final dashboard
+  routing. Phase 6.4 remains incomplete.
 - Phase 6.4.5 bounded same-boot provisioning recovery is implemented with
   hardware testing pending. Static validation covers the three-session budget,
   `STOPPED -> READY` reinitialization, queue reuse/reset, generation filtering,
@@ -296,9 +308,21 @@ idf.py -p <PORT> flash monitor
   after button release.
 - Phase 7.5 active-provisioning reset coordination is implemented and
   build-verified, with hardware acceptance pending. A 10-second bounded
-  preparation closes the
-  reset gate and quiesces provisioning before either persistent Wi-Fi layer is
-  cleared; failure clears nothing and suppresses reboot.
+  preparation closes the reset gate, quiesces provisioning, drains a verified
+  handoff that lost the reset race, disables reconnect, and confirms Station
+  detach before either persistent Wi-Fi layer is cleared; failure clears
+  nothing and suppresses reboot.
+- The current DHCP/network hardening preserves the `e66adb3` ownership
+  boundary: ESP-NETIF remains the only DHCP lifecycle owner and `wifi_manager`
+  serializes connect, disconnect, detach, and driver-restore operations. On a
+  grace-expired handoff, the coordinator now reaches clean BLE `STOPPED`,
+  deinitializes NimBLE, drains the final credential copy, and allows a bounded
+  5-second DHCP settle before validating matching SSID plus IPv4. Failed
+  validation securely clears the credential copy and detaches the unadopted
+  Station. The Phase 7 reset gate, reset exclusion, quiescence, and non-erasing
+  failure policy remain intact. The change is build-verified only; current
+  target-hardware regression acceptance is still pending and is not implied by
+  the earlier Phase 7.3 one-run acceptance.
 - Never log or commit passwords, ID tokens, refresh tokens, service-account
   keys, or Firebase administrator credentials.
 

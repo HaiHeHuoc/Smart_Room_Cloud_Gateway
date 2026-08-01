@@ -28,11 +28,14 @@
 #define APP_NETWORK_COORDINATOR_SUCCESS_DWELL_MS \
     1500U
 
+#define APP_NETWORK_COORDINATOR_LATE_DHCP_SETTLE_MS \
+    5000U
+
+#define APP_NETWORK_COORDINATOR_UNMANAGED_DETACH_TIMEOUT_MS \
+    5000U
+
 #define APP_NETWORK_COORDINATOR_STORED_WIFI_BOOT_GRACE_MS \
     (60U * 1000U)
-
-#define APP_NETWORK_COORDINATOR_WIFI_DETACH_TIMEOUT_MS \
-    5000U
 
 #define APP_NETWORK_COORDINATOR_MAX_SESSIONS \
     10U
@@ -64,7 +67,6 @@ typedef struct
 {
     app_provisioning_result_t result;
     esp_err_t error;
-    bool cleanup_complete;
 } app_provisioning_attempt_outcome_t;
 
 /* Static Variables --------------------------------------------------------- */
@@ -169,30 +171,18 @@ static esp_err_t app_cleanup_provisioning_session(
     uint32_t session_generation);
 
 /**
- * @brief Detach a provisioning Station attempt after its outcome boundary.
+ * @brief Wait for verified credentials across session, grace, and late DHCP.
  *
- * Call only after provisioning has reached STOPPED and the final verified
- * credential queue drain is empty. The finite wait prevents a late driver
- * event from overlapping the next provisioning session.
- *
- * @return ESP_OK after WIFI_MANAGER_STATE_DISCONNECTED is observed,
- *         ESP_ERR_NOT_FINISHED if the finite detach wait expires, or an error
- *         from wifi_manager.
- */
-static esp_err_t app_discard_unmanaged_wifi_connection(void);
-
-/**
- * @brief Wait for verified credentials with a bounded per-handoff IP wait.
- *
- * If an in-flight credential handoff reaches its deadline, this function
- * first stops and deinitializes the provisioning framework, then performs one
- * final non-blocking queue drain. That ordering gives a concurrent GOT_IP a
- * deterministic outcome without disconnecting a framework-owned attempt.
+ * The normal wait keeps the e66 session/grace ordering. If the bounded grace
+ * expires with a pending handoff, this helper closes the final queue race,
+ * arms generation-bound RAM retention, claims reset exclusion, cleans the
+ * provisioning framework to STOPPED, and allows one short reset-aware Station
+ * IPv4 settle. A matching late connection is returned through the ordinary
+ * verified credential queue; every other late exit securely discards it.
  *
  * @param[in] session_generation Active non-zero session identity.
  * @param[out] credentials Verified credential destination.
- * @param[out] cleanup_complete True when this function already reached
- *                              PROVISIONING_MANAGER_STATE_STOPPED.
+ * @param[out] connection_grace_used True when the post-session grace started.
  *
  * @return ESP_OK for verified credentials, ESP_ERR_TIMEOUT for a bounded
  *         timeout, or another lifecycle/queue error.
@@ -200,17 +190,38 @@ static esp_err_t app_discard_unmanaged_wifi_connection(void);
 static esp_err_t app_wait_for_verified_provisioning_credentials(
     uint32_t session_generation,
     provisioning_manager_wifi_credentials_t *credentials,
-    bool *cleanup_complete);
+    bool *connection_grace_used);
 
 /**
- * @brief Reclaim terminal BLE memory without changing the network outcome.
+ * @brief Securely remove every late-handoff credential copy.
  *
- * The provisioning manager enforces STOPPED/controller-idle safety. Any
- * remaining release failure is diagnostic only because persistence,
- * connection, and adoption results have independent ownership.
- *
- * @param[in] context Non-sensitive lifecycle context for diagnostics.
+ * Verified queue data is drained into a temporary zeroized buffer. An armed
+ * unverified copy is discarded through its generation-bound manager API.
+ * Optionally requests detachment of the unmanaged Station only after the
+ * provisioning framework is known STOPPED.
  */
+static esp_err_t app_discard_late_provisioning_handoff(
+    uint32_t session_generation,
+    bool detach_unmanaged_station);
+
+/**
+ * @brief Request unmanaged Station detach and wait for its asynchronous event.
+ *
+ * The wait is finite and reset-aware so a replacement provisioning session
+ * never starts while the previous Station disconnect is still in flight.
+ */
+static esp_err_t app_detach_unmanaged_provisioning_station(void);
+
+/**
+ * @brief Stop BLE and reconcile a DHCP result arriving just after teardown.
+ *
+ * Called only after the normal connection grace expires with a pending
+ * handoff. This function owns reset exclusion for its complete teardown and
+ * settle transaction and releases it before returning.
+ */
+static esp_err_t app_reconcile_late_provisioning_handoff(
+    uint32_t session_generation,
+    provisioning_manager_wifi_credentials_t *credentials);
 static void app_release_terminal_ble_memory_best_effort(
     const char *context);
 
@@ -840,8 +851,8 @@ static void app_provisioning_progress_callback(
 
         case PROVISIONING_MANAGER_PROGRESS_WIFI_CREDENTIAL_FAILED:
             /*
-             * A normal credential failure is not terminal for the BLE
-             * session. Keep the QR cache valid so the phone can retry.
+             * Match e66adb3: a credential rejection is not promoted to the
+             * coordinator's terminal lifecycle failure path.
              */
             app_publish_provisioning_status(
                 status->session_generation,
@@ -851,11 +862,11 @@ static void app_provisioning_progress_callback(
             break;
 
         case PROVISIONING_MANAGER_PROGRESS_WIFI_CONNECTED:
-            /*
-             * The coordinator task advances to SAVING_CONFIG after consuming
-             * the verified credential queue. Publishing here can race that
-             * task and overwrite a causally newer GUI state.
-             */
+            app_publish_provisioning_status(
+                status->session_generation,
+                UI_PROVISIONING_STATE_WAITING_FOR_IP,
+                status->last_error,
+                0U);
             break;
 
         case PROVISIONING_MANAGER_PROGRESS_STOPPING:
@@ -992,7 +1003,94 @@ static esp_err_t app_cleanup_provisioning_session(
         s_config.provisioning_timeout_ms);
 }
 
-static esp_err_t app_discard_unmanaged_wifi_connection(void)
+static esp_err_t app_discard_late_provisioning_handoff(
+    uint32_t session_generation,
+    bool detach_unmanaged_station)
+{
+    esp_err_t result = ESP_OK;
+    provisioning_manager_wifi_credentials_t queued_credentials = {0};
+
+    const esp_err_t receive_ret =
+        provisioning_manager_receive_wifi_credentials(
+            &queued_credentials,
+            0U);
+
+    app_zeroize(
+        &queued_credentials,
+        sizeof(queued_credentials));
+
+    if ((receive_ret != ESP_OK) &&
+        (receive_ret != ESP_ERR_TIMEOUT))
+    {
+        result = receive_ret;
+    }
+
+    const esp_err_t discard_ret =
+        provisioning_manager_discard_late_wifi_handoff(
+            session_generation);
+
+    if ((discard_ret != ESP_OK) &&
+        (discard_ret != ESP_ERR_INVALID_STATE) &&
+        (result == ESP_OK))
+    {
+        result = discard_ret;
+    }
+
+    /*
+     * Close a verified-queue producer that was already outside the manager
+     * lock when the first drain ran. Once STOPPED this second drain is final;
+     * before STOPPED, discarding an armed pending copy prevents later success
+     * from producing credentials.
+     */
+    const esp_err_t final_receive_ret =
+        provisioning_manager_receive_wifi_credentials(
+            &queued_credentials,
+            0U);
+
+    app_zeroize(
+        &queued_credentials,
+        sizeof(queued_credentials));
+
+    if ((final_receive_ret != ESP_OK) &&
+        (final_receive_ret != ESP_ERR_TIMEOUT) &&
+        (result == ESP_OK))
+    {
+        result = final_receive_ret;
+    }
+
+    bool handoff_pending = false;
+    const esp_err_t pending_ret =
+        provisioning_manager_is_wifi_handoff_pending(
+            &handoff_pending);
+
+    if ((pending_ret != ESP_OK) &&
+        (result == ESP_OK))
+    {
+        result = pending_ret;
+    }
+    else if (handoff_pending &&
+             (result == ESP_OK))
+    {
+        result = ESP_ERR_INVALID_STATE;
+    }
+
+    if (detach_unmanaged_station &&
+        !handoff_pending)
+    {
+        const esp_err_t detach_ret =
+            app_detach_unmanaged_provisioning_station();
+
+        if ((detach_ret != ESP_OK) &&
+            (result == ESP_OK))
+        {
+            result = detach_ret;
+        }
+    }
+
+    return result;
+}
+
+static esp_err_t app_detach_unmanaged_provisioning_station(void)
 {
     esp_err_t ret =
         wifi_manager_discard_unmanaged_connection();
@@ -1002,80 +1100,345 @@ static esp_err_t app_discard_unmanaged_wifi_connection(void)
         return ret;
     }
 
-    const TickType_t start_tick =
+    const TickType_t detach_start_tick =
         xTaskGetTickCount();
-
-    const TickType_t timeout_ticks =
+    const TickType_t detach_timeout_ticks =
         pdMS_TO_TICKS(
-            APP_NETWORK_COORDINATOR_WIFI_DETACH_TIMEOUT_MS);
-
-    TickType_t poll_ticks =
-        pdMS_TO_TICKS(
-            s_config.provisioning_poll_period_ms);
-
-    if (poll_ticks > timeout_ticks)
-    {
-        poll_ticks = timeout_ticks;
-    }
+            APP_NETWORK_COORDINATOR_UNMANAGED_DETACH_TIMEOUT_MS);
 
     while (true)
     {
-        wifi_manager_status_t status = {0};
+        if (app_is_factory_reset_requested())
+        {
+            return ESP_ERR_NOT_ALLOWED;
+        }
+
+        wifi_manager_status_t wifi_status = {0};
 
         ret =
             wifi_manager_get_status(
-                &status);
+                &wifi_status);
 
         if (ret != ESP_OK)
         {
             return ret;
         }
 
-        if (status.state ==
-            WIFI_MANAGER_STATE_DISCONNECTED)
+        if ((wifi_status.state ==
+             WIFI_MANAGER_STATE_DISCONNECTED) ||
+            (wifi_status.state ==
+             WIFI_MANAGER_STATE_READY))
         {
             return ESP_OK;
         }
 
-        const TickType_t now_tick =
-            xTaskGetTickCount();
-
-        if ((TickType_t)(
-                now_tick -
-                start_tick) >=
-            timeout_ticks)
+        if (wifi_status.state ==
+            WIFI_MANAGER_STATE_FAILED)
         {
-            ESP_LOGE(
-                TAG,
-                "Unadopted Station connection did not detach within %lu ms",
-                (unsigned long)
-                    APP_NETWORK_COORDINATOR_WIFI_DETACH_TIMEOUT_MS);
-
-            /*
-             * This is not a retryable provisioning timeout. Starting a new
-             * session while the old driver detach is unresolved would leave
-             * the transient late-GOT_IP guard active across generations.
-             */
-            return ESP_ERR_NOT_FINISHED;
+            return ESP_FAIL;
         }
 
-        vTaskDelay(poll_ticks);
+        const TickType_t elapsed_ticks =
+            (TickType_t)(
+                xTaskGetTickCount() -
+                detach_start_tick);
+
+        if (elapsed_ticks >= detach_timeout_ticks)
+        {
+            return ESP_ERR_TIMEOUT;
+        }
+
+        const TickType_t remaining_ticks =
+            detach_timeout_ticks - elapsed_ticks;
+        const TickType_t configured_poll_ticks =
+            pdMS_TO_TICKS(
+                s_config.provisioning_poll_period_ms);
+        const TickType_t delay_ticks =
+            (configured_poll_ticks < remaining_ticks)
+                ? configured_poll_ticks
+                : remaining_ticks;
+
+        vTaskDelay(delay_ticks);
     }
+}
+
+static esp_err_t app_reconcile_late_provisioning_handoff(
+    uint32_t session_generation,
+    provisioning_manager_wifi_credentials_t *credentials)
+{
+    if ((session_generation == 0U) ||
+        (credentials == NULL))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_err_t result =
+        app_claim_reset_exclusion();
+
+    if (result != ESP_OK)
+    {
+        return result;
+    }
+
+    bool cleanup_stopped = false;
+    TickType_t settle_start_tick = 0U;
+    const TickType_t settle_timeout_ticks =
+        pdMS_TO_TICKS(
+            APP_NETWORK_COORDINATOR_LATE_DHCP_SETTLE_MS);
+
+    /*
+     * Close the race between the grace-expiry receive and claiming reset
+     * exclusion. A framework GOT_IP that won this boundary remains a normal
+     * verified handoff and does not need late retention.
+     */
+    result =
+        provisioning_manager_receive_wifi_credentials(
+            credentials,
+            0U);
+
+    if (result == ESP_OK)
+    {
+        goto release_success;
+    }
+
+    if (result != ESP_ERR_TIMEOUT)
+    {
+        goto discard_and_release;
+    }
+
+    if (app_is_factory_reset_requested())
+    {
+        result = ESP_ERR_NOT_ALLOWED;
+        goto discard_and_release;
+    }
+
+    result =
+        provisioning_manager_arm_late_wifi_handoff(
+            session_generation);
+
+    if (result != ESP_OK)
+    {
+        /*
+         * One last receive reconciles a success callback that moved the
+         * credential after the preceding queue check but before arm observed
+         * the manager state.
+         */
+        const esp_err_t boundary_receive_ret =
+            provisioning_manager_receive_wifi_credentials(
+                credentials,
+                0U);
+
+        if (boundary_receive_ret == ESP_OK)
+        {
+            result = ESP_OK;
+            goto release_success;
+        }
+
+        if (boundary_receive_ret != ESP_ERR_TIMEOUT)
+        {
+            result = boundary_receive_ret;
+        }
+
+        goto discard_and_release;
+    }
+
+    if (app_is_factory_reset_requested())
+    {
+        result = ESP_ERR_NOT_ALLOWED;
+        goto discard_and_release;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Connection grace expired; stopping BLE before bounded DHCP settle");
+
+    result =
+        app_cleanup_provisioning_session(
+            session_generation);
+
+    if (result != ESP_OK)
+    {
+        goto discard_and_release;
+    }
+
+    cleanup_stopped = true;
+
+    if (app_is_factory_reset_requested())
+    {
+        result = ESP_ERR_NOT_ALLOWED;
+        goto discard_and_release;
+    }
+
+    /*
+     * A normal framework success can finish while asynchronous teardown is in
+     * progress. Prefer that verified queue result before consulting the
+     * retained late copy.
+     */
+    result =
+        provisioning_manager_receive_wifi_credentials(
+            credentials,
+            0U);
+
+    if (result == ESP_OK)
+    {
+        goto release_success;
+    }
+
+    if (result != ESP_ERR_TIMEOUT)
+    {
+        goto discard_and_release;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Provisioning stopped; allowing %lu ms for late DHCP completion",
+        (unsigned long)APP_NETWORK_COORDINATOR_LATE_DHCP_SETTLE_MS);
+
+    settle_start_tick = xTaskGetTickCount();
+
+    while (true)
+    {
+        if (app_is_factory_reset_requested())
+        {
+            result = ESP_ERR_NOT_ALLOWED;
+            goto discard_and_release;
+        }
+
+        wifi_manager_status_t wifi_status = {0};
+
+        result =
+            wifi_manager_get_status(
+                &wifi_status);
+
+        if (result != ESP_OK)
+        {
+            goto discard_and_release;
+        }
+
+        if ((wifi_status.state ==
+             WIFI_MANAGER_STATE_CONNECTED) &&
+            wifi_status.has_ipv4_address)
+        {
+            result =
+                provisioning_manager_confirm_late_wifi_handoff(
+                    session_generation,
+                    wifi_status.ssid);
+
+            if (result != ESP_OK)
+            {
+                goto discard_and_release;
+            }
+
+            result =
+                provisioning_manager_receive_wifi_credentials(
+                    credentials,
+                    0U);
+
+            if (result != ESP_OK)
+            {
+                goto discard_and_release;
+            }
+
+            ESP_LOGI(
+                TAG,
+                "Late DHCP completion reconciled for provisioning "
+                "generation %lu",
+                (unsigned long)session_generation);
+
+            goto release_success;
+        }
+
+        if ((wifi_status.state ==
+             WIFI_MANAGER_STATE_DISCONNECTED) ||
+            (wifi_status.state ==
+             WIFI_MANAGER_STATE_READY) ||
+            (wifi_status.state ==
+             WIFI_MANAGER_STATE_FAILED) ||
+            (wifi_status.state ==
+             WIFI_MANAGER_STATE_RETRY_WAIT))
+        {
+            result = ESP_FAIL;
+            goto discard_and_release;
+        }
+
+        const TickType_t elapsed_ticks =
+            (TickType_t)(
+                xTaskGetTickCount() -
+                settle_start_tick);
+
+        if (elapsed_ticks >= settle_timeout_ticks)
+        {
+            result = ESP_ERR_TIMEOUT;
+            goto discard_and_release;
+        }
+
+        const TickType_t remaining_ticks =
+            settle_timeout_ticks - elapsed_ticks;
+        const TickType_t configured_poll_ticks =
+            pdMS_TO_TICKS(
+                s_config.provisioning_poll_period_ms);
+        const TickType_t delay_ticks =
+            (configured_poll_ticks < remaining_ticks)
+                ? configured_poll_ticks
+                : remaining_ticks;
+
+        vTaskDelay(delay_ticks);
+    }
+
+discard_and_release:
+    {
+        const bool reset_requested =
+            app_is_factory_reset_requested();
+
+        const esp_err_t discard_ret =
+            app_discard_late_provisioning_handoff(
+                session_generation,
+                cleanup_stopped && !reset_requested);
+
+        if ((discard_ret != ESP_OK) &&
+            (result != ESP_ERR_NOT_ALLOWED))
+        {
+            result = discard_ret;
+        }
+    }
+
+    if (app_release_reset_exclusion())
+    {
+        result = ESP_ERR_NOT_ALLOWED;
+    }
+
+    app_zeroize(
+        credentials,
+        sizeof(*credentials));
+
+    return result;
+
+release_success:
+    if (app_release_reset_exclusion())
+    {
+        app_zeroize(
+            credentials,
+            sizeof(*credentials));
+
+        return ESP_ERR_NOT_ALLOWED;
+    }
+
+    return ESP_OK;
 }
 
 static esp_err_t app_wait_for_verified_provisioning_credentials(
     uint32_t session_generation,
     provisioning_manager_wifi_credentials_t *credentials,
-    bool *cleanup_complete)
+    bool *connection_grace_used)
 {
     if ((session_generation == 0U) ||
         (credentials == NULL) ||
-        (cleanup_complete == NULL))
+        (connection_grace_used == NULL))
     {
         return ESP_ERR_INVALID_ARG;
     }
 
-    *cleanup_complete = false;
+    *connection_grace_used = false;
 
     const TickType_t session_start_tick =
         xTaskGetTickCount();
@@ -1084,13 +1447,12 @@ static esp_err_t app_wait_for_verified_provisioning_credentials(
         pdMS_TO_TICKS(
             s_config.provisioning_timeout_ms);
 
-    const TickType_t handoff_timeout_ticks =
+    const TickType_t connection_grace_ticks =
         pdMS_TO_TICKS(
             s_config.provisioning_connection_grace_ms);
 
-    bool handoff_timer_active = false;
-    TickType_t handoff_start_tick = 0U;
-    uint32_t tracked_handoff_generation = 0U;
+    bool connection_grace_active = false;
+    TickType_t connection_grace_start_tick = 0U;
 
     while (true)
     {
@@ -1110,28 +1472,20 @@ static esp_err_t app_wait_for_verified_provisioning_credentials(
         }
 
         /*
-         * Always drain a verified credential first. If reset won before the
-         * handoff claim, the caller will securely clear that copy instead of
-         * persisting it. This also clears the manager's pending-handoff flag.
+         * Preserve Phase 7 reset responsiveness throughout the ordinary wait.
+         * Only an expired pending-handoff grace transfers cleanup to the
+         * bounded late-DHCP reconciliation transaction below.
          */
         if (app_is_factory_reset_requested())
         {
             return ESP_ERR_NOT_ALLOWED;
         }
 
-        bool terminal_error_valid = false;
-        esp_err_t terminal_error = ESP_OK;
         uint32_t active_generation = 0U;
 
         portENTER_CRITICAL(&s_state_lock);
-
-        terminal_error_valid =
-            s_provisioning_terminal_error_valid;
-        terminal_error =
-            s_provisioning_terminal_error;
         active_generation =
             s_active_provisioning_generation;
-
         portEXIT_CRITICAL(&s_state_lock);
 
         if (active_generation != session_generation)
@@ -1139,154 +1493,88 @@ static esp_err_t app_wait_for_verified_provisioning_credentials(
             return ESP_ERR_INVALID_STATE;
         }
 
-        if (terminal_error_valid)
-        {
-            return
-                (terminal_error != ESP_OK)
-                    ? terminal_error
-                    : ESP_FAIL;
-        }
-
-        provisioning_manager_wifi_handoff_status_t handoff_status = {0};
-
-        ret =
-            provisioning_manager_get_wifi_handoff_status(
-                &handoff_status);
-
-        if (ret != ESP_OK)
-        {
-            return ret;
-        }
-
         const TickType_t now_tick =
             xTaskGetTickCount();
 
-        bool handoff_deadline_expired = false;
-
-        if (handoff_status.pending)
+        if (!connection_grace_active)
         {
-            if (!handoff_timer_active ||
-                (tracked_handoff_generation !=
-                 handoff_status.credential_generation))
-            {
-                handoff_timer_active = true;
-                handoff_start_tick = now_tick;
-                tracked_handoff_generation =
-                    handoff_status.credential_generation;
+            const bool session_deadline_expired =
+                ((TickType_t)(
+                     now_tick -
+                     session_start_tick) >=
+                 session_timeout_ticks);
 
-                ESP_LOGI(
-                    TAG,
-                    "Provisioning generation %lu, credential attempt %lu "
-                    "entered bounded Wi-Fi/IP handoff (%lu ms)",
-                    (unsigned long)session_generation,
-                    (unsigned long)tracked_handoff_generation,
-                    (unsigned long)
-                        s_config.provisioning_connection_grace_ms);
+            if (!session_deadline_expired)
+            {
+                continue;
             }
 
-            handoff_deadline_expired =
-                (TickType_t)(
-                    now_tick -
-                    handoff_start_tick) >=
-                handoff_timeout_ticks;
-        }
-        else
-        {
-            /* A failed credential attempt may be retried in the same session. */
-            handoff_timer_active = false;
-            handoff_start_tick = 0U;
-            tracked_handoff_generation = 0U;
-        }
+            bool handoff_pending = false;
 
-        const bool idle_session_deadline_expired =
-            !handoff_status.pending &&
-            ((TickType_t)(
-                 now_tick -
-                 session_start_tick) >=
-             session_timeout_ticks);
+            ret =
+                provisioning_manager_is_wifi_handoff_pending(
+                    &handoff_pending);
 
-        if (!handoff_deadline_expired &&
-            !idle_session_deadline_expired)
-        {
-            continue;
-        }
+            if (ret != ESP_OK)
+            {
+                return ret;
+            }
 
-        if (handoff_deadline_expired)
-        {
+            if (!handoff_pending)
+            {
+                return ESP_ERR_TIMEOUT;
+            }
+
+            connection_grace_active = true;
+            connection_grace_start_tick = now_tick;
+            *connection_grace_used = true;
+
             ESP_LOGW(
                 TAG,
-                "Provisioning generation %lu did not obtain IPv4 within "
-                "%lu ms; quiescing the framework before retry",
+                "Provisioning generation %lu reached its deadline with "
+                "Wi-Fi handoff pending; allowing %lu ms grace",
                 (unsigned long)session_generation,
                 (unsigned long)
                     s_config.provisioning_connection_grace_ms);
-        }
-        else
-        {
-            ESP_LOGW(
-                TAG,
-                "Provisioning generation %lu reached its idle session "
-                "deadline; quiescing the framework before retry",
-                (unsigned long)session_generation);
-        }
 
-        app_publish_provisioning_status(
-            session_generation,
-            UI_PROVISIONING_STATE_CLEANING_UP,
-            ESP_ERR_TIMEOUT,
-            0U);
-
-        ret =
-            app_cleanup_provisioning_session(
-                session_generation);
-
-        if (ret != ESP_OK)
-        {
-            return ret;
-        }
-
-        *cleanup_complete = true;
-
-        /*
-         * STOPPED means the upstream GOT_IP handler is unregistered. A
-         * success that won before that boundary remains queued; a later event
-         * can no longer create a verified handoff.
-         */
-        ret =
-            provisioning_manager_receive_wifi_credentials(
-                credentials,
+            app_publish_provisioning_status(
+                session_generation,
+                UI_PROVISIONING_STATE_WAITING_FOR_IP,
+                ESP_OK,
                 0U);
 
-        if (ret == ESP_OK)
-        {
-            ESP_LOGI(
-                TAG,
-                "Provisioning generation %lu completed at the cleanup "
-                "boundary",
-                (unsigned long)session_generation);
-
-            return ESP_OK;
+            continue;
         }
 
-        if (ret != ESP_ERR_TIMEOUT)
+        if ((TickType_t)(
+                now_tick -
+                connection_grace_start_tick) >=
+            connection_grace_ticks)
         {
-            return ret;
+            /*
+             * Close the grace boundary before arming late retention. If the
+             * framework queued success during the last sliced wait, keep the
+             * ordinary verified path and avoid unnecessary BLE teardown.
+             */
+            ret =
+                provisioning_manager_receive_wifi_credentials(
+                    credentials,
+                    0U);
+
+            if (ret == ESP_OK)
+            {
+                return ESP_OK;
+            }
+
+            if (ret != ESP_ERR_TIMEOUT)
+            {
+                return ret;
+            }
+
+            return app_reconcile_late_provisioning_handoff(
+                session_generation,
+                credentials);
         }
-
-        /*
-         * No success existed when the upstream GOT_IP handler was removed.
-         * Detach the now-ownerless Station attempt before retrying or
-         * exhausting the retry budget.
-         */
-        ret =
-            app_discard_unmanaged_wifi_connection();
-
-        if (ret != ESP_OK)
-        {
-            return ret;
-        }
-
-        return ESP_ERR_TIMEOUT;
     }
 }
 
@@ -1485,7 +1773,6 @@ app_run_one_wifi_provisioning_session(
         .result =
             APP_PROVISIONING_RESULT_NONRETRYABLE_INTERNAL_FAILURE,
         .error = ESP_FAIL,
-        .cleanup_complete = false,
     };
 
     esp_err_t ret =
@@ -1574,11 +1861,13 @@ app_run_one_wifi_provisioning_session(
     provisioning_manager_wifi_credentials_t credentials =
         {0};
 
+    bool connection_grace_used = false;
+
     ret =
         app_wait_for_verified_provisioning_credentials(
             session_generation,
             &credentials,
-            &outcome.cleanup_complete);
+            &connection_grace_used);
 
     if (ret != ESP_OK)
     {
@@ -1616,16 +1905,9 @@ app_run_one_wifi_provisioning_session(
             return outcome;
         }
 
-        if (ret == ESP_ERR_TIMEOUT)
+        if ((ret == ESP_ERR_TIMEOUT) ||
+            connection_grace_used)
         {
-            if (outcome.cleanup_complete)
-            {
-                outcome.result =
-                    APP_PROVISIONING_RESULT_RETRYABLE_TIMEOUT;
-
-                return outcome;
-            }
-
             provisioning_manager_state_t manager_state =
                 PROVISIONING_MANAGER_STATE_UNINITIALIZED;
 
@@ -1649,11 +1931,21 @@ app_run_one_wifi_provisioning_session(
                      PROVISIONING_MANAGER_STATE_ACTIVE)
             {
                 outcome.result =
-                    APP_PROVISIONING_RESULT_RETRYABLE_TIMEOUT;
+                    (ret == ESP_ERR_TIMEOUT)
+                        ? APP_PROVISIONING_RESULT_RETRYABLE_TIMEOUT
+                        : APP_PROVISIONING_RESULT_RETRYABLE_SESSION_FAILURE;
             }
         }
 
         return outcome;
+    }
+
+    if (connection_grace_used)
+    {
+        ESP_LOGI(
+            TAG,
+            "Provisioning generation %lu completed after its session deadline",
+            (unsigned long)session_generation);
     }
 
     ret = app_claim_reset_exclusion();
@@ -1712,8 +2004,6 @@ app_run_one_wifi_provisioning_session(
         outcome.error = ret;
         goto release_handoff;
     }
-
-    outcome.cleanup_complete = true;
 
     wifi_manager_status_t wifi_status = {0};
 
@@ -2076,11 +2366,17 @@ static esp_err_t app_run_wifi_provisioning(void)
                 ? UI_PROVISIONING_STATE_TIMEOUT
                 : UI_PROVISIONING_STATE_FAILED;
 
+        uint16_t failure_reason = 0U;
+
+        portENTER_CRITICAL(&s_state_lock);
+        failure_reason = s_provisioning_disconnect_reason;
+        portEXIT_CRITICAL(&s_state_lock);
+
         app_publish_provisioning_status(
             session_generation,
             failure_state,
             outcome.error,
-            0U);
+            failure_reason);
 
         ESP_LOGW(
             TAG,
@@ -2096,37 +2392,29 @@ static esp_err_t app_run_wifi_provisioning(void)
             pdMS_TO_TICKS(
                 s_config.provisioning_failure_dwell_ms));
 
-        esp_err_t cleanup_ret = ESP_OK;
+        ret = app_claim_reset_exclusion();
 
-        if (!outcome.cleanup_complete)
+        if (ret != ESP_OK)
         {
-            app_publish_provisioning_status(
-                session_generation,
-                UI_PROVISIONING_STATE_CLEANING_UP,
-                outcome.error,
-                0U);
-
-            ESP_LOGI(
-                TAG,
-                "Cleaning provisioning session %lu/%lu",
-                (unsigned long)(session_index + 1U),
-                (unsigned long)
-                    s_config.provisioning_max_sessions);
-
-            cleanup_ret =
-                app_cleanup_provisioning_session(
-                    session_generation);
+            return ret;
         }
-        else
-        {
-            ESP_LOGD(
-                TAG,
-                "Provisioning session %lu/%lu was already quiesced at its "
-                "Wi-Fi/IP deadline",
-                (unsigned long)(session_index + 1U),
-                (unsigned long)
-                    s_config.provisioning_max_sessions);
-        }
+
+        app_publish_provisioning_status(
+            session_generation,
+            UI_PROVISIONING_STATE_CLEANING_UP,
+            outcome.error,
+            0U);
+
+        ESP_LOGI(
+            TAG,
+            "Cleaning provisioning session %lu/%lu",
+            (unsigned long)(session_index + 1U),
+            (unsigned long)
+                s_config.provisioning_max_sessions);
+
+        const esp_err_t cleanup_ret =
+            app_cleanup_provisioning_session(
+                session_generation);
 
         if (cleanup_ret != ESP_OK)
         {
@@ -2143,7 +2431,9 @@ static esp_err_t app_run_wifi_provisioning(void)
                 "Provisioning cleanup did not reach STOPPED: %s",
                 esp_err_to_name(cleanup_ret));
 
-            return cleanup_ret;
+            return app_release_reset_exclusion()
+                       ? ESP_ERR_NOT_ALLOWED
+                       : cleanup_ret;
         }
 
         ESP_LOGI(
@@ -2180,7 +2470,41 @@ static esp_err_t app_run_wifi_provisioning(void)
             app_release_terminal_ble_memory_best_effort(
                 "cleanup verification failure");
 
-            return verification_error;
+            return app_release_reset_exclusion()
+                       ? ESP_ERR_NOT_ALLOWED
+                       : verification_error;
+        }
+
+        if (!app_is_factory_reset_requested())
+        {
+            const esp_err_t detach_ret =
+                app_detach_unmanaged_provisioning_station();
+
+            if (detach_ret != ESP_OK)
+            {
+                app_publish_provisioning_status(
+                    session_generation,
+                    UI_PROVISIONING_STATE_FAILED,
+                    detach_ret,
+                    0U);
+
+                ESP_LOGE(
+                    TAG,
+                    "Failed to detach unadopted provisioning Station: %s",
+                    esp_err_to_name(detach_ret));
+
+                app_release_terminal_ble_memory_best_effort(
+                    "Station detach failure");
+
+                return app_release_reset_exclusion()
+                           ? ESP_ERR_NOT_ALLOWED
+                           : detach_ret;
+            }
+        }
+
+        if (app_release_reset_exclusion())
+        {
+            return ESP_ERR_NOT_ALLOWED;
         }
 
         const bool retry_budget_available =
@@ -2201,7 +2525,7 @@ static esp_err_t app_run_wifi_provisioning(void)
                 session_generation,
                 failure_state,
                 outcome.error,
-                0U);
+                failure_reason);
 
             if (retryable)
             {
@@ -2685,13 +3009,16 @@ esp_err_t app_network_coordinator_prepare_for_factory_reset(
     const TickType_t timeout_ticks =
         pdMS_TO_TICKS(timeout_ms);
     esp_err_t result = ESP_OK;
+    bool wifi_quiesce_requested = false;
 
     while (true)
     {
         bool exclusion_active = false;
+        uint32_t active_generation = 0U;
 
         portENTER_CRITICAL(&s_state_lock);
         exclusion_active = s_reset_exclusion_active;
+        active_generation = s_active_provisioning_generation;
         portEXIT_CRITICAL(&s_state_lock);
 
         provisioning_manager_state_t manager_state =
@@ -2745,13 +3072,114 @@ esp_err_t app_network_coordinator_prepare_for_factory_reset(
 
         if (lifecycle_quiescent &&
             !exclusion_active &&
+            handoff_pending)
+        {
+            /*
+             * STOPPED has removed the upstream GOT_IP producer. Drain a
+             * verified boundary success first. If the queue is empty, discard
+             * the explicitly armed generation-bound late copy so reset never
+             * waits for or persists an unverified credential.
+             */
+            provisioning_manager_wifi_credentials_t credentials = {0};
+
+            const esp_err_t receive_result =
+                provisioning_manager_receive_wifi_credentials(
+                    &credentials,
+                    0U);
+
+            app_zeroize(
+                &credentials,
+                sizeof(credentials));
+
+            if ((receive_result != ESP_OK) &&
+                (receive_result != ESP_ERR_TIMEOUT))
+            {
+                result = receive_result;
+                break;
+            }
+
+            if ((receive_result == ESP_ERR_TIMEOUT) &&
+                handoff_pending)
+            {
+                const esp_err_t discard_result =
+                    provisioning_manager_discard_late_wifi_handoff(
+                        active_generation);
+
+                if ((discard_result != ESP_OK) &&
+                    (discard_result != ESP_ERR_INVALID_STATE))
+                {
+                    result = discard_result;
+                    break;
+                }
+
+                if (discard_result == ESP_OK)
+                {
+                    ESP_LOGI(
+                        TAG,
+                        "Discarded retained late Wi-Fi handoff claimed by "
+                        "factory reset");
+                }
+            }
+
+            result =
+                provisioning_manager_is_wifi_handoff_pending(
+                    &handoff_pending);
+
+            if (result != ESP_OK)
+            {
+                break;
+            }
+
+            if (receive_result == ESP_OK)
+            {
+                ESP_LOGI(
+                    TAG,
+                    "Discarded verified Wi-Fi handoff claimed by factory reset");
+            }
+        }
+
+        if (lifecycle_quiescent &&
+            !exclusion_active &&
             !handoff_pending)
         {
-            ESP_LOGI(
-                TAG,
-                "Provisioning quiesced for factory reset");
+            if (!wifi_quiesce_requested)
+            {
+                result = wifi_manager_disconnect();
 
-            return ESP_OK;
+                if (result != ESP_OK)
+                {
+                    break;
+                }
+
+                wifi_quiesce_requested = true;
+
+                ESP_LOGI(
+                    TAG,
+                    "Provisioning quiesced; waiting for Station detach");
+            }
+
+            wifi_manager_status_t wifi_status = {0};
+
+            result =
+                wifi_manager_get_status(
+                    &wifi_status);
+
+            if (result != ESP_OK)
+            {
+                break;
+            }
+
+            if ((wifi_status.state ==
+                 WIFI_MANAGER_STATE_DISCONNECTED) ||
+                (wifi_status.state ==
+                 WIFI_MANAGER_STATE_READY))
+            {
+                ESP_LOGI(
+                    TAG,
+                    "Provisioning and Station are quiescent for factory reset");
+
+                return ESP_OK;
+            }
         }
 
         const TickType_t elapsed_ticks =

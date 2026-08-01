@@ -16,7 +16,8 @@ the controlled reboot.
 - `app_reset_coordinator` owns press-cycle ordering, the reset transaction, and
   the final reboot decision.
 - `app_network_coordinator` owns the application reset gate, active-operation
-  exclusion, and provisioning lifecycle quiescence.
+  exclusion, provisioning lifecycle quiescence, and the bounded request for
+  `wifi_manager` to disable reconnect and detach the Station.
 - `config_manager` remains the only owner of persistent configuration writes
   and erasure.
 - `wifi_manager` owns Station connection/reconnect behavior and the
@@ -54,6 +55,8 @@ task runs until a verified factory reset restarts the firmware. It uses a
 accepted LONG_PRESS
     -> allocate a non-zero boot-local transaction ID
     -> app_network_coordinator_prepare_for_factory_reset(10000)
+        -> stop provisioning and drain any verified handoff
+        -> disable reconnect, disconnect STA, confirm DISCONNECTED
     -> wifi_manager_clear_persistent_driver_settings()
     -> config_manager_clear_wifi()
     -> verify NOT_CONFIGURED through config_manager
@@ -68,11 +71,11 @@ accepted LONG_PRESS
 Network preparation is always first. It closes the application reset gate,
 prevents a new provisioning session or credential handoff, requests one stop
 for an active service, and waits at most 10 seconds for manager cleanup and an
-already-claimed persistence/adoption transaction. `ESP_OK` leaves that gate
-closed until reboot. Only then is driver-owned persistence cleared, followed
-by application configuration and `NOT_CONFIGURED` verification. Reboot
-discards the old Station, DHCP, reconnect-timer, and coordinator runtime state
-instead of trying to enter provisioning from a live connection.
+already-claimed persistence/adoption transaction. It then disables automatic
+reconnect, requests Station disconnect, and confirms `DISCONNECTED` within the
+same deadline. `ESP_OK` leaves that gate closed until reboot. Only then is
+driver-owned persistence cleared, followed by application configuration and
+`NOT_CONFIGURED` verification.
 
 Preparation failure clears no persistent layer and suppresses reboot. A gate
 claimed by that failed call is rolled back so release can re-arm a safe retry.
@@ -155,7 +158,8 @@ non-rebooting and retryable after release.
 
 **IMPLEMENTED / BUILD VERIFIED / HARDWARE ACCEPTANCE PENDING**
 
-Phase 7.5 adds bounded provisioning quiescence before either persistent Wi-Fi
-layer is cleared. Reset preparation failure remains non-rebooting and leaves
-configuration intact. Hardware tests must still cover every provisioning
-lifecycle boundary and a reset racing a verified credential handoff.
+Phase 7.5 adds bounded provisioning and Station quiescence before either
+persistent Wi-Fi layer is cleared. Reset preparation failure remains
+non-rebooting and leaves configuration intact. Hardware tests must still cover
+every provisioning lifecycle boundary, active/reconnecting Station detach, and
+a reset racing a verified credential handoff.

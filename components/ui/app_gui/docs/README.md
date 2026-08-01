@@ -263,8 +263,9 @@ The QR cache belongs to the provisioning session, not to one screen instance.
 Leaving `PROVISIONING` does not clear it. A coordinator/manager terminal stop,
 failure, timeout, or successful handoff posts an unavailable message; the GUI
 task then zeroizes the cache and hides the QR object when that screen is
-active. Ordinary credential failure keeps the same QR available so the phone
-can submit another credential set in the same BLE session.
+active. A credential failure is displayed for the configured dwell, then the
+coordinator stops that failed framework generation; its terminal clear removes
+the old QR before the replacement generation publishes a new payload.
 
 Real progress flow:
 
@@ -518,8 +519,9 @@ Run any temporary state driver outside the UI task, call only public
    module edges and the full white quiet zone remain visible.
 9. Verify the serial log contains no QR JSON, PoP, password, session key
    material, or credentials.
-10. Submit a wrong password, verify `FAILED` is shown while the QR/session
-    remains usable, then submit correct credentials without rebooting.
+10. Submit a wrong password, verify `FAILED -> CLEANING_UP -> RETRYING`, then
+    verify the old QR is cleared and submit correct credentials through the new
+    QR/generation without rebooting.
 11. Verify successful provisioning shows `SAVING_CONFIG`, `CLEANING_UP`, and
     `SUCCESS`, holds success for about 1500 ms, then shows `WIFI_STATUS` and
     later `SENSOR_DASHBOARD`.

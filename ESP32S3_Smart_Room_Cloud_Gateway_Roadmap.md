@@ -110,7 +110,7 @@ Complex local web dashboard
 
 | Hardware | Purpose | Required for MVP? | Notes |
 |---|---|---:|---|
-| ESP32-S3 board | Main controller | Yes | Prefer board with PSRAM if available |
+| ESP32-S3 N16R8 board | Main controller | Yes | 16 MB flash; 8 MiB Octal PSRAM enabled at 80 MHz |
 | ST7735 LCD 128x160 | Local UI | Yes | SPI display |
 | DHT22 | Temperature/humidity sensor | Yes | Can replace with better sensor later |
 | Button | Factory reset / menu input | Yes | Long press detection |
@@ -622,7 +622,11 @@ remains in progress; provisioning-status UI work is still pending.
 - [x] Gate the memory-heavy cloud task on coordinator `CONNECTING` or `ONLINE`
   states that cannot overlap active BLE provisioning.
 - [x] Recover a `GOT_IP` event near the provisioning deadline through one
-  bounded handoff grace before declaring the coordinator failed.
+  bounded handoff grace, followed when needed by clean BLE teardown and a
+  generation-bound 5-second DHCP settle.
+- [x] Confirm late credentials only when the active Station has IPv4 and its
+  SSID exactly matches the pending candidate; otherwise zeroize and detach the
+  unadopted attempt before retry.
 - [x] Keep sensor, cloud, Wi-Fi, provisioning, GUI, and coordinator ownership
   within their existing components.
 - [x] Build and statically review callback, queue, critical-section, and
@@ -662,15 +666,15 @@ remain covered by the final A-N matrix.
   queue rather than the screen-command queue.
 - [x] Make the GUI QR cache session-owned and clear it only through explicit
   session invalidation.
-- [x] Keep ordinary credential failure non-terminal so the same BLE session
-  can accept another phone submission.
+- [x] At this checkpoint, keep ordinary credential failure non-terminal; this
+  behavior is superseded by the framework-failure hardening in Phase 6.4.5.
 - [x] Map verified persistence, cleanup, and adoption to
   `SAVING_CONFIG -> CLEANING_UP -> SUCCESS`.
 - [x] Hold `SUCCESS` for 1500 ms, request `WIFI_STATUS`, and preserve the
   existing timeout route to `SENSOR_DASHBOARD`.
 - [x] Keep automatic `RETRYING` and session restart outside this checkpoint.
-- [ ] Confirm progress ordering, wrong-password retry within the same BLE
-  session, timeout cleanup, success dwell, and final routing on hardware.
+- [ ] Confirm progress ordering, wrong-password replacement-session recovery,
+  timeout cleanup, success dwell, and final routing on hardware.
 
 Phase 6.4.4 is implemented and build-verified. Hardware acceptance remains
 pending; automatic retry/restart was deferred to Phase 6.4.5 at that
@@ -683,8 +687,10 @@ pending.
   and 1500 ms retry backoff.
 - [x] Reinitialize `provisioning_manager` only after clean `STOPPED` and reuse
   and reset its single credential queue.
-- [x] Keep wrong-password recovery inside the same BLE session without
-  consuming the outer session budget.
+- [x] Publish framework credential exhaustion as a non-sensitive failure.
+  The 2026-08-01 selective restore no longer promotes this event to an
+  immediate terminal generation change; bounded session timeout owns cleanup,
+  matching `e66adb3`.
 - [x] Classify retryable timeout/session failure separately from storage,
   adoption, and internal failures.
 - [x] Attach a non-zero generation to manager progress, GUI status, QR update,
@@ -697,8 +703,8 @@ pending.
   final exhaustion on the Provisioning Screen without reboot.
 - [x] Preserve the successful Phase 6.4.4 cleanup, adoption, success dwell,
   and final screen routing.
-- [ ] Confirm timeout retry, same-session password correction, exhaustion,
-  second-session success, stale-event rejection, injected failures, and
+- [ ] Confirm timeout retry, replacement-session password correction,
+  exhaustion, second-session success, stale-event rejection, injected failures, and
   30-60-minute resource stability on hardware.
 
 Phase 6.4.5 is implemented and statically build-verified. Hardware acceptance
@@ -785,9 +791,10 @@ board, power source, AP/hotspot, phone provisioning application, and duration.
 #### C. Wrong password then correct password
 
 1. Submit a wrong password and verify `FAILED`.
-2. Verify the same BLE session, QR, and `Session 1/3` remain active with no
-   `RETRYING`.
-3. Submit the correct password and verify the normal success flow.
+2. Verify no application-forced immediate generation change. Let bounded
+   timeout/manager cleanup complete before any replacement session.
+3. Submit the correct password when the framework/session permits and verify
+   the normal success flow.
 
 #### D. Timeout and replacement session
 
@@ -1022,8 +1029,14 @@ completed handler pass; it does not claim direct physical LCD flush feedback.
 - [x] Prevent new sessions, retries, persistence, adoption, and normal routing
       after reset wins.
 - [x] Wait for an already-claimed credential handoff before persistent erasure.
+- [x] Drain and securely clear a verified handoff that loses the reset race
+      after the framework reaches a producer-free lifecycle state.
 - [x] Stop ACTIVE provisioning and poll STARTING/STOPPING within one finite
       10-second reset-coordinator deadline.
+- [x] Disable Station reconnect, force a driver detach even when cached manager
+      state is stale, and confirm `DISCONNECTED` within the same deadline.
+- [x] Serialize manager-owned connect, disconnect, cleanup, and restore driver
+      commands so a reconnect cannot race persistent Wi-Fi erasure.
 - [x] Treat manager FAILED as fail-safe and roll back a newly claimed gate on
       preparation failure.
 - [x] Keep preparation failure non-erasing and non-rebooting while preserving
@@ -1034,10 +1047,32 @@ completed handler pass; it does not claim direct physical LCD flush feedback.
       STOPPED, and FAILED manager states on target hardware.
 - [ ] Race reset against queued credentials, NVS persistence, cleanup,
       connection adoption, and the success dwell on target hardware.
+- [ ] Validate reset while Station is `CONNECTED`, `WAITING_FOR_IP`, and
+      `RETRY_WAIT`, including a reconnect command racing reset.
 
 Phase 7.5 is implemented but is not complete until the hardware race matrix
 passes. A successful preparation leaves the reset gate asserted until reboot;
 only then may driver and application Wi-Fi persistence be cleared.
+
+The current DHCP/resource hardening is build-verified but hardware acceptance
+is pending. The N16R8 target now enables its 8 MiB Octal PSRAM and explicitly
+routes NimBLE's dynamic pools through the external allocator. Ordinary
+allocations larger than 16 KB prefer PSRAM, while a 32 KB internal reserve
+protects internal/DMA-capable requests. Wi-Fi/lwIP is not explicitly redirected;
+LCD DMA buffers and Phase 7 task stacks are not moved. ESP-NETIF still owns
+DHCP; the application does not start or stop the client after association.
+
+When the 120-second session and its pending-handoff 30-second IPv4 grace both
+expire, the coordinator performs generation-bound final queue drains, holds the
+existing Phase 7 reset exclusion, and stops/deinitializes BLE to clean
+`STOPPED`. It then gives the associated Station at most 5 seconds to settle
+DHCP. Credentials advance to persistence/read-back/adoption only if the active
+Station SSID exactly matches the candidate and a valid IPv4 address is present.
+Every timeout, mismatch, error, or reset race securely clears local and queued
+credential copies and discards retained pending data; ordinary failure also
+detaches the unadopted Station before retry. Phase 7 reset gating, exclusion,
+quiescence, and non-erasing failure policy remain unchanged. Target-hardware
+acceptance is still required and no runtime fix is claimed by the build alone.
 
 ### Tasks
 
@@ -1139,9 +1174,12 @@ Feasibility assessment as of 2026-08-01:
 - Re-verify the official registry, changelog, API, license, service behavior,
   and transitive dependency lock before Sprint 12 begins. Do not silently
   float to a newer version.
-- Current firmware targets ESP-IDF 6.0.1, but PSRAM is not enabled in the live
-  `sdkconfig`. No I2S microphone, speaker, amplifier, codec, or audio GPIO map
-  is currently confirmed. These are gates, not assumptions.
+- Current firmware targets ESP-IDF 6.0.1 on an N16R8 board with 8 MiB Octal
+  PSRAM enabled. The network fix reserves its explicit external allocation for
+  NimBLE dynamic pools; future audio work must remeasure PSRAM and internal/DMA
+  headroom rather than assume that capacity is free. No I2S microphone,
+  speaker, amplifier, codec, or audio GPIO map is currently confirmed. These
+  are gates, not assumptions.
 - `esp_xiaozhi` is a protocol dependency, not the application owner. Only the
   project-owned `voice_assistant` component may include its headers or expose
   its handles internally.
@@ -1242,9 +1280,9 @@ adding a production audio component or Xiaozhi dependency.
 
 ### Resource And Hardware Risks
 
-- DMA-capable internal RAM, I2S clock/pin conflicts, PSRAM-disabled baseline,
-  amplifier noise, insufficient power, clipping, underrun, and microphone
-  overflow.
+- DMA-capable internal-RAM headroom, PSRAM contention with the active NimBLE
+  allocation policy, I2S clock/pin conflicts, amplifier noise, insufficient
+  power, clipping, underrun, and microphone overflow.
 - Required hardware: verified ESP32-S3 board variant, digital I2S microphone,
   MAX98357A or documented alternative, speaker, and safe power supply.
 
@@ -1384,8 +1422,10 @@ production microphone, speaker, I2S, buffering, and audio status behavior.
 - Use the component's documented tasks/events plus test-owned bounded event
   capture. Record all created tasks, event handlers, timers, sockets, queues,
   stack high-water marks, and cleanup ownership.
-- Hardware requirement is the Sprint 10/11 audio platform and a board with
-  measured internal/DMA heap headroom; this sprint must not assume PSRAM.
+- Hardware requirement is the Sprint 10/11 audio platform plus measured
+  internal, DMA, and PSRAM headroom. The existing N16R8 PSRAM configuration is
+  real but is not unowned capacity that this sprint may consume without a new
+  resource measurement.
 
 ### Test Plan And Acceptance
 

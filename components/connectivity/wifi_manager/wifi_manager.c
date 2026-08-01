@@ -5,6 +5,7 @@
 #include <stdio.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 #include "esp_netif.h"
@@ -25,6 +26,7 @@
 #define WIFI_MANAGER_RECONNECT_MAX_DELAY_MS        60000U
 
 #define WIFI_MANAGER_CONNECTION_TIMEOUT_MS         30000U
+#define WIFI_MANAGER_DRIVER_OPERATION_TIMEOUT_MS   5000U
 #define WIFI_MANAGER_MS_TO_US                      1000ULL
 
 /* Constants ---------------------------------------------------------------- */
@@ -173,6 +175,9 @@ static wifi_manager_context_t s_wifi_manager = {
 static portMUX_TYPE s_status_lock =
     portMUX_INITIALIZER_UNLOCKED;
 
+static StaticSemaphore_t s_driver_operation_mutex_storage;
+static SemaphoreHandle_t s_driver_operation_mutex = NULL;
+
 
 /* Function Prototypes ------------------------------------------------------ */
 static void wifi_manager_event_handler(
@@ -194,37 +199,9 @@ static void wifi_manager_connection_timeout_callback(
 
 static esp_err_t wifi_manager_start_connection_attempt(void);
 
-/**
- * @brief Enforce this component's dynamic IPv4 policy on the Station netif.
- *
- * Call from task-context Wi-Fi/IP handlers. In particular, calling this after
- * the default WIFI_EVENT_STA_START handler normalizes a stale STOPPED client
- * before association can reach ESP-NETIF's static-IP branch. This project has
- * no static IPv4 configuration API. No component critical section is held
- * across ESP-NETIF.
- */
-static esp_err_t wifi_manager_ensure_dhcp_client_started(
-    esp_netif_t *station_netif);
+static esp_err_t wifi_manager_lock_driver_operation(void);
 
-/**
- * @brief Begin a clean DHCP transaction for a newly associated Station.
- *
- * ESP-NETIF normally starts DHCP from its default connected handler. Repeated
- * provisioning attempts can nevertheless arrive with a client state machine
- * left from the previous association. Stop/start is intentionally performed
- * once per association so lwIP discards that state and sends a fresh discover.
- */
-static esp_err_t wifi_manager_restart_dhcp_client(
-    esp_netif_t *station_netif);
-
-/**
- * @brief Idempotently cover an associated, no-IPv4 Station with the watchdog.
- *
- * This helper is restricted to connections already owned by wifi_manager.
- * Provisioning attempts remain bounded by the application coordinator so the
- * provisioning framework is the only owner of their Wi-Fi attempt lifecycle.
- */
-static esp_err_t wifi_manager_ensure_owned_ip_wait_timeout(void);
+static void wifi_manager_unlock_driver_operation(void);
 
 static void wifi_manager_cancel_connection_attempt_locked(void);
 
@@ -239,6 +216,55 @@ static void wifi_manager_cancel_connection_attempt_locked(void)
     s_wifi_manager.connection_timeout_pending = false;
     s_wifi_manager.connection_timeout_generation = 0U;
     s_wifi_manager.connection_attempt_deadline_us = 0;
+}
+
+static void wifi_manager_zeroize(
+    void *buffer,
+    size_t size)
+{
+    volatile uint8_t *cursor =
+        (volatile uint8_t *)buffer;
+
+    while ((cursor != NULL) &&
+           (size > 0U))
+    {
+        *cursor = 0U;
+        cursor++;
+        size--;
+    }
+}
+
+static esp_err_t wifi_manager_lock_driver_operation(void)
+{
+    if (s_driver_operation_mutex == NULL)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const TickType_t timeout_ticks =
+        pdMS_TO_TICKS(
+            WIFI_MANAGER_DRIVER_OPERATION_TIMEOUT_MS);
+
+    if (xSemaphoreTake(
+            s_driver_operation_mutex,
+            timeout_ticks) != pdTRUE)
+    {
+        ESP_LOGE(
+            TAG,
+            "Timed out waiting for Wi-Fi driver operation lock");
+
+        return ESP_ERR_TIMEOUT;
+    }
+
+    return ESP_OK;
+}
+
+static void wifi_manager_unlock_driver_operation(void)
+{
+    if (s_driver_operation_mutex != NULL)
+    {
+        (void)xSemaphoreGive(s_driver_operation_mutex);
+    }
 }
 
 static esp_err_t wifi_manager_stop_connection_timeout_timer(void)
@@ -260,219 +286,6 @@ static esp_err_t wifi_manager_stop_connection_timeout_timer(void)
     if (error == ESP_ERR_INVALID_STATE)
     {
         return ESP_OK;
-    }
-
-    return error;
-}
-
-static esp_err_t wifi_manager_ensure_dhcp_client_started(
-    esp_netif_t *station_netif)
-{
-    if (station_netif == NULL)
-    {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    esp_netif_dhcp_status_t dhcp_status =
-        ESP_NETIF_DHCP_INIT;
-
-    esp_err_t error =
-        esp_netif_dhcpc_get_status(
-            station_netif,
-            &dhcp_status);
-
-    if (error != ESP_OK)
-    {
-        return error;
-    }
-
-    if (dhcp_status == ESP_NETIF_DHCP_STARTED)
-    {
-        return ESP_OK;
-    }
-
-    if (dhcp_status == ESP_NETIF_DHCP_STOPPED)
-    {
-        /*
-         * The default ESP-NETIF connected handler interprets STOPPED as a
-         * static-IPv4 policy. wifi_manager does not expose static addressing,
-         * so STOPPED is stale lifecycle state and must be reset to DHCP.
-         * esp_netif_dhcpc_start() clears retained IP/DNS data before starting.
-         */
-        ESP_LOGW(
-            TAG,
-            "Station DHCP client was stopped; restoring dynamic IPv4 policy");
-    }
-
-    error =
-        esp_netif_dhcpc_start(station_netif);
-
-    if (error == ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED)
-    {
-        return ESP_OK;
-    }
-
-    return error;
-}
-
-static esp_err_t wifi_manager_restart_dhcp_client(
-    esp_netif_t *station_netif)
-{
-    if (station_netif == NULL)
-    {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    esp_err_t error =
-        esp_netif_dhcpc_stop(station_netif);
-
-    if ((error != ESP_OK) &&
-        (error != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED))
-    {
-        return error;
-    }
-
-    error =
-        esp_netif_dhcpc_start(station_netif);
-
-    if (error == ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED)
-    {
-        return ESP_OK;
-    }
-
-    return error;
-}
-
-static esp_err_t wifi_manager_ensure_owned_ip_wait_timeout(void)
-{
-    esp_timer_handle_t timer = NULL;
-    TaskHandle_t recovery_task_handle = NULL;
-    uint32_t attempt_generation = 0U;
-    bool timeout_already_active = false;
-    const int64_t now_us = esp_timer_get_time();
-
-    taskENTER_CRITICAL(&s_status_lock);
-
-    timeout_already_active =
-        s_wifi_manager.credentials_configured &&
-        s_wifi_manager.auto_reconnect_enabled &&
-        s_wifi_manager.connection_attempt_active &&
-        !s_wifi_manager.connection_timeout_abort_in_progress &&
-        !s_wifi_manager.status.has_ipv4_address &&
-        s_wifi_manager.status.state ==
-            WIFI_MANAGER_STATE_WAITING_FOR_IP;
-
-    const bool can_arm =
-        s_wifi_manager.initialized &&
-        s_wifi_manager.credentials_configured &&
-        s_wifi_manager.auto_reconnect_enabled &&
-        !s_wifi_manager.manual_disconnect_requested &&
-        !s_wifi_manager.status.has_ipv4_address &&
-        !s_wifi_manager.connection_attempt_active &&
-        !s_wifi_manager.connection_timeout_abort_in_progress &&
-        s_wifi_manager.status.state ==
-            WIFI_MANAGER_STATE_WAITING_FOR_IP &&
-        s_wifi_manager.connection_timeout_timer != NULL &&
-        s_wifi_manager.reconnect_task_handle != NULL;
-
-    timer = s_wifi_manager.connection_timeout_timer;
-
-    if (can_arm)
-    {
-        s_wifi_manager.connection_attempt_generation++;
-
-        if (s_wifi_manager.connection_attempt_generation == 0U)
-        {
-            s_wifi_manager.connection_attempt_generation = 1U;
-        }
-
-        attempt_generation =
-            s_wifi_manager.connection_attempt_generation;
-
-        s_wifi_manager.connection_attempt_active = true;
-
-        s_wifi_manager.connection_timeout_pending = false;
-        s_wifi_manager.connection_timeout_generation = 0U;
-        s_wifi_manager.connection_attempt_deadline_us =
-            now_us +
-            ((int64_t)WIFI_MANAGER_CONNECTION_TIMEOUT_MS *
-             (int64_t)WIFI_MANAGER_MS_TO_US);
-    }
-
-    taskEXIT_CRITICAL(&s_status_lock);
-
-    if (timeout_already_active)
-    {
-        return ESP_OK;
-    }
-
-    if (!can_arm)
-    {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    esp_err_t error =
-        wifi_manager_stop_connection_timeout_timer();
-
-    if (error == ESP_OK)
-    {
-        taskENTER_CRITICAL(&s_status_lock);
-
-        const bool attempt_still_active =
-            s_wifi_manager.connection_attempt_active &&
-            s_wifi_manager.connection_attempt_generation ==
-                attempt_generation &&
-            !s_wifi_manager.manual_disconnect_requested &&
-            !s_wifi_manager.status.has_ipv4_address &&
-            s_wifi_manager.status.state ==
-                WIFI_MANAGER_STATE_WAITING_FOR_IP;
-
-        taskEXIT_CRITICAL(&s_status_lock);
-
-        if (!attempt_still_active)
-        {
-            return ESP_OK;
-        }
-
-        error = esp_timer_start_once(
-            timer,
-            (uint64_t)WIFI_MANAGER_CONNECTION_TIMEOUT_MS *
-                WIFI_MANAGER_MS_TO_US);
-    }
-
-    if (error != ESP_OK)
-    {
-        const int64_t failure_time_us =
-            esp_timer_get_time();
-
-        taskENTER_CRITICAL(&s_status_lock);
-
-        if (s_wifi_manager.connection_attempt_active &&
-            s_wifi_manager.connection_attempt_generation ==
-                attempt_generation &&
-            !s_wifi_manager.connection_timeout_abort_in_progress &&
-            !s_wifi_manager.status.has_ipv4_address)
-        {
-            /*
-             * A timer-service failure must not leave an associated Station
-             * in WAITING_FOR_IP forever. Convert it into an immediate timeout
-             * for the existing recovery task.
-             */
-            s_wifi_manager.connection_attempt_deadline_us =
-                failure_time_us;
-            s_wifi_manager.connection_timeout_pending = true;
-            s_wifi_manager.connection_timeout_generation =
-                attempt_generation;
-            recovery_task_handle =
-                s_wifi_manager.reconnect_task_handle;
-        }
-
-        taskEXIT_CRITICAL(&s_status_lock);
-
-        if (recovery_task_handle != NULL)
-        {
-            xTaskNotifyGive(recovery_task_handle);
-        }
     }
 
     return error;
@@ -614,9 +427,29 @@ static esp_err_t wifi_manager_start_connection_attempt(void)
         return error;
     }
 
+    error = wifi_manager_lock_driver_operation();
+
+    if (error != ESP_OK)
+    {
+        taskENTER_CRITICAL(&s_status_lock);
+
+        if (s_wifi_manager.connection_attempt_generation ==
+            attempt_generation)
+        {
+            wifi_manager_cancel_connection_attempt_locked();
+        }
+
+        taskEXIT_CRITICAL(&s_status_lock);
+
+        (void)wifi_manager_stop_connection_timeout_timer();
+        return error;
+    }
+
     /*
-     * Manual disconnect or another terminal event may have won while the
-     * timer was being armed. Never start a canceled attempt.
+     * Manual disconnect or another terminal event may have won while the timer
+     * or driver-operation lock was being acquired. Recheck while holding the
+     * driver lock so a reset disconnect cannot return before a late connect
+     * command is issued.
      */
     taskENTER_CRITICAL(&s_status_lock);
 
@@ -631,11 +464,13 @@ static esp_err_t wifi_manager_start_connection_attempt(void)
 
     if (!attempt_still_active)
     {
+        wifi_manager_unlock_driver_operation();
         (void)wifi_manager_stop_connection_timeout_timer();
         return ESP_ERR_INVALID_STATE;
     }
 
     error = esp_wifi_connect();
+    wifi_manager_unlock_driver_operation();
 
     if (error != ESP_OK)
     {
@@ -742,7 +577,14 @@ static bool wifi_manager_process_connection_timeout(void)
         return true;
     }
 
-    const esp_err_t error = esp_wifi_disconnect();
+    esp_err_t error =
+        wifi_manager_lock_driver_operation();
+
+    if (error == ESP_OK)
+    {
+        error = esp_wifi_disconnect();
+        wifi_manager_unlock_driver_operation();
+    }
 
     if (error == ESP_OK)
     {
@@ -762,7 +604,9 @@ static bool wifi_manager_process_connection_timeout(void)
     if (manual_disconnect)
     {
         s_wifi_manager.status.state =
-            WIFI_MANAGER_STATE_DISCONNECTED;
+            (error == ESP_ERR_WIFI_NOT_CONNECT)
+                ? WIFI_MANAGER_STATE_DISCONNECTED
+                : WIFI_MANAGER_STATE_FAILED;
         s_wifi_manager.status.has_ipv4_address = false;
         s_wifi_manager.status.ipv4_address[0] = '\0';
         s_wifi_manager.status.rssi_valid = false;
@@ -770,10 +614,19 @@ static bool wifi_manager_process_connection_timeout(void)
     }
     taskEXIT_CRITICAL(&s_status_lock);
 
-    ESP_LOGW(
-        TAG,
-        "Could not abort timed-out Wi-Fi attempt: %s",
-        esp_err_to_name(error));
+    if (error == ESP_ERR_WIFI_NOT_CONNECT)
+    {
+        ESP_LOGD(
+            TAG,
+            "Timed-out Wi-Fi attempt was already detached");
+    }
+    else
+    {
+        ESP_LOGW(
+            TAG,
+            "Could not abort timed-out Wi-Fi attempt: %s",
+            esp_err_to_name(error));
+    }
 
     if (manual_disconnect)
     {
@@ -1110,10 +963,8 @@ static void wifi_manager_event_handler(
     /*
      * These parameters will be used in later steps.
      */
+    (void)handler_argument;
     (void)event_data;
-
-    esp_netif_t *const station_netif =
-        (esp_netif_t *)handler_argument;
 
 
     if (event_base == WIFI_EVENT) {
@@ -1121,18 +972,6 @@ static void wifi_manager_event_handler(
         {
             case WIFI_EVENT_STA_START:
             {
-                const esp_err_t dhcp_error =
-                    wifi_manager_ensure_dhcp_client_started(
-                        station_netif);
-
-                if (dhcp_error != ESP_OK)
-                {
-                    ESP_LOGE(
-                        TAG,
-                        "Failed to prepare Station DHCP client: %s",
-                        esp_err_to_name(dhcp_error));
-                }
-
                 ESP_LOGD(TAG, "Event: WIFI_EVENT_STA_START");
                 break;
             }
@@ -1175,26 +1014,7 @@ static void wifi_manager_event_handler(
 
                 taskEXIT_CRITICAL(&s_status_lock);
 
-                const esp_err_t dhcp_error =
-                    wifi_manager_restart_dhcp_client(
-                        station_netif);
-
-                if (dhcp_error != ESP_OK)
-                {
-                    ESP_LOGE(
-                        TAG,
-                        "Failed to restart Station DHCP client after "
-                        "association: %s",
-                        esp_err_to_name(dhcp_error));
-                }
-                else
-                {
-                    ESP_LOGI(
-                        TAG,
-                        "Fresh Station DHCP negotiation started");
-                }
-
-                ESP_LOGD(TAG, "Event: WIFI_EVENT_STA_CONNECTED");
+                ESP_LOGI(TAG, "Event: WIFI_EVENT_STA_CONNECTED");
                 ESP_LOGD(TAG, "Waiting for IPv4 address");
 
                 wifi_manager_notify_status_changed();
@@ -1449,27 +1269,8 @@ static void wifi_manager_event_handler(
 
             case IP_EVENT_STA_LOST_IP:
                 wifi_manager_state_t resulting_state;
-                bool ipv4_was_present = false;
 
                 taskENTER_CRITICAL(&s_status_lock);
-
-                ipv4_was_present =
-                    s_wifi_manager.status.has_ipv4_address;
-
-                if (!ipv4_was_present)
-                {
-                    resulting_state =
-                        s_wifi_manager.status.state;
-
-                    taskEXIT_CRITICAL(&s_status_lock);
-
-                    ESP_LOGD(
-                        TAG,
-                        "Ignored stale lost-IP event in state %s",
-                        wifi_manager_state_to_string(resulting_state));
-
-                    break;
-                }
 
                 s_wifi_manager.status.has_ipv4_address = false;
                 s_wifi_manager.status.ipv4_address[0] = '\0';
@@ -1500,35 +1301,6 @@ static void wifi_manager_event_handler(
                     "Station lost IPv4 address, state=%s",
                     wifi_manager_state_to_string(resulting_state)
                 );
-
-                if (resulting_state ==
-                    WIFI_MANAGER_STATE_WAITING_FOR_IP)
-                {
-                    const esp_err_t dhcp_error =
-                        wifi_manager_ensure_dhcp_client_started(
-                            station_netif);
-
-                    if (dhcp_error != ESP_OK)
-                    {
-                        ESP_LOGE(
-                            TAG,
-                            "Failed to restart Station DHCP client after "
-                            "address loss: %s",
-                            esp_err_to_name(dhcp_error));
-                    }
-
-                    const esp_err_t timeout_error =
-                        wifi_manager_ensure_owned_ip_wait_timeout();
-
-                    if ((timeout_error != ESP_OK) &&
-                        (timeout_error != ESP_ERR_INVALID_STATE))
-                    {
-                        ESP_LOGW(
-                            TAG,
-                            "Failed to arm lost-IP recovery timeout: %s",
-                            esp_err_to_name(timeout_error));
-                    }
-                }
 
                 wifi_manager_notify_status_changed();
 
@@ -1569,6 +1341,22 @@ esp_err_t wifi_manager_init(void)
     {
         ESP_LOGW(TAG, "Wi-Fi manager is already initialized");
         return ESP_ERR_INVALID_STATE;
+    }
+
+    if (s_driver_operation_mutex == NULL)
+    {
+        s_driver_operation_mutex =
+            xSemaphoreCreateMutexStatic(
+                &s_driver_operation_mutex_storage);
+
+        if (s_driver_operation_mutex == NULL)
+        {
+            ESP_LOGE(
+                TAG,
+                "Failed to create Wi-Fi driver operation mutex");
+
+            return ESP_ERR_NO_MEM;
+        }
     }
 
     /*
@@ -1686,7 +1474,7 @@ esp_err_t wifi_manager_init(void)
         WIFI_EVENT,
         ESP_EVENT_ANY_ID,
         wifi_manager_event_handler,
-        station_netif,
+        NULL,
         &s_wifi_manager.wifi_event_instance
     );
 
@@ -1707,7 +1495,7 @@ esp_err_t wifi_manager_init(void)
         IP_EVENT,
         ESP_EVENT_ANY_ID,
         wifi_manager_event_handler,
-        station_netif,
+        NULL,
         &s_wifi_manager.ip_event_instance
     );
 
@@ -1935,13 +1723,13 @@ esp_err_t wifi_manager_init(void)
         taskEXIT_CRITICAL(
             &s_status_lock);
     
-        ESP_LOGI(
-            TAG,
-            "Wi-Fi manager initialized: mode=%s, storage=%s",
-            "STATION",
-            "RAM"
+    ESP_LOGI(
+        TAG,
+        "Wi-Fi manager initialized: mode=%s, storage=%s",
+        "STATION",
+        "RAM"
         );
-    
+
     return ESP_OK;
 }
 
@@ -1955,7 +1743,18 @@ esp_err_t wifi_manager_connect(
         "Station configuration is NULL"
     );
 
-    ESP_RETURN_ON_FALSE(s_wifi_manager.initialized == true, 
+    bool initialized = false;
+    wifi_manager_state_t current_state =
+        WIFI_MANAGER_STATE_UNINITIALIZED;
+
+    taskENTER_CRITICAL(&s_status_lock);
+
+    initialized = s_wifi_manager.initialized;
+    current_state = s_wifi_manager.status.state;
+
+    taskEXIT_CRITICAL(&s_status_lock);
+
+    ESP_RETURN_ON_FALSE(initialized,
         ESP_ERR_INVALID_STATE,
         TAG,
         "Wi-Fi manager is not initialized"
@@ -1964,18 +1763,20 @@ esp_err_t wifi_manager_connect(
     /*
      * Avoid starting another connection while one is already active.
      */
-    if ((s_wifi_manager.status.state ==
+    if ((current_state ==
          WIFI_MANAGER_STATE_CONNECTING) ||
-        (s_wifi_manager.status.state ==
+        (current_state ==
          WIFI_MANAGER_STATE_WAITING_FOR_IP) ||
-        (s_wifi_manager.status.state ==
-         WIFI_MANAGER_STATE_CONNECTED)) {
+        (current_state ==
+         WIFI_MANAGER_STATE_CONNECTED) ||
+        (current_state ==
+         WIFI_MANAGER_STATE_RETRY_WAIT)) {
 
         ESP_LOGW(
             TAG,
             "Wi-Fi connection is already active: state=%s",
             wifi_manager_state_to_string(
-                s_wifi_manager.status.state
+                current_state
             )
         );
 
@@ -2084,70 +1885,20 @@ esp_err_t wifi_manager_connect(
     }
 
 
-    taskENTER_CRITICAL(
-        &s_status_lock);
-
     /*
-    * The ESP-IDF Wi-Fi driver now contains valid Station
-    * credentials in RAM.
-    */
-    s_wifi_manager.credentials_configured =
-        true;
-
-    s_wifi_manager.auto_reconnect_enabled =
-        true;
-
-    s_wifi_manager.manual_disconnect_requested =
-        false;
-
-    s_wifi_manager.reconnect_delay_ms =
-        WIFI_MANAGER_RECONNECT_INITIAL_DELAY_MS;
-
-    s_wifi_manager.reconnect_attempt_count =
-        0U;
-
-    memset(
-        s_wifi_manager.status.ssid,
-        0,
-        sizeof(s_wifi_manager.status.ssid));
-
-    memcpy(
-        s_wifi_manager.status.ssid,
-        config->ssid,
-        ssid_length);
-
-    s_wifi_manager.status.ssid[ssid_length] =
-        '\0';
-
-    s_wifi_manager.status.ipv4_address[0] =
-        '\0';
-
-    s_wifi_manager.status.has_ipv4_address =
-        false;
-
-    s_wifi_manager.status.rssi_valid =
-        false;
-
-    s_wifi_manager.status.rssi_dbm =
-        0;
-
-    s_wifi_manager.status.disconnect_reason =
-        0U;
-
-    s_wifi_manager.status.state =
-        WIFI_MANAGER_STATE_CONNECTING;
-
-    taskEXIT_CRITICAL(
-        &s_status_lock);
-
-    /*
-     * 4. Apply Station configuration to the Wi-Fi driver.
+     * 4. Apply Station configuration before publishing ownership internally.
+     * A failed driver copy must not leave reconnect/status state claiming that
+     * credentials were accepted.
      */
     esp_err_t ret =
         esp_wifi_set_config(
             WIFI_IF_STA,
             &wifi_config
         );
+
+    wifi_manager_zeroize(
+        &wifi_config,
+        sizeof(wifi_config));
 
     if (ret != ESP_OK) {
         ESP_LOGE(
@@ -2165,6 +1916,24 @@ esp_err_t wifi_manager_connect(
      * Setting CONNECTING first avoids a race where an asynchronous
      * Wi-Fi event arrives before the state is updated.
      */
+    taskENTER_CRITICAL(
+        &s_status_lock);
+
+    s_wifi_manager.credentials_configured =
+        true;
+
+    s_wifi_manager.auto_reconnect_enabled =
+        true;
+
+    s_wifi_manager.manual_disconnect_requested =
+        false;
+
+    s_wifi_manager.reconnect_delay_ms =
+        WIFI_MANAGER_RECONNECT_INITIAL_DELAY_MS;
+
+    s_wifi_manager.reconnect_attempt_count =
+        0U;
+
     memset(
         s_wifi_manager.status.ssid,
         0,
@@ -2190,11 +1959,17 @@ esp_err_t wifi_manager_connect(
     s_wifi_manager.status.rssi_valid =
         false;
 
+    s_wifi_manager.status.rssi_dbm =
+        0;
+
     s_wifi_manager.status.disconnect_reason =
         0U;
 
     s_wifi_manager.status.state =
         WIFI_MANAGER_STATE_CONNECTING;
+
+    taskEXIT_CRITICAL(
+        &s_status_lock);
 
     ESP_LOGI(
         TAG,
@@ -2210,8 +1985,31 @@ esp_err_t wifi_manager_connect(
         taskENTER_CRITICAL(
             &s_status_lock);
 
+        s_wifi_manager.credentials_configured =
+            false;
+
+        s_wifi_manager.auto_reconnect_enabled =
+            false;
+
+        s_wifi_manager.manual_disconnect_requested =
+            false;
+
+        wifi_manager_cancel_connection_attempt_locked();
+
         s_wifi_manager.status.state =
             WIFI_MANAGER_STATE_FAILED;
+
+        s_wifi_manager.status.has_ipv4_address =
+            false;
+
+        s_wifi_manager.status.ipv4_address[0] =
+            '\0';
+
+        s_wifi_manager.status.rssi_valid =
+            false;
+
+        s_wifi_manager.status.rssi_dbm =
+            0;
 
         taskEXIT_CRITICAL(
             &s_status_lock);
@@ -2238,7 +2036,6 @@ esp_err_t wifi_manager_disconnect(void)
         TAG,
         "Wi-Fi manager is not initialized");
 
-    bool driver_disconnect_required = false;
     bool timeout_abort_in_progress = false;
 
     /*
@@ -2268,38 +2065,6 @@ esp_err_t wifi_manager_disconnect(void)
 
     wifi_manager_cancel_connection_attempt_locked();
 
-    driver_disconnect_required =
-        !timeout_abort_in_progress &&
-        (s_wifi_manager.status.state ==
-             WIFI_MANAGER_STATE_CONNECTED ||
-         s_wifi_manager.status.state ==
-             WIFI_MANAGER_STATE_WAITING_FOR_IP ||
-         s_wifi_manager.status.state ==
-             WIFI_MANAGER_STATE_CONNECTING);
-
-    /*
-     * If the driver is already offline, there may be no new
-     * DISCONNECTED event. Complete the state transition locally.
-     */
-    if (!driver_disconnect_required &&
-        !timeout_abort_in_progress)
-    {
-        s_wifi_manager.status.state =
-            WIFI_MANAGER_STATE_DISCONNECTED;
-
-        s_wifi_manager.status.has_ipv4_address =
-            false;
-
-        s_wifi_manager.status.ipv4_address[0] =
-            '\0';
-
-        s_wifi_manager.status.rssi_valid =
-            false;
-
-        s_wifi_manager.status.rssi_dbm =
-            0;
-    }
-
     taskEXIT_CRITICAL(
         &s_status_lock);
 
@@ -2323,24 +2088,58 @@ esp_err_t wifi_manager_disconnect(void)
         return ESP_OK;
     }
 
-    if (!driver_disconnect_required)
+    const esp_err_t lock_error =
+        wifi_manager_lock_driver_operation();
+
+    if (lock_error != ESP_OK)
     {
+        taskENTER_CRITICAL(&s_status_lock);
+        s_wifi_manager.status.state = WIFI_MANAGER_STATE_FAILED;
+        taskEXIT_CRITICAL(&s_status_lock);
+
+        wifi_manager_notify_status_changed();
+        return lock_error;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Manual Wi-Fi driver detach requested");
+
+    esp_err_t error =
+        esp_wifi_disconnect();
+
+    wifi_manager_unlock_driver_operation();
+
+    if (error == ESP_ERR_WIFI_NOT_CONNECT)
+    {
+        /*
+         * No DISCONNECTED event is guaranteed when association disappeared
+         * just before this call. Complete the quiescent state locally so a
+         * factory-reset preparation cannot wait on an event that will never
+         * arrive.
+         */
+        taskENTER_CRITICAL(
+            &s_status_lock);
+
+        s_wifi_manager.connection_timeout_abort_in_progress = false;
+        s_wifi_manager.status.state =
+            WIFI_MANAGER_STATE_DISCONNECTED;
+        s_wifi_manager.status.has_ipv4_address = false;
+        s_wifi_manager.status.ipv4_address[0] = '\0';
+        s_wifi_manager.status.rssi_valid = false;
+        s_wifi_manager.status.rssi_dbm = 0;
+
+        taskEXIT_CRITICAL(
+            &s_status_lock);
+
         ESP_LOGI(
             TAG,
-            "Wi-Fi is already disconnected; "
-            "automatic reconnect disabled");
+            "Wi-Fi driver was already detached; reconnect remains disabled");
 
         wifi_manager_notify_status_changed();
 
         return ESP_OK;
     }
-
-    ESP_LOGI(
-        TAG,
-        "Manual Wi-Fi disconnect requested");
-
-    esp_err_t error =
-        esp_wifi_disconnect();
 
     if (error != ESP_OK)
     {
@@ -2434,12 +2233,61 @@ esp_err_t wifi_manager_discard_unmanaged_connection(void)
             esp_err_to_name(timer_error));
     }
 
+    /*
+     * network_provisioning selects WIFI_STORAGE_FLASH while it validates
+     * credentials. The framework is STOPPED before this API is called, so
+     * restore wifi_manager's RAM-only runtime policy before another session
+     * can begin. Persistent driver cleanup remains a separate factory-reset
+     * operation.
+     */
+    const esp_err_t lock_error =
+        wifi_manager_lock_driver_operation();
+
+    if (lock_error != ESP_OK)
+    {
+        taskENTER_CRITICAL(&s_status_lock);
+        s_wifi_manager.unmanaged_disconnect_in_progress = false;
+        s_wifi_manager.status.state = WIFI_MANAGER_STATE_FAILED;
+        taskEXIT_CRITICAL(&s_status_lock);
+
+        wifi_manager_notify_status_changed();
+        return lock_error;
+    }
+
+    const esp_err_t storage_error =
+        esp_wifi_set_storage(WIFI_STORAGE_RAM);
+
+    if (storage_error != ESP_OK)
+    {
+        wifi_manager_unlock_driver_operation();
+
+        taskENTER_CRITICAL(&s_status_lock);
+
+        s_wifi_manager.unmanaged_disconnect_in_progress = false;
+        s_wifi_manager.status.state =
+            WIFI_MANAGER_STATE_FAILED;
+
+        taskEXIT_CRITICAL(&s_status_lock);
+
+        ESP_LOGE(
+            TAG,
+            "Failed to restore Wi-Fi RAM storage during provisioning "
+            "cleanup: %s",
+            esp_err_to_name(storage_error));
+
+        wifi_manager_notify_status_changed();
+
+        return storage_error;
+    }
+
     ESP_LOGI(
         TAG,
         "Discarding unadopted provisioning connection");
 
     const esp_err_t error =
         esp_wifi_disconnect();
+
+    wifi_manager_unlock_driver_operation();
 
     if (error == ESP_ERR_WIFI_NOT_CONNECT)
     {
@@ -2523,8 +2371,18 @@ esp_err_t wifi_manager_clear_persistent_driver_settings(void)
      * restore resets persistent Wi-Fi mode, protocol, bandwidth, and Station
      * configuration.
      */
+    const esp_err_t lock_error =
+        wifi_manager_lock_driver_operation();
+
+    if (lock_error != ESP_OK)
+    {
+        return lock_error;
+    }
+
     const esp_err_t error =
         esp_wifi_restore();
+
+    wifi_manager_unlock_driver_operation();
 
     if (error != ESP_OK)
     {
@@ -2932,7 +2790,7 @@ esp_err_t wifi_manager_scan_and_log(void)
 
     ESP_LOGD(
         TAG,
-        " No. | RSSI | Channel | Quality   | SSID"
+        " No. | RSSI | Channel | Quality"
     );
 
     ESP_LOGD(
@@ -2947,19 +2805,13 @@ esp_err_t wifi_manager_scan_and_log(void)
         const wifi_ap_record_t *record =
             &ap_records[index];
 
-        const char *ssid =
-            record->ssid[0] != '\0'
-                ? (const char *)record->ssid
-                : "<hidden>";
-
         ESP_LOGD(
             TAG,
-            "%4u | %4d | %7u | %-9s | %s",
+            "%4u | %4d | %7u | %-9s",
             (unsigned int)(index + 1U),
             (int)record->rssi,
             (unsigned int)record->primary,
-            wifi_manager_rssi_to_quality(record->rssi),
-            ssid
+            wifi_manager_rssi_to_quality(record->rssi)
         );
     }
 
