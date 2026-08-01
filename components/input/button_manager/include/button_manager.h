@@ -1,5 +1,18 @@
 #pragma once
 
+/**
+ * @file button_manager.h
+ * @brief Public API for one debounced polled GPIO button.
+ *
+ * The manager owns GPIO sampling, stable-edge debounce, hold timing, and
+ * one-shot long-press publication from a dedicated FreeRTOS task. It does not
+ * own factory-reset policy, persistent storage, Wi-Fi, provisioning, reboot,
+ * or LVGL work.
+ *
+ * Phase 7.6 refreshes documentation and section structure only; declarations
+ * and runtime behavior remain unchanged.
+ */
+
 /* Includes ----------------------------------------------------------------- */
 #include <stdint.h>
 
@@ -11,8 +24,7 @@ extern "C"
 {
 #endif
 
-/* Type Definitions -------------------------------------------------------- */
-
+/* Type Definitions --------------------------------------------------------- */
 /**
  * @brief Stable button events published by the polling task.
  */
@@ -48,9 +60,12 @@ typedef struct
  * @brief Application callback invoked from the button polling task.
  *
  * The callback must return quickly. It must not perform blocking storage,
- * networking, BLE provisioning, LVGL operations, or reboot the device.
+ * networking, BLE provisioning, LVGL operations, or reboot the device. The
+ * callback executes in task context, never ISR context, with no button-manager
+ * lock held.
  *
- * The event pointer is valid only until the callback returns.
+ * The event pointer is borrowed and remains valid only until the callback
+ * returns. The callback must copy any data needed asynchronously.
  */
 typedef void (*button_manager_event_callback_t)(
     const button_manager_event_data_t *event_data,
@@ -82,7 +97,6 @@ typedef struct
 } button_manager_config_t;
 
 /* Functions ---------------------------------------------------------------- */
-
 /**
  * @brief Configure the button GPIO and initialize manager state.
  *
@@ -115,7 +129,8 @@ esp_err_t button_manager_init(
  * held and must return quickly.
  *
  * @param[in] callback Non-NULL event callback.
- * @param[in] user_context Opaque context returned to the callback; may be NULL.
+ * @param[in] user_context Opaque borrowed context returned to the callback;
+ *                         may be NULL.
  *
  * @return
  * - ESP_OK on success.
@@ -127,11 +142,14 @@ esp_err_t button_manager_register_callback(
     void *user_context);
 
 /**
- * @brief Create and start the button polling task.
+ * @brief Create and start the permanent button polling task.
  *
- * A callback must have been registered first. This API is non-blocking after
- * task creation. The task uses a 3072-byte stack, priority 4, polls with the
- * configured finite period, and has no stop/deinit operation in Phase 7.1.
+ * A callback must have been registered first. This API returns after task
+ * creation and does not wait for a button event. The task uses a 3072-byte
+ * stack, priority 4, polls with the configured finite period, and has no
+ * stop/deinit operation.
+ *
+ * This function is task-context only and is not ISR-safe.
  *
  * @return
  * - ESP_OK on success.
