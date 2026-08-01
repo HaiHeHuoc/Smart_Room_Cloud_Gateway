@@ -18,8 +18,9 @@ The reusable component domain layout is documented in `components/README.md`.
 6. Initialize `app_gui` and start its single UI task. No screen is selected
    until the coordinator resolves the final configuration state.
 7. Optionally start the diagnostic `performance_monitor`.
-8. Initialize `button_manager`, register its callback, and start its local
-   polling task. Button failure does not stop unrelated service startup.
+8. Initialize and start `app_reset_coordinator`, then initialize
+   `button_manager`, register its callback, and start its local polling task.
+   Reset-input failure does not stop unrelated service startup.
 9. Initialize `wifi_manager` and register its status callback.
 10. Initialize `app_network_coordinator` without scheduling its task.
 11. Initialize `firebase_auth`, then initialize `cloud_manager` and register its
@@ -64,8 +65,14 @@ cloud_manager status callback
 
 button_manager task callback
     -> receive one copied PRESSED / RELEASED / LONG_PRESS event
-    -> log Phase 7.1 diagnostics and return without blocking
-    -> no NVS erase, provisioning restart, reboot, or LVGL call in Phase 7.1
+    -> map it to app_reset_coordinator input
+    -> post a copied event with zero queue wait and return
+
+app_reset_coordinator task
+    -> validate PRESSED / LONG_PRESS / RELEASED ordering
+    -> accept at most one diagnostic reset request per physical press cycle
+    -> re-arm only after RELEASED
+    -> no NVS erase, provisioning restart, reboot, or LVGL call in Phase 7.2
 
 provisioning_manager callback
     -> validate and hold credentials pending
@@ -153,6 +160,10 @@ callback cannot post into an uninitialized cloud component.
 - `app_network_coordinator` owns boot and config-driven screen policy in a
   dedicated task. It may post non-blocking `app_gui` screen requests but does
   not call LVGL, create widgets, or render screens.
+- `app_reset_coordinator` owns application-level reset-input ordering in its
+  dedicated task. The button callback only performs a zero-wait copied queue
+  post; Phase 7.2 performs no storage, Wi-Fi, provisioning, reboot, or LVGL
+  action.
 - `sensor_manager` is a local service and continues sampling and updating the
   GUI while provisioning waits, times out, or network connectivity is absent.
 - The single Wi-Fi callback fans out a short runtime event to the coordinator,
@@ -259,7 +270,11 @@ idf.py -p <PORT> flash monitor
   `components/cloud/cloud_manager/README.txt` and `Test/TestFirebase_Auth.ps1`.
 - Phase 7.1 button input was manually/hardware accepted by the user on
   2026-08-01. GPIO polling, debounce, press/release, and one-shot long-press
-  detection are complete; reset execution and UI confirmation remain deferred.
+  detection are complete.
+- Phase 7.2 reset-input qualification was manually/hardware accepted by the
+  user on 2026-08-01. Non-blocking handoff, event ordering, and one accepted
+  diagnostic request per press cycle are complete; configuration erasure,
+  provisioning recovery, reboot policy, and UI confirmation remain deferred.
 - Never log or commit passwords, ID tokens, refresh tokens, service-account
   keys, or Firebase administrator credentials.
 

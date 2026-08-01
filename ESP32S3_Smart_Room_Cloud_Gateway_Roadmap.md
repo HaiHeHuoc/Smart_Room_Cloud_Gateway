@@ -953,6 +953,23 @@ completes only physical input, debounce, and event publication. It does not
 complete Sprint 7: configuration clearing, provisioning restart, reset UI, and
 end-to-end recovery remain pending.
 
+### Phase 7.2 Status — Complete
+
+- [x] Add the independent `app_reset_coordinator` application component.
+- [x] Start the coordinator before button event publication can begin.
+- [x] Forward copied button events through a zero-wait queue operation.
+- [x] Validate press, long-press, and release ordering in a dedicated task.
+- [x] Accept at most one diagnostic reset request per physical press cycle.
+- [x] Keep storage, Wi-Fi, provisioning, reboot, and LVGL work outside the
+      button callback and outside the Phase 7.2 scope.
+- [x] Document lifecycle, task context, ownership, failure behavior, and
+      deferred reset execution.
+
+Phase 7.2 was manually/hardware accepted by the user on 2026-08-01. This
+completes only non-blocking reset-input handoff and one-shot request
+qualification. It does not complete Sprint 7: no configuration is erased and
+no provisioning, reboot, or reset-confirmation UI action is performed.
+
 ### Tasks
 
 - [x] Add button input.
@@ -1813,7 +1830,7 @@ Use this section to track daily/weekly progress.
 | 4 | Firebase upload | Done |  | 2026-07-19 | Hardware upload, Firebase data, failure handling, and LCD Cloud status accepted. |
 | 5 | NVS config storage | Done |  | 2026-07-26 | Persistence, integrity, migration, and recovery tests accepted. |
 | 6 | BLE provisioning | In progress |  |  | Phase 6.4 implemented; final A-N hardware acceptance pending. |
-| 7 | Factory reset | In progress |  |  | Phase 7.1 input/debounce/events hardware-accepted; reset action and recovery remain pending. |
+| 7 | Factory reset | In progress |  |  | Phases 7.1-7.2 input and one-shot request qualification hardware-accepted; reset action and recovery remain pending. |
 | 8 | Reconnect + retry | In progress |  |  | Wi-Fi/cloud recovery implemented; final target-hardware recovery and endurance acceptance pending. |
 | 9 | Portfolio polish | Not started |  |  |  |
 | 10 | Audio hardware validation | Proposed / Not started |  |  | New optional voice syllabus; hardware and GPIO gate. |

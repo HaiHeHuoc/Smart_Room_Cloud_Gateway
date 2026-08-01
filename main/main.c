@@ -49,6 +49,9 @@
 /* app network coordinator ------------------------------------------------- */
 #include "app_network_coordinator.h"
 
+/* app reset coordinator --------------------------------------------------- */
+#include "app_reset_coordinator.h"
+
 /* Button manager ----------------------------------------------------------- */
 #include "button_manager.h"
 
@@ -307,47 +310,76 @@ void app_main(void)
 #endif
 
     /*
-     * Phase 7.1 button input is an independent local service.
+     * Phase 7.2 reset-input path.
      *
-     * Failure disables only physical-button input; it does not prevent LCD,
-     * sensor, Wi-Fi, provisioning, or cloud services from starting.
+     * The reset coordinator must be running before button_manager starts so
+     * that the first callback always has a valid non-blocking destination.
+     *
+     * A failure disables only the physical factory-reset path. LCD, sensor,
+     * Wi-Fi, provisioning, and cloud initialization continue normally.
      */
-    esp_err_t button_ret =
-        button_manager_init(
-            &BUTTON_MANAGER_CONFIG);
+    esp_err_t reset_ret =
+        app_reset_coordinator_init();
 
-    if (button_ret != ESP_OK)
+    if (reset_ret != ESP_OK)
     {
         ESP_LOGE(
             TAG,
-            "Failed to initialize button manager: %s",
-            esp_err_to_name(button_ret));
+            "Failed to initialize reset coordinator: %s",
+            esp_err_to_name(reset_ret));
     }
     else
     {
-        button_ret =
-            button_manager_register_callback(
-                app_button_event_callback,
-                NULL);
+        reset_ret =
+            app_reset_coordinator_start();
 
-        if (button_ret != ESP_OK)
+        if (reset_ret != ESP_OK)
         {
             ESP_LOGE(
                 TAG,
-                "Failed to register button callback: %s",
-                esp_err_to_name(button_ret));
+                "Failed to start reset coordinator: %s",
+                esp_err_to_name(reset_ret));
         }
         else
         {
-            button_ret =
-                button_manager_start();
+            esp_err_t button_ret =
+                button_manager_init(
+                    &BUTTON_MANAGER_CONFIG);
 
             if (button_ret != ESP_OK)
             {
                 ESP_LOGE(
                     TAG,
-                    "Failed to start button manager: %s",
+                    "Failed to initialize button manager: %s",
                     esp_err_to_name(button_ret));
+            }
+            else
+            {
+                button_ret =
+                    button_manager_register_callback(
+                        app_button_event_callback,
+                        NULL);
+
+                if (button_ret != ESP_OK)
+                {
+                    ESP_LOGE(
+                        TAG,
+                        "Failed to register button callback: %s",
+                        esp_err_to_name(button_ret));
+                }
+                else
+                {
+                    button_ret =
+                        button_manager_start();
+
+                    if (button_ret != ESP_OK)
+                    {
+                        ESP_LOGE(
+                            TAG,
+                            "Failed to start button manager: %s",
+                            esp_err_to_name(button_ret));
+                    }
+                }
             }
         }
     }
@@ -987,10 +1019,15 @@ static void app_button_event_callback(
         return;
     }
 
+    app_reset_coordinator_input_event_t reset_input_event;
+
     switch (event_data->event)
     {
         case BUTTON_MANAGER_EVENT_PRESSED:
-            ESP_LOGI(TAG, "Button pressed");
+            ESP_LOGD(TAG, "Button pressed");
+
+            reset_input_event =
+                APP_RESET_COORDINATOR_INPUT_PRESSED;
             break;
 
         case BUTTON_MANAGER_EVENT_RELEASED:
@@ -998,6 +1035,8 @@ static void app_button_event_callback(
                 TAG,
                 "Button released: held=%" PRIu32 " ms",
                 event_data->held_ms);
+            reset_input_event =
+                APP_RESET_COORDINATOR_INPUT_RELEASED;
             break;
 
         case BUTTON_MANAGER_EVENT_LONG_PRESS:
@@ -1005,6 +1044,8 @@ static void app_button_event_callback(
                 TAG,
                 "Button long press detected: held=%" PRIu32 " ms",
                 event_data->held_ms);
+            reset_input_event =
+                APP_RESET_COORDINATOR_INPUT_LONG_PRESS;
             break;
 
         default:
@@ -1012,6 +1053,23 @@ static void app_button_event_callback(
                 TAG,
                 "Unknown button event: %d",
                 (int)event_data->event);
-            break;
+            return;
+    }
+    /*
+     * Non-blocking queue post only.
+     *
+     * No storage access, LVGL call, provisioning action, or reboot occurs in
+     * button task context.
+     */
+    const esp_err_t post_ret =
+        app_reset_coordinator_post_input_event(
+            reset_input_event);
+
+    if (post_ret != ESP_OK)
+    {
+        ESP_LOGW(
+            TAG,
+            "Failed to forward button event to reset coordinator: %s",
+            esp_err_to_name(post_ret));
     }
 }
