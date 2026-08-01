@@ -141,25 +141,31 @@ covered long-press cleanup of both persistent Wi-Fi stores, verified reboot to
 `NOT_CONFIGURED`, BLE reprovisioning without `erase-flash`, and successful
 IPv4 acquisition after the new connection.
 
-At the Phase 7.3 checkpoint, GUI reset confirmation remained deferred. It is
-implemented by Phase 7.4 with build verification complete and hardware
-acceptance still pending.
+At the Phase 7.3 checkpoint, GUI reset confirmation and active-provisioning
+reset arbitration remained deferred. Those scopes were implemented in Phase
+7.4 and Phase 7.5 and were subsequently accepted on target hardware.
 
 ## Phase 7.4 Status
 
-**IMPLEMENTED / BUILD VERIFIED / HARDWARE ACCEPTANCE PENDING**
+**COMPLETE / BUILD VERIFIED / HARDWARE ACCEPTED**
 
 Phase 7.4 adds copied success/failure results, exact transaction
 acknowledgment, the 500 ms acknowledgment budget, the 1500 ms confirmed-success
 dwell, and the 500 ms fallback before a verified reboot. Failure remains
 non-rebooting and retryable after release.
 
+Phase 7.4 was marked complete by the user on 2026-08-02 after target-hardware
+acceptance of the reset-result UI and controlled-restart behavior.
+
 ## Phase 7.5 Status
 
-**IMPLEMENTED / BUILD VERIFIED / HARDWARE ACCEPTANCE PENDING**
+**COMPLETE / BUILD VERIFIED / HARDWARE ACCEPTED**
 
 Phase 7.5 adds bounded provisioning and Station quiescence before either
 persistent Wi-Fi layer is cleared. Reset preparation failure remains
-non-rebooting and leaves configuration intact. Hardware tests must still cover
-every provisioning lifecycle boundary, active/reconnecting Station detach, and
-a reset racing a verified credential handoff.
+non-rebooting and leaves configuration intact. The accepted scope includes
+active provisioning reset coordination, Station detach/reconnect suppression,
+and protection against credential persistence or adoption after reset wins.
+
+Phase 7.5 was marked complete by the user on 2026-08-02 after target-hardware
+acceptance of the reset coordination and recovery behavior.
