@@ -169,3 +169,20 @@ and protection against credential persistence or adoption after reset wins.
 
 Phase 7.5 was marked complete by the user on 2026-08-02 after target-hardware
 acceptance of the reset coordination and recovery behavior.
+
+## Phase 7.6 Status
+
+**COMPLETE / DOCUMENTATION CLOSURE / HARDWARE ACCEPTANCE CONFIRMED BY USER**
+
+Phase 7.6 is the final cross-phase regression and documentation checkpoint. It
+adds no production feature and does not alter the reset state machine. The
+closure records the accepted end-to-end reset, reboot, provisioning, IPv4, UI,
+ownership, and resource behavior for Sprint 7.
+
+The authoritative closure record is
+[`PHASE_7_6_CLOSURE.md`](../../../PHASE_7_6_CLOSURE.md). Phase 7.6 documentation
+work is limited to Markdown, comments, docstrings, and source-file section
+labels. Executable statements, API declarations, timing values, build
+configuration, and runtime behavior remain unchanged.
+
+Sprint 7 was marked complete by the user on 2026-08-02.
