@@ -9,7 +9,10 @@ thread-safe status snapshots to the application and GUI.
 
 Credentials are supplied by the application and stored by the ESP-IDF Wi-Fi
 driver in RAM through `WIFI_STORAGE_RAM`. Provisioning and persistent
-credential ownership remain outside this component.
+application credential ownership remain outside this component. Because the
+upstream provisioning framework temporarily writes Station configuration with
+`WIFI_STORAGE_FLASH`, `wifi_manager` also exposes a narrowly scoped cleanup API
+for removing that driver-owned persistent copy during factory reset.
 
 ## What Is Implemented
 
@@ -23,6 +26,8 @@ credential ownership remain outside this component.
 - Uses exponential retry delays of 1, 2, 4, 8, 16, then at most 30 seconds.
 - Resets retry delay and attempt count after `IP_EVENT_STA_GOT_IP`.
 - Supports manual disconnect and suppresses automatic reconnect afterward.
+- Clears ESP-IDF driver-owned persistent Wi-Fi settings on a verified
+  application factory-reset path.
 - Applies a 30-second connection/DHCP timeout to every initial or automatic
   call to `esp_wifi_connect()`.
 - Reads connected AP RSSI with `esp_wifi_sta_get_rssi()`.
@@ -170,6 +175,7 @@ configuration. An empty password is valid for an open network.
 | `wifi_manager_init()` | Initialize the Station driver, timer, event handlers, and reconnect task once. |
 | `wifi_manager_connect()` | Validate/copy credentials and begin a timed asynchronous connection. |
 | `wifi_manager_disconnect()` | Disconnect manually and suppress automatic reconnect. |
+| `wifi_manager_clear_persistent_driver_settings()` | Erase ESP-IDF persistent Wi-Fi mode/config state before a factory-reset reboot; does not clear application config or reboot. |
 | `wifi_manager_get_status()` | Copy a locked snapshot of current manager status. |
 | `wifi_manager_get_rssi()` | Read and cache RSSI while connected with IPv4. |
 | `wifi_manager_is_connected()` | Return true only while wifi_manager owns a `CONNECTED` Station with valid IPv4. |

@@ -11,4 +11,7 @@ idf_component_register(
     PRIV_REQUIRES
         freertos
         log
+        config_manager
+        esp_system
+        wifi_manager
 )

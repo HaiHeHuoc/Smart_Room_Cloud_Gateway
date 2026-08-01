@@ -8,12 +8,17 @@
 #include "freertos/task.h"
 
 #include "esp_log.h"
+#include "esp_system.h"
+
+#include "config_manager.h"
+#include "wifi_manager.h"
 
 /* Macros ------------------------------------------------------------------- */
-#define APP_RESET_COORDINATOR_QUEUE_LENGTH          4U
-#define APP_RESET_COORDINATOR_TASK_STACK_SIZE_BYTES 3072U
-#define APP_RESET_COORDINATOR_TASK_PRIORITY         4U
-#define APP_RESET_COORDINATOR_TASK_NAME             "app_reset"
+#define APP_RESET_COORDINATOR_QUEUE_LENGTH           4U
+#define APP_RESET_COORDINATOR_TASK_STACK_SIZE_BYTES  3072U
+#define APP_RESET_COORDINATOR_TASK_PRIORITY          4U
+#define APP_RESET_COORDINATOR_TASK_NAME              "app_reset"
+#define APP_RESET_COORDINATOR_RESTART_DELAY_MS       500U
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "APP_RESET_COORD";
@@ -63,15 +68,15 @@ typedef struct
 
 /* Static Variables --------------------------------------------------------- */
 static app_reset_coordinator_context_t s_reset_coordinator =
-    {
-        .lifecycle =
-            APP_RESET_COORDINATOR_LIFECYCLE_UNINITIALIZED,
+{
+    .lifecycle =
+        APP_RESET_COORDINATOR_LIFECYCLE_UNINITIALIZED,
 
-        .input_queue =
-            NULL,
+    .input_queue =
+        NULL,
 
-        .task_handle =
-            NULL,
+    .task_handle =
+        NULL,
 };
 
 /* Function Prototypes ------------------------------------------------------ */
@@ -81,7 +86,115 @@ static void app_reset_coordinator_task(
 static bool app_reset_coordinator_is_valid_input_event(
     app_reset_coordinator_input_event_t event);
 
+/**
+ * @brief Erase only stored Wi-Fi credentials and verify persistent state.
+ *
+ * @return ESP_OK only when the resulting persistent state is
+ *         CONFIG_MANAGER_WIFI_CONFIG_STATE_NOT_CONFIGURED.
+ */
+static esp_err_t app_reset_coordinator_clear_and_verify_wifi(void);
+
+/**
+ * @brief Return a diagnostic string for a Wi-Fi configuration state.
+ */
+static const char *app_reset_coordinator_wifi_state_to_string(
+    config_manager_wifi_config_state_t state);
+
 /* Static Functions --------------------------------------------------------- */
+static const char *app_reset_coordinator_wifi_state_to_string(
+    config_manager_wifi_config_state_t state)
+{
+    switch (state)
+    {
+        case CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN:
+            return "UNKNOWN";
+
+        case CONFIG_MANAGER_WIFI_CONFIG_STATE_NOT_CONFIGURED:
+            return "NOT_CONFIGURED";
+
+        case CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID:
+            return "VALID";
+
+        case CONFIG_MANAGER_WIFI_CONFIG_STATE_INCOMPLETE:
+            return "INCOMPLETE";
+
+        case CONFIG_MANAGER_WIFI_CONFIG_STATE_UNSUPPORTED_VERSION:
+            return "UNSUPPORTED_VERSION";
+
+        case CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA:
+            return "INVALID_DATA";
+
+        case CONFIG_MANAGER_WIFI_CONFIG_STATE_MIGRATION_REQUIRED:
+            return "MIGRATION_REQUIRED";
+
+        default:
+            return "INVALID_ENUM";
+    }
+}
+
+static esp_err_t app_reset_coordinator_clear_and_verify_wifi(void)
+{
+    /*
+     * config_manager_clear_wifi() owns NVS locking, handle lifecycle,
+     * credential-key erasure, and commit.
+     *
+     * It preserves configuration version, custom data, and device identity.
+     */
+    esp_err_t error =
+        config_manager_clear_wifi();
+
+    if (error != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to clear stored Wi-Fi configuration: %s",
+            esp_err_to_name(error));
+
+        return error;
+    }
+
+    config_manager_wifi_config_state_t wifi_state =
+        CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN;
+
+    /*
+     * Do not trust only the erase return value. Reopen and classify the
+     * persistent configuration after the committed operation.
+     */
+    error =
+        config_manager_get_wifi_config_state(
+            &wifi_state);
+
+    if (error != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to verify stored Wi-Fi configuration: %s",
+            esp_err_to_name(error));
+
+        return error;
+    }
+
+    if (wifi_state !=
+        CONFIG_MANAGER_WIFI_CONFIG_STATE_NOT_CONFIGURED)
+    {
+        ESP_LOGE(
+            TAG,
+            "Wi-Fi configuration verification failed: state=%s",
+            app_reset_coordinator_wifi_state_to_string(
+                wifi_state));
+
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Wi-Fi configuration reset verified: state=%s",
+        app_reset_coordinator_wifi_state_to_string(
+            wifi_state));
+
+    return ESP_OK;
+}
+
 static void app_reset_coordinator_task(
     void *argument)
 {
@@ -108,94 +221,155 @@ static void app_reset_coordinator_task(
 
         switch (event)
         {
-        case APP_RESET_COORDINATOR_INPUT_PRESSED:
-        {
-            if (state ==
-                APP_RESET_COORDINATOR_STATE_ARMED)
+            case APP_RESET_COORDINATOR_INPUT_PRESSED:
             {
-                state =
-                    APP_RESET_COORDINATOR_STATE_PRESS_ACTIVE;
+                if (state ==
+                    APP_RESET_COORDINATOR_STATE_ARMED)
+                {
+                    state =
+                        APP_RESET_COORDINATOR_STATE_PRESS_ACTIVE;
 
-                ESP_LOGI(
-                    TAG,
-                    "Factory-reset press cycle started");
+                    ESP_LOGI(
+                        TAG,
+                        "Factory-reset press cycle started");
+                }
+                else
+                {
+                    ESP_LOGD(
+                        TAG,
+                        "Duplicate pressed event ignored");
+                }
+
+                break;
             }
-            else
+
+            case APP_RESET_COORDINATOR_INPUT_LONG_PRESS:
             {
-                ESP_LOGD(
-                    TAG,
-                    "Duplicate pressed event ignored");
+                if (state ==
+                    APP_RESET_COORDINATOR_STATE_PRESS_ACTIVE)
+                {
+                    /*
+                     * Lock this physical press cycle before starting storage
+                     * work. Any duplicate queued LONG_PRESS event is ignored.
+                     */
+                    state =
+                        APP_RESET_COORDINATOR_STATE_REQUEST_ACCEPTED;
+
+                    ESP_LOGI(
+                        TAG,
+                        "Factory-reset request accepted");
+
+                    /*
+                     * Storage work runs in the reset coordinator task.
+                     *
+                     * It does not execute in the button callback and therefore
+                     * cannot block button_manager's polling task.
+                     */
+                    /*
+                     * Clear driver-owned persistence first. If Wi-Fi is not
+                     * initialized yet, application configuration remains
+                     * valid and the reset can be retried safely.
+                     */
+                    const esp_err_t driver_reset_error =
+                        wifi_manager_clear_persistent_driver_settings();
+
+                    if (driver_reset_error != ESP_OK)
+                    {
+                        /*
+                         * Application configuration is still intact, so an
+                         * early request or driver failure cannot leave the
+                         * authoritative credential store erased.
+                         */
+                        ESP_LOGE(
+                            TAG,
+                            "Factory-reset Wi-Fi driver cleanup failed: %s",
+                            esp_err_to_name(driver_reset_error));
+
+                        break;
+                    }
+
+                    const esp_err_t reset_error =
+                        app_reset_coordinator_clear_and_verify_wifi();
+
+                    if (reset_error != ESP_OK)
+                    {
+                        /*
+                         * Driver cleanup is idempotent. Preserve runtime and
+                         * suppress reboot so the application operation can be
+                         * retried after release.
+                         */
+                        ESP_LOGE(
+                            TAG,
+                            "Factory-reset storage transaction failed: %s",
+                            esp_err_to_name(reset_error));
+
+                        break;
+                    }
+
+                    ESP_LOGW(
+                        TAG,
+                        "Factory reset verified; restarting into provisioning");
+
+                    /*
+                     * Give the serial transport a finite opportunity to emit
+                     * the terminal diagnostic before rebooting. Runtime Wi-Fi
+                     * and DHCP state are discarded by esp_restart().
+                     */
+                    vTaskDelay(
+                        pdMS_TO_TICKS(
+                            APP_RESET_COORDINATOR_RESTART_DELAY_MS));
+
+                    esp_restart();
+                }
+                else if (state ==
+                         APP_RESET_COORDINATOR_STATE_REQUEST_ACCEPTED)
+                {
+                    ESP_LOGD(
+                        TAG,
+                        "Duplicate long-press request ignored");
+                }
+                else
+                {
+                    ESP_LOGW(
+                        TAG,
+                        "Out-of-order long-press event ignored");
+                }
+
+                break;
             }
 
-            break;
-        }
-
-        case APP_RESET_COORDINATOR_INPUT_LONG_PRESS:
-        {
-            if (state ==
-                APP_RESET_COORDINATOR_STATE_PRESS_ACTIVE)
+            case APP_RESET_COORDINATOR_INPUT_RELEASED:
             {
-                state =
-                    APP_RESET_COORDINATOR_STATE_REQUEST_ACCEPTED;
+                if (state !=
+                    APP_RESET_COORDINATOR_STATE_ARMED)
+                {
+                    ESP_LOGI(
+                        TAG,
+                        "Factory-reset input re-armed");
+                }
 
                 /*
-                 * Phase 7.2 ends here.
-                 *
-                 * Phase 7.3 will replace this diagnostic action with the
-                 * verified Wi-Fi configuration reset transaction.
+                 * A failed transaction does not reboot. Release re-arms the
+                 * coordinator so the idempotent cleanup can be retried.
+                 * Successful transactions restart before this event is read.
                  */
-                ESP_LOGI(
-                    TAG,
-                    "Factory-reset request accepted "
-                    "(Phase 7.2 diagnostic only)");
+                state =
+                    APP_RESET_COORDINATOR_STATE_ARMED;
+
+                break;
             }
-            else if (state ==
-                     APP_RESET_COORDINATOR_STATE_REQUEST_ACCEPTED)
+
+            default:
             {
-                ESP_LOGD(
-                    TAG,
-                    "Duplicate long-press request ignored");
-            }
-            else
-            {
+                /*
+                 * Public validation should prevent this branch.
+                 */
                 ESP_LOGW(
                     TAG,
-                    "Out-of-order long-press event ignored");
+                    "Unknown reset input event ignored");
+
+                break;
             }
-
-            break;
-        }
-
-        case APP_RESET_COORDINATOR_INPUT_RELEASED:
-        {
-            if (state !=
-                APP_RESET_COORDINATOR_STATE_ARMED)
-            {
-                ESP_LOGI(
-                    TAG,
-                    "Factory-reset input re-armed");
-            }
-
-            /*
-             * Release always ends the current physical press cycle.
-             */
-            state =
-                APP_RESET_COORDINATOR_STATE_ARMED;
-
-            break;
-        }
-
-        default:
-        {
-            /*
-             * Public validation should prevent this branch.
-             */
-            ESP_LOGW(
-                TAG,
-                "Unknown reset input event ignored");
-
-            break;
-        }
         }
     }
 }
@@ -205,15 +379,16 @@ static bool app_reset_coordinator_is_valid_input_event(
 {
     switch (event)
     {
-    case APP_RESET_COORDINATOR_INPUT_PRESSED:
-    case APP_RESET_COORDINATOR_INPUT_LONG_PRESS:
-    case APP_RESET_COORDINATOR_INPUT_RELEASED:
-        return true;
+        case APP_RESET_COORDINATOR_INPUT_PRESSED:
+        case APP_RESET_COORDINATOR_INPUT_LONG_PRESS:
+        case APP_RESET_COORDINATOR_INPUT_RELEASED:
+            return true;
 
-    default:
-        return false;
+        default:
+            return false;
     }
 }
+
 /* Functions ---------------------------------------------------------------- */
 esp_err_t app_reset_coordinator_init(void)
 {
