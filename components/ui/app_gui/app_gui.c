@@ -66,12 +66,18 @@
 typedef enum
 {
     APP_GUI_COMMAND_SHOW_SCREEN = 0,
+    APP_GUI_COMMAND_SHOW_RESET_RESULT
 } app_gui_command_type_t;
 
 typedef struct
 {
     app_gui_command_type_t type;
-    app_gui_screen_id_t screen_id;
+
+    union
+    {
+        app_gui_screen_id_t screen_id;
+        ui_reset_status_t reset_status;
+    } payload;
 } app_gui_command_t;
 
 typedef struct
@@ -98,6 +104,9 @@ typedef struct
     lv_obj_t *sensor_wifi_dot;
     lv_obj_t *sensor_cloud_label;
     lv_obj_t *sensor_cloud_dot;
+    lv_obj_t *reset_status_label;
+    lv_obj_t *reset_detail_label;
+    lv_obj_t *reset_state_indicator;
 } app_gui_widget_refs_t;
 
 /* Constants ---------------------------------------------------------------- */
@@ -157,6 +166,34 @@ static lv_obj_t *s_sensor_wifi_label = NULL;
 static lv_obj_t *s_sensor_wifi_dot = NULL;
 static lv_obj_t *s_sensor_cloud_label = NULL;
 static lv_obj_t *s_sensor_cloud_dot = NULL;
+
+static bool s_latest_reset_status_available = false;
+
+static ui_reset_status_t s_latest_reset_status =
+{
+    .transaction_id = 0U,
+    .state = UI_RESET_STATE_FAILED,
+    .last_error = ESP_FAIL,
+};
+
+/*
+ * A reset result is acknowledged only after the UI task has processed the
+ * command and completed the following LVGL timer/flush pass.
+ */
+static uint32_t s_pending_reset_presentation_id = 0U;
+static uint32_t s_presented_reset_transaction_id = 0U;
+
+/*
+ * Once a reset-result screen is shown, normal screen-routing commands are
+ * ignored. Another reset-result command remains allowed so a failed attempt
+ * can later be replaced by a successful retry.
+ */
+static bool s_reset_result_route_locked = false;
+
+/* Reset-result references are valid only while its screen is active. */
+static lv_obj_t *s_reset_status_label = NULL;
+static lv_obj_t *s_reset_detail_label = NULL;
+static lv_obj_t *s_reset_state_indicator = NULL;
 
 /* Function Prototypes ------------------------------------------------------ */
 static bool app_gui_is_valid_screen_id(
@@ -242,12 +279,24 @@ static void app_gui_render_sensor_wifi_status(
     const ui_wifi_status_t *status);
 static void app_gui_render_cloud_status(
     const ui_cloud_status_t *status);
-static void app_gui_render_cached_status(
+static bool app_gui_render_cached_status(
     app_gui_screen_id_t screen_id);
 static esp_err_t app_gui_activate_screen(
     app_gui_screen_id_t target_screen);
 static void app_gui_process_provisioning_status(
     const ui_provisioning_status_t *status);
+static bool app_gui_is_valid_reset_status(
+    const ui_reset_status_t *status);
+
+static const char *app_gui_reset_state_to_string(
+    ui_reset_state_t state);
+
+static esp_err_t app_gui_create_reset_result_screen(
+    lv_obj_t *screen);
+
+static bool app_gui_render_reset_status(
+    const ui_reset_status_t *status);
+static void app_gui_acknowledge_reset_presentation(void);
 static void app_gui_process_provisioning_status_queue(void);
 static void app_gui_process_commands(void);
 static void app_gui_process_provisioning_qr_payload(void);
@@ -265,11 +314,55 @@ static bool app_gui_is_valid_screen_id(
     bool allow_none)
 {
     return
-        ((allow_none && (screen_id == APP_GUI_SCREEN_NONE)) ||
+        ((allow_none &&
+          (screen_id == APP_GUI_SCREEN_NONE)) ||
          (screen_id == APP_GUI_SCREEN_BOOT) ||
          (screen_id == APP_GUI_SCREEN_PROVISIONING) ||
          (screen_id == APP_GUI_SCREEN_WIFI_STATUS) ||
-         (screen_id == APP_GUI_SCREEN_SENSOR_DASHBOARD));
+         (screen_id == APP_GUI_SCREEN_SENSOR_DASHBOARD) ||
+         (screen_id == APP_GUI_SCREEN_RESET_RESULT));
+}
+
+static bool app_gui_is_valid_reset_status(
+    const ui_reset_status_t *status)
+{
+    if (status == NULL)
+    {
+        return false;
+    }
+
+    if (status->transaction_id == 0U)
+    {
+        return false;
+    }
+
+    switch (status->state)
+    {
+        case UI_RESET_STATE_SUCCESS:
+            return status->last_error == ESP_OK;
+
+        case UI_RESET_STATE_FAILED:
+            return status->last_error != ESP_OK;
+
+        default:
+            return false;
+    }
+}
+
+static const char *app_gui_reset_state_to_string(
+    ui_reset_state_t state)
+{
+    switch (state)
+    {
+        case UI_RESET_STATE_SUCCESS:
+            return "SUCCESS";
+
+        case UI_RESET_STATE_FAILED:
+            return "FAILED";
+
+        default:
+            return "UNKNOWN";
+    }
 }
 
 static void app_gui_zeroize(
@@ -434,6 +527,9 @@ static const char *app_gui_screen_id_to_string(
 
         case APP_GUI_SCREEN_SENSOR_DASHBOARD:
             return "SENSOR_DASHBOARD";
+
+        case APP_GUI_SCREEN_RESET_RESULT:
+            return "RESET_RESULT";
 
         default:
             return "UNKNOWN";
@@ -656,6 +752,14 @@ static void app_gui_capture_widget_refs(
     refs->sensor_wifi_dot = s_sensor_wifi_dot;
     refs->sensor_cloud_label = s_sensor_cloud_label;
     refs->sensor_cloud_dot = s_sensor_cloud_dot;
+    refs->reset_status_label =
+        s_reset_status_label;
+
+    refs->reset_detail_label =
+        s_reset_detail_label;
+
+    refs->reset_state_indicator =
+        s_reset_state_indicator;
 }
 
 static void app_gui_clear_widget_refs(void)
@@ -676,6 +780,9 @@ static void app_gui_clear_widget_refs(void)
     s_sensor_wifi_dot = NULL;
     s_sensor_cloud_label = NULL;
     s_sensor_cloud_dot = NULL;
+    s_reset_status_label = NULL;
+    s_reset_detail_label = NULL;
+    s_reset_state_indicator = NULL;
 }
 
 static void app_gui_apply_widget_refs(
@@ -707,6 +814,9 @@ static void app_gui_apply_widget_refs(
     s_sensor_wifi_dot = refs->sensor_wifi_dot;
     s_sensor_cloud_label = refs->sensor_cloud_label;
     s_sensor_cloud_dot = refs->sensor_cloud_dot;
+    s_reset_status_label = refs->reset_status_label;
+    s_reset_detail_label = refs->reset_detail_label;
+    s_reset_state_indicator = refs->reset_state_indicator;
 }
 
 /* Wi-Fi Screen Helpers ----------------------------------------------------- */
@@ -1707,6 +1817,270 @@ static esp_err_t app_gui_create_sensor_screen(
     return ESP_OK;
 }
 
+/* Reset Result Screen ----------------------------------------------------- */
+
+static esp_err_t app_gui_create_reset_result_screen(
+    lv_obj_t *screen)
+{
+    if (screen == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    lv_obj_remove_flag(
+        screen,
+        LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_set_style_bg_color(
+        screen,
+        lv_color_hex(0x101619),
+        LV_PART_MAIN);
+
+    lv_obj_set_style_bg_opa(
+        screen,
+        LV_OPA_COVER,
+        LV_PART_MAIN);
+
+    lv_obj_set_style_border_width(
+        screen,
+        0,
+        LV_PART_MAIN);
+
+    lv_obj_set_style_radius(
+        screen,
+        0,
+        LV_PART_MAIN);
+
+    lv_obj_set_style_pad_all(
+        screen,
+        0,
+        LV_PART_MAIN);
+
+    lv_obj_t *title =
+        lv_label_create(screen);
+
+    s_reset_state_indicator =
+        lv_obj_create(screen);
+
+    s_reset_status_label =
+        lv_label_create(screen);
+
+    s_reset_detail_label =
+        lv_label_create(screen);
+
+    if ((title == NULL) ||
+        (s_reset_state_indicator == NULL) ||
+        (s_reset_status_label == NULL) ||
+        (s_reset_detail_label == NULL))
+    {
+        return ESP_ERR_NO_MEM;
+    }
+
+    lv_label_set_text(
+        title,
+        "Factory Reset");
+
+    lv_obj_set_style_text_font(
+        title,
+        &lv_font_montserrat_18,
+        LV_PART_MAIN);
+
+    lv_obj_set_style_text_color(
+        title,
+        lv_color_hex(0xF2F5F7),
+        LV_PART_MAIN);
+
+    lv_obj_align(
+        title,
+        LV_ALIGN_CENTER,
+        0,
+        -46);
+
+    lv_obj_remove_style_all(
+        s_reset_state_indicator);
+
+    lv_obj_set_size(
+        s_reset_state_indicator,
+        18,
+        18);
+
+    lv_obj_set_style_radius(
+        s_reset_state_indicator,
+        LV_RADIUS_CIRCLE,
+        LV_PART_MAIN);
+
+    lv_obj_set_style_bg_opa(
+        s_reset_state_indicator,
+        LV_OPA_COVER,
+        LV_PART_MAIN);
+
+    lv_obj_set_style_bg_color(
+        s_reset_state_indicator,
+        lv_color_hex(0xFFC857),
+        LV_PART_MAIN);
+
+    lv_obj_align(
+        s_reset_state_indicator,
+        LV_ALIGN_CENTER,
+        0,
+        -18);
+
+    lv_label_set_text(
+        s_reset_status_label,
+        "Completing...");
+
+    lv_obj_set_style_text_font(
+        s_reset_status_label,
+        &lv_font_montserrat_18,
+        LV_PART_MAIN);
+
+    lv_obj_set_style_text_color(
+        s_reset_status_label,
+        lv_color_hex(0xFFC857),
+        LV_PART_MAIN);
+
+    lv_obj_align(
+        s_reset_status_label,
+        LV_ALIGN_CENTER,
+        0,
+        12);
+
+    lv_label_set_text(
+        s_reset_detail_label,
+        "Please wait");
+
+    lv_label_set_long_mode(
+        s_reset_detail_label,
+        LV_LABEL_LONG_WRAP);
+
+    lv_obj_set_size(
+        s_reset_detail_label,
+        148,
+        32);
+
+    lv_obj_set_style_text_font(
+        s_reset_detail_label,
+        &lv_font_montserrat_10,
+        LV_PART_MAIN);
+
+    lv_obj_set_style_text_color(
+        s_reset_detail_label,
+        lv_color_hex(0xA6B0B6),
+        LV_PART_MAIN);
+
+    lv_obj_set_style_text_align(
+        s_reset_detail_label,
+        LV_TEXT_ALIGN_CENTER,
+        LV_PART_MAIN);
+
+    lv_obj_align(
+        s_reset_detail_label,
+        LV_ALIGN_CENTER,
+        0,
+        43);
+
+    return ESP_OK;
+}
+
+static bool app_gui_render_reset_status(
+    const ui_reset_status_t *status)
+{
+    if (!app_gui_is_valid_reset_status(status) ||
+        (s_reset_status_label == NULL) ||
+        (s_reset_detail_label == NULL) ||
+        (s_reset_state_indicator == NULL))
+    {
+        return false;
+    }
+
+    const bool success =
+        status->state ==
+        UI_RESET_STATE_SUCCESS;
+
+    const lv_color_t state_color =
+        success
+            ? lv_color_hex(0x49C978)
+            : lv_color_hex(0xF06464);
+
+    lv_obj_set_style_bg_color(
+        s_reset_state_indicator,
+        state_color,
+        LV_PART_MAIN);
+
+    lv_obj_set_style_text_color(
+        s_reset_status_label,
+        state_color,
+        LV_PART_MAIN);
+
+    if (success)
+    {
+        lv_label_set_text(
+            s_reset_status_label,
+            "Wi-Fi cleared");
+
+        lv_label_set_text(
+            s_reset_detail_label,
+            "Restarting into setup...");
+    }
+    else
+    {
+        char error_text[72] = {0};
+
+        (void)snprintf(
+            error_text,
+            sizeof(error_text),
+            "Error: %s\nRelease and try again",
+            esp_err_to_name(
+                status->last_error));
+
+        lv_label_set_text(
+            s_reset_status_label,
+            "Reset failed");
+
+        lv_label_set_text(
+            s_reset_detail_label,
+            error_text);
+    }
+
+    return true;
+}
+
+static void app_gui_acknowledge_reset_presentation(void)
+{
+    uint32_t presented_transaction_id = 0U;
+
+    taskENTER_CRITICAL(
+        &s_screen_id_lock);
+
+    if ((s_pending_reset_presentation_id != 0U) &&
+        (s_current_screen_id ==
+         APP_GUI_SCREEN_RESET_RESULT) &&
+        s_latest_reset_status_available &&
+        (s_latest_reset_status.transaction_id ==
+         s_pending_reset_presentation_id))
+    {
+        s_presented_reset_transaction_id =
+            s_pending_reset_presentation_id;
+
+        presented_transaction_id =
+            s_presented_reset_transaction_id;
+    }
+
+    /* A pending presentation is valid for only this handler pass. */
+    s_pending_reset_presentation_id = 0U;
+
+    taskEXIT_CRITICAL(
+        &s_screen_id_lock);
+
+    if (presented_transaction_id != 0U)
+    {
+        ESP_LOGD(
+            TAG,
+            "Reset-result presentation acknowledged: transaction=%lu",
+            (unsigned long)presented_transaction_id);
+    }
+}
+
 /* Cached Model Rendering --------------------------------------------------- */
 static void app_gui_render_wifi_status(
     const ui_wifi_status_t *status)
@@ -1878,9 +2252,19 @@ static void app_gui_render_cloud_status(
     }
 }
 
-static void app_gui_render_cached_status(
+static bool app_gui_render_cached_status(
     app_gui_screen_id_t screen_id)
 {
+
+    bool reset_available = false;
+
+    ui_reset_status_t reset_status =
+    {
+        .transaction_id = 0U,
+        .state = UI_RESET_STATE_FAILED,
+        .last_error = ESP_FAIL,
+    };
+
     bool provisioning_available = false;
     bool provisioning_qr_available = false;
     bool wifi_available = false;
@@ -1900,23 +2284,48 @@ static void app_gui_render_cached_status(
     ui_cloud_status_t cloud_status = {0};
 
     taskENTER_CRITICAL(&s_screen_id_lock);
-    provisioning_available =
-        s_latest_provisioning_status_available;
-    provisioning_status =
-        s_latest_provisioning_status;
-    if (screen_id == APP_GUI_SCREEN_PROVISIONING) {
-        provisioning_qr_available =
-            s_latest_provisioning_qr_payload_available;
-        provisioning_qr_payload =
-            s_latest_provisioning_qr_payload;
+
+    reset_available =
+        s_latest_reset_status_available;
+    reset_status =
+        s_latest_reset_status;
+
+    if (screen_id !=
+        APP_GUI_SCREEN_RESET_RESULT)
+    {
+        provisioning_available =
+            s_latest_provisioning_status_available;
+        provisioning_status =
+            s_latest_provisioning_status;
+
+        if (screen_id == APP_GUI_SCREEN_PROVISIONING) {
+            provisioning_qr_available =
+                s_latest_provisioning_qr_payload_available;
+            provisioning_qr_payload =
+                s_latest_provisioning_qr_payload;
+        }
+
+        wifi_available = s_latest_wifi_status_available;
+        wifi_status = s_latest_wifi_status;
+        sensor_available = s_latest_sensor_status_available;
+        sensor_status = s_latest_sensor_status;
+        cloud_available = s_latest_cloud_status_available;
+        cloud_status = s_latest_cloud_status;
     }
-    wifi_available = s_latest_wifi_status_available;
-    wifi_status = s_latest_wifi_status;
-    sensor_available = s_latest_sensor_status_available;
-    sensor_status = s_latest_sensor_status;
-    cloud_available = s_latest_cloud_status_available;
-    cloud_status = s_latest_cloud_status;
+
     taskEXIT_CRITICAL(&s_screen_id_lock);
+
+    if (screen_id ==
+        APP_GUI_SCREEN_RESET_RESULT)
+    {
+        if (!reset_available)
+        {
+            return false;
+        }
+
+        return app_gui_render_reset_status(
+            &reset_status);
+    }
 
     if (screen_id == APP_GUI_SCREEN_PROVISIONING) {
         if (!provisioning_available) {
@@ -1938,17 +2347,17 @@ static void app_gui_render_cached_status(
             &provisioning_qr_payload,
             sizeof(provisioning_qr_payload));
 
-        return;
+        return true;
     }
 
     if ((screen_id == APP_GUI_SCREEN_WIFI_STATUS) &&
         wifi_available) {
         app_gui_render_wifi_status(&wifi_status);
-        return;
+        return true;
     }
 
     if (screen_id != APP_GUI_SCREEN_SENSOR_DASHBOARD) {
-        return;
+        return true;
     }
 
     if (wifi_available) {
@@ -1962,6 +2371,8 @@ static void app_gui_render_cached_status(
     if (cloud_available) {
         app_gui_render_cloud_status(&cloud_status);
     }
+
+    return true;
 }
 
 /* Central Screen Router ---------------------------------------------------- */
@@ -1978,8 +2389,17 @@ static esp_err_t app_gui_activate_screen(
     ui_manager_lvgl_wait_for_mutex();
 
     if (target_screen == current_screen) {
-        app_gui_render_cached_status(target_screen);
+        const bool rendered =
+            app_gui_render_cached_status(
+                target_screen);
+
         ui_manager_lvgl_release_mutex();
+
+        if (!rendered)
+        {
+            return ESP_ERR_INVALID_STATE;
+        }
+
         ESP_LOGD(
             TAG,
             "Ignoring duplicate screen request: %s",
@@ -2025,6 +2445,12 @@ static esp_err_t app_gui_activate_screen(
             ret = app_gui_create_sensor_screen(target_root);
             break;
 
+        case APP_GUI_SCREEN_RESET_RESULT:
+            ret =
+                app_gui_create_reset_result_screen(
+                    target_root);
+            break;
+
         case APP_GUI_SCREEN_NONE:
         default:
             ret = ESP_ERR_INVALID_ARG;
@@ -2051,6 +2477,16 @@ static esp_err_t app_gui_activate_screen(
         return ret;
     }
 
+    if (!app_gui_render_cached_status(
+            target_screen))
+    {
+        lv_obj_delete(target_root);
+        app_gui_apply_widget_refs(
+            &previous_refs);
+        ui_manager_lvgl_release_mutex();
+        return ESP_ERR_INVALID_STATE;
+    }
+
     if ((s_wifi_screen_timer != NULL) &&
         (target_screen != APP_GUI_SCREEN_WIFI_STATUS)) {
         lv_timer_pause(s_wifi_screen_timer);
@@ -2058,8 +2494,6 @@ static esp_err_t app_gui_activate_screen(
 
     lv_screen_load(target_root);
     app_gui_set_active_screen_id(target_screen);
-
-    app_gui_render_cached_status(target_screen);
 
     if (target_screen == APP_GUI_SCREEN_WIFI_STATUS) {
         app_gui_restart_wifi_screen_timer();
@@ -2150,44 +2584,142 @@ static void app_gui_process_provisioning_status_queue(void)
 
     app_gui_process_provisioning_status(&status);
 }
-
 static void app_gui_process_commands(void)
 {
     app_gui_command_t command = {0};
 
-    if (s_command_queue == NULL) {
+    if (s_command_queue == NULL)
+    {
         return;
     }
 
     while (xQueueReceive(
                s_command_queue,
                &command,
-               0) == pdTRUE) {
-        switch (command.type) {
+               0U) == pdTRUE)
+    {
+        switch (command.type)
+        {
             case APP_GUI_COMMAND_SHOW_SCREEN:
             {
-                const esp_err_t ret =
-                    app_gui_activate_screen(
-                        command.screen_id);
+                bool reset_route_locked = false;
 
-                if (ret != ESP_OK) {
+                taskENTER_CRITICAL(
+                    &s_screen_id_lock);
+
+                reset_route_locked =
+                    s_reset_result_route_locked;
+
+                taskEXIT_CRITICAL(
+                    &s_screen_id_lock);
+
+                if (reset_route_locked)
+                {
+                    ESP_LOGD(
+                        TAG,
+                        "Screen request ignored during reset-result flow");
+
+                    break;
+                }
+
+                const app_gui_screen_id_t target_screen =
+                    command.payload.screen_id;
+
+                const esp_err_t error =
+                    app_gui_activate_screen(
+                        target_screen);
+
+                if (error != ESP_OK)
+                {
                     ESP_LOGE(
                         TAG,
                         "Failed to activate screen %s: %s",
                         app_gui_screen_id_to_string(
-                            command.screen_id),
-                        esp_err_to_name(ret));
+                            target_screen),
+                        esp_err_to_name(error));
                 }
 
                 break;
             }
 
+            case APP_GUI_COMMAND_SHOW_RESET_RESULT:
+            {
+                const ui_reset_status_t *reset_status =
+                    &command.payload.reset_status;
+
+                if (!app_gui_is_valid_reset_status(
+                        reset_status))
+                {
+                    ESP_LOGW(
+                        TAG,
+                        "Ignoring invalid reset-result command");
+
+                    break;
+                }
+
+                taskENTER_CRITICAL(
+                    &s_screen_id_lock);
+
+                s_latest_reset_status =
+                    *reset_status;
+
+                s_latest_reset_status_available =
+                    true;
+
+                taskEXIT_CRITICAL(
+                    &s_screen_id_lock);
+
+                const esp_err_t error =
+                    app_gui_activate_screen(
+                        APP_GUI_SCREEN_RESET_RESULT);
+
+                if (error != ESP_OK)
+                {
+                    ESP_LOGE(
+                        TAG,
+                        "Failed to activate reset-result screen: %s",
+                        esp_err_to_name(error));
+
+                    break;
+                }
+
+                /*
+                 * Lock normal routing only after the reset screen was
+                 * successfully created and loaded. Presentation is not
+                 * acknowledged until the following LVGL handler pass.
+                 */
+                taskENTER_CRITICAL(
+                    &s_screen_id_lock);
+
+                s_reset_result_route_locked =
+                    true;
+
+                s_pending_reset_presentation_id =
+                    reset_status->transaction_id;
+
+                taskEXIT_CRITICAL(
+                    &s_screen_id_lock);
+
+                ESP_LOGI(
+                    TAG,
+                    "Reset-result screen loaded: transaction=%lu, state=%s",
+                    (unsigned long)
+                        reset_status->transaction_id,
+                    app_gui_reset_state_to_string(
+                        reset_status->state));
+
+                break;
+            }
+
             default:
+            {
                 ESP_LOGW(
                     TAG,
                     "Ignoring unknown GUI command: %d",
                     (int)command.type);
+
                 break;
+            }
         }
     }
 }
@@ -2450,6 +2982,8 @@ static void app_gui_process_lvgl(void)
     lv_timer_handler();
 
     ui_manager_lvgl_release_mutex();
+
+    app_gui_acknowledge_reset_presentation();
 }
 
 static void app_gui_ui_task(void *param)
@@ -2802,7 +3336,12 @@ esp_err_t app_gui_post_cloud_status(
 esp_err_t app_gui_request_screen(
     app_gui_screen_id_t screen_id)
 {
-    if (!app_gui_is_valid_screen_id(screen_id, false)) {
+    if (!app_gui_is_valid_screen_id(
+            screen_id,
+            false) ||
+        (screen_id ==
+         APP_GUI_SCREEN_RESET_RESULT))
+    {
         ESP_LOGW(
             TAG,
             "Invalid screen request target: %s (%d)",
@@ -2815,9 +3354,16 @@ esp_err_t app_gui_request_screen(
         return ESP_ERR_INVALID_STATE;
     }
 
-    const app_gui_command_t command = {
-        .type = APP_GUI_COMMAND_SHOW_SCREEN,
-        .screen_id = screen_id,
+    const app_gui_command_t command =
+    {
+        .type =
+            APP_GUI_COMMAND_SHOW_SCREEN,
+
+        .payload =
+        {
+            .screen_id =
+                screen_id,
+        },
     };
 
     if (xQueueSend(
@@ -2847,6 +3393,77 @@ esp_err_t app_gui_get_screen_id(
     taskENTER_CRITICAL(&s_screen_id_lock);
     *screen_id = s_current_screen_id;
     taskEXIT_CRITICAL(&s_screen_id_lock);
+
+    return ESP_OK;
+}
+
+esp_err_t app_gui_show_reset_result(
+    const ui_reset_status_t *status)
+{
+    if (!app_gui_is_valid_reset_status(status))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_command_queue == NULL)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const app_gui_command_t command =
+    {
+        .type =
+            APP_GUI_COMMAND_SHOW_RESET_RESULT,
+
+        .payload =
+        {
+            .reset_status =
+                *status,
+        },
+    };
+
+    if (xQueueSend(
+            s_command_queue,
+            &command,
+            0U) != pdTRUE)
+    {
+        ESP_LOGW(
+            TAG,
+            "GUI command queue is full; "
+            "reset result was not queued");
+
+        return ESP_ERR_TIMEOUT;
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t app_gui_is_reset_result_presented(
+    uint32_t transaction_id,
+    bool *presented)
+{
+    if ((transaction_id == 0U) ||
+        (presented == NULL))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *presented = false;
+
+    if (s_command_queue == NULL)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    taskENTER_CRITICAL(
+        &s_screen_id_lock);
+
+    *presented =
+        s_presented_reset_transaction_id ==
+        transaction_id;
+
+    taskEXIT_CRITICAL(
+        &s_screen_id_lock);
 
     return ESP_OK;
 }

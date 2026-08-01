@@ -127,6 +127,20 @@ typedef struct
 } provisioning_manager_progress_status_t;
 
 /**
+ * @brief Non-sensitive identity and state of the current credential handoff.
+ *
+ * @p credential_generation increments for every valid credential set received
+ * in one provisioning-manager lifecycle. It lets a polling coordinator detect
+ * a fast failed-attempt-to-new-attempt transition even when @p pending is true
+ * in both observations.
+ */
+typedef struct
+{
+    bool pending;
+    uint32_t credential_generation;
+} provisioning_manager_wifi_handoff_status_t;
+
+/**
  * @brief Task-context callback for provisioning progress.
  *
  * The callback receives a copied snapshot and is invoked outside the manager's
@@ -287,6 +301,22 @@ esp_err_t provisioning_manager_get_state(
  */
 esp_err_t provisioning_manager_is_wifi_handoff_pending(
     bool *handoff_pending);
+
+/**
+ * @brief Copy the current credential-handoff state and monotonic identity.
+ *
+ * The snapshot contains no SSID or password. A non-zero generation identifies
+ * the latest valid credential set received in the current provisioning
+ * lifecycle; it remains unchanged when that attempt completes or fails.
+ * This API is thread-safe and non-blocking.
+ *
+ * @param[out] status Destination for the copied handoff snapshot.
+ *
+ * @return ESP_OK, ESP_ERR_INVALID_ARG when @p status is NULL, or
+ *         ESP_ERR_INVALID_STATE before the credential queue is initialized.
+ */
+esp_err_t provisioning_manager_get_wifi_handoff_status(
+    provisioning_manager_wifi_handoff_status_t *status);
 
 /**
  * @brief Wait for and copy the latest provisioned Wi-Fi credentials.

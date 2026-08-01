@@ -31,6 +31,9 @@
 #define APP_NETWORK_COORDINATOR_STORED_WIFI_BOOT_GRACE_MS \
     (60U * 1000U)
 
+#define APP_NETWORK_COORDINATOR_WIFI_DETACH_TIMEOUT_MS \
+    5000U
+
 #define APP_NETWORK_COORDINATOR_MAX_SESSIONS \
     10U
 
@@ -49,6 +52,7 @@ static const char *const TAG = "APP_NETWORK_COORDINATOR";
 typedef enum
 {
     APP_PROVISIONING_RESULT_SUCCESS = 0,
+    APP_PROVISIONING_RESULT_ABORTED_BY_FACTORY_RESET,
     APP_PROVISIONING_RESULT_RETRYABLE_TIMEOUT,
     APP_PROVISIONING_RESULT_RETRYABLE_SESSION_FAILURE,
     APP_PROVISIONING_RESULT_NONRETRYABLE_STORAGE_FAILURE,
@@ -60,6 +64,7 @@ typedef struct
 {
     app_provisioning_result_t result;
     esp_err_t error;
+    bool cleanup_complete;
 } app_provisioning_attempt_outcome_t;
 
 /* Static Variables --------------------------------------------------------- */
@@ -78,6 +83,8 @@ static uint32_t s_active_provisioning_generation = 0U;
 static uint32_t s_active_provisioning_session_number = 0U;
 static bool s_provisioning_terminal_error_valid = false;
 static esp_err_t s_provisioning_terminal_error = ESP_OK;
+static bool s_factory_reset_requested = false;
+static bool s_reset_exclusion_active = false;
 
 /* Function Prototypes ------------------------------------------------------ */
 /**
@@ -162,6 +169,40 @@ static esp_err_t app_cleanup_provisioning_session(
     uint32_t session_generation);
 
 /**
+ * @brief Detach a provisioning Station attempt after its outcome boundary.
+ *
+ * Call only after provisioning has reached STOPPED and the final verified
+ * credential queue drain is empty. The finite wait prevents a late driver
+ * event from overlapping the next provisioning session.
+ *
+ * @return ESP_OK after WIFI_MANAGER_STATE_DISCONNECTED is observed,
+ *         ESP_ERR_NOT_FINISHED if the finite detach wait expires, or an error
+ *         from wifi_manager.
+ */
+static esp_err_t app_discard_unmanaged_wifi_connection(void);
+
+/**
+ * @brief Wait for verified credentials with a bounded per-handoff IP wait.
+ *
+ * If an in-flight credential handoff reaches its deadline, this function
+ * first stops and deinitializes the provisioning framework, then performs one
+ * final non-blocking queue drain. That ordering gives a concurrent GOT_IP a
+ * deterministic outcome without disconnecting a framework-owned attempt.
+ *
+ * @param[in] session_generation Active non-zero session identity.
+ * @param[out] credentials Verified credential destination.
+ * @param[out] cleanup_complete True when this function already reached
+ *                              PROVISIONING_MANAGER_STATE_STOPPED.
+ *
+ * @return ESP_OK for verified credentials, ESP_ERR_TIMEOUT for a bounded
+ *         timeout, or another lifecycle/queue error.
+ */
+static esp_err_t app_wait_for_verified_provisioning_credentials(
+    uint32_t session_generation,
+    provisioning_manager_wifi_credentials_t *credentials,
+    bool *cleanup_complete);
+
+/**
  * @brief Reclaim terminal BLE memory without changing the network outcome.
  *
  * The provisioning manager enforces STOPPED/controller-idle safety. Any
@@ -229,6 +270,25 @@ static void app_network_coordinator_set_state(
     app_network_coordinator_state_t state);
 
 /**
+ * @brief Inspect the application factory-reset gate atomically.
+ */
+static bool app_is_factory_reset_requested(void);
+
+/**
+ * @brief Claim one reset-excluded application network operation.
+ *
+ * The claim covers an operation whose external side effects must either finish
+ * before factory-reset erasure or not start at all. No critical section is
+ * held while the claimed operation calls a manager, NVS, GUI, or delay API.
+ */
+static esp_err_t app_claim_reset_exclusion(void);
+
+/**
+ * @brief Release the reset-exclusion claim and return the reset-gate snapshot.
+ */
+static bool app_release_reset_exclusion(void);
+
+/**
  * @brief Execute the synchronous boot policy in coordinator task context.
  *
  * @return ESP_OK when the selected network path starts or completes.
@@ -275,7 +335,14 @@ static void app_network_coordinator_task(
     const esp_err_t ret =
         app_network_coordinator_run_boot_policy();
 
-    if (ret != ESP_OK)
+    if ((ret == ESP_ERR_NOT_ALLOWED) &&
+        app_is_factory_reset_requested())
+    {
+        ESP_LOGI(
+            TAG,
+            "Network boot policy yielded to factory-reset preparation");
+    }
+    else if (ret != ESP_OK)
     {
         app_network_coordinator_set_state(
             APP_NETWORK_COORDINATOR_STATE_FAILED);
@@ -308,27 +375,43 @@ static void app_network_coordinator_task(
 
 static esp_err_t app_network_coordinator_run_boot_policy(void)
 {
+    esp_err_t ret =
+        app_claim_reset_exclusion();
+
+    if (ret != ESP_OK)
+    {
+        return ret;
+    }
+
     app_network_coordinator_set_state(
         APP_NETWORK_COORDINATOR_STATE_RESOLVING_CONFIG);
 
     config_manager_wifi_config_state_t config_state =
         CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN;
 
-    esp_err_t ret =
+    ret =
         app_resolve_wifi_config_state(
             &config_state);
 
     if (ret != ESP_OK)
     {
-        app_network_coordinator_request_initial_screen(
-            CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN);
+        const bool reset_requested =
+            app_release_reset_exclusion();
+
+        if (!reset_requested)
+        {
+            app_network_coordinator_request_initial_screen(
+                CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN);
+        }
 
         ESP_LOGE(
             TAG,
             "Failed to resolve Wi-Fi configuration: %s",
             esp_err_to_name(ret));
 
-        return ret;
+        return reset_requested
+                   ? ESP_ERR_NOT_ALLOWED
+                   : ret;
     }
 
     app_log_wifi_config_state(
@@ -336,6 +419,11 @@ static esp_err_t app_network_coordinator_run_boot_policy(void)
 
     app_network_coordinator_request_initial_screen(
         config_state);
+
+    if (app_release_reset_exclusion())
+    {
+        return ESP_ERR_NOT_ALLOWED;
+    }
 
     ret =
         app_apply_wifi_boot_policy(
@@ -361,6 +449,11 @@ static esp_err_t app_network_coordinator_run_boot_policy(void)
 static void app_network_coordinator_request_initial_screen(
     config_manager_wifi_config_state_t state)
 {
+    if (app_is_factory_reset_requested())
+    {
+        return;
+    }
+
     const app_gui_screen_id_t target_screen =
         state == CONFIG_MANAGER_WIFI_CONFIG_STATE_NOT_CONFIGURED
             ? APP_GUI_SCREEN_PROVISIONING
@@ -403,7 +496,8 @@ static void app_network_coordinator_wait_for_stored_wifi_boot_grace(void)
 
     app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
 
-    if ((app_network_coordinator_get_state(&state) != ESP_OK) ||
+    if (app_is_factory_reset_requested() ||
+        (app_network_coordinator_get_state(&state) != ESP_OK) ||
         (state == APP_NETWORK_COORDINATOR_STATE_ONLINE) ||
         (app_gui_get_screen_id(&screen_id) != ESP_OK) ||
         (screen_id != APP_GUI_SCREEN_BOOT))
@@ -439,6 +533,51 @@ static void app_network_coordinator_set_state(
     portEXIT_CRITICAL(&s_state_lock);
 }
 
+static bool app_is_factory_reset_requested(void)
+{
+    bool requested = false;
+
+    portENTER_CRITICAL(&s_state_lock);
+    requested = s_factory_reset_requested;
+    portEXIT_CRITICAL(&s_state_lock);
+
+    return requested;
+}
+
+static esp_err_t app_claim_reset_exclusion(void)
+{
+    portENTER_CRITICAL(&s_state_lock);
+
+    if (s_factory_reset_requested)
+    {
+        portEXIT_CRITICAL(&s_state_lock);
+        return ESP_ERR_NOT_ALLOWED;
+    }
+
+    if (s_reset_exclusion_active)
+    {
+        portEXIT_CRITICAL(&s_state_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    s_reset_exclusion_active = true;
+    portEXIT_CRITICAL(&s_state_lock);
+
+    return ESP_OK;
+}
+
+static bool app_release_reset_exclusion(void)
+{
+    bool reset_requested = false;
+
+    portENTER_CRITICAL(&s_state_lock);
+    s_reset_exclusion_active = false;
+    reset_requested = s_factory_reset_requested;
+    portEXIT_CRITICAL(&s_state_lock);
+
+    return reset_requested;
+}
+
 static void app_zeroize(
     void *buffer,
     size_t size)
@@ -461,6 +600,9 @@ static const char *app_provisioning_result_to_string(
         case APP_PROVISIONING_RESULT_SUCCESS:
             return "SUCCESS";
 
+        case APP_PROVISIONING_RESULT_ABORTED_BY_FACTORY_RESET:
+            return "ABORTED_BY_FACTORY_RESET";
+
         case APP_PROVISIONING_RESULT_RETRYABLE_TIMEOUT:
             return "RETRYABLE_TIMEOUT";
 
@@ -482,6 +624,11 @@ static const char *app_provisioning_result_to_string(
 static void app_publish_provisioning_qr_payload(
     uint32_t session_generation)
 {
+    if (app_is_factory_reset_requested())
+    {
+        return;
+    }
+
     ui_provisioning_qr_payload_t qr_payload =
     {
         .session_generation = session_generation,
@@ -540,6 +687,12 @@ static void app_publish_provisioning_status(
     uint32_t session_limit = 0U;
 
     portENTER_CRITICAL(&s_state_lock);
+
+    if (s_factory_reset_requested)
+    {
+        portEXIT_CRITICAL(&s_state_lock);
+        return;
+    }
 
     if (session_generation ==
         s_active_provisioning_generation)
@@ -607,6 +760,12 @@ static void app_provisioning_progress_callback(
     uint32_t active_generation = 0U;
 
     portENTER_CRITICAL(&s_state_lock);
+
+    if (s_factory_reset_requested)
+    {
+        portEXIT_CRITICAL(&s_state_lock);
+        return;
+    }
 
     active_generation =
         s_active_provisioning_generation;
@@ -692,11 +851,11 @@ static void app_provisioning_progress_callback(
             break;
 
         case PROVISIONING_MANAGER_PROGRESS_WIFI_CONNECTED:
-            app_publish_provisioning_status(
-                status->session_generation,
-                UI_PROVISIONING_STATE_WAITING_FOR_IP,
-                status->last_error,
-                0U);
+            /*
+             * The coordinator task advances to SAVING_CONFIG after consuming
+             * the verified credential queue. Publishing here can race that
+             * task and overwrite a causally newer GUI state.
+             */
             break;
 
         case PROVISIONING_MANAGER_PROGRESS_STOPPING:
@@ -788,12 +947,30 @@ static esp_err_t app_cleanup_provisioning_session(
     {
         ret = provisioning_manager_stop();
 
-        if (ret != ESP_OK)
+        if (ret == ESP_ERR_INVALID_STATE)
+        {
+            /*
+             * Auto-stop may move ACTIVE -> STOPPING after the snapshot but
+             * before this call. Reconcile that legal race instead of losing a
+             * verified credential queued at the same boundary.
+             */
+            ret =
+                provisioning_manager_get_state(
+                    &state);
+
+            if (ret != ESP_OK)
+            {
+                return ret;
+            }
+        }
+        else if (ret != ESP_OK)
         {
             return ret;
         }
-
-        state = PROVISIONING_MANAGER_STATE_STOPPING;
+        else
+        {
+            state = PROVISIONING_MANAGER_STATE_STOPPING;
+        }
     }
 
     if (state == PROVISIONING_MANAGER_STATE_STOPPED)
@@ -813,6 +990,304 @@ static esp_err_t app_cleanup_provisioning_session(
 
     return app_wait_for_provisioning_stop(
         s_config.provisioning_timeout_ms);
+}
+
+static esp_err_t app_discard_unmanaged_wifi_connection(void)
+{
+    esp_err_t ret =
+        wifi_manager_discard_unmanaged_connection();
+
+    if (ret != ESP_OK)
+    {
+        return ret;
+    }
+
+    const TickType_t start_tick =
+        xTaskGetTickCount();
+
+    const TickType_t timeout_ticks =
+        pdMS_TO_TICKS(
+            APP_NETWORK_COORDINATOR_WIFI_DETACH_TIMEOUT_MS);
+
+    TickType_t poll_ticks =
+        pdMS_TO_TICKS(
+            s_config.provisioning_poll_period_ms);
+
+    if (poll_ticks > timeout_ticks)
+    {
+        poll_ticks = timeout_ticks;
+    }
+
+    while (true)
+    {
+        wifi_manager_status_t status = {0};
+
+        ret =
+            wifi_manager_get_status(
+                &status);
+
+        if (ret != ESP_OK)
+        {
+            return ret;
+        }
+
+        if (status.state ==
+            WIFI_MANAGER_STATE_DISCONNECTED)
+        {
+            return ESP_OK;
+        }
+
+        const TickType_t now_tick =
+            xTaskGetTickCount();
+
+        if ((TickType_t)(
+                now_tick -
+                start_tick) >=
+            timeout_ticks)
+        {
+            ESP_LOGE(
+                TAG,
+                "Unadopted Station connection did not detach within %lu ms",
+                (unsigned long)
+                    APP_NETWORK_COORDINATOR_WIFI_DETACH_TIMEOUT_MS);
+
+            /*
+             * This is not a retryable provisioning timeout. Starting a new
+             * session while the old driver detach is unresolved would leave
+             * the transient late-GOT_IP guard active across generations.
+             */
+            return ESP_ERR_NOT_FINISHED;
+        }
+
+        vTaskDelay(poll_ticks);
+    }
+}
+
+static esp_err_t app_wait_for_verified_provisioning_credentials(
+    uint32_t session_generation,
+    provisioning_manager_wifi_credentials_t *credentials,
+    bool *cleanup_complete)
+{
+    if ((session_generation == 0U) ||
+        (credentials == NULL) ||
+        (cleanup_complete == NULL))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *cleanup_complete = false;
+
+    const TickType_t session_start_tick =
+        xTaskGetTickCount();
+
+    const TickType_t session_timeout_ticks =
+        pdMS_TO_TICKS(
+            s_config.provisioning_timeout_ms);
+
+    const TickType_t handoff_timeout_ticks =
+        pdMS_TO_TICKS(
+            s_config.provisioning_connection_grace_ms);
+
+    bool handoff_timer_active = false;
+    TickType_t handoff_start_tick = 0U;
+    uint32_t tracked_handoff_generation = 0U;
+
+    while (true)
+    {
+        esp_err_t ret =
+            provisioning_manager_receive_wifi_credentials(
+                credentials,
+                s_config.provisioning_poll_period_ms);
+
+        if (ret == ESP_OK)
+        {
+            return ESP_OK;
+        }
+
+        if (ret != ESP_ERR_TIMEOUT)
+        {
+            return ret;
+        }
+
+        /*
+         * Always drain a verified credential first. If reset won before the
+         * handoff claim, the caller will securely clear that copy instead of
+         * persisting it. This also clears the manager's pending-handoff flag.
+         */
+        if (app_is_factory_reset_requested())
+        {
+            return ESP_ERR_NOT_ALLOWED;
+        }
+
+        bool terminal_error_valid = false;
+        esp_err_t terminal_error = ESP_OK;
+        uint32_t active_generation = 0U;
+
+        portENTER_CRITICAL(&s_state_lock);
+
+        terminal_error_valid =
+            s_provisioning_terminal_error_valid;
+        terminal_error =
+            s_provisioning_terminal_error;
+        active_generation =
+            s_active_provisioning_generation;
+
+        portEXIT_CRITICAL(&s_state_lock);
+
+        if (active_generation != session_generation)
+        {
+            return ESP_ERR_INVALID_STATE;
+        }
+
+        if (terminal_error_valid)
+        {
+            return
+                (terminal_error != ESP_OK)
+                    ? terminal_error
+                    : ESP_FAIL;
+        }
+
+        provisioning_manager_wifi_handoff_status_t handoff_status = {0};
+
+        ret =
+            provisioning_manager_get_wifi_handoff_status(
+                &handoff_status);
+
+        if (ret != ESP_OK)
+        {
+            return ret;
+        }
+
+        const TickType_t now_tick =
+            xTaskGetTickCount();
+
+        bool handoff_deadline_expired = false;
+
+        if (handoff_status.pending)
+        {
+            if (!handoff_timer_active ||
+                (tracked_handoff_generation !=
+                 handoff_status.credential_generation))
+            {
+                handoff_timer_active = true;
+                handoff_start_tick = now_tick;
+                tracked_handoff_generation =
+                    handoff_status.credential_generation;
+
+                ESP_LOGI(
+                    TAG,
+                    "Provisioning generation %lu, credential attempt %lu "
+                    "entered bounded Wi-Fi/IP handoff (%lu ms)",
+                    (unsigned long)session_generation,
+                    (unsigned long)tracked_handoff_generation,
+                    (unsigned long)
+                        s_config.provisioning_connection_grace_ms);
+            }
+
+            handoff_deadline_expired =
+                (TickType_t)(
+                    now_tick -
+                    handoff_start_tick) >=
+                handoff_timeout_ticks;
+        }
+        else
+        {
+            /* A failed credential attempt may be retried in the same session. */
+            handoff_timer_active = false;
+            handoff_start_tick = 0U;
+            tracked_handoff_generation = 0U;
+        }
+
+        const bool idle_session_deadline_expired =
+            !handoff_status.pending &&
+            ((TickType_t)(
+                 now_tick -
+                 session_start_tick) >=
+             session_timeout_ticks);
+
+        if (!handoff_deadline_expired &&
+            !idle_session_deadline_expired)
+        {
+            continue;
+        }
+
+        if (handoff_deadline_expired)
+        {
+            ESP_LOGW(
+                TAG,
+                "Provisioning generation %lu did not obtain IPv4 within "
+                "%lu ms; quiescing the framework before retry",
+                (unsigned long)session_generation,
+                (unsigned long)
+                    s_config.provisioning_connection_grace_ms);
+        }
+        else
+        {
+            ESP_LOGW(
+                TAG,
+                "Provisioning generation %lu reached its idle session "
+                "deadline; quiescing the framework before retry",
+                (unsigned long)session_generation);
+        }
+
+        app_publish_provisioning_status(
+            session_generation,
+            UI_PROVISIONING_STATE_CLEANING_UP,
+            ESP_ERR_TIMEOUT,
+            0U);
+
+        ret =
+            app_cleanup_provisioning_session(
+                session_generation);
+
+        if (ret != ESP_OK)
+        {
+            return ret;
+        }
+
+        *cleanup_complete = true;
+
+        /*
+         * STOPPED means the upstream GOT_IP handler is unregistered. A
+         * success that won before that boundary remains queued; a later event
+         * can no longer create a verified handoff.
+         */
+        ret =
+            provisioning_manager_receive_wifi_credentials(
+                credentials,
+                0U);
+
+        if (ret == ESP_OK)
+        {
+            ESP_LOGI(
+                TAG,
+                "Provisioning generation %lu completed at the cleanup "
+                "boundary",
+                (unsigned long)session_generation);
+
+            return ESP_OK;
+        }
+
+        if (ret != ESP_ERR_TIMEOUT)
+        {
+            return ret;
+        }
+
+        /*
+         * No success existed when the upstream GOT_IP handler was removed.
+         * Detach the now-ownerless Station attempt before retrying or
+         * exhausting the retry budget.
+         */
+        ret =
+            app_discard_unmanaged_wifi_connection();
+
+        if (ret != ESP_OK)
+        {
+            return ret;
+        }
+
+        return ESP_ERR_TIMEOUT;
+    }
 }
 
 static void app_release_terminal_ble_memory_best_effort(
@@ -1010,15 +1485,39 @@ app_run_one_wifi_provisioning_session(
         .result =
             APP_PROVISIONING_RESULT_NONRETRYABLE_INTERNAL_FAILURE,
         .error = ESP_FAIL,
+        .cleanup_complete = false,
     };
 
     esp_err_t ret =
+        app_claim_reset_exclusion();
+
+    if (ret != ESP_OK)
+    {
+        if (ret == ESP_ERR_NOT_ALLOWED)
+        {
+            outcome.result =
+                APP_PROVISIONING_RESULT_ABORTED_BY_FACTORY_RESET;
+        }
+
+        outcome.error = ret;
+        return outcome;
+    }
+
+    ret =
         provisioning_manager_init(
             session_generation);
 
     if (ret != ESP_OK)
     {
         outcome.error = ret;
+
+        if (app_release_reset_exclusion())
+        {
+            outcome.result =
+                APP_PROVISIONING_RESULT_ABORTED_BY_FACTORY_RESET;
+            outcome.error = ESP_ERR_NOT_ALLOWED;
+        }
+
         return outcome;
     }
 
@@ -1040,6 +1539,14 @@ app_run_one_wifi_provisioning_session(
         }
 
         outcome.error = ret;
+
+        if (app_release_reset_exclusion())
+        {
+            outcome.result =
+                APP_PROVISIONING_RESULT_ABORTED_BY_FACTORY_RESET;
+            outcome.error = ESP_ERR_NOT_ALLOWED;
+        }
+
         return outcome;
     }
 
@@ -1056,52 +1563,22 @@ app_run_one_wifi_provisioning_session(
         "Provisioning generation %lu is active",
         (unsigned long)session_generation);
 
+    if (app_release_reset_exclusion())
+    {
+        outcome.result =
+            APP_PROVISIONING_RESULT_ABORTED_BY_FACTORY_RESET;
+        outcome.error = ESP_ERR_NOT_ALLOWED;
+        return outcome;
+    }
+
     provisioning_manager_wifi_credentials_t credentials =
         {0};
 
-    bool connection_grace_used = false;
-
     ret =
-        provisioning_manager_receive_wifi_credentials(
+        app_wait_for_verified_provisioning_credentials(
+            session_generation,
             &credentials,
-            s_config.provisioning_timeout_ms);
-
-    if (ret == ESP_ERR_TIMEOUT)
-    {
-        bool handoff_pending = false;
-
-        const esp_err_t progress_ret =
-            provisioning_manager_is_wifi_handoff_pending(
-                &handoff_pending);
-
-        if (progress_ret != ESP_OK)
-        {
-            ret = progress_ret;
-        }
-        else if (handoff_pending)
-        {
-            ESP_LOGW(
-                TAG,
-                "Provisioning generation %lu reached its deadline with "
-                "Wi-Fi handoff pending; allowing %lu ms grace",
-                (unsigned long)session_generation,
-                (unsigned long)
-                    s_config.provisioning_connection_grace_ms);
-
-            app_publish_provisioning_status(
-                session_generation,
-                UI_PROVISIONING_STATE_WAITING_FOR_IP,
-                ESP_OK,
-                0U);
-
-            connection_grace_used = true;
-
-            ret =
-                provisioning_manager_receive_wifi_credentials(
-                    &credentials,
-                    s_config.provisioning_connection_grace_ms);
-        }
-    }
+            &outcome.cleanup_complete);
 
     if (ret != ESP_OK)
     {
@@ -1110,6 +1587,13 @@ app_run_one_wifi_provisioning_session(
             sizeof(credentials));
 
         outcome.error = ret;
+
+        if (ret == ESP_ERR_NOT_ALLOWED)
+        {
+            outcome.result =
+                APP_PROVISIONING_RESULT_ABORTED_BY_FACTORY_RESET;
+            return outcome;
+        }
 
         bool terminal_error_valid = false;
         esp_err_t terminal_error = ESP_OK;
@@ -1134,6 +1618,14 @@ app_run_one_wifi_provisioning_session(
 
         if (ret == ESP_ERR_TIMEOUT)
         {
+            if (outcome.cleanup_complete)
+            {
+                outcome.result =
+                    APP_PROVISIONING_RESULT_RETRYABLE_TIMEOUT;
+
+                return outcome;
+            }
+
             provisioning_manager_state_t manager_state =
                 PROVISIONING_MANAGER_STATE_UNINITIALIZED;
 
@@ -1164,12 +1656,23 @@ app_run_one_wifi_provisioning_session(
         return outcome;
     }
 
-    if (connection_grace_used)
+    ret = app_claim_reset_exclusion();
+
+    if (ret != ESP_OK)
     {
-        ESP_LOGI(
-            TAG,
-            "Provisioning generation %lu completed during connection grace",
-            (unsigned long)session_generation);
+        app_zeroize(
+            &credentials,
+            sizeof(credentials));
+
+        outcome.error = ret;
+
+        if (ret == ESP_ERR_NOT_ALLOWED)
+        {
+            outcome.result =
+                APP_PROVISIONING_RESULT_ABORTED_BY_FACTORY_RESET;
+        }
+
+        return outcome;
     }
 
     app_publish_provisioning_status(
@@ -1191,7 +1694,7 @@ app_run_one_wifi_provisioning_session(
         outcome.result =
             APP_PROVISIONING_RESULT_NONRETRYABLE_STORAGE_FAILURE;
         outcome.error = ret;
-        return outcome;
+        goto release_handoff;
     }
 
     app_publish_provisioning_status(
@@ -1207,8 +1710,10 @@ app_run_one_wifi_provisioning_session(
     if (ret != ESP_OK)
     {
         outcome.error = ret;
-        return outcome;
+        goto release_handoff;
     }
+
+    outcome.cleanup_complete = true;
 
     wifi_manager_status_t wifi_status = {0};
 
@@ -1221,7 +1726,7 @@ app_run_one_wifi_provisioning_session(
         outcome.result =
             APP_PROVISIONING_RESULT_NONRETRYABLE_ADOPTION_FAILURE;
         outcome.error = ret;
-        return outcome;
+        goto release_handoff;
     }
 
     if ((wifi_status.state !=
@@ -1231,7 +1736,7 @@ app_run_one_wifi_provisioning_session(
         outcome.result =
             APP_PROVISIONING_RESULT_NONRETRYABLE_ADOPTION_FAILURE;
         outcome.error = ESP_ERR_INVALID_STATE;
-        return outcome;
+        goto release_handoff;
     }
 
     ret =
@@ -1247,16 +1752,29 @@ app_run_one_wifi_provisioning_session(
         outcome.result =
             APP_PROVISIONING_RESULT_NONRETRYABLE_ADOPTION_FAILURE;
         outcome.error = ret;
-        return outcome;
+        goto release_handoff;
     }
+
+    bool reset_requested = false;
 
     portENTER_CRITICAL(&s_state_lock);
 
-    s_state =
-        APP_NETWORK_COORDINATOR_STATE_ONLINE;
-    s_provisioning_success_dwell_active = true;
+    reset_requested = s_factory_reset_requested;
+
+    if (!reset_requested)
+    {
+        s_provisioning_success_dwell_active = true;
+    }
 
     portEXIT_CRITICAL(&s_state_lock);
+
+    if (reset_requested)
+    {
+        outcome.result =
+            APP_PROVISIONING_RESULT_ABORTED_BY_FACTORY_RESET;
+        outcome.error = ESP_ERR_NOT_ALLOWED;
+        goto release_handoff;
+    }
 
     app_clear_provisioning_qr_payload(
         session_generation);
@@ -1275,35 +1793,70 @@ app_run_one_wifi_provisioning_session(
         pdMS_TO_TICKS(
             APP_NETWORK_COORDINATOR_SUCCESS_DWELL_MS));
 
-    const esp_err_t screen_ret =
-        app_gui_request_screen(
-            APP_GUI_SCREEN_WIFI_STATUS);
-
-    if (screen_ret != ESP_OK)
+    if (!app_is_factory_reset_requested())
     {
-        ESP_LOGW(
-            TAG,
-            "Failed to queue post-provisioning Wi-Fi status screen: %s",
-            esp_err_to_name(screen_ret));
+        const esp_err_t screen_ret =
+            app_gui_request_screen(
+                APP_GUI_SCREEN_WIFI_STATUS);
+
+        if (screen_ret != ESP_OK)
+        {
+            ESP_LOGW(
+                TAG,
+                "Failed to queue post-provisioning Wi-Fi status screen: %s",
+                esp_err_to_name(screen_ret));
+        }
     }
-
-    portENTER_CRITICAL(&s_state_lock);
-
-    s_provisioning_success_dwell_active = false;
-
-    portEXIT_CRITICAL(&s_state_lock);
 
     app_release_terminal_ble_memory_best_effort(
         "successful provisioning");
 
-    outcome.result = APP_PROVISIONING_RESULT_SUCCESS;
-    outcome.error = ESP_OK;
+    portENTER_CRITICAL(&s_state_lock);
+
+    reset_requested = s_factory_reset_requested;
+    s_provisioning_success_dwell_active = false;
+    s_reset_exclusion_active = false;
+
+    if (!reset_requested)
+    {
+        s_state =
+            APP_NETWORK_COORDINATOR_STATE_ONLINE;
+    }
+
+    portEXIT_CRITICAL(&s_state_lock);
+
+    if (reset_requested)
+    {
+        outcome.result =
+            APP_PROVISIONING_RESULT_ABORTED_BY_FACTORY_RESET;
+        outcome.error = ESP_ERR_NOT_ALLOWED;
+    }
+    else
+    {
+        outcome.result = APP_PROVISIONING_RESULT_SUCCESS;
+        outcome.error = ESP_OK;
+    }
+
+    return outcome;
+
+release_handoff:
+    if (app_release_reset_exclusion())
+    {
+        outcome.result =
+            APP_PROVISIONING_RESULT_ABORTED_BY_FACTORY_RESET;
+        outcome.error = ESP_ERR_NOT_ALLOWED;
+    }
 
     return outcome;
 }
 
 static esp_err_t app_run_wifi_provisioning(void)
 {
+    if (app_is_factory_reset_requested())
+    {
+        return ESP_ERR_NOT_ALLOWED;
+    }
+
     esp_err_t ret =
         provisioning_manager_register_progress_callback(
             app_provisioning_progress_callback,
@@ -1319,6 +1872,13 @@ static esp_err_t app_run_wifi_provisioning(void)
              s_config.provisioning_max_sessions;
          session_index++)
     {
+        ret = app_claim_reset_exclusion();
+
+        if (ret != ESP_OK)
+        {
+            return ret;
+        }
+
         config_manager_wifi_config_state_t config_state =
             CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN;
 
@@ -1328,13 +1888,18 @@ static esp_err_t app_run_wifi_provisioning(void)
 
         if (ret != ESP_OK)
         {
+            const bool reset_requested =
+                app_release_reset_exclusion();
+
             if (session_index > 0U)
             {
                 app_release_terminal_ble_memory_best_effort(
                     "configuration inspection failure");
             }
 
-            return ret;
+            return reset_requested
+                       ? ESP_ERR_NOT_ALLOWED
+                       : ret;
         }
 
         if (config_state ==
@@ -1354,7 +1919,8 @@ static esp_err_t app_run_wifi_provisioning(void)
             ret =
                 app_connect_stored_wifi();
 
-            if (ret == ESP_OK)
+            if ((ret == ESP_OK) &&
+                !app_is_factory_reset_requested())
             {
                 app_network_coordinator_set_state(
                     APP_NETWORK_COORDINATOR_STATE_CONNECTING);
@@ -1372,12 +1938,17 @@ static esp_err_t app_run_wifi_provisioning(void)
                 }
             }
 
-            return ret;
+            return app_release_reset_exclusion()
+                       ? ESP_ERR_NOT_ALLOWED
+                       : ret;
         }
 
         if (config_state !=
             CONFIG_MANAGER_WIFI_CONFIG_STATE_NOT_CONFIGURED)
         {
+            const bool reset_requested =
+                app_release_reset_exclusion();
+
             if (session_index > 0U)
             {
                 app_release_terminal_ble_memory_best_effort(
@@ -1389,12 +1960,25 @@ static esp_err_t app_run_wifi_provisioning(void)
                 "Provisioning retry blocked by Wi-Fi configuration state %d",
                 (int)config_state);
 
-            return ESP_ERR_INVALID_STATE;
+            return reset_requested
+                       ? ESP_ERR_NOT_ALLOWED
+                       : ESP_ERR_INVALID_STATE;
+        }
+
+        if (app_release_reset_exclusion())
+        {
+            return ESP_ERR_NOT_ALLOWED;
         }
 
         uint32_t session_generation = 0U;
 
         portENTER_CRITICAL(&s_state_lock);
+
+        if (s_factory_reset_requested)
+        {
+            portEXIT_CRITICAL(&s_state_lock);
+            return ESP_ERR_NOT_ALLOWED;
+        }
 
         session_generation =
             s_active_provisioning_generation + 1U;
@@ -1439,6 +2023,11 @@ static esp_err_t app_run_wifi_provisioning(void)
             vTaskDelay(
                 pdMS_TO_TICKS(
                     s_config.provisioning_retry_backoff_ms));
+
+            if (app_is_factory_reset_requested())
+            {
+                return ESP_ERR_NOT_ALLOWED;
+            }
         }
 
         app_publish_provisioning_status(
@@ -1463,6 +2052,16 @@ static esp_err_t app_run_wifi_provisioning(void)
             APP_PROVISIONING_RESULT_SUCCESS)
         {
             return ESP_OK;
+        }
+
+        if (outcome.result ==
+            APP_PROVISIONING_RESULT_ABORTED_BY_FACTORY_RESET)
+        {
+            ESP_LOGI(
+                TAG,
+                "Provisioning yielded to factory-reset preparation");
+
+            return ESP_ERR_NOT_ALLOWED;
         }
 
         const bool retryable =
@@ -1497,22 +2096,37 @@ static esp_err_t app_run_wifi_provisioning(void)
             pdMS_TO_TICKS(
                 s_config.provisioning_failure_dwell_ms));
 
-        app_publish_provisioning_status(
-            session_generation,
-            UI_PROVISIONING_STATE_CLEANING_UP,
-            outcome.error,
-            0U);
+        esp_err_t cleanup_ret = ESP_OK;
 
-        ESP_LOGI(
-            TAG,
-            "Cleaning provisioning session %lu/%lu",
-            (unsigned long)(session_index + 1U),
-            (unsigned long)
-                s_config.provisioning_max_sessions);
+        if (!outcome.cleanup_complete)
+        {
+            app_publish_provisioning_status(
+                session_generation,
+                UI_PROVISIONING_STATE_CLEANING_UP,
+                outcome.error,
+                0U);
 
-        const esp_err_t cleanup_ret =
-            app_cleanup_provisioning_session(
-                session_generation);
+            ESP_LOGI(
+                TAG,
+                "Cleaning provisioning session %lu/%lu",
+                (unsigned long)(session_index + 1U),
+                (unsigned long)
+                    s_config.provisioning_max_sessions);
+
+            cleanup_ret =
+                app_cleanup_provisioning_session(
+                    session_generation);
+        }
+        else
+        {
+            ESP_LOGD(
+                TAG,
+                "Provisioning session %lu/%lu was already quiesced at its "
+                "Wi-Fi/IP deadline",
+                (unsigned long)(session_index + 1U),
+                (unsigned long)
+                    s_config.provisioning_max_sessions);
+        }
 
         if (cleanup_ret != ESP_OK)
         {
@@ -1611,6 +2225,11 @@ static esp_err_t app_run_wifi_provisioning(void)
 static esp_err_t app_apply_wifi_boot_policy(
     config_manager_wifi_config_state_t state)
 {
+    if (app_is_factory_reset_requested())
+    {
+        return ESP_ERR_NOT_ALLOWED;
+    }
+
     switch (state)
     {
         case CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID:
@@ -1621,21 +2240,41 @@ static esp_err_t app_apply_wifi_boot_policy(
 
             {
                 esp_err_t ret =
-                    app_connect_stored_wifi();
+                    app_claim_reset_exclusion();
 
-                if (ret == ESP_OK)
+                if (ret != ESP_OK)
+                {
+                    return ret;
+                }
+
+                ret = app_connect_stored_wifi();
+
+                if ((ret == ESP_OK) &&
+                    !app_is_factory_reset_requested())
                 {
                     app_network_coordinator_set_state(
                         APP_NETWORK_COORDINATOR_STATE_CONNECTING);
                 }
 
-                return ret;
+                return app_release_reset_exclusion()
+                           ? ESP_ERR_NOT_ALLOWED
+                           : ret;
             }
 
         case CONFIG_MANAGER_WIFI_CONFIG_STATE_NOT_CONFIGURED:
         {
-            app_network_coordinator_set_state(
-                APP_NETWORK_COORDINATOR_STATE_PROVISIONING);
+            portENTER_CRITICAL(&s_state_lock);
+
+            if (s_factory_reset_requested)
+            {
+                portEXIT_CRITICAL(&s_state_lock);
+                return ESP_ERR_NOT_ALLOWED;
+            }
+
+            s_state =
+                APP_NETWORK_COORDINATOR_STATE_PROVISIONING;
+
+            portEXIT_CRITICAL(&s_state_lock);
 
             ESP_LOGI(
                 TAG,
@@ -1650,16 +2289,23 @@ static esp_err_t app_apply_wifi_boot_policy(
 
         case CONFIG_MANAGER_WIFI_CONFIG_STATE_MIGRATION_REQUIRED:
         {
-            ESP_LOGI(
-                TAG,
-                "Legacy Wi-Fi configuration requires migration");
-
             esp_err_t ret =
-                config_manager_migrate_device_config();
+                app_claim_reset_exclusion();
 
             if (ret != ESP_OK)
             {
                 return ret;
+            }
+
+            ESP_LOGI(
+                TAG,
+                "Legacy Wi-Fi configuration requires migration");
+
+            ret = config_manager_migrate_device_config();
+
+            if (ret != ESP_OK)
+            {
+                goto release_migration;
             }
 
             config_manager_wifi_config_state_t migrated_state =
@@ -1671,25 +2317,30 @@ static esp_err_t app_apply_wifi_boot_policy(
 
             if (ret != ESP_OK)
             {
-                return ret;
+                goto release_migration;
             }
 
             if (migrated_state !=
                 CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID)
             {
-                return ESP_ERR_INVALID_RESPONSE;
+                ret = ESP_ERR_INVALID_RESPONSE;
+                goto release_migration;
             }
 
             ret =
                 app_connect_stored_wifi();
 
-            if (ret == ESP_OK)
+            if ((ret == ESP_OK) &&
+                !app_is_factory_reset_requested())
             {
                 app_network_coordinator_set_state(
                     APP_NETWORK_COORDINATOR_STATE_CONNECTING);
             }
 
-            return ret;
+release_migration:
+            return app_release_reset_exclusion()
+                       ? ESP_ERR_NOT_ALLOWED
+                       : ret;
         }
 
         case CONFIG_MANAGER_WIFI_CONFIG_STATE_INCOMPLETE:
@@ -1876,6 +2527,8 @@ esp_err_t app_network_coordinator_init(
     s_active_provisioning_session_number = 0U;
     s_provisioning_terminal_error_valid = false;
     s_provisioning_terminal_error = ESP_OK;
+    s_factory_reset_requested = false;
+    s_reset_exclusion_active = false;
     s_state = APP_NETWORK_COORDINATOR_STATE_READY;
 
     portEXIT_CRITICAL(&s_state_lock);
@@ -1951,7 +2604,8 @@ esp_err_t app_network_coordinator_start(void)
     portENTER_CRITICAL(&s_state_lock);
 
     if (s_state !=
-        APP_NETWORK_COORDINATOR_STATE_READY)
+            APP_NETWORK_COORDINATOR_STATE_READY ||
+        s_factory_reset_requested)
     {
         portEXIT_CRITICAL(&s_state_lock);
 
@@ -1991,6 +2645,152 @@ esp_err_t app_network_coordinator_start(void)
     return ESP_OK;
 }
 
+esp_err_t app_network_coordinator_prepare_for_factory_reset(
+    uint32_t timeout_ms)
+{
+    ESP_RETURN_ON_FALSE(
+        (timeout_ms > 0U) &&
+            (timeout_ms <= APP_NETWORK_COORDINATOR_MAX_TIMING_MS) &&
+            (pdMS_TO_TICKS(timeout_ms) > 0U),
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "Factory-reset preparation timeout is invalid"
+    );
+
+    bool gate_claimed_by_call = false;
+
+    portENTER_CRITICAL(&s_state_lock);
+
+    if (s_state == APP_NETWORK_COORDINATOR_STATE_UNINITIALIZED)
+    {
+        portEXIT_CRITICAL(&s_state_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!s_factory_reset_requested)
+    {
+        s_factory_reset_requested = true;
+        gate_claimed_by_call = true;
+    }
+
+    portEXIT_CRITICAL(&s_state_lock);
+
+    ESP_LOGI(
+        TAG,
+        "Factory-reset preparation requested (timeout=%lu ms)",
+        (unsigned long)timeout_ms);
+
+    const TickType_t start_tick =
+        xTaskGetTickCount();
+    const TickType_t timeout_ticks =
+        pdMS_TO_TICKS(timeout_ms);
+    esp_err_t result = ESP_OK;
+
+    while (true)
+    {
+        bool exclusion_active = false;
+
+        portENTER_CRITICAL(&s_state_lock);
+        exclusion_active = s_reset_exclusion_active;
+        portEXIT_CRITICAL(&s_state_lock);
+
+        provisioning_manager_state_t manager_state =
+            PROVISIONING_MANAGER_STATE_UNINITIALIZED;
+
+        result = provisioning_manager_get_state(
+            &manager_state);
+
+        if (result != ESP_OK)
+        {
+            break;
+        }
+
+        if (manager_state == PROVISIONING_MANAGER_STATE_FAILED)
+        {
+            result = ESP_ERR_INVALID_STATE;
+            break;
+        }
+
+        if (manager_state == PROVISIONING_MANAGER_STATE_ACTIVE)
+        {
+            result = provisioning_manager_stop();
+
+            if ((result != ESP_OK) &&
+                (result != ESP_ERR_INVALID_STATE))
+            {
+                break;
+            }
+
+            result = ESP_OK;
+        }
+
+        const bool lifecycle_quiescent =
+            (manager_state == PROVISIONING_MANAGER_STATE_UNINITIALIZED) ||
+            (manager_state == PROVISIONING_MANAGER_STATE_READY) ||
+            (manager_state == PROVISIONING_MANAGER_STATE_STOPPED);
+
+        bool handoff_pending = false;
+
+        if (manager_state != PROVISIONING_MANAGER_STATE_UNINITIALIZED)
+        {
+            result =
+                provisioning_manager_is_wifi_handoff_pending(
+                    &handoff_pending);
+
+            if (result != ESP_OK)
+            {
+                break;
+            }
+        }
+
+        if (lifecycle_quiescent &&
+            !exclusion_active &&
+            !handoff_pending)
+        {
+            ESP_LOGI(
+                TAG,
+                "Provisioning quiesced for factory reset");
+
+            return ESP_OK;
+        }
+
+        const TickType_t elapsed_ticks =
+            (TickType_t)(xTaskGetTickCount() - start_tick);
+
+        if (elapsed_ticks >= timeout_ticks)
+        {
+            result = ESP_ERR_TIMEOUT;
+            break;
+        }
+
+        const TickType_t remaining_ticks =
+            timeout_ticks - elapsed_ticks;
+        const TickType_t configured_poll_ticks =
+            pdMS_TO_TICKS(
+                s_config.provisioning_poll_period_ms);
+        const TickType_t delay_ticks =
+            configured_poll_ticks < remaining_ticks
+                ? configured_poll_ticks
+                : remaining_ticks;
+
+        vTaskDelay(delay_ticks);
+    }
+
+    if (gate_claimed_by_call)
+    {
+        portENTER_CRITICAL(&s_state_lock);
+        s_factory_reset_requested = false;
+        portEXIT_CRITICAL(&s_state_lock);
+
+        ESP_LOGW(
+            TAG,
+            "Factory-reset preparation failed; reset gate rolled back: %s",
+            esp_err_to_name(result));
+    }
+
+    return result;
+}
+
 esp_err_t app_network_coordinator_notify_wifi_event(
     app_network_coordinator_wifi_event_t event,
     uint16_t disconnect_reason)
@@ -2023,6 +2823,7 @@ esp_err_t app_network_coordinator_notify_wifi_event(
     bool state_changed = false;
     bool provisioning_active = false;
     bool success_dwell_active = false;
+    bool reset_requested = false;
     uint32_t provisioning_generation = 0U;
 
     portENTER_CRITICAL(&s_state_lock);
@@ -2035,6 +2836,14 @@ esp_err_t app_network_coordinator_notify_wifi_event(
         s_provisioning_success_dwell_active;
     provisioning_generation =
         s_active_provisioning_generation;
+
+    reset_requested = s_factory_reset_requested;
+
+    if (reset_requested)
+    {
+        portEXIT_CRITICAL(&s_state_lock);
+        return ESP_OK;
+    }
 
     if (provisioning_active &&
         (event ==

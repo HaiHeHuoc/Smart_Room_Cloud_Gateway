@@ -30,6 +30,15 @@ for removing that driver-owned persistent copy during factory reset.
   application factory-reset path.
 - Applies a 30-second connection/DHCP timeout to every initial or automatic
   call to `esp_wifi_connect()`.
+- Enforces the component's dynamic-IPv4 policy when the Station starts and
+  verifies again after association; this project does not expose static IPv4.
+- Starts one clean DHCP transaction after every Station association so a
+  provisioning retry cannot inherit the previous association's lwIP state.
+- Re-arms bounded recovery if a Station already owned by `wifi_manager` loses
+  IPv4 while it remains associated.
+- Provides one narrow, transient disconnect operation for a provisioning
+  attempt only after the framework is `STOPPED` and its final verified queue
+  drain is empty.
 - Reads connected AP RSSI with `esp_wifi_sta_get_rssi()`.
 - Performs a blocking active scan and logs nearby access points.
 - Cleans up partially initialized Wi-Fi, event, task, timer, and netif
@@ -68,7 +77,8 @@ the source of the reason.
 
 ## Connection And DHCP Timeout
 
-One private one-shot `esp_timer` covers each complete connection attempt:
+One private one-shot `esp_timer` covers each complete runtime connection
+attempt:
 
 ```text
 arm 30-second timer
@@ -81,6 +91,37 @@ arm 30-second timer
 The timer is armed for both the initial connection and every automatic retry.
 It is canceled when the attempt obtains an IPv4 address, disconnects, is
 manually canceled, or fails synchronously.
+
+Connections established temporarily by `network_provisioning` do not call
+`wifi_manager_connect()`. Their `WIFI_EVENT_STA_CONNECTED` event still verifies
+that the default DHCP client is active, but it does not arm this component's
+disconnect watchdog. The application coordinator bounds that handoff and
+quiesces the provisioning framework at its session boundary. If the final
+verified queue drain is empty, the coordinator then asks `wifi_manager` to
+detach the now-unowned Station attempt before retry. This keeps one owner at
+each lifecycle stage and prevents a timeout/GOT_IP split-brain.
+
+The Station-start handler also normalizes a DHCP client left in `STOPPED`
+state before association. ESP-NETIF reserves that state for static addressing;
+because this project supports only dynamic IPv4, `wifi_manager` restarts DHCP
+and lets ESP-NETIF clear retained IP/DNS data. This prevents a stale address
+from suppressing a fresh DHCP negotiation after reset or reprovisioning.
+
+After each `WIFI_EVENT_STA_CONNECTED`, `wifi_manager` performs one controlled
+DHCP stop/start transaction. ESP-NETIF has already brought the interface up at
+that point, so the restart clears the previous lwIP DHCP transaction and sends
+a new discovery for the current association. This does not add another
+reconnect owner or an unbounded retry loop; failure still reaches the existing
+30-second coordinator/watchdog boundary.
+
+An `IP_EVENT_STA_LOST_IP` is actionable only if the current manager state
+previously held IPv4. A delayed lost-IP timer from an earlier association is
+ignored while the current association is already `WAITING_FOR_IP`.
+
+`IP_EVENT_STA_LOST_IP` uses the same watchdog while the Station remains
+associated only after credentials and reconnect policy have been configured or
+adopted. Timeout recovery then returns to the normal `wifi_manager`
+reconnect/backoff path.
 
 The timer callback intentionally does very little. It stores a protected
 timeout flag and attempt generation, then notifies the existing reconnect task.
@@ -111,8 +152,14 @@ N+1. The timeout flag is accepted only while all of these remain true:
 `GOT_IP`, disconnect, and manual disconnect invalidate the active attempt under
 the same lock. If timeout recovery has already claimed the attempt, a racing
 `GOT_IP` event is ignored so the abort can finish without briefly publishing a
-false `CONNECTED` state. Duplicate task notifications are harmless because the
-task rechecks state, generation, and policy before starting another attempt.
+false `CONNECTED` state. A `GOT_IP` event is accepted only from `CONNECTING`,
+`WAITING_FOR_IP`, or `CONNECTED`; an event queued before a completed disconnect
+cannot revive `READY`, `DISCONNECTED`, `RETRY_WAIT`, or `FAILED`. Duplicate task
+notifications are harmless because the task rechecks state, generation, and
+policy before starting another attempt.
+When re-arming after `LOST_IP`, failure to start the one-shot timer is converted
+into an immediate reconnect-task recovery notification instead of leaving an
+owned connection in `WAITING_FOR_IP` unbounded.
 
 ## Retry And Manual Disconnect
 
@@ -130,6 +177,13 @@ instead of issuing a duplicate disconnect call.
 A later successful call to `wifi_manager_connect()` supplies credentials again,
 clears manual-disconnect intent, resets backoff to one second, and enables
 automatic reconnect.
+
+`wifi_manager_discard_unmanaged_connection()` is intentionally different. It
+is valid only before credentials/reconnect ownership has been configured or
+adopted. It blocks late `GOT_IP` publication while requesting one driver
+disconnect, does not set persistent manual-disconnect policy, and relies on
+`WIFI_EVENT_STA_DISCONNECTED` to finish. If the driver is already offline, it
+completes the local `DISCONNECTED` state synchronously.
 
 ## Initialization Order
 
@@ -175,6 +229,7 @@ configuration. An empty password is valid for an open network.
 | `wifi_manager_init()` | Initialize the Station driver, timer, event handlers, and reconnect task once. |
 | `wifi_manager_connect()` | Validate/copy credentials and begin a timed asynchronous connection. |
 | `wifi_manager_disconnect()` | Disconnect manually and suppress automatic reconnect. |
+| `wifi_manager_discard_unmanaged_connection()` | Detach an unadopted provisioning Station attempt after the framework's terminal outcome boundary; does not enable reconnect or persistent manual-disconnect policy. |
 | `wifi_manager_clear_persistent_driver_settings()` | Erase ESP-IDF persistent Wi-Fi mode/config state before a factory-reset reboot; does not clear application config or reboot. |
 | `wifi_manager_get_status()` | Copy a locked snapshot of current manager status. |
 | `wifi_manager_get_rssi()` | Read and cache RSSI while connected with IPv4. |
@@ -212,8 +267,20 @@ Successful startup includes messages similar to:
 ```text
 I (...) WIFI_MANAGER: Wi-Fi manager initialized: mode=STATION, storage=RAM
 I (...) WIFI_MANAGER: Connecting to configured Wi-Fi network
-I (...) WIFI_MANAGER: Event: WIFI_EVENT_STA_CONNECTED
+D (...) WIFI_MANAGER: Event: WIFI_EVENT_STA_CONNECTED
 I (...) WIFI_MANAGER: Event: IP_EVENT_STA_GOT_IP, address=...
+```
+
+If stale DHCP lifecycle state is recovered, one warning is emitted:
+
+```text
+W (...) WIFI_MANAGER: Station DHCP client was stopped; restoring dynamic IPv4 policy
+```
+
+Every association confirms the clean transaction:
+
+```text
+I (...) WIFI_MANAGER: Fresh Station DHCP negotiation started
 ```
 
 A timeout produces a warning similar to:
@@ -224,6 +291,13 @@ W (...) WIFI_MANAGER: Wi-Fi connection/DHCP timed out after 30000 ms, generation
 
 The subsequent disconnect and retry use the normal state callback and backoff
 logs. Stale timeout callbacks are debug-level diagnostics.
+
+Provisioning timeout cleanup may instead include:
+
+```text
+I (...) WIFI_MANAGER: Discarding unadopted provisioning connection
+I (...) WIFI_MANAGER: Unadopted provisioning connection detached
+```
 
 ## RSSI And Scan
 
@@ -240,8 +314,10 @@ task.
 - There is no public deinitialization API.
 - Durable credentials remain owned by `config_manager`; `wifi_manager` keeps
   only the runtime Station configuration in driver RAM.
-- `IP_EVENT_STA_LOST_IP` keeps the associated station in `WAITING_FOR_IP`; it
-  does not start a new connection-attempt timer by itself.
+- Provisioning attempt deadlines and replacement sessions are owned by
+  `app_network_coordinator`; this component never disconnects an active
+  framework-owned attempt. Its narrow discard API is used only after the
+  framework is `STOPPED` and the verified handoff queue is empty.
 - Runtime validation on hardware is still required for unreachable AP, wrong
   password, association without DHCP, repeated timeout/retry cycles, successful
   recovery, and manual disconnect during timeout or backoff.

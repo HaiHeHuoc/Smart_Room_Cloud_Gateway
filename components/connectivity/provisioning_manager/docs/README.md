@@ -44,8 +44,9 @@ components/connectivity/provisioning_manager/
 - Prevents concurrent callers from claiming the same lifecycle transition.
 - Deep-copies and validates framework-owned credentials on receipt.
 - Keeps credentials pending until the framework reports Wi-Fi success.
-- Exposes a thread-safe, non-sensitive handoff-pending snapshot so application
-  policy can distinguish idle provisioning from an in-flight Wi-Fi attempt.
+- Exposes a thread-safe, non-sensitive handoff snapshot with pending state and
+  a monotonically increasing credential generation so application policy can
+  distinguish every in-flight Wi-Fi attempt.
 - Discards pending credentials after a failed connection attempt.
 - Delivers one verified copy through a length-one FreeRTOS queue.
 - Publishes non-sensitive `STARTING`, waiting, credential, Wi-Fi result,
@@ -88,6 +89,7 @@ The application manifest currently selects
 | `provisioning_manager_release_ble_memory()` | Permanently release retained BLE memory after the retry envelope |
 | `provisioning_manager_get_state()` | Copy the current lifecycle state |
 | `provisioning_manager_is_wifi_handoff_pending()` | Report whether received credentials are still connecting or awaiting application consumption |
+| `provisioning_manager_get_wifi_handoff_status()` | Copy pending state and the current credential-attempt generation without exposing credentials |
 | `provisioning_manager_receive_wifi_credentials()` | Wait for credentials from a framework-confirmed connection |
 
 All public APIs return `esp_err_t`. The component does not call
@@ -149,6 +151,7 @@ UNINITIALIZED -> READY -> STARTING -> ACTIVE -> STOPPING -> STOPPED
 NETWORK_PROV_WIFI_CRED_RECV
     -> validate and copy to pending storage
     -> mark Wi-Fi handoff pending
+    -> increment the non-zero credential-attempt generation
     -> wait for the framework connection result
 
 NETWORK_PROV_WIFI_CRED_FAIL
@@ -164,19 +167,34 @@ NETWORK_PROV_WIFI_CRED_SUCCESS
 The queue holds an independent copy. The caller must clear its output after
 persistence or on every error path. The component never calls
 `config_manager`, `wifi_manager`, GUI, cloud, or reboot APIs from its callback.
-The handoff-pending API returns only a boolean. Progress snapshots contain only
-a non-zero session generation, an enum, `esp_err_t`, and the framework's
-non-sensitive Wi-Fi failure reason; they never expose SSID or password
-contents.
+The legacy handoff-pending API returns only a boolean. The handoff-status API
+adds a lifecycle-local credential generation that remains unchanged when an
+attempt completes; this lets a polling coordinator detect a fast
+`pending(A) -> not pending -> pending(B)` transition. Progress snapshots
+contain only a non-zero session generation, an enum, `esp_err_t`, and the
+framework's non-sensitive Wi-Fi failure reason; they never expose SSID or
+password contents.
 
 ## Timeout Boundary Handling
 
 The credential receive API still honors each caller-supplied finite timeout.
-The application coordinator first waits for the normal provisioning session
-deadline. If that deadline expires while the handoff-pending snapshot is true,
-the coordinator performs one additional bounded connection wait. This catches
-a `GOT_IP` event arriving near the deadline without accepting unverified
-credentials or treating an unadopted Station connection as application-ready.
+The application coordinator calls it in finite polling slices and observes the
+non-sensitive handoff status. Each credential generation receives a fresh
+30-second IPv4 deadline independent of the idle-session deadline. A failed
+credential attempt clears that timer, allowing another submission in the same
+BLE session; generation changes also reset the deadline if both transitions
+occur between polling slices.
+
+On either timeout, the coordinator first stops the provisioning service and
+waits for `STOPPED`, then performs one final non-blocking credential receive.
+Cleanup preserves a framework-verified queue item but clears an unverified
+pending copy. Therefore `GOT_IP` that wins before handler removal continues the
+success path exactly once, while `GOT_IP` after handler removal cannot produce
+a false success. `wifi_manager` verifies DHCP-client activation but never
+disconnects or starts a competing reconnect loop while this framework owns the
+attempt. After `STOPPED` plus an empty final drain, the coordinator uses the
+narrow Wi-Fi-owner cleanup API to detach the now-unowned Station attempt before
+retrying.
 
 ## Threading And Cleanup
 
@@ -298,9 +316,9 @@ would waste CPU and flood the state log.
 The production provisioning path in `main.c`:
 
 1. Starts provisioning only when Wi-Fi state is `NOT_CONFIGURED`.
-2. Waits with a finite session timeout for framework-verified credentials.
-3. Allows one bounded connection grace only when credentials are already
-   pending at the session deadline.
+2. Waits with a finite idle-session timeout for framework-verified credentials.
+3. Gives every pending credential handoff one bounded IPv4 deadline, then
+   reaches `STOPPED` and drains the verified queue once before retrying.
 4. Persists only through `config_manager`.
 5. Re-reads state and data; continues only after successful verification.
 6. Waits for BLE cleanup and the active Station connection.
@@ -359,7 +377,9 @@ I (...) PROVISIONING_MANAGER: Provisioning manager de-initialized
 ## Future Attention
 
 - Replace the development Proof of Possession with a production strategy.
-- Add factory-reset and reprovisioning policy in Sprint 7.
+- Phase 7.5 factory-reset policy remains application-owned: the network
+  coordinator uses existing state, stop, and handoff-pending APIs to quiesce
+  this manager before persistent erasure. Hardware race acceptance is pending.
 
 ## Phase 6.4.6 BLE Release Correction
 

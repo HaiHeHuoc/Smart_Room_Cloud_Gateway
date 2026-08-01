@@ -2,6 +2,7 @@
 #include "app_reset_coordinator.h"
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -10,6 +11,8 @@
 #include "esp_log.h"
 #include "esp_system.h"
 
+#include "app_gui.h"
+#include "app_network_coordinator.h"
 #include "config_manager.h"
 #include "wifi_manager.h"
 
@@ -18,7 +21,13 @@
 #define APP_RESET_COORDINATOR_TASK_STACK_SIZE_BYTES  3072U
 #define APP_RESET_COORDINATOR_TASK_PRIORITY          4U
 #define APP_RESET_COORDINATOR_TASK_NAME              "app_reset"
-#define APP_RESET_COORDINATOR_RESTART_DELAY_MS       500U
+
+#define APP_RESET_COORDINATOR_UI_READY_TIMEOUT_MS      500U
+#define APP_RESET_COORDINATOR_UI_POLL_PERIOD_MS         25U
+#define APP_RESET_COORDINATOR_SUCCESS_DWELL_MS        1500U
+#define APP_RESET_COORDINATOR_FALLBACK_DWELL_MS        500U
+#define APP_RESET_COORDINATOR_NETWORK_QUIESCE_TIMEOUT_MS \
+    10000U
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "APP_RESET_COORD";
@@ -100,7 +109,126 @@ static esp_err_t app_reset_coordinator_clear_and_verify_wifi(void);
 static const char *app_reset_coordinator_wifi_state_to_string(
     config_manager_wifi_config_state_t state);
 
+static esp_err_t app_reset_coordinator_show_result(
+    uint32_t transaction_id,
+    ui_reset_state_t state,
+    esp_err_t last_error);
+
+static bool app_reset_coordinator_wait_for_reset_result(
+    uint32_t transaction_id);
+
+static void app_reset_coordinator_restart_after_success(
+    uint32_t transaction_id,
+    bool reset_result_queued);
+
 /* Static Functions --------------------------------------------------------- */
+static esp_err_t app_reset_coordinator_show_result(
+    uint32_t transaction_id,
+    ui_reset_state_t state,
+    esp_err_t last_error)
+{
+    const ui_reset_status_t status =
+    {
+        .transaction_id =
+            transaction_id,
+
+        .state =
+            state,
+
+        .last_error =
+            last_error,
+    };
+
+    return app_gui_show_reset_result(
+        &status);
+}
+
+static bool app_reset_coordinator_wait_for_reset_result(
+    uint32_t transaction_id)
+{
+    const TickType_t start_tick =
+        xTaskGetTickCount();
+
+    const TickType_t timeout_ticks =
+        pdMS_TO_TICKS(
+            APP_RESET_COORDINATOR_UI_READY_TIMEOUT_MS);
+
+    const TickType_t poll_ticks =
+        pdMS_TO_TICKS(
+            APP_RESET_COORDINATOR_UI_POLL_PERIOD_MS);
+
+    while ((TickType_t)(
+               xTaskGetTickCount() -
+               start_tick) < timeout_ticks)
+    {
+        bool presented = false;
+
+        const esp_err_t error =
+            app_gui_is_reset_result_presented(
+                transaction_id,
+                &presented);
+
+        if (error != ESP_OK)
+        {
+            ESP_LOGW(
+                TAG,
+                "Failed to inspect reset-result presentation: %s",
+                esp_err_to_name(error));
+
+            return false;
+        }
+
+        if (presented)
+        {
+            return true;
+        }
+
+        vTaskDelay(
+            poll_ticks);
+    }
+
+    return false;
+}
+
+static void app_reset_coordinator_restart_after_success(
+    uint32_t transaction_id,
+    bool reset_result_queued)
+{
+    bool presentation_confirmed = false;
+
+    if (reset_result_queued)
+    {
+        presentation_confirmed =
+            app_reset_coordinator_wait_for_reset_result(
+                transaction_id);
+
+        if (!presentation_confirmed)
+        {
+            ESP_LOGW(
+                TAG,
+                "Reset-result presentation was not confirmed: "
+                "transaction=%lu",
+                (unsigned long)transaction_id);
+        }
+    }
+
+    const uint32_t dwell_ms =
+        presentation_confirmed
+            ? APP_RESET_COORDINATOR_SUCCESS_DWELL_MS
+            : APP_RESET_COORDINATOR_FALLBACK_DWELL_MS;
+
+    vTaskDelay(
+        pdMS_TO_TICKS(
+            dwell_ms));
+
+    ESP_LOGW(
+        TAG,
+        "Restarting after verified Wi-Fi reset: transaction=%lu",
+        (unsigned long)transaction_id);
+
+    esp_restart();
+}
+
 static const char *app_reset_coordinator_wifi_state_to_string(
     config_manager_wifi_config_state_t state)
 {
@@ -203,6 +331,8 @@ static void app_reset_coordinator_task(
     app_reset_coordinator_state_t state =
         APP_RESET_COORDINATOR_STATE_ARMED;
 
+    uint32_t transaction_counter = 0U;
+
     while (true)
     {
         app_reset_coordinator_input_event_t event =
@@ -255,9 +385,22 @@ static void app_reset_coordinator_task(
                     state =
                         APP_RESET_COORDINATOR_STATE_REQUEST_ACCEPTED;
 
+                    if (transaction_counter == UINT32_MAX)
+                    {
+                        transaction_counter = 1U;
+                    }
+                    else
+                    {
+                        transaction_counter++;
+                    }
+
+                    const uint32_t transaction_id =
+                        transaction_counter;
+
                     ESP_LOGI(
                         TAG,
-                        "Factory-reset request accepted");
+                        "Factory-reset request accepted: transaction=%lu",
+                        (unsigned long)transaction_id);
 
                     /*
                      * Storage work runs in the reset coordinator task.
@@ -265,21 +408,60 @@ static void app_reset_coordinator_task(
                      * It does not execute in the button callback and therefore
                      * cannot block button_manager's polling task.
                      */
+                    const esp_err_t preparation_error =
+                        app_network_coordinator_prepare_for_factory_reset(
+                            APP_RESET_COORDINATOR_NETWORK_QUIESCE_TIMEOUT_MS);
+
+                    if (preparation_error != ESP_OK)
+                    {
+                        const esp_err_t ui_error =
+                            app_reset_coordinator_show_result(
+                                transaction_id,
+                                UI_RESET_STATE_FAILED,
+                                preparation_error);
+
+                        if (ui_error != ESP_OK)
+                        {
+                            ESP_LOGW(
+                                TAG,
+                                "Failed to display reset preparation failure: "
+                                "%s",
+                                esp_err_to_name(ui_error));
+                        }
+
+                        ESP_LOGE(
+                            TAG,
+                            "Factory-reset network preparation failed: %s",
+                            esp_err_to_name(preparation_error));
+
+                        break;
+                    }
+
                     /*
-                     * Clear driver-owned persistence first. If Wi-Fi is not
-                     * initialized yet, application configuration remains
-                     * valid and the reset can be retried safely.
+                     * The network coordinator now prevents any later
+                     * provisioning persistence until reboot. Clear driver
+                     * persistence before application configuration so a
+                     * partial failure never destroys the recoverable NVS copy.
                      */
                     const esp_err_t driver_reset_error =
                         wifi_manager_clear_persistent_driver_settings();
 
                     if (driver_reset_error != ESP_OK)
                     {
-                        /*
-                         * Application configuration is still intact, so an
-                         * early request or driver failure cannot leave the
-                         * authoritative credential store erased.
-                         */
+                        const esp_err_t ui_error =
+                            app_reset_coordinator_show_result(
+                                transaction_id,
+                                UI_RESET_STATE_FAILED,
+                                driver_reset_error);
+
+                        if (ui_error != ESP_OK)
+                        {
+                            ESP_LOGW(
+                                TAG,
+                                "Failed to display driver reset failure: %s",
+                                esp_err_to_name(ui_error));
+                        }
+
                         ESP_LOGE(
                             TAG,
                             "Factory-reset Wi-Fi driver cleanup failed: %s",
@@ -293,11 +475,20 @@ static void app_reset_coordinator_task(
 
                     if (reset_error != ESP_OK)
                     {
-                        /*
-                         * Driver cleanup is idempotent. Preserve runtime and
-                         * suppress reboot so the application operation can be
-                         * retried after release.
-                         */
+                        const esp_err_t ui_error =
+                            app_reset_coordinator_show_result(
+                                transaction_id,
+                                UI_RESET_STATE_FAILED,
+                                reset_error);
+
+                        if (ui_error != ESP_OK)
+                        {
+                            ESP_LOGW(
+                                TAG,
+                                "Failed to display storage reset failure: %s",
+                                esp_err_to_name(ui_error));
+                        }
+
                         ESP_LOGE(
                             TAG,
                             "Factory-reset storage transaction failed: %s",
@@ -306,20 +497,32 @@ static void app_reset_coordinator_task(
                         break;
                     }
 
-                    ESP_LOGW(
+                    ESP_LOGI(
                         TAG,
-                        "Factory reset verified; restarting into provisioning");
+                        "Factory reset verified; preparing controlled "
+                        "restart: transaction=%lu",
+                        (unsigned long)transaction_id);
 
-                    /*
-                     * Give the serial transport a finite opportunity to emit
-                     * the terminal diagnostic before rebooting. Runtime Wi-Fi
-                     * and DHCP state are discarded by esp_restart().
-                     */
-                    vTaskDelay(
-                        pdMS_TO_TICKS(
-                            APP_RESET_COORDINATOR_RESTART_DELAY_MS));
+                    const esp_err_t ui_error =
+                        app_reset_coordinator_show_result(
+                            transaction_id,
+                            UI_RESET_STATE_SUCCESS,
+                            ESP_OK);
 
-                    esp_restart();
+                    const bool reset_result_queued =
+                        ui_error == ESP_OK;
+
+                    if (!reset_result_queued)
+                    {
+                        ESP_LOGW(
+                            TAG,
+                            "Failed to queue reset success UI: %s",
+                            esp_err_to_name(ui_error));
+                    }
+
+                    app_reset_coordinator_restart_after_success(
+                        transaction_id,
+                        reset_result_queued);
                 }
                 else if (state ==
                          APP_RESET_COORDINATOR_STATE_REQUEST_ACCEPTED)
