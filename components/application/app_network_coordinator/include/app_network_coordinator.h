@@ -99,18 +99,18 @@ typedef struct
     uint32_t provisioning_timeout_ms;
 
     /**
-     * @brief Maximum time for one received credential handoff to obtain IPv4.
+     * @brief Post-session grace for a pending credential handoff to obtain IPv4.
      *
-     * The deadline starts when a credential handoff becomes pending. It is
-     * independent of the idle-session deadline, so credentials received near
-     * the end of a session still receive the complete bounded IPv4 window.
-     * On expiry the coordinator quiesces the provisioning framework before
+     * This window starts only when the normal provisioning session deadline is
+     * reached with a handoff still pending. On expiry the coordinator performs
+     * final verified-queue drains, quiesces the provisioning framework, and
+     * allows one fixed five-second post-STOPPED late-DHCP settle before
      * classifying the attempt or starting a replacement session.
      */
     uint32_t provisioning_connection_grace_ms;
 
     /**
-     * @brief Poll period used while waiting for asynchronous manager cleanup.
+     * @brief Poll period used for cleanup, late DHCP, and reset-safe waits.
      *
      * This field will be removed later when the coordinator becomes fully
      * event-driven.
@@ -143,7 +143,7 @@ typedef struct
  * The configuration is copied. Initialization is accepted only from
  * APP_NETWORK_COORDINATOR_STATE_UNINITIALIZED.
  *
- * @param[in] config Idle-session timeout, pending-handoff IPv4 deadline,
+ * @param[in] config Session timeout, pending-handoff post-session IPv4 grace,
  *                   cleanup polling, retry budget/backoff, and failure dwell.
  *
  * @return
@@ -200,13 +200,16 @@ esp_err_t app_network_coordinator_start(void);
  * already holding the reset-exclusion claim to finish. An ACTIVE provisioning
  * service is asked to stop, and STARTING/STOPPING lifecycle transitions are
  * polled with a finite delay until the framework can no longer produce a new
- * credential handoff.
+ * credential handoff. The Wi-Fi owner then disables automatic reconnect,
+ * requests Station disconnect, and the same deadline covers confirmation that
+ * the Station is detached.
  *
  * ESP_OK is a terminal handoff to the reset coordinator: the reset gate stays
  * asserted until reboot. The caller may then clear driver-owned persistence
  * and application Wi-Fi configuration. If preparation fails, a gate claimed
  * by that call is rolled back; this function never erases configuration,
- * calls Wi-Fi reset APIs, allocates resources, creates a task, or calls LVGL.
+ * calls persistent Wi-Fi reset APIs, allocates resources, creates a task, or
+ * calls LVGL.
  *
  * The API is not ISR-safe and must not be called concurrently. The
  * app_reset_coordinator task is its sole application owner.
@@ -217,13 +220,16 @@ esp_err_t app_network_coordinator_start(void);
  *
  * @return
  * - ESP_OK: Provisioning cannot start or produce another credential handoff
- *   before reboot, and no credential persistence transaction is active.
+ *   before reboot, any retained late handoff has been securely discarded, no
+ *   credential persistence transaction is active, and the Station is detached
+ *   with automatic reconnect disabled.
  * - ESP_ERR_INVALID_ARG: @p timeout_ms is zero, unrepresentable, or too large.
  * - ESP_ERR_INVALID_STATE: Coordinator is not initialized or safe lifecycle
  *   proof is unavailable.
- * - ESP_ERR_TIMEOUT: The reset-exclusion claim or provisioning cleanup did
- *   not become safe before the deadline.
- * - Other ESP-IDF errors returned while inspecting or stopping provisioning.
+ * - ESP_ERR_TIMEOUT: The reset-exclusion claim, provisioning cleanup, or
+ *   Station detach did not become safe before the deadline.
+ * - Other ESP-IDF errors returned while inspecting/stopping provisioning or
+ *   quiescing the Station.
  */
 esp_err_t app_network_coordinator_prepare_for_factory_reset(
     uint32_t timeout_ms);

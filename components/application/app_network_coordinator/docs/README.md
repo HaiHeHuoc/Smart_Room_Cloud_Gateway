@@ -23,9 +23,10 @@ The coordinator:
   facts into provisioning UI states.
 - Maps the existing Wi-Fi callback's association, DHCP, and disconnect
   snapshots into provisioning progress without taking Wi-Fi ownership.
-- Stops publishing the framework's verified `WIFI_CONNECTED` event as
-  `WAITING_FOR_IP`; the coordinator task owns the subsequent
-  `SAVING_CONFIG` transition.
+- Maps the framework's `WIFI_CONNECTED` progress to `WAITING_FOR_IP`; only the
+  coordinator task can advance a verified queue item to `SAVING_CONFIG`.
+- Reconciles DHCP replies that arrive immediately after clean BLE teardown
+  through one generation-bound, five-second, reset-aware settle window.
 - Requests the initial application screen from the final verified
   configuration state.
 - Persists provisioned credentials through `config_manager`.
@@ -50,7 +51,7 @@ The coordinator does not:
 |---|---|
 | `app_network_coordinator_init()` | Copy timing configuration and enter `READY`. |
 | `app_network_coordinator_start()` | Schedule the one-shot coordinator task and return immediately. |
-| `app_network_coordinator_prepare_for_factory_reset()` | Close the reset gate, quiesce provisioning, and wait within one caller-supplied deadline for active reset-excluded work. |
+| `app_network_coordinator_prepare_for_factory_reset()` | Close the reset gate, quiesce provisioning, disable reconnect, and wait within one caller-supplied deadline for Station detach. |
 | `app_network_coordinator_get_state()` | Copy the thread-safe lifecycle state. |
 | `app_network_coordinator_state_to_string()` | Convert a state to readable text. |
 | `app_network_coordinator_notify_wifi_event()` | Apply a short Wi-Fi notification to provisioning progress or normal runtime state, including the raw disconnect reason. |
@@ -118,6 +119,21 @@ TIMEOUT or FAILED
     -> WAITING_FOR_PHONE
 ```
 
+When association succeeds but DHCP responds only after BLE stops, the grace
+boundary follows this recovery branch:
+
+```text
+30-second IPv4 grace expires with handoff pending
+    -> final non-blocking verified-queue drains
+    -> claim reset exclusion and arm the exact generation
+    -> stop/deinitialize provisioning to STOPPED
+    -> final framework-success queue drain
+    -> poll Station for at most 5 seconds
+    -> require CONNECTED + IPv4 + exact pending SSID
+    -> promote to the ordinary verified queue
+    -> reuse SAVING_CONFIG -> read-back -> adoption path
+```
+
 The coordinator remains `PROVISIONING` throughout intermediate failures and
 backoff. It changes to `FAILED` only after retry exhaustion, a nonretryable
 failure, or cleanup that cannot reach `STOPPED`.
@@ -134,22 +150,24 @@ sessions, retries, credential persistence, adoption, normal success routing,
 and runtime Wi-Fi/dashboard routing.
 
 Short reset-exclusion claims protect operations whose external side effects
-must finish before erasure. The coordinator never holds its critical lock
-across manager, NVS, Wi-Fi, GUI, logging, or delay APIs. A credential already
-queued is received and securely cleared when the reset gate won before its
-handoff claim; a handoff that claimed first is allowed to finish, while reset
-waits and then clears persistence last.
+must finish before erasure. Late-DHCP teardown and settle retain the claim for
+their bounded transaction, poll the reset gate, and abort without persistence
+if reset wins. The coordinator never holds its critical lock across manager,
+NVS, Wi-Fi, GUI, logging, or delay APIs. A verified queue item is received and
+securely cleared when the reset gate wins; a retained unverified late copy is
+discarded by generation before Station detach and persistent erasure.
 
 | Provisioning state | Preparation action |
 |---|---|
-| `UNINITIALIZED`, `READY`, `STOPPED` | Require no active exclusion and no pending handoff, then succeed. |
+| `UNINITIALIZED`, `READY`, `STOPPED` | Require no active exclusion; drain a verified handoff or discard an armed late copy, then disconnect Station and wait for detach. |
 | `STARTING`, `STOPPING` | Poll with the configured finite period until safe or timed out. |
 | `ACTIVE` | Request `provisioning_manager_stop()` at the atomic ACTIVE boundary, then wait for cleanup. |
 | `FAILED` | Fail safe; do not authorize persistent erasure. |
 
-Success leaves the gate asserted until reboot. Failure rolls back only a gate
-created by that call, does not erase configuration, and does not call Wi-Fi
-reset or GUI APIs. No new task, queue, or dynamic allocation is introduced.
+Success requires both provisioning and Station lifecycle quiescence and leaves
+the gate asserted until reboot. Failure rolls back only a gate created by that
+call and does not erase configuration or call persistent Wi-Fi reset or GUI
+APIs. No new task, queue, or dynamic allocation is introduced.
 
 QR publication is best-effort and never promotes coordinator state, starts a
 Wi-Fi connection, or changes the active screen.
@@ -206,14 +224,20 @@ Screen routing follows the final result:
   remains suitable for the normal task-context Wi-Fi status callback.
 - The manager progress callback posts only copied latest-value GUI messages.
   It performs no wait, persistence, Wi-Fi operation, or LVGL call.
-- `PROVISIONING_MANAGER_PROGRESS_WIFI_CONNECTED` does not post another GUI
-  state. Upstream emits it only after `GOT_IP`; the coordinator task already
-  owns the following `SAVING_CONFIG` transition. This removes the old delayed
-  callback that could overwrite `SAVING_CONFIG` or `CLEANING_UP` with
-  `WAITING_FOR_IP`.
-- Provisioning waits use configured finite timeout and poll periods.
-- Each credential-attempt generation receives one finite IPv4 deadline. An
-  idle session keeps its independent finite deadline.
+- `PROVISIONING_MANAGER_PROGRESS_WIFI_CONNECTED` publishes
+  `WAITING_FOR_IP`, matching the `e66adb3` progress mapping. The verified queue
+  still gates persistence and adoption.
+- Provisioning waits use configured finite session, grace, and poll periods.
+- A pending credential handoff uses the remaining session time first. If it is
+  still pending when the session deadline expires, it receives one finite IPv4
+  grace window. Grace expiry performs final queue drains, clean BLE teardown,
+  and at most five additional reset-aware seconds for DHCP completion.
+- Late credentials stay RAM-only and generation-bound. Persistence requires
+  manager `STOPPED`, Station `CONNECTED`, valid IPv4, exact SSID match, and
+  successful delivery through the ordinary verified queue.
+- Timeout, mismatch, internal error, or reset drains verified queue storage and
+  zeroizes any armed pending copy. Non-reset failure detaches the unmanaged
+  Station before retry.
 - Temporary SSID/password buffers are securely overwritten on all completed
   paths.
 - The temporary QR copy is overwritten immediately after its non-blocking GUI
@@ -238,40 +262,41 @@ static const app_network_coordinator_config_t config = {
 
 All values must be non-zero. The session count is bounded to 10 and timing
 values to 10 minutes; every delay must convert to at least one FreeRTOS tick.
-The coordinator copies this structure during initialization. The legacy
-`provisioning_connection_grace_ms` field is the complete IPv4 deadline for one
-pending credential handoff. It starts when the handoff becomes pending, so a
-credential received near the 120-second idle-session deadline still receives
-the full 30-second window.
+The coordinator copies this structure during initialization.
+`provisioning_timeout_ms` bounds the normal session. The
+`provisioning_connection_grace_ms` window starts only if that session deadline
+is reached while a credential handoff is still pending. With the values above,
+the ordinary credential wait lasts at most 150 seconds. Only a handoff still
+pending at that boundary can then enter clean teardown and the fixed five-second
+late-DHCP settle.
 
 ## Late DHCP Recovery
 
-`wifi_manager` observes every Station association and verifies that the default
-DHCP client is active, but it does not disconnect a provisioning-owned attempt.
-The coordinator polls the non-sensitive handoff snapshot every 200 ms. A new
-credential generation starts its own 30-second IPv4 deadline; a failed
-credential attempt clears that timer so the same BLE session can accept
-another phone submission. The generation also detects a fast failed-A/new-B
-transition that occurs entirely between two polls, so B never inherits A's
-deadline.
+ESP-NETIF remains the DHCP lifecycle owner; neither the coordinator nor
+`wifi_manager` manually starts or stops DHCP. At the 120-second session
+deadline the coordinator reads the legacy boolean handoff state; a pending
+handoff gets the configured 30-second grace.
 
-When either the idle-session deadline or the per-handoff IPv4 deadline expires,
-the coordinator first requests provisioning shutdown and waits for `STOPPED`.
-Only then does it perform one final non-blocking credential-queue drain. This
-creates a deterministic boundary:
+Observed hardware logs show a DHCP OFFER/ACK can arrive only after BLE and the
+provisioning framework stop. Starting the next BLE session immediately then
+calls into Wi-Fi setup and cancels that valid lease. To close this boundary,
+grace expiry performs a non-blocking verified queue receive, claims Phase 7
+reset exclusion, receives once more, and arms only the active generation.
+Normal cleanup reaches `STOPPED` while the manager preserves only that armed
+RAM copy. A final queue receive catches framework success that won during
+teardown.
 
-- `GOT_IP` before framework deinitialization leaves one verified credential
-  item, so the final drain continues the success path.
-- Framework deinitialization first unregisters the upstream IP handler, so a
-  later `GOT_IP` cannot create a successful handoff. After an empty final drain,
-  the coordinator asks `wifi_manager` to detach the unadopted Station attempt
-  and waits up to five seconds for `DISCONNECTED` before a replacement session
-  can start.
+If the queue remains empty, the coordinator polls `wifi_manager` for no more
+than five seconds. Only `CONNECTED`, `has_ipv4_address`, and an exact connected
+SSID match allow `provisioning_manager` to promote the retained credential to
+the verified queue. The existing persistence/read-back/adoption flow is then
+reused unchanged. No password is exposed for the SSID comparison and no
+credential is persisted before verification.
 
-If that detach event is not observed within five seconds, the result is an
-internal lifecycle failure rather than a retryable provisioning timeout. This
-prevents a new session from inheriting an unresolved driver operation or its
-late-IP suppression guard.
+Reset, timeout, disconnect, mismatch, or API failure drains and zeroizes all
+late copies. A non-reset failure requests unmanaged Station detach after clean
+`STOPPED` and before another session begins. `WIFI_CREDENTIAL_FAILED` remains a
+non-terminal progress update at the coordinator boundary.
 
 Success still follows the normal security and ownership path:
 
@@ -331,12 +356,11 @@ adoption, and screen-routing behavior.
 **IMPLEMENTED / HARDWARE TEST PENDING**
 
 At the Phase 6.4.4 checkpoint the coordinator published the real provisioning
-lifecycle, preserved the
-QR payload across ordinary screen transitions and credential failures, and
-cleared it only when the session became invalid. A wrong credential set shows
-`FAILED` while the same BLE session remains available for another phone
-submission; automatic `RETRYING` was deferred to Phase 6.4.5. Verified success
-persists and re-reads configuration,
+lifecycle and preserved the QR payload across ordinary screen transitions.
+The 2026-08-01 selective restore reinstates its non-terminal credential-failure
+mapping and session/grace ordering from `e66adb3`; target testing must determine
+how the upstream service behaves after exhausting connection attempts. Verified
+success persists and re-reads configuration,
 waits for manager cleanup, adopts the valid Station/IPv4 connection, shows
 `SUCCESS` for 1500 ms, then requests `WIFI_STATUS`. The existing Wi-Fi-screen
 timer continues to route to `SENSOR_DASHBOARD`. Coordinator runtime tracking
@@ -357,8 +381,7 @@ the QR screen to show `Session n/max` throughout waiting, cleanup, retry, and
 success states.
 
 Before a replacement session, cleanup must reach `STOPPED`, handoff-pending
-must be false, an unadopted Station attempt must be detached, and
-`config_manager` must still report `NOT_CONFIGURED`. The
+must be false, and `config_manager` must still report `NOT_CONFIGURED`. The
 manager resets its retained credential queue during reinitialization. If
 configuration becomes `VALID`, no new BLE service starts; the coordinator uses
 the stored-configuration path instead. Intermediate retries retain BLE
@@ -374,17 +397,18 @@ adoption; it intentionally does not depend on optional BLE memory reclamation.
 | Result class | Examples | New phone session |
 |---|---|---|
 | `SUCCESS` | Persisted, cleaned, connection adopted | No |
-| `RETRYABLE_TIMEOUT` | Idle session or pending IPv4 handoff reached its bounded deadline | Yes, while budget remains |
-| `RETRYABLE_SESSION_FAILURE` | Session stopped cleanly without a usable handoff | Yes, while budget remains |
+| `RETRYABLE_TIMEOUT` | Idle session expired, or the bounded grace/late settle produced no verified handoff | Yes, while budget remains |
+| `RETRYABLE_SESSION_FAILURE` | Session stopped cleanly without a usable handoff, including late reconciliation failure | Yes, while budget remains |
 | `NONRETRYABLE_STORAGE_FAILURE` | Save, validation, or read-back failure | No |
 | `NONRETRYABLE_ADOPTION_FAILURE` | Persisted connection cannot be adopted | No |
-| `NONRETRYABLE_INTERNAL_FAILURE` | Init/start/queue/cleanup or Station detach cannot be safely completed | No |
+| `NONRETRYABLE_INTERNAL_FAILURE` | Init/start/queue or cleanup cannot be safely completed | No |
 
-An ordinary wrong-password event is not a session result: the same BLE
-service and QR remain active, no retry count is consumed, and a later correct
-submission continues the current session. On final exhaustion the QR is
-cleared, final `TIMEOUT` or `FAILED` remains on `PROVISIONING`, coordinator
-state becomes `FAILED`, and cloud startup remains gated.
+A wrong-password result displays `FAILED` but is not independently promoted to
+a terminal coordinator error. This intentionally restores the `e66adb3`
+ordering. Session timeout or a clean manager stop still drives the outer
+cleanup/retry envelope. On final exhaustion the QR is cleared, final `TIMEOUT`
+or `FAILED` remains on `PROVISIONING`, coordinator state becomes `FAILED`, and
+cloud startup remains gated.
 
 ### Phase 6.4.5 Manual Hardware Tests
 
@@ -392,9 +416,10 @@ state becomes `FAILED`, and cloud startup remains gated.
   `TIMEOUT -> CLEANING_UP -> RETRYING -> STARTING -> WAITING_FOR_PHONE`, no
   reboot, manager `STOPPED` before restart, discoverable session 2, a new QR
   model, and no heap drop.
-- **Test B — Wrong password in the same session:** submit wrong then correct
-  credentials; verify no `RETRYING`, no session-count increment, QR remains,
-  and the same BLE service completes the success flow.
+- **Test B — Wrong then correct password:** submit wrong credentials; verify
+  `FAILED` without an application-forced immediate generation change. Verify
+  timeout/manager cleanup remains bounded before any replacement session, then
+  submit corrected credentials and verify the success flow.
 - **Test C — Retry exhaustion:** allow all three default sessions to timeout;
   verify exactly three sessions, no fourth service, final QR cleared, terminal
   state remains visible, Station is disconnected, no reboot, and no cloud

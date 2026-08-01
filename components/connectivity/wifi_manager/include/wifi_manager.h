@@ -215,6 +215,8 @@ esp_err_t wifi_manager_disconnect(void);
  * provisioning framework has reached STOPPED and its final verified handoff
  * queue is empty. Unlike wifi_manager_disconnect(), it does not set persistent
  * manual-disconnect intent, so a later provisioning session may connect.
+ * It also restores WIFI_STORAGE_RAM after the provisioning framework's
+ * temporary FLASH policy before returning or requesting the disconnect.
  *
  * The operation is rejected after credentials/reconnect ownership has been
  * configured or adopted. Completion of an active driver disconnect remains
@@ -235,9 +237,10 @@ esp_err_t wifi_manager_discard_unmanaged_connection(void);
  * reload that stale driver state.
  *
  * This function does not erase config_manager data, disconnect the current
- * Station connection, or reboot. Call it only from normal task context before
- * clearing the authoritative application Wi-Fi configuration. Reboot promptly
- * after the complete reset transaction succeeds.
+ * Station connection, or reboot. Call it only from normal task context after
+ * the application network coordinator has confirmed that provisioning is
+ * stopped and the Station is detached. Reboot promptly after the complete
+ * reset transaction succeeds.
  *
  * @return ESP_OK on success, ESP_ERR_INVALID_STATE before initialization, or
  *         an ESP-IDF Wi-Fi error when persistent settings cannot be restored.

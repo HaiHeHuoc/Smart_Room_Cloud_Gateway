@@ -84,7 +84,8 @@ static provisioning_manager_wifi_credentials_t s_pending_credentials = {0};
 
 static bool s_pending_credentials_valid = false;
 static bool s_wifi_handoff_pending = false;
-static uint32_t s_wifi_handoff_generation = 0U;
+static bool s_late_wifi_handoff_armed = false;
+static uint32_t s_late_wifi_handoff_generation = 0U;
 
 static char s_active_service_name
     [PROVISIONING_MANAGER_SERVICE_NAME_BUFFER_SIZE] = {0};
@@ -564,34 +565,49 @@ static void provisioning_manager_cleanup_task(
 {
     (void)arg;
     uint32_t completed_generation = 0U;
+    bool late_handoff_retained = false;
 
     const esp_err_t ret =
         network_prov_mgr_deinit();
 
     portENTER_CRITICAL(&s_state_lock);
 
+    completed_generation = s_session_generation;
+
     const bool unverified_credentials_pending =
         s_pending_credentials_valid;
 
-    provisioning_manager_zeroize(
-        &s_pending_credentials,
-        sizeof(s_pending_credentials));
+    late_handoff_retained =
+        (ret == ESP_OK) &&
+        s_late_wifi_handoff_armed &&
+        (s_late_wifi_handoff_generation == completed_generation) &&
+        unverified_credentials_pending &&
+        s_wifi_handoff_pending;
 
-    s_pending_credentials_valid = false;
-
-    if (unverified_credentials_pending)
+    if (!late_handoff_retained)
     {
+        provisioning_manager_zeroize(
+            &s_pending_credentials,
+            sizeof(s_pending_credentials));
+
+        s_pending_credentials_valid = false;
+
         /*
          * Cleanup canceled an in-flight, not-yet-verified credential set.
          * A true handoff with no pending copy can instead represent verified
          * credentials already queued for the application; preserve that flag
          * until receive or terminal queue cleanup.
          */
-        s_wifi_handoff_pending = false;
+        if (unverified_credentials_pending)
+        {
+            s_wifi_handoff_pending = false;
+        }
+
+        s_late_wifi_handoff_armed = false;
+        s_late_wifi_handoff_generation = 0U;
     }
 
     s_cleanup_in_progress = false;
-    completed_generation = s_session_generation;
     provisioning_manager_clear_active_identity_locked();
     s_state =
         (ret == ESP_OK)
@@ -602,6 +618,14 @@ static void provisioning_manager_cleanup_task(
 
     if (ret == ESP_OK)
     {
+        if (late_handoff_retained)
+        {
+            ESP_LOGI(
+                TAG,
+                "Retained generation-bound Wi-Fi handoff for bounded "
+                "post-stop reconciliation");
+        }
+
         ESP_LOGI(
             TAG,
             "Provisioning manager de-initialized");
@@ -672,6 +696,8 @@ static void provisioning_manager_event_callback(
 
                 s_pending_credentials_valid = false;
                 s_wifi_handoff_pending = false;
+                s_late_wifi_handoff_armed = false;
+                s_late_wifi_handoff_generation = 0U;
 
                 portEXIT_CRITICAL(&s_state_lock);
 
@@ -704,13 +730,8 @@ static void provisioning_manager_event_callback(
 
             s_pending_credentials_valid = true;
             s_wifi_handoff_pending = true;
-
-            s_wifi_handoff_generation++;
-
-            if (s_wifi_handoff_generation == 0U)
-            {
-                s_wifi_handoff_generation = 1U;
-            }
+            s_late_wifi_handoff_armed = false;
+            s_late_wifi_handoff_generation = 0U;
 
             portEXIT_CRITICAL(&s_state_lock);
 
@@ -755,6 +776,8 @@ static void provisioning_manager_event_callback(
 
             s_pending_credentials_valid = false;
             s_wifi_handoff_pending = false;
+            s_late_wifi_handoff_armed = false;
+            s_late_wifi_handoff_generation = 0U;
 
             portEXIT_CRITICAL(&s_state_lock);
 
@@ -795,6 +818,8 @@ static void provisioning_manager_event_callback(
 
             s_wifi_handoff_pending =
                 credentials_ready;
+            s_late_wifi_handoff_armed = false;
+            s_late_wifi_handoff_generation = 0U;
 
             credentials_queue = s_credentials_queue;
 
@@ -920,6 +945,8 @@ static void provisioning_manager_event_callback(
 
                 s_pending_credentials_valid = false;
                 s_wifi_handoff_pending = false;
+                s_late_wifi_handoff_armed = false;
+                s_late_wifi_handoff_generation = 0U;
                 s_cleanup_in_progress = false;
                 provisioning_manager_clear_active_identity_locked();
                 s_state =
@@ -1044,6 +1071,24 @@ esp_err_t provisioning_manager_init(
         return ESP_OK;
     }
 
+    /*
+     * A STOPPED generation may still own a deliberately retained late
+     * handoff or a verified queue item. Require its coordinator to confirm,
+     * consume, or securely discard that handoff before a new generation can
+     * overwrite the session identity. This fails closed instead of silently
+     * dropping credentials at the retry boundary.
+     */
+    if ((current_state ==
+         PROVISIONING_MANAGER_STATE_STOPPED) &&
+        (s_late_wifi_handoff_armed ||
+         s_pending_credentials_valid ||
+         s_wifi_handoff_pending))
+    {
+        portEXIT_CRITICAL(&s_state_lock);
+
+        return ESP_ERR_INVALID_STATE;
+    }
+
     if (((current_state !=
           PROVISIONING_MANAGER_STATE_UNINITIALIZED) &&
         (current_state !=
@@ -1066,7 +1111,8 @@ esp_err_t provisioning_manager_init(
 
     s_pending_credentials_valid = false;
     s_wifi_handoff_pending = false;
-    s_wifi_handoff_generation = 0U;
+    s_late_wifi_handoff_armed = false;
+    s_late_wifi_handoff_generation = 0U;
     provisioning_manager_clear_active_identity_locked();
     credentials_queue = s_credentials_queue;
 
@@ -1328,6 +1374,8 @@ esp_err_t provisioning_manager_start(void)
 
         s_pending_credentials_valid = false;
         s_wifi_handoff_pending = false;
+        s_late_wifi_handoff_armed = false;
+        s_late_wifi_handoff_generation = 0U;
         provisioning_manager_clear_active_identity_locked();
         s_state =
             (cleanup_ret == ESP_OK)
@@ -1532,6 +1580,19 @@ esp_err_t provisioning_manager_release_ble_memory(void)
     }
 
     s_ble_memory_releasing = true;
+
+    if (s_pending_credentials_valid)
+    {
+        provisioning_manager_zeroize(
+            &s_pending_credentials,
+            sizeof(s_pending_credentials));
+
+        s_pending_credentials_valid = false;
+        s_wifi_handoff_pending = false;
+    }
+
+    s_late_wifi_handoff_armed = false;
+    s_late_wifi_handoff_generation = 0U;
     credentials_queue = s_credentials_queue;
 
     portEXIT_CRITICAL(&s_state_lock);
@@ -1558,6 +1619,8 @@ esp_err_t provisioning_manager_release_ble_memory(void)
     portENTER_CRITICAL(&s_state_lock);
 
     s_wifi_handoff_pending = false;
+    s_late_wifi_handoff_armed = false;
+    s_late_wifi_handoff_generation = 0U;
 
     portEXIT_CRITICAL(&s_state_lock);
 
@@ -1653,34 +1716,218 @@ esp_err_t provisioning_manager_is_wifi_handoff_pending(
     return ESP_OK;
 }
 
-esp_err_t provisioning_manager_get_wifi_handoff_status(
-    provisioning_manager_wifi_handoff_status_t *status)
+esp_err_t provisioning_manager_arm_late_wifi_handoff(
+    uint32_t session_generation)
 {
-    if (status == NULL)
+    if (session_generation == 0U)
     {
         return ESP_ERR_INVALID_ARG;
     }
 
-    memset(
-        status,
-        0,
-        sizeof(*status));
+    bool newly_armed = false;
 
     portENTER_CRITICAL(&s_state_lock);
 
-    if (s_credentials_queue == NULL)
+    const bool lifecycle_reconcilable =
+        (s_state == PROVISIONING_MANAGER_STATE_ACTIVE) ||
+        (s_state == PROVISIONING_MANAGER_STATE_STOPPING) ||
+        (s_state == PROVISIONING_MANAGER_STATE_STOPPED);
+
+    if (!lifecycle_reconcilable ||
+        (s_session_generation != session_generation) ||
+        (s_credentials_queue == NULL) ||
+        !s_wifi_handoff_pending)
     {
         portEXIT_CRITICAL(&s_state_lock);
-
         return ESP_ERR_INVALID_STATE;
     }
 
-    status->pending =
-        s_wifi_handoff_pending;
-    status->credential_generation =
-        s_wifi_handoff_generation;
+    if (s_pending_credentials_valid)
+    {
+        const bool stopped_without_existing_retention =
+            (s_state == PROVISIONING_MANAGER_STATE_STOPPED) &&
+            (!s_late_wifi_handoff_armed ||
+             (s_late_wifi_handoff_generation != session_generation));
+
+        const bool conflicting_retention =
+            s_late_wifi_handoff_armed &&
+            (s_late_wifi_handoff_generation != session_generation);
+
+        if (stopped_without_existing_retention ||
+            conflicting_retention)
+        {
+            portEXIT_CRITICAL(&s_state_lock);
+            return ESP_ERR_INVALID_STATE;
+        }
+
+        if (!s_late_wifi_handoff_armed)
+        {
+            s_late_wifi_handoff_armed = true;
+            s_late_wifi_handoff_generation = session_generation;
+            newly_armed = true;
+        }
+    }
+    else
+    {
+        /*
+         * A framework success callback may have moved the same handoff to the
+         * verified queue between the coordinator's final non-blocking receive
+         * and this call. Treat that boundary as reconcilable; no unverified
+         * copy needs retention.
+         */
+        s_late_wifi_handoff_armed = false;
+        s_late_wifi_handoff_generation = 0U;
+    }
 
     portEXIT_CRITICAL(&s_state_lock);
+
+    if (newly_armed)
+    {
+        ESP_LOGI(
+            TAG,
+            "Armed bounded post-stop Wi-Fi handoff reconciliation");
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t provisioning_manager_confirm_late_wifi_handoff(
+    uint32_t session_generation,
+    const char *connected_ssid)
+{
+    if ((session_generation == 0U) ||
+        (connected_ssid == NULL))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const size_t connected_ssid_length =
+        strnlen(
+            connected_ssid,
+            PROVISIONING_MANAGER_WIFI_SSID_BUFFER_SIZE);
+
+    if ((connected_ssid_length == 0U) ||
+        (connected_ssid_length >
+         PROVISIONING_MANAGER_WIFI_SSID_MAX_LEN))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    provisioning_manager_wifi_credentials_t credentials_copy = {0};
+    QueueHandle_t credentials_queue = NULL;
+
+    portENTER_CRITICAL(&s_state_lock);
+
+    if ((s_state != PROVISIONING_MANAGER_STATE_STOPPED) ||
+        (s_session_generation != session_generation) ||
+        !s_late_wifi_handoff_armed ||
+        (s_late_wifi_handoff_generation != session_generation) ||
+        !s_pending_credentials_valid ||
+        !s_wifi_handoff_pending ||
+        (s_credentials_queue == NULL))
+    {
+        portEXIT_CRITICAL(&s_state_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (strcmp(
+            s_pending_credentials.ssid,
+            connected_ssid) != 0)
+    {
+        portEXIT_CRITICAL(&s_state_lock);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    memcpy(
+        &credentials_copy,
+        &s_pending_credentials,
+        sizeof(credentials_copy));
+
+    provisioning_manager_zeroize(
+        &s_pending_credentials,
+        sizeof(s_pending_credentials));
+
+    s_pending_credentials_valid = false;
+    s_late_wifi_handoff_armed = false;
+    s_late_wifi_handoff_generation = 0U;
+    credentials_queue = s_credentials_queue;
+
+    portEXIT_CRITICAL(&s_state_lock);
+
+    const BaseType_t queue_ret =
+        xQueueOverwrite(
+            credentials_queue,
+            &credentials_copy);
+
+    provisioning_manager_zeroize(
+        &credentials_copy,
+        sizeof(credentials_copy));
+
+    if (queue_ret != pdPASS)
+    {
+        portENTER_CRITICAL(&s_state_lock);
+        s_wifi_handoff_pending = false;
+        portEXIT_CRITICAL(&s_state_lock);
+
+        ESP_LOGE(
+            TAG,
+            "Failed to queue late verified Wi-Fi credentials");
+
+        provisioning_manager_publish_progress_for_generation(
+            session_generation,
+            PROVISIONING_MANAGER_PROGRESS_FAILED,
+            ESP_FAIL,
+            0U);
+
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Late provisioning handoff verified by Station IPv4 state");
+
+    provisioning_manager_publish_progress_for_generation(
+        session_generation,
+        PROVISIONING_MANAGER_PROGRESS_WIFI_CONNECTED,
+        ESP_OK,
+        0U);
+
+    return ESP_OK;
+}
+
+esp_err_t provisioning_manager_discard_late_wifi_handoff(
+    uint32_t session_generation)
+{
+    if (session_generation == 0U)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    portENTER_CRITICAL(&s_state_lock);
+
+    if ((s_session_generation != session_generation) ||
+        !s_late_wifi_handoff_armed ||
+        (s_late_wifi_handoff_generation != session_generation) ||
+        !s_pending_credentials_valid)
+    {
+        portEXIT_CRITICAL(&s_state_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    provisioning_manager_zeroize(
+        &s_pending_credentials,
+        sizeof(s_pending_credentials));
+
+    s_pending_credentials_valid = false;
+    s_wifi_handoff_pending = false;
+    s_late_wifi_handoff_armed = false;
+    s_late_wifi_handoff_generation = 0U;
+
+    portEXIT_CRITICAL(&s_state_lock);
+
+    ESP_LOGI(
+        TAG,
+        "Discarded retained late Wi-Fi handoff");
 
     return ESP_OK;
 }
@@ -1736,6 +1983,8 @@ esp_err_t provisioning_manager_receive_wifi_credentials(
         portENTER_CRITICAL(&s_state_lock);
 
         s_wifi_handoff_pending = false;
+        s_late_wifi_handoff_armed = false;
+        s_late_wifi_handoff_generation = 0U;
 
         portEXIT_CRITICAL(&s_state_lock);
 
@@ -1749,6 +1998,8 @@ esp_err_t provisioning_manager_receive_wifi_credentials(
     portENTER_CRITICAL(&s_state_lock);
 
     s_wifi_handoff_pending = false;
+    s_late_wifi_handoff_armed = false;
+    s_late_wifi_handoff_generation = 0U;
 
     portEXIT_CRITICAL(&s_state_lock);
 
