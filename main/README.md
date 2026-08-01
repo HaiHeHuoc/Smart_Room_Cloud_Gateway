@@ -70,9 +70,11 @@ button_manager task callback
 
 app_reset_coordinator task
     -> validate PRESSED / LONG_PRESS / RELEASED ordering
-    -> accept at most one diagnostic reset request per physical press cycle
-    -> re-arm only after RELEASED
-    -> no NVS erase, provisioning restart, reboot, or LVGL call in Phase 7.2
+    -> accept at most one reset request per physical press cycle
+    -> clear the ESP-IDF driver-owned persistent Wi-Fi copy through wifi_manager
+    -> clear and verify config_manager Wi-Fi state
+    -> reboot only after both cleanup layers succeed
+    -> boot coordinator selects provisioning from NOT_CONFIGURED
 
 provisioning_manager callback
     -> validate and hold credentials pending
@@ -162,8 +164,10 @@ callback cannot post into an uninitialized cloud component.
   not call LVGL, create widgets, or render screens.
 - `app_reset_coordinator` owns application-level reset-input ordering in its
   dedicated task. The button callback only performs a zero-wait copied queue
-  post; Phase 7.2 performs no storage, Wi-Fi, provisioning, reboot, or LVGL
-  action.
+  post. The coordinator first requests driver-owned persistent cleanup through
+  `wifi_manager`, then clears application Wi-Fi state through `config_manager`,
+  and reboots only after both operations succeed. It never calls LVGL or logs
+  credentials.
 - `sensor_manager` is a local service and continues sampling and updating the
   GUI while provisioning waits, times out, or network connectivity is absent.
 - The single Wi-Fi callback fans out a short runtime event to the coordinator,
@@ -275,6 +279,11 @@ idf.py -p <PORT> flash monitor
   user on 2026-08-01. Non-blocking handoff, event ordering, and one accepted
   diagnostic request per press cycle are complete; configuration erasure,
   provisioning recovery, reboot policy, and UI confirmation remain deferred.
+- Phase 7.3 reset execution was manually/hardware accepted by the user on
+  2026-08-01. The reset transaction clears and verifies application Wi-Fi
+  state, removes the ESP-IDF driver-owned persistent copy, reboots into BLE
+  provisioning, and obtains IPv4 after reprovisioning without `erase-flash`.
+  Reset-confirmation UI remains deferred.
 - Never log or commit passwords, ID tokens, refresh tokens, service-account
   keys, or Firebase administrator credentials.
 

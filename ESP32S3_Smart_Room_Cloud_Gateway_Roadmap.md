@@ -970,21 +970,39 @@ completes only non-blocking reset-input handoff and one-shot request
 qualification. It does not complete Sprint 7: no configuration is erased and
 no provisioning, reboot, or reset-confirmation UI action is performed.
 
+### Phase 7.3 Status — Complete
+
+- [x] Remove the second persistent Station configuration written by the
+      upstream provisioning framework through a `wifi_manager`-owned wrapper.
+- [x] Clear application-owned Wi-Fi keys only through `config_manager`.
+- [x] Re-open and verify the resulting state is `NOT_CONFIGURED`.
+- [x] Suppress reboot when either persistent cleanup layer fails.
+- [x] Reboot after successful cleanup so live Wi-Fi, DHCP, reconnect, cloud,
+      and coordinator state cannot survive into provisioning.
+- [x] Reprovision without `erase-flash` and receive a valid IPv4 address.
+- [x] Preserve device identity, custom configuration, callback safety, and
+      credential-free logs.
+
+Phase 7.3 was manually/hardware accepted by the user on 2026-08-01. This
+completes verified Wi-Fi reset and reboot-to-provisioning recovery. Sprint 7
+remains incomplete because reset-confirmation UI and reset coordination during
+an active provisioning credential handoff are still deferred.
+
 ### Tasks
 
 - [x] Add button input.
 - [x] Implement debounce.
 - [x] Detect long press, for example 5 seconds.
-- [ ] Erase Wi-Fi config from NVS.
-- [ ] Restart provisioning mode.
+- [x] Erase Wi-Fi config from NVS.
+- [x] Restart provisioning mode.
 - [ ] Display reset confirmation/status on LVGL.
 
 ### Done Criteria
 
-- [ ] Short press does not erase config accidentally.
-- [ ] Long press reliably resets config.
-- [ ] Device returns to provisioning mode.
-- [ ] User can recover from wrong Wi-Fi credentials.
+- [x] Short press does not erase config accidentally.
+- [x] Long press reliably resets config.
+- [x] Device returns to provisioning mode.
+- [x] User can recover from wrong Wi-Fi credentials.
 
 ### Learning Topics
 
@@ -1830,7 +1848,7 @@ Use this section to track daily/weekly progress.
 | 4 | Firebase upload | Done |  | 2026-07-19 | Hardware upload, Firebase data, failure handling, and LCD Cloud status accepted. |
 | 5 | NVS config storage | Done |  | 2026-07-26 | Persistence, integrity, migration, and recovery tests accepted. |
 | 6 | BLE provisioning | In progress |  |  | Phase 6.4 implemented; final A-N hardware acceptance pending. |
-| 7 | Factory reset | In progress |  |  | Phases 7.1-7.2 input and one-shot request qualification hardware-accepted; reset action and recovery remain pending. |
+| 7 | Factory reset | In progress |  |  | Phases 7.1-7.3 configured-runtime erase/reboot/reprovision/IPv4 recovery hardware-accepted; reset UI and active-provisioning coordination remain pending. |
 | 8 | Reconnect + retry | In progress |  |  | Wi-Fi/cloud recovery implemented; final target-hardware recovery and endurance acceptance pending. |
 | 9 | Portfolio polish | Not started |  |  |  |
 | 10 | Audio hardware validation | Proposed / Not started |  |  | New optional voice syllabus; hardware and GPIO gate. |

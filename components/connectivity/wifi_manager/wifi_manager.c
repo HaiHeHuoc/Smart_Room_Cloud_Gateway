@@ -2011,6 +2011,48 @@ esp_err_t wifi_manager_disconnect(void)
     return ESP_OK;
 }
 
+esp_err_t wifi_manager_clear_persistent_driver_settings(void)
+{
+    taskENTER_CRITICAL(&s_status_lock);
+
+    const bool initialized =
+        s_wifi_manager.initialized;
+
+    taskEXIT_CRITICAL(&s_status_lock);
+
+    if (!initialized)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /*
+     * network_provisioning writes received credentials using
+     * WIFI_STORAGE_FLASH. Keep this driver-owned cleanup behind wifi_manager
+     * instead of exposing esp_wifi_restore() to application coordinators.
+     * Reboot promptly after the complete reset transaction succeeds because
+     * restore resets persistent Wi-Fi mode, protocol, bandwidth, and Station
+     * configuration.
+     */
+    const esp_err_t error =
+        esp_wifi_restore();
+
+    if (error != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to clear persistent Wi-Fi driver settings: %s",
+            esp_err_to_name(error));
+
+        return error;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Persistent Wi-Fi driver settings cleared");
+
+    return ESP_OK;
+}
+
 esp_err_t wifi_manager_get_status(
     wifi_manager_status_t *status)
 {

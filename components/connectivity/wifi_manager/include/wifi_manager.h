@@ -209,6 +209,24 @@ esp_err_t wifi_manager_connect(
 esp_err_t wifi_manager_disconnect(void);
 
 /**
+ * @brief Erase persistent Wi-Fi settings owned by the ESP-IDF driver.
+ *
+ * The provisioning framework temporarily uses WIFI_STORAGE_FLASH and can
+ * leave a second credential copy outside config_manager. This operation calls
+ * esp_wifi_restore() through the Wi-Fi owner so a factory-reset reboot cannot
+ * reload that stale driver state.
+ *
+ * This function does not erase config_manager data, disconnect the current
+ * Station connection, or reboot. Call it only from normal task context before
+ * clearing the authoritative application Wi-Fi configuration. Reboot promptly
+ * after the complete reset transaction succeeds.
+ *
+ * @return ESP_OK on success, ESP_ERR_INVALID_STATE before initialization, or
+ *         an ESP-IDF Wi-Fi error when persistent settings cannot be restored.
+ */
+esp_err_t wifi_manager_clear_persistent_driver_settings(void);
+
+/**
  * @brief Copy the current Wi-Fi status.
  *
  * @param status Output status structure.
