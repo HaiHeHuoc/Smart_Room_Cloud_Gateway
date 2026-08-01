@@ -174,7 +174,9 @@ const char *app_network_coordinator_state_to_string(
  *
  * This non-blocking API creates a dedicated one-shot FreeRTOS task. Persistent
  * configuration resolution, stored connection startup, and bounded BLE
- * provisioning run in that task.
+ * provisioning run in that task. For stored credentials, the task also keeps
+ * BOOT visible for at most 60 seconds before requesting WIFI_STATUS when the
+ * device is still offline; wifi_manager continues reconnecting independently.
  *
  * ESP_OK confirms only that the task was created. Inspect coordinator and
  * manager states for the eventual network result.

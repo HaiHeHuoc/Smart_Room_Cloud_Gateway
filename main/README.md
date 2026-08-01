@@ -3,7 +3,7 @@
 ## Purpose
 
 `main.c` is the firmware composition root. It initializes platform, display,
-storage, GUI, Wi-Fi, sensor, Firebase Authentication, and cloud components in
+storage, GUI, button, Wi-Fi, sensor, Firebase Authentication, and cloud components in
 their required order. It also maps manager-owned snapshots into the GUI and
 cloud data types without calling LVGL or HTTPS from producer callbacks.
 The reusable component domain layout is documented in `components/README.md`.
@@ -18,16 +18,20 @@ The reusable component domain layout is documented in `components/README.md`.
 6. Initialize `app_gui` and start its single UI task. No screen is selected
    until the coordinator resolves the final configuration state.
 7. Optionally start the diagnostic `performance_monitor`.
-8. Initialize `wifi_manager` and register its status callback.
-9. Initialize `app_network_coordinator` without scheduling its task.
-10. Initialize `firebase_auth`, then initialize `cloud_manager` and register its
-   status callback. The telemetry queue now exists, but TLS has not started.
-11. Initialize `sensor_manager`, register its callback, and start DHT22
+8. Initialize `button_manager`, register its callback, and start its local
+   polling task. Button failure does not stop unrelated service startup.
+9. Initialize `wifi_manager` and register its status callback.
+10. Initialize `app_network_coordinator` without scheduling its task.
+11. Initialize `firebase_auth`, then initialize `cloud_manager` and register its
+    status callback. The telemetry queue now exists, but TLS has not started.
+12. Initialize `sensor_manager`, register its callback, and start DHT22
     sampling as a local service independent of network availability.
-12. Schedule the dedicated one-shot `app_network_coordinator` task. It requests
+13. Schedule the dedicated one-shot `app_network_coordinator` task. It requests
     `BOOT` for a verified configured path or `PROVISIONING` directly for
-    `NOT_CONFIGURED`.
-13. In the low-activity main loop, start `cloud_manager` only after the
+    `NOT_CONFIGURED`. A configured device leaves `BOOT` after at most 60
+    seconds even if stored Wi-Fi remains unavailable; the cached offline/retry
+    snapshot is then shown on `WIFI_STATUS` without interrupting reconnect.
+14. In the low-activity main loop, start `cloud_manager` only after the
     coordinator reaches `CONNECTING` for stored credentials or `ONLINE` after
     provisioning cleanup and adoption; retry task allocation after temporary
     memory pressure.
@@ -57,6 +61,11 @@ cloud_manager status callback
     -> map cloud_manager_status_t to ui_cloud_status_t
     -> app_gui_post_cloud_status()
     -> GUI task updates the Sensor screen Cloud row and indicator
+
+button_manager task callback
+    -> receive one copied PRESSED / RELEASED / LONG_PRESS event
+    -> log Phase 7.1 diagnostics and return without blocking
+    -> no NVS erase, provisioning restart, reboot, or LVGL call in Phase 7.1
 
 provisioning_manager callback
     -> validate and hold credentials pending
@@ -248,6 +257,9 @@ idf.py -p <PORT> flash monitor
   roadmap's A-N matrix is the final acceptance procedure.
 - Firebase project setup and authenticated host testing are documented in
   `components/cloud/cloud_manager/README.txt` and `Test/TestFirebase_Auth.ps1`.
+- Phase 7.1 button input was manually/hardware accepted by the user on
+  2026-08-01. GPIO polling, debounce, press/release, and one-shot long-press
+  detection are complete; reset execution and UI confirmation remain deferred.
 - Never log or commit passwords, ID tokens, refresh tokens, service-account
   keys, or Firebase administrator credentials.
 

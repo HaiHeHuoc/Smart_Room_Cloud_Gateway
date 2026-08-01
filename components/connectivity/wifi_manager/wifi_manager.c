@@ -653,7 +653,7 @@ static void wifi_manager_reconnect_task(
 
         if (!should_reconnect)
         {
-            ESP_LOGI(
+            ESP_LOGD(
                 TAG,
                 "Reconnect attempt skipped");
 
@@ -725,7 +725,7 @@ static void wifi_manager_reconnect_task(
 
         if (!should_reconnect)
         {
-            ESP_LOGI(
+            ESP_LOGD(
                 TAG,
                 "Reconnect attempt cancelled");
 
@@ -803,7 +803,7 @@ static void wifi_manager_reconnect_task(
         }
 
 
-        ESP_LOGI(
+        ESP_LOGD(
             TAG,
             "Reconnect task awakened, notifications=%lu",
             (unsigned long)notification_count);
@@ -906,7 +906,7 @@ static void wifi_manager_event_handler(
 
                 taskEXIT_CRITICAL(&s_status_lock);
 
-                ESP_LOGI(TAG, "Event: WIFI_EVENT_STA_CONNECTED");
+                ESP_LOGD(TAG, "Event: WIFI_EVENT_STA_CONNECTED");
                 ESP_LOGD(TAG, "Waiting for IPv4 address");
 
                 wifi_manager_notify_status_changed();
@@ -981,7 +981,7 @@ static void wifi_manager_event_handler(
                         }
                     }
 
-                    ESP_LOGI(TAG, "Event: WIFI_EVENT_STA_DISCONNECTED");
+                    ESP_LOGD(TAG, "Event: WIFI_EVENT_STA_DISCONNECTED");
 
                     wifi_manager_notify_status_changed();
 
@@ -998,7 +998,7 @@ static void wifi_manager_event_handler(
                     }
                     else if (!wifi_manager_schedule_reconnect())
                     {
-                        ESP_LOGI(
+                        ESP_LOGD(
                             TAG,
                             "Automatic reconnect was not scheduled");
                     }
@@ -2393,17 +2393,17 @@ esp_err_t wifi_manager_scan_and_log(void)
         return ret;
     }
 
-    ESP_LOGI(
+    ESP_LOGD(
         TAG,
         "------------------------------------------------------------"
     );
 
-    ESP_LOGI(
+    ESP_LOGD(
         TAG,
         " No. | RSSI | Channel | Quality   | SSID"
     );
 
-    ESP_LOGI(
+    ESP_LOGD(
         TAG,
         "------------------------------------------------------------"
     );
@@ -2420,7 +2420,7 @@ esp_err_t wifi_manager_scan_and_log(void)
                 ? (const char *)record->ssid
                 : "<hidden>";
 
-        ESP_LOGI(
+        ESP_LOGD(
             TAG,
             "%4u | %4d | %7u | %-9s | %s",
             (unsigned int)(index + 1U),
@@ -2431,7 +2431,7 @@ esp_err_t wifi_manager_scan_and_log(void)
         );
     }
 
-    ESP_LOGI(
+    ESP_LOGD(
         TAG,
         "------------------------------------------------------------"
     );

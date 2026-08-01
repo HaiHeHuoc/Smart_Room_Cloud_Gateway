@@ -19,6 +19,7 @@ idf_component_register(
         config_manager
         provisioning_manager
         app_network_coordinator
+        button_manager
 
     PRIV_REQUIRES
         nvs_flash

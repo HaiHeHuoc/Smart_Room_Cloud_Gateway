@@ -301,7 +301,7 @@ It posts screen requests but never renders or calls LVGL.
 
 | Trigger | Route or behavior |
 |---|---|
-| Config `VALID` after verification/migration | `BOOT` -> `WIFI_STATUS` after verified normal `GOT_IP` -> `SENSOR_DASHBOARD` after the existing timeout |
+| Config `VALID` after verification/migration | `BOOT` -> `WIFI_STATUS` immediately after verified normal `GOT_IP`, or after 60 seconds if stored Wi-Fi is still unavailable -> `SENSOR_DASHBOARD` after the existing timeout |
 | Config `NOT_CONFIGURED` | `PROVISIONING` screen directly |
 | Config migration | Resolve migration, then use `BOOT` for the final valid path |
 | Config inspection or unrecoverable integrity error | Best-effort `BOOT` placeholder plus safe error logging |
