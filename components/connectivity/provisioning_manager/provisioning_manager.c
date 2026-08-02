@@ -17,6 +17,9 @@
 #include "esp_mac.h"
 #include "esp_wifi_types.h"
 
+#include "freertos/idf_additions.h"
+#include "esp_heap_caps.h"
+
 #include "network_provisioning/manager.h"
 #include "network_provisioning/scheme_ble.h"
 /* Macros ------------------------------------------------------------------- */
@@ -925,13 +928,14 @@ static void provisioning_manager_event_callback(
              * here would attempt to take that mutex again and deadlock.
              */
             BaseType_t task_ret =
-                xTaskCreate(
+                xTaskCreateWithCaps(
                     provisioning_manager_cleanup_task,
                     "prov_cleanup",
                     PROVISIONING_MANAGER_CLEANUP_TASK_STACK_SIZE_BYTES,
                     NULL,
                     PROVISIONING_MANAGER_CLEANUP_TASK_PRIORITY,
-                    NULL);
+                    NULL,
+                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
             if (task_ret != pdPASS)
             {
@@ -1149,9 +1153,10 @@ esp_err_t provisioning_manager_init(
     if (credentials_queue == NULL)
     {
         credentials_queue =
-            xQueueCreate(
+            xQueueCreateWithCaps(
             PROVISIONING_MANAGER_CREDENTIAL_QUEUE_LENGTH,
-            sizeof(provisioning_manager_wifi_credentials_t));
+            sizeof(provisioning_manager_wifi_credentials_t),
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
         credentials_queue_created =
             (credentials_queue != NULL);
@@ -1211,7 +1216,7 @@ esp_err_t provisioning_manager_init(
     if ((ret != ESP_OK) &&
         credentials_queue_created)
     {
-        vQueueDelete(credentials_queue);
+        vQueueDeleteWithCaps(credentials_queue);
 
         portENTER_CRITICAL(&s_state_lock);
 

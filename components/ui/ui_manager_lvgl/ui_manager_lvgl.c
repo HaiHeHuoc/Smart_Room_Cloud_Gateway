@@ -167,7 +167,9 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t *display_handle)
 
     ESP_LOGD(TAG, "sizeof(lv_color_t)=%d, sizeof(uint16_t)=%d", sizeof(lv_color_t), sizeof(uint16_t));
 
-    s_lvgl_draw_buffer = heap_caps_malloc(LVGL_DRAW_BUFFER_SIZE, MALLOC_CAP_DMA);
+    s_lvgl_draw_buffer = heap_caps_malloc(LVGL_DRAW_BUFFER_SIZE,
+        MALLOC_CAP_DMA | MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                                            // MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL) ;
 
     if (s_lvgl_draw_buffer == NULL)
     {
@@ -178,7 +180,8 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t *display_handle)
 
     #if LCD_ROTATE == LCD_RORATE_LANDSCAPE
         s_lvgl_rotate_buffer = heap_caps_malloc(LVGL_DRAW_BUFFER_SIZE,
-                                                MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+            MALLOC_CAP_DMA | MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                                                // MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
 
         if (s_lvgl_rotate_buffer == NULL)
         {
