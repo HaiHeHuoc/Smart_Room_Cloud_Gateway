@@ -50,6 +50,25 @@ Initialization copies all configured strings and creates both mutexes. It does
 not contact Firebase. The first call to `firebase_auth_get_valid_id_token()`
 performs sign-in when no cached token exists.
 
+## Development Configuration Source
+
+The current application maps the four `FIREBASE_*` macros to project Kconfig
+symbols declared in `main/Kconfig.projbuild`:
+
+```text
+Smart Room Cloud Gateway
+└── Firebase development configuration
+```
+
+Run `idf.py menuconfig` and set the Web API key, dedicated device account,
+password, and optional expected UID. Values are written to the local generated
+`sdkconfig`, which is ignored by Git. The repository source intentionally
+contains no real Firebase account values.
+
+These values are still compiled into development firmware. Menuconfig prevents
+new source commits from carrying them; it is not a production secret-storage
+mechanism.
+
 ## Public API
 
 | API | Current role |
@@ -134,8 +153,8 @@ therefore not required for the current expiration calculation.
   certificate verification.
 - A Firebase Web API key identifies the project but is not an administrator
   secret.
-- Device passwords are sensitive and are currently compiled into the firmware
-  through development configuration.
+- Device account passwords are sensitive and are compiled into development
+  firmware from the local menuconfig-generated `sdkconfig`.
 - Never embed service-account keys, administrator credentials, private keys,
   ID tokens, or refresh tokens in firmware.
 - Authentication response/request buffers and temporary refresh-token copies
@@ -143,19 +162,24 @@ therefore not required for the current expiration calculation.
   request, response, URL query, credential, or token.
 - Restrict Realtime Database access with `auth.uid` rules for the expected
   device UID.
-- Move the device password to provisioning or protected local configuration
-  before production deployment.
+- Use a dedicated restricted account rather than a personal or administrator
+  account.
+- Rotate every credential that has ever entered Git history. Removing it from
+  the current source does not invalidate old commits or clones.
+- Move the device credential to protected local configuration, encrypted NVS,
+  or a hardware-backed strategy before production deployment.
 
 Firebase project setup and the verified PowerShell flow are documented in
 `components/cloud/cloud_manager/README.txt` and `Test/TestFirebase_Auth.ps1`.
 
 ## Future Attention
 
-- Provision credentials without committing them to shared headers.
-- Consider NVS encryption or a hardware-backed credential strategy when the
-  board security model is defined.
 - Add explicit credential rotation and deinit only when required by product
   lifecycle behavior.
+- Consider NVS encryption or a hardware-backed credential strategy when the
+  board security model is defined.
+- Replace application-composition endpoint constants with protected,
+  device-specific deployment configuration when production requirements exist.
 
 ## Phase 6.4.6 Status
 
