@@ -1,102 +1,131 @@
 # Known Limitations And Future Work
 
-## Current Known Limitations
+## Version 1 Product Boundaries
 
 ### Security And Provisioning
 
-- Firebase development values are configured through menuconfig and compiled into firmware. This is not production secret storage.
-- Any credential that previously entered Git history must be rotated; removing it from the current source is not sufficient.
-- BLE provisioning currently uses a development Proof of Possession rather than a device-specific manufacturing flow.
-- The provisioning QR contains session material and must not be logged or published without sanitization.
-- There is no secure element, flash encryption policy, or secure-boot production flow documented yet.
+- Firebase development values are entered through menuconfig and compiled into
+  firmware. This is not production secret storage.
+- Any password or token that previously entered Git history must be rotated;
+  removing it from the current tree does not invalidate old commits or clones.
+- BLE provisioning uses a development Proof of Possession rather than a
+  manufacturing-time unique secret.
+- The provisioning QR contains session material and must be sanitized before
+  public publication.
+- Version 1 does not define a secure-element, NVS-encryption, flash-encryption,
+  secure-boot, or signed-OTA production policy.
+- Firebase App Check is not implemented by the ESP-IDF client.
 
-### Cloud
+### Cloud And Data
 
-- Telemetry is latest-value only. Samples generated during an outage replace one another rather than forming a historical offline queue.
-- The current Firebase endpoint is configured in application composition code and is not yet a portable per-device runtime setting.
+- Telemetry is latest-value only. Samples produced during an outage overwrite
+  one another rather than creating an offline history.
+- The Firebase database endpoint is configured in application composition code
+  rather than a portable deployment profile.
 - The cloud service has no public stop/deinit/operator-restart API.
-- Terminal authentication or deterministic configuration errors remain latched until reboot.
-- There is no MQTT, WebSocket dashboard, local web UI, or cloud command channel.
+- Terminal authentication or deterministic configuration errors remain latched
+  until reboot.
+- There is no MQTT, local web dashboard, cloud command channel, or historical
+  chart service.
 
 ### Storage
 
 - SD card removal is not detected dynamically.
 - `sd_card_manager` has no public unmount/deinit API.
-- Startup currently treats SD mount failure as fatal for the remaining application flow.
-- Automatic formatting is disabled, so an unsupported/unformatted card must be corrected manually.
-- The storage service does not yet own generic application data or offline telemetry history.
+- Startup treats SD mount failure as fatal for the remaining application flow.
+- Automatic formatting is disabled to protect card data.
+- Storage does not own offline telemetry history.
 
 ### UI
 
-- The 160x128 display limits layout density and long text.
-- There is no touch input or manual on-device SSID/password entry.
-- Provisioning retry is automatic; there is no touch retry button.
-- Reset presentation acknowledgment proves an LVGL render cycle, not a physical LCD transfer acknowledgment.
-- Real portfolio photos and video are not included until captured from the target hardware.
+- The 160x128 logical layout limits text density and complex visualization.
+- There is no touch input or on-device SSID/password editor.
+- Provisioning retry is automatic; there is no touch retry control.
+- Reset-result acknowledgment confirms an LVGL render cycle, not physical LCD
+  transfer completion.
 
 ### Network And Lifecycle
 
-- Full cross-phase provisioning and factory-reset race matrices remain tracked in the roadmap.
-- Provisioning retry count and timing are fixed application configuration values.
-- Runtime Wi-Fi failure does not automatically start provisioning, by design.
-- The application currently has one long-lived cloud task and no runtime cloud-service restart command.
+- Provisioning retry count and timing are fixed application values.
+- Runtime Wi-Fi failure intentionally reconnects instead of automatically
+  reopening provisioning.
+- Long-lived services are one-shot and have no coordinated runtime shutdown.
+- The current architecture is validated for one gateway and one Firebase
+  identity, not fleet provisioning or fleet credential rotation.
 
 ### Hardware
 
-- Pin assignments are board-specific and must be reviewed before changing the ESP32-S3 module or carrier.
-- The DHT22 is slow and less accurate than newer digital sensors.
-- The current SD clock is intentionally conservative.
+- GPIO assignments are board-specific and must be reviewed when changing the
+  ESP32-S3 board or carrier.
+- DHT22 accuracy and update speed are limited compared with newer sensors.
+- The SD clock is intentionally conservative.
 - No card-detect input is used.
-- Audio hardware and GPIO allocation are not yet accepted; voice work begins only in the optional post-MVP roadmap.
+- Audio hardware and GPIO allocation belong to Version 2 and are not part of
+  the Version 1 release.
 
-### Resource Measurement
+### Resource Measurements
 
-- Performance reports are workload snapshots, not guaranteed fixed values.
-- Internal and DMA-capable heap totals overlap and must not be added.
+- Performance reports are workload snapshots, not fixed guarantees.
+- Internal and DMA-capable heap capabilities overlap and must not be added.
 - Fragmentation percentages are diagnostic estimates.
-- Low-water stack and heap values need renewed validation whenever tasks, networking, GUI, audio, or dependency versions change.
+- Heap and stack low-water values must be revalidated after task, network, GUI,
+  audio, or dependency changes.
+
+## Public-Release Requirements
+
+The source tree can be prepared for publication, but repository visibility
+must not be changed until the owner completes the actions in `SECURITY.md`,
+including:
+
+1. rotate every credential previously committed;
+2. confirm old credentials are revoked;
+3. inspect or rewrite Git history for still-sensitive values;
+4. publish restrictive Firebase Realtime Database rules;
+5. review API-key restrictions and quotas;
+6. sanitize all media and logs;
+7. avoid publishing credential-bearing firmware binaries.
 
 ## Recommended Future Improvements
 
-### Near-Term Portfolio Improvements
+### Release Engineering
 
-1. Add real hardware photos and sanitized screenshots.
-2. Upload a two-to-four-minute demo video.
-3. Select and add an explicit repository license.
-4. Add a reproducible test-results document with firmware commit and hardware matrix.
-5. Replace any remaining project-specific Firebase endpoint with configurable application settings.
-6. Review and rewrite Git history if the repository will be published broadly, after rotating exposed credentials.
+1. Add an explicit repository license.
+2. Add CI for formatting, build configuration, and host-side checks.
+3. Add automated secret scanning.
+4. Publish release tags and a reproducible build record.
+5. Add sanitized Firebase and performance screenshots when useful.
 
 ### Product Hardening
 
-1. Device-specific provisioning secret stored in protected manufacturing data.
-2. Flash encryption and secure boot threat-model review.
-3. Protected device identity and cloud credentials.
-4. OTA with project-owned validation, rollback, and version policy.
+1. Unique per-device identity and credential rotation.
+2. Protected manufacturing and provisioning data.
+3. NVS encryption, flash encryption, and secure boot.
+4. Signed OTA with validation, rollback, and version policy.
 5. Runtime service stop/deinit/restart APIs.
 6. Card-detect, unmount, and storage-error recovery.
-7. Watchdog and health-policy integration beyond diagnostics.
-8. Automated hardware-in-the-loop regression where practical.
+7. Watchdog and health policy beyond passive diagnostics.
+8. Hardware-in-the-loop regression where practical.
+9. App Check or a project-owned authenticated backend for abuse control.
 
 ### Data And Cloud
 
-1. SNTP time synchronization and real timestamps.
+1. SNTP synchronization and real timestamps.
 2. SD-backed bounded offline history.
 3. Batched historical upload after connectivity returns.
-4. Configurable telemetry interval and endpoint.
-5. MQTT only when its operational value exceeds the added lifecycle and security cost.
+4. Configurable telemetry interval, device ID, and endpoint.
+5. Fleet-safe per-device database paths and revocation.
 
 ### Sensor And UI
 
-1. Replace DHT22 with a more accurate sensor after preserving the manager API.
-2. Add historical charting only after measuring LVGL memory impact.
+1. Replace DHT22 behind the existing manager API.
+2. Add historical charts only after measuring LVGL memory impact.
 3. Add user-safe configuration and diagnostics screens.
 4. Add brightness control through a project-owned API.
-5. Improve accessibility and long-text handling on the small display.
+5. Improve accessibility and long-text handling.
 
-### Optional Voice Extension
+## Version 2 Voice Extension
 
-The approved optional roadmap places voice after the existing MVP:
+The approved post-Version 1 order is:
 
 ```text
 Sprint 10: audio hardware validation
@@ -110,9 +139,10 @@ Sprint 17: controlled MCP actions
 Sprint 18: wake word and advanced voice UX
 ```
 
-This extension must not replace existing Wi-Fi, provisioning, storage, cloud, GUI, or reset ownership.
+Version 2 must not replace existing Wi-Fi, provisioning, storage, cloud, GUI,
+or reset ownership.
 
-## Deliberately Deferred Features
+## Deliberately Deferred
 
 - Custom mobile application
 - Firestore direct integration
