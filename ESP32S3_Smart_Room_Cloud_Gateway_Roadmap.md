@@ -1099,7 +1099,7 @@ acceptance is still required and no runtime fix is claimed by the build alone.
 
 ---
 
-## Sprint 8 — Reconnect + Cloud Retry
+## Sprint 8 — Reconnect + Cloud Retry — Complete
 
 **Goal:** Make the device robust when network/cloud is unstable.
 
@@ -1114,10 +1114,26 @@ acceptance is still required and no runtime fix is claimed by the build alone.
 
 ### Done Criteria
 
-- [ ] Device recovers when Wi-Fi router is turned off/on.
-- [ ] Device does not crash when Firebase is unreachable.
-- [ ] UI clearly shows offline/error state.
-- [ ] Logs are useful for debugging.
+- [x] Device recovers when Wi-Fi router is turned off/on.
+- [x] Device does not crash when Firebase is unreachable.
+- [x] UI clearly shows offline/error state.
+- [x] Logs are useful for debugging.
+
+### Hardware Acceptance Result
+
+Accepted by the user on 2026-08-02 after completing the planned target-hardware
+reconnect, cloud retry, UI-state, logging, and stability checks.
+
+- [x] Wi-Fi reconnect and IPv4 recovery succeed after router/hotspot loss.
+- [x] Cloud upload pauses or retries with bounded behavior while unavailable.
+- [x] Cloud upload resumes after connectivity is restored.
+- [x] Latest-value telemetry behavior remains functional during recovery.
+- [x] Offline, retry, synchronization, online, and error states remain visible
+      through the queue-driven GUI path.
+- [x] No crash, watchdog reset, or blocking recovery failure was observed in
+      the completed Phase 8 test steps.
+
+**Sprint 8 — COMPLETE / USER HARDWARE ACCEPTED**
 
 ### Learning Topics
 
@@ -1879,7 +1895,7 @@ The project is considered portfolio-ready when:
 - [ ] Sensor data is uploaded to Firebase.
 - [ ] Wi-Fi config survives reboot.
 - [ ] Button factory reset works.
-- [ ] Device can recover from Wi-Fi disconnect.
+- [x] Device can recover from Wi-Fi disconnect.
 - [ ] Code is split into clear components.
 - [ ] README explains setup, architecture, and demo.
 - [ ] There is at least one demo video or photo set.
@@ -1940,7 +1956,7 @@ Use this section to track daily/weekly progress.
 | 5 | NVS config storage | Done |  | 2026-07-26 | Persistence, integrity, migration, and recovery tests accepted. |
 | 6 | BLE provisioning | In progress |  |  | Phase 6.4 implemented; final A-N hardware acceptance pending. |
 | 7 | Factory reset | In progress |  |  | Phases 7.1-7.3 hardware-accepted; Phases 7.4-7.5 are implemented with hardware acceptance pending. |
-| 8 | Reconnect + retry | In progress |  |  | Wi-Fi/cloud recovery implemented; final target-hardware recovery and endurance acceptance pending. |
+| 8 | Reconnect + retry | Done |  | 2026-08-02 | User-confirmed target-hardware reconnect, cloud retry/recovery, UI-state, logging, and stability acceptance. |
 | 9 | Portfolio polish | Not started |  |  |  |
 | 10 | Audio hardware validation | Proposed / Not started |  |  | New optional voice syllabus; hardware and GPIO gate. |
 | 11 | Production audio manager | Proposed / Not started |  |  | Requires Sprint 10 hardware acceptance. |
@@ -1997,22 +2013,3 @@ Sprint 1: LCD + LVGL bring-up
 ```
 
 Do **not** start from BLE or Firebase first.
-
-Reason:
-
-```text
-LCD + LVGL gives fast visual feedback.
-Wi-Fi/Firebase/BLE can be added after the local UI foundation is stable.
-```
-
----
-
-## 19. Current Project State
-
-```text
-Current phase: Planning
-Current focus: Prepare roadmap and tracking document
-Next action: Create ESP-IDF project skeleton and bring up LCD + LVGL
-Main risk: Scope creep from adding too many cloud/network features too early
-Recommended discipline: Finish one sprint at a time before adding optional features
-```
