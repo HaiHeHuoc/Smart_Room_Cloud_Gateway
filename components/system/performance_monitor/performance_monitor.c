@@ -2,17 +2,24 @@
 #include "performance_monitor.h"
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
 #include "sdkconfig.h"
 
 #include "esp_check.h"
+#include "esp_chip_info.h"
 #include "esp_err.h"
+#include "esp_flash.h"
 #include "esp_heap_caps.h"
 #include "esp_image_format.h"
 #include "esp_log.h"
+#include "esp_memory_utils.h"
 #include "esp_ota_ops.h"
+#include "esp_psram.h"
+#include "esp_system.h"
+#include "esp_timer.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -39,28 +46,51 @@
 #define PERF_MONITOR_MAX_TASKS              40U
 
 /*
- * App/Flash information does not change at runtime, so print it less often.
+ * Print the complete task table on the first report and then every 60 seconds.
  *
- * 12 samples × 5 seconds = once every 60 seconds.
+ * 12 reports x 5 seconds = 60 seconds.
  */
-#define PERF_MONITOR_FLASH_LOG_INTERVAL      12U
+#define PERF_MONITOR_FULL_TASK_INTERVAL     12U
+
+#define PERF_MONITOR_STACK_WARNING_BYTES    1024U
 
 #define PERF_INTERNAL_RAM_CAPS \
     (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
+
+#define PERF_PSRAM_CAPS \
+    (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
 
 #define PERF_DMA_RAM_CAPS \
     (MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA)
 
 /* Constants ---------------------------------------------------------------- */
+
 static const char *const TAG = "PERF_MONITOR";
 
 /* Type Definitions --------------------------------------------------------- */
+
 typedef struct {
     uint32_t used_x10;
     uint32_t idle_x10;
+    uint32_t core_used_x10[CONFIG_FREERTOS_NUMBER_OF_CORES];
+    bool core_valid[CONFIG_FREERTOS_NUMBER_OF_CORES];
+    uint64_t elapsed_runtime;
+    uint64_t total_cpu_capacity;
+    UBaseType_t start_task_count;
+    UBaseType_t end_task_count;
 } performance_monitor_cpu_result_t;
 
+typedef struct {
+    UBaseType_t running;
+    UBaseType_t ready;
+    UBaseType_t blocked;
+    UBaseType_t suspended;
+    UBaseType_t deleted;
+    UBaseType_t invalid;
+} performance_monitor_task_state_counts_t;
+
 /* Static Variables --------------------------------------------------------- */
+
 static TaskHandle_t s_monitor_task_handle = NULL;
 
 /*
@@ -74,27 +104,68 @@ EXT_RAM_BSS_ATTR static TaskStatus_t s_end_snapshot[PERF_MONITOR_MAX_TASKS];
 #endif
 
 /* Function Prototypes ------------------------------------------------------ */
+
 static bool performance_monitor_is_idle_task(
     const char *task_name);
+
+static int32_t performance_monitor_get_idle_core_index(
+    const char *task_name);
+
+static const char *performance_monitor_reset_reason_to_string(
+    esp_reset_reason_t reason);
+
+static const char *performance_monitor_task_state_to_string(
+    eTaskState state);
+
+static const char *performance_monitor_stack_location_to_string(
+    const TaskStatus_t *task);
+
+static void performance_monitor_log_boot_information(void);
+
+static void performance_monitor_log_report_header(
+    uint32_t report_index);
 
 #if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
 static const TaskStatus_t *performance_monitor_find_task(
     const TaskStatus_t *tasks,
     UBaseType_t task_count,
     TaskHandle_t task_handle);
+
 static esp_err_t performance_monitor_measure_cpu(
     TickType_t measurement_ticks,
     performance_monitor_cpu_result_t *result);
+
+static uint32_t performance_monitor_get_task_cpu_x10(
+    const TaskStatus_t *start_task,
+    const TaskStatus_t *end_task,
+    uint64_t total_cpu_capacity);
 #endif
 
 static void performance_monitor_log_cpu(
+    uint32_t report_index,
     const performance_monitor_cpu_result_t *cpu);
+
 static void performance_monitor_log_heap_region(
+    uint32_t report_index,
     const char *name,
     uint32_t capabilities);
-static void performance_monitor_log_memory(void);
+
+static void performance_monitor_log_memory(
+    uint32_t report_index);
+
 static void performance_monitor_log_app_flash(void);
-static void performance_monitor_log_task_stack(void);
+
+static void performance_monitor_log_task_summary(
+    uint32_t report_index,
+    const TaskStatus_t *tasks,
+    UBaseType_t task_count);
+
+#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+static void performance_monitor_log_task_table(
+    uint32_t report_index,
+    const performance_monitor_cpu_result_t *cpu);
+#endif
+
 static void performance_monitor_task(void *argument);
 
 /* Static Functions --------------------------------------------------------- */
@@ -111,6 +182,176 @@ static bool performance_monitor_is_idle_task(const char *task_name)
     return strncmp(task_name, "IDLE", 4U) == 0;
 }
 
+static int32_t performance_monitor_get_idle_core_index(
+    const char *task_name)
+{
+    if (!performance_monitor_is_idle_task(task_name)) {
+        return -1;
+    }
+
+    const char core_character = task_name[4];
+
+    if ((core_character < '0') ||
+        (core_character > '9')) {
+        return -1;
+    }
+
+    const int32_t core_index =
+        (int32_t)(core_character - '0');
+
+    if ((core_index < 0) ||
+        (core_index >= CONFIG_FREERTOS_NUMBER_OF_CORES)) {
+        return -1;
+    }
+
+    return core_index;
+}
+
+static const char *performance_monitor_reset_reason_to_string(
+    esp_reset_reason_t reason)
+{
+    switch (reason) {
+        case ESP_RST_POWERON:
+            return "POWER_ON";
+
+        case ESP_RST_EXT:
+            return "EXTERNAL_PIN";
+
+        case ESP_RST_SW:
+            return "SOFTWARE";
+
+        case ESP_RST_PANIC:
+            return "PANIC";
+
+        case ESP_RST_INT_WDT:
+            return "INTERRUPT_WDT";
+
+        case ESP_RST_TASK_WDT:
+            return "TASK_WDT";
+
+        case ESP_RST_WDT:
+            return "OTHER_WDT";
+
+        case ESP_RST_DEEPSLEEP:
+            return "DEEP_SLEEP";
+
+        case ESP_RST_BROWNOUT:
+            return "BROWNOUT";
+
+        case ESP_RST_SDIO:
+            return "SDIO";
+
+        case ESP_RST_UNKNOWN:
+        default:
+            return "UNKNOWN";
+    }
+}
+
+static const char *performance_monitor_task_state_to_string(
+    eTaskState state)
+{
+    switch (state) {
+        case eRunning:
+            return "RUNNING";
+
+        case eReady:
+            return "READY";
+
+        case eBlocked:
+            return "BLOCKED";
+
+        case eSuspended:
+            return "SUSPENDED";
+
+        case eDeleted:
+            return "DELETED";
+
+        case eInvalid:
+        default:
+            return "INVALID";
+    }
+}
+
+static const char *performance_monitor_stack_location_to_string(
+    const TaskStatus_t *task)
+{
+    if ((task == NULL) ||
+        (task->pxStackBase == NULL)) {
+        return "UNKNOWN";
+    }
+
+    if (esp_ptr_external_ram(task->pxStackBase)) {
+        return "PSRAM";
+    }
+
+    if (esp_ptr_internal(task->pxStackBase)) {
+        return "INTERNAL";
+    }
+
+    return "OTHER";
+}
+
+static void performance_monitor_log_boot_information(void)
+{
+    esp_chip_info_t chip_info = {0};
+    esp_chip_info(&chip_info);
+
+    uint32_t flash_size = 0U;
+    const esp_err_t flash_result =
+        esp_flash_get_size(
+            NULL,
+            &flash_size);
+
+    const size_t psram_size =
+        esp_psram_get_size();
+
+    ESP_LOGI(
+        TAG,
+        "[REPORT:000000][CHIP] target=%s, revision=%u, cores=%u, "
+        "cpu_config=%u MHz, idf=%s, reset=%s",
+        CONFIG_IDF_TARGET,
+        (unsigned int)chip_info.revision,
+        (unsigned int)chip_info.cores,
+        (unsigned int)CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ,
+        esp_get_idf_version(),
+        performance_monitor_reset_reason_to_string(
+            esp_reset_reason())
+    );
+
+    if (flash_result == ESP_OK) {
+        ESP_LOGI(
+            TAG,
+            "[REPORT:000000][MEMORY_HW] flash=%u bytes, psram=%u bytes",
+            (unsigned int)flash_size,
+            (unsigned int)psram_size
+        );
+    }
+    else {
+        ESP_LOGW(
+            TAG,
+            "[REPORT:000000][MEMORY_HW] flash=unknown (%s), psram=%u bytes",
+            esp_err_to_name(flash_result),
+            (unsigned int)psram_size
+        );
+    }
+}
+
+static void performance_monitor_log_report_header(
+    uint32_t report_index)
+{
+    const uint64_t uptime_seconds =
+        (uint64_t)esp_timer_get_time() /
+        1000000ULL;
+
+    ESP_LOGI(
+        TAG,
+        "[REPORT:%06u][SYSTEM] uptime=%llu s, period=%u ms",
+        (unsigned int)report_index,
+        (unsigned long long)uptime_seconds,
+        (unsigned int)PERF_MONITOR_PERIOD_MS
+    );
+}
+
 #if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
 
 static const TaskStatus_t *performance_monitor_find_task(
@@ -118,7 +359,8 @@ static const TaskStatus_t *performance_monitor_find_task(
     UBaseType_t task_count,
     TaskHandle_t task_handle)
 {
-    if ((tasks == NULL) || (task_handle == NULL)) {
+    if ((tasks == NULL) ||
+        (task_handle == NULL)) {
         return NULL;
     }
 
@@ -144,8 +386,7 @@ static esp_err_t performance_monitor_measure_cpu(
         "CPU result pointer is NULL"
     );
 
-    result->used_x10 = 0U;
-    result->idle_x10 = 0U;
+    memset(result, 0, sizeof(*result));
 
     const UBaseType_t current_task_count =
         uxTaskGetNumberOfTasks();
@@ -209,6 +450,8 @@ static esp_err_t performance_monitor_measure_cpu(
     );
 
     uint64_t idle_runtime = 0U;
+    uint64_t core_idle_runtime[
+        CONFIG_FREERTOS_NUMBER_OF_CORES] = {0};
 
     for (UBaseType_t index = 0U;
          index < start_task_count;
@@ -238,19 +481,30 @@ static esp_err_t performance_monitor_measure_cpu(
         const uint64_t task_delta =
             (uint64_t)task_delta_native;
 
-        if (performance_monitor_is_idle_task(
+        if (!performance_monitor_is_idle_task(
                 start_task->pcTaskName)) {
-            idle_runtime += task_delta;
+            continue;
+        }
+
+        idle_runtime += task_delta;
+
+        const int32_t idle_core_index =
+            performance_monitor_get_idle_core_index(
+                start_task->pcTaskName);
+
+        if (idle_core_index >= 0) {
+            core_idle_runtime[idle_core_index] +=
+                task_delta;
+
+            result->core_valid[idle_core_index] =
+                true;
         }
     }
 
     /*
      * In dual-core mode, total CPU capacity over a wall-time interval is:
      *
-     *     elapsed_runtime × number_of_cores
-     *
-     * The official ESP-IDF runtime-statistics example uses the same
-     * core-count adjustment.
+     *     elapsed_runtime x number_of_cores
      */
     const uint64_t total_cpu_capacity =
         elapsed_runtime *
@@ -273,11 +527,6 @@ static esp_err_t performance_monitor_measure_cpu(
     const uint64_t busy_runtime =
         total_cpu_capacity - idle_runtime;
 
-    /*
-     * Percentage × 10:
-     *
-     *     653 means 65.3%
-     */
     result->used_x10 =
         (uint32_t)(
             (busy_runtime * 1000ULL) /
@@ -290,12 +539,70 @@ static esp_err_t performance_monitor_measure_cpu(
             total_cpu_capacity
         );
 
+    for (UBaseType_t core_index = 0U;
+         core_index < CONFIG_FREERTOS_NUMBER_OF_CORES;
+         ++core_index) {
+
+        if (!result->core_valid[core_index]) {
+            continue;
+        }
+
+        if (core_idle_runtime[core_index] >
+            elapsed_runtime) {
+            core_idle_runtime[core_index] =
+                elapsed_runtime;
+        }
+
+        const uint64_t core_busy_runtime =
+            elapsed_runtime -
+            core_idle_runtime[core_index];
+
+        result->core_used_x10[core_index] =
+            (uint32_t)(
+                (core_busy_runtime * 1000ULL) /
+                elapsed_runtime
+            );
+    }
+
+    result->elapsed_runtime = elapsed_runtime;
+    result->total_cpu_capacity =
+        total_cpu_capacity;
+    result->start_task_count =
+        start_task_count;
+    result->end_task_count =
+        end_task_count;
+
     return ESP_OK;
+}
+
+static uint32_t performance_monitor_get_task_cpu_x10(
+    const TaskStatus_t *start_task,
+    const TaskStatus_t *end_task,
+    uint64_t total_cpu_capacity)
+{
+    if ((start_task == NULL) ||
+        (end_task == NULL) ||
+        (total_cpu_capacity == 0U)) {
+        return 0U;
+    }
+
+    const configRUN_TIME_COUNTER_TYPE delta_native =
+        end_task->ulRunTimeCounter -
+        start_task->ulRunTimeCounter;
+
+    const uint64_t task_delta =
+        (uint64_t)delta_native;
+
+    return (uint32_t)(
+        (task_delta * 1000ULL) /
+        total_cpu_capacity
+    );
 }
 
 #endif /* CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS */
 
 static void performance_monitor_log_cpu(
+    uint32_t report_index,
     const performance_monitor_cpu_result_t *cpu)
 {
     if (cpu == NULL) {
@@ -304,35 +611,64 @@ static void performance_monitor_log_cpu(
 
     ESP_LOGI(
         TAG,
-        "[CPU] used=%u.%u%%, idle=%u.%u%%, cores=%u",
+        "[REPORT:%06u][CPU] used=%u.%u%%, idle=%u.%u%%, cores=%u",
+        (unsigned int)report_index,
         (unsigned int)(cpu->used_x10 / 10U),
         (unsigned int)(cpu->used_x10 % 10U),
         (unsigned int)(cpu->idle_x10 / 10U),
         (unsigned int)(cpu->idle_x10 % 10U),
         (unsigned int)CONFIG_FREERTOS_NUMBER_OF_CORES
     );
+
+    for (UBaseType_t core_index = 0U;
+         core_index < CONFIG_FREERTOS_NUMBER_OF_CORES;
+         ++core_index) {
+
+        if (!cpu->core_valid[core_index]) {
+            continue;
+        }
+
+        ESP_LOGI(
+            TAG,
+            "[REPORT:%06u][CPU:CORE%u] used=%u.%u%%",
+            (unsigned int)report_index,
+            (unsigned int)core_index,
+            (unsigned int)(
+                cpu->core_used_x10[core_index] / 10U),
+            (unsigned int)(
+                cpu->core_used_x10[core_index] % 10U)
+        );
+    }
 }
 
 static void performance_monitor_log_heap_region(
+    uint32_t report_index,
     const char *name,
-    uint32_t caps)
+    uint32_t capabilities)
 {
+    multi_heap_info_t heap_info = {0};
+
+    heap_caps_get_info(
+        &heap_info,
+        capabilities);
+
     const size_t total =
-        heap_caps_get_total_size(caps);
+        heap_caps_get_total_size(capabilities);
 
     const size_t free_now =
-        heap_caps_get_free_size(caps);
+        heap_info.total_free_bytes;
 
     const size_t minimum_free =
-        heap_caps_get_minimum_free_size(caps);
+        heap_info.minimum_free_bytes;
 
     const size_t largest_block =
-        heap_caps_get_largest_free_block(caps);
+        heap_info.largest_free_block;
 
     if (total == 0U) {
         ESP_LOGI(
             TAG,
-            "[RAM:%s] not available",
+            "[REPORT:%06u][RAM:%s] not available",
+            (unsigned int)report_index,
             name
         );
 
@@ -345,17 +681,27 @@ static void performance_monitor_log_heap_region(
             : 0U;
 
     const uint32_t used_percent_x10 =
-        total > 0U
+        (uint32_t)(
+            ((uint64_t)used * 1000ULL) /
+            total
+        );
+
+    const uint32_t fragmentation_x10 =
+        free_now > 0U
             ? (uint32_t)(
-                ((uint64_t)used * 1000ULL) /
-                total
+                ((uint64_t)(
+                    free_now - largest_block) *
+                 1000ULL) /
+                free_now
               )
             : 0U;
 
     ESP_LOGI(
         TAG,
-        "[RAM:%s] total=%u, used=%u (%u.%u%%), "
-        "free=%u, minimum=%u, largest=%u bytes",
+        "[REPORT:%06u][RAM:%s] total=%u, used=%u (%u.%u%%), "
+        "free=%u, minimum=%u, largest=%u, frag_est=%u.%u%%, "
+        "alloc_blocks=%u, free_blocks=%u",
+        (unsigned int)report_index,
         name,
         (unsigned int)total,
         (unsigned int)used,
@@ -363,23 +709,31 @@ static void performance_monitor_log_heap_region(
         (unsigned int)(used_percent_x10 % 10U),
         (unsigned int)free_now,
         (unsigned int)minimum_free,
-        (unsigned int)largest_block
+        (unsigned int)largest_block,
+        (unsigned int)(fragmentation_x10 / 10U),
+        (unsigned int)(fragmentation_x10 % 10U),
+        (unsigned int)heap_info.allocated_blocks,
+        (unsigned int)heap_info.free_blocks
     );
 }
 
-static void performance_monitor_log_memory(void)
+static void performance_monitor_log_memory(
+    uint32_t report_index)
 {
     performance_monitor_log_heap_region(
+        report_index,
         "INTERNAL",
         PERF_INTERNAL_RAM_CAPS
     );
 
     performance_monitor_log_heap_region(
+        report_index,
         "PSRAM",
-        MALLOC_CAP_SPIRAM
+        PERF_PSRAM_CAPS
     );
 
     performance_monitor_log_heap_region(
+        report_index,
         "DMA",
         PERF_DMA_RAM_CAPS
     );
@@ -393,7 +747,7 @@ static void performance_monitor_log_app_flash(void)
     if (running_partition == NULL) {
         ESP_LOGW(
             TAG,
-            "[FLASH] Cannot obtain running app partition"
+            "[REPORT:000000][FLASH] Cannot obtain running app partition"
         );
 
         return;
@@ -415,13 +769,13 @@ static void performance_monitor_log_app_flash(void)
     if (metadata_result != ESP_OK) {
         ESP_LOGW(
             TAG,
-            "[FLASH] Cannot read app metadata: %s",
+            "[REPORT:000000][FLASH] Cannot read app metadata: %s",
             esp_err_to_name(metadata_result)
         );
 
         ESP_LOGI(
             TAG,
-            "[FLASH] partition=%s, capacity=%u bytes",
+            "[REPORT:000000][FLASH] partition=%s, capacity=%u bytes",
             running_partition->label,
             (unsigned int)running_partition->size
         );
@@ -447,7 +801,7 @@ static void performance_monitor_log_app_flash(void)
 
     ESP_LOGI(
         TAG,
-        "[FLASH] partition=%s, image=%u, capacity=%u, "
+        "[REPORT:000000][FLASH] partition=%s, image=%u, capacity=%u, "
         "free=%u bytes, used=%u.%u%%",
         running_partition->label,
         (unsigned int)image_size,
@@ -458,40 +812,171 @@ static void performance_monitor_log_app_flash(void)
     );
 }
 
-static void performance_monitor_log_task_stack(void)
+static void performance_monitor_log_task_summary(
+    uint32_t report_index,
+    const TaskStatus_t *tasks,
+    UBaseType_t task_count)
 {
-    const UBaseType_t minimum_stack_remaining =
-        uxTaskGetStackHighWaterMark(NULL);
+    if ((tasks == NULL) ||
+        (task_count == 0U)) {
+        ESP_LOGW(
+            TAG,
+            "[REPORT:%06u][TASKS] no task snapshot available",
+            (unsigned int)report_index
+        );
+
+        return;
+    }
+
+    performance_monitor_task_state_counts_t counts = {0};
+
+    for (UBaseType_t index = 0U;
+         index < task_count;
+         ++index) {
+        switch (tasks[index].eCurrentState) {
+            case eRunning:
+                ++counts.running;
+                break;
+
+            case eReady:
+                ++counts.ready;
+                break;
+
+            case eBlocked:
+                ++counts.blocked;
+                break;
+
+            case eSuspended:
+                ++counts.suspended;
+                break;
+
+            case eDeleted:
+                ++counts.deleted;
+                break;
+
+            case eInvalid:
+            default:
+                ++counts.invalid;
+                break;
+        }
+    }
 
     ESP_LOGI(
         TAG,
-        "[STACK] task=%s, minimum remaining=%u bytes",
-        pcTaskGetName(NULL),
-        (unsigned int)minimum_stack_remaining
+        "[REPORT:%06u][TASKS] total=%u, running=%u, ready=%u, "
+        "blocked=%u, suspended=%u, deleted=%u, invalid=%u",
+        (unsigned int)report_index,
+        (unsigned int)task_count,
+        (unsigned int)counts.running,
+        (unsigned int)counts.ready,
+        (unsigned int)counts.blocked,
+        (unsigned int)counts.suspended,
+        (unsigned int)counts.deleted,
+        (unsigned int)counts.invalid
     );
 }
+
+#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+
+static void performance_monitor_log_task_table(
+    uint32_t report_index,
+    const performance_monitor_cpu_result_t *cpu)
+{
+    if ((cpu == NULL) ||
+        (cpu->end_task_count == 0U)) {
+        return;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "[REPORT:%06u][TASK_TABLE] entries=%u, "
+        "stack_min is the lowest remaining stack in bytes",
+        (unsigned int)report_index,
+        (unsigned int)cpu->end_task_count
+    );
+
+    for (UBaseType_t index = 0U;
+         index < cpu->end_task_count;
+         ++index) {
+
+        const TaskStatus_t *end_task =
+            &s_end_snapshot[index];
+
+        const TaskStatus_t *start_task =
+            performance_monitor_find_task(
+                s_start_snapshot,
+                cpu->start_task_count,
+                end_task->xHandle
+            );
+
+        const uint32_t task_cpu_x10 =
+            performance_monitor_get_task_cpu_x10(
+                start_task,
+                end_task,
+                cpu->total_cpu_capacity
+            );
+
+        const UBaseType_t stack_minimum =
+            end_task->usStackHighWaterMark;
+
+        ESP_LOGI(
+            TAG,
+            "[REPORT:%06u][TASK] id=%u, name=%s, state=%s, "
+            "priority=%u, cpu=%u.%u%%, stack_min=%u bytes, "
+            "stack_location=%s",
+            (unsigned int)report_index,
+            (unsigned int)end_task->xTaskNumber,
+            end_task->pcTaskName,
+            performance_monitor_task_state_to_string(
+                end_task->eCurrentState),
+            (unsigned int)end_task->uxCurrentPriority,
+            (unsigned int)(task_cpu_x10 / 10U),
+            (unsigned int)(task_cpu_x10 % 10U),
+            (unsigned int)stack_minimum,
+            performance_monitor_stack_location_to_string(
+                end_task)
+        );
+
+        if (stack_minimum <
+            PERF_MONITOR_STACK_WARNING_BYTES) {
+            ESP_LOGW(
+                TAG,
+                "[REPORT:%06u][STACK_WARNING] task=%s, "
+                "minimum_remaining=%u bytes",
+                (unsigned int)report_index,
+                end_task->pcTaskName,
+                (unsigned int)stack_minimum
+            );
+        }
+    }
+}
+
+#endif /* CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS */
 
 static void performance_monitor_task(void *argument)
 {
     (void)argument;
 
-    uint32_t sample_index = 0U;
+    uint32_t report_index = 0U;
 
     ESP_LOGI(
         TAG,
-        "Performance monitor started: period=%u ms",
-        (unsigned int)PERF_MONITOR_PERIOD_MS
+        "Performance monitor started: period=%u ms, "
+        "full_task_interval=%u reports",
+        (unsigned int)PERF_MONITOR_PERIOD_MS,
+        (unsigned int)PERF_MONITOR_FULL_TASK_INTERVAL
     );
 
     /*
-     * Print firmware partition information immediately.
+     * Static chip and firmware information is printed only once.
      */
+    performance_monitor_log_boot_information();
     performance_monitor_log_app_flash();
 
     while (true) {
-#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
-
         performance_monitor_cpu_result_t cpu = {0};
+
+#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
 
         const esp_err_t cpu_result =
             performance_monitor_measure_cpu(
@@ -499,18 +984,26 @@ static void performance_monitor_task(void *argument)
                 &cpu
             );
 
+        ++report_index;
+
+        performance_monitor_log_report_header(
+            report_index);
+
         if (cpu_result == ESP_OK) {
-            performance_monitor_log_cpu(&cpu);
+            performance_monitor_log_cpu(
+                report_index,
+                &cpu);
         }
         else {
             ESP_LOGE(
                 TAG,
-                "CPU measurement failed: %s",
+                "[REPORT:%06u][CPU] measurement failed: %s",
+                (unsigned int)report_index,
                 esp_err_to_name(cpu_result)
             );
 
             /*
-             * Avoid a fast error loop.
+             * Avoid a fast error loop when a snapshot cannot be captured.
              */
             vTaskDelay(
                 pdMS_TO_TICKS(PERF_MONITOR_PERIOD_MS)
@@ -519,9 +1012,16 @@ static void performance_monitor_task(void *argument)
 
 #else
 
+        ++report_index;
+
+        performance_monitor_log_report_header(
+            report_index);
+
         ESP_LOGE(
             TAG,
-            "CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS is disabled"
+            "[REPORT:%06u][CPU] "
+            "CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS is disabled",
+            (unsigned int)report_index
         );
 
         vTaskDelay(
@@ -530,15 +1030,29 @@ static void performance_monitor_task(void *argument)
 
 #endif
 
-        performance_monitor_log_memory();
-        performance_monitor_log_task_stack();
+        performance_monitor_log_memory(
+            report_index);
 
-        ++sample_index;
+#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
 
-        if ((sample_index %
-             PERF_MONITOR_FLASH_LOG_INTERVAL) == 0U) {
-            performance_monitor_log_app_flash();
+        if (cpu.end_task_count > 0U) {
+            performance_monitor_log_task_summary(
+                report_index,
+                s_end_snapshot,
+                cpu.end_task_count
+            );
+
+            if ((report_index == 1U) ||
+                ((report_index %
+                  PERF_MONITOR_FULL_TASK_INTERVAL) == 0U)) {
+                performance_monitor_log_task_table(
+                    report_index,
+                    &cpu
+                );
+            }
         }
+
+#endif
     }
 }
 
