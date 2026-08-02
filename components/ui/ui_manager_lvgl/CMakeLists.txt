@@ -1,6 +1,11 @@
 idf_component_register(
-    SRCS "ui_manager_lvgl.c"
-    INCLUDE_DIRS "include"
+    SRCS
+        "ui_manager_lvgl.c"
+        "lvgl_psram_allocator.c"
+
+    INCLUDE_DIRS
+        "include"
+
     REQUIRES
         common
         display_driver
@@ -8,4 +13,7 @@ idf_component_register(
         esp_lcd
         esp_timer
         heap
+        esp_hw_support
+
+    WHOLE_ARCHIVE
 )
