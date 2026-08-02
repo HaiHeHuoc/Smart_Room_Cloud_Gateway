@@ -343,6 +343,11 @@ static void performance_monitor_log_report_header(
         (uint64_t)esp_timer_get_time() /
         1000000ULL;
 
+    /*
+     * Keep consecutive reports visually separated in the serial monitor.
+     */
+    ESP_LOGI(TAG, "\n");
+
     ESP_LOGI(
         TAG,
         "[REPORT:%06u][SYSTEM] uptime=%llu s, period=%u ms",
