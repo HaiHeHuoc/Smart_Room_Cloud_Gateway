@@ -2013,3 +2013,22 @@ Sprint 1: LCD + LVGL bring-up
 ```
 
 Do **not** start from BLE or Firebase first.
+
+Reason:
+
+```text
+LCD + LVGL gives fast visual feedback.
+Wi-Fi/Firebase/BLE can be added after the local UI foundation is stable.
+```
+
+---
+
+## 19. Current Project State
+
+```text
+Current phase: Planning
+Current focus: Prepare roadmap and tracking document
+Next action: Create ESP-IDF project skeleton and bring up LCD + LVGL
+Main risk: Scope creep from adding too many cloud/network features too early
+Recommended discipline: Finish one sprint at a time before adding optional features
+```
