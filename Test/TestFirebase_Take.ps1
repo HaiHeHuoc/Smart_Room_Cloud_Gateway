@@ -1,10 +1,31 @@
+param(
+    [string]$DatabaseUrl = $env:FIREBASE_DATABASE_URL,
+    [string]$DeviceId = $env:FIREBASE_DEVICE_ID,
+    [string]$IdToken = $env:FIREBASE_ID_TOKEN
+)
+
 $ErrorActionPreference = "Stop"
 
-$databaseUrl = "https://esp32-smart-room-gateway-default-rtdb.asia-southeast1.firebasedatabase.app"
-$uri = "$databaseUrl/devices/esp32s3-001/latest.json"
+if ([string]::IsNullOrWhiteSpace($DeviceId))
+{
+    $DeviceId = "esp32s3-001"
+}
 
-Write-Host "Request URL:"
-Write-Host $uri
+if ([string]::IsNullOrWhiteSpace($DatabaseUrl))
+{
+    throw "Set FIREBASE_DATABASE_URL before running this test."
+}
+
+if ([string]::IsNullOrWhiteSpace($IdToken))
+{
+    throw "Set a short-lived FIREBASE_ID_TOKEN before running this test."
+}
+
+$databaseBase = $DatabaseUrl.TrimEnd('/')
+$escapedDeviceId = [Uri]::EscapeDataString($DeviceId)
+$uri =
+    "$databaseBase/devices/$escapedDeviceId/latest.json" +
+    "?auth=$([Uri]::EscapeDataString($IdToken))"
 
 try
 {
@@ -12,11 +33,15 @@ try
         -Method Get `
         -Uri $uri
 
-    Write-Host "`nFirebase GET successful:"
+    Write-Host "Authenticated Firebase GET successful:"
     $response | Format-List
 }
 catch
 {
     Write-Error "Firebase GET failed: $($_.Exception.Message)"
     exit 1
+}
+finally
+{
+    $IdToken = $null
 }

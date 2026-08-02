@@ -1,342 +1,120 @@
-# Main Application Notes
+# Main Application Composition
 
 ## Purpose
 
-`main.c` is the firmware composition root. It initializes platform, display,
-storage, GUI, button, Wi-Fi, sensor, Firebase Authentication, and cloud components in
-their required order. It also maps manager-owned snapshots into the GUI and
-cloud data types without calling LVGL or HTTPS from producer callbacks.
-The reusable component domain layout is documented in `components/README.md`.
+`main/main.c` is the firmware composition root. It initializes platform,
+display, storage, GUI, input, Wi-Fi, sensor, Firebase Authentication, and cloud
+components in dependency order. It maps manager-owned snapshots into copied GUI
+and cloud data without calling LVGL or HTTPS from producer callbacks.
 
-## Current Startup Order
+Reusable component ownership is documented in [`components/README.md`](../components/README.md).
 
-1. Log project identity.
-2. Initialize NVS and `config_manager`.
-3. Initialize ESP-NETIF and the default ESP event loop.
-4. Initialize the LCD display driver and LVGL display integration.
-5. Mount the SD card and register the LVGL `S:` filesystem.
-6. Initialize `app_gui` and start its single UI task. No screen is selected
-   until the coordinator resolves the final configuration state.
-7. Optionally start the diagnostic `performance_monitor`.
-8. Initialize and start `app_reset_coordinator`, then initialize
-   `button_manager`, register its callback, and start its local polling task.
-   Reset-input failure does not stop unrelated service startup.
-9. Initialize `wifi_manager` and register its status callback.
-10. Initialize `app_network_coordinator` without scheduling its task.
-11. Initialize `firebase_auth`, then initialize `cloud_manager` and register its
-    status callback. The telemetry queue now exists, but TLS has not started.
-12. Initialize `sensor_manager`, register its callback, and start DHT22
-    sampling as a local service independent of network availability.
-13. Schedule the dedicated one-shot `app_network_coordinator` task. It requests
-    `BOOT` for a verified configured path or `PROVISIONING` directly for
-    `NOT_CONFIGURED`. A configured device leaves `BOOT` after at most 60
-    seconds even if stored Wi-Fi remains unavailable; the cached offline/retry
-    snapshot is then shown on `WIFI_STATUS` without interrupting reconnect.
-14. In the low-activity main loop, start `cloud_manager` only after the
-    coordinator reaches `CONNECTING` for stored credentials or `ONLINE` after
-    provisioning cleanup and adoption; retry task allocation after temporary
-    memory pressure.
+## Version 1 Status
 
-Startup errors are logged and return from `app_main()` instead of using active
-`ESP_ERROR_CHECK()` calls that abort the firmware.
+```text
+Release: v1.0.0
+Status: Implemented and hardware accepted
+```
 
-## Event Flow
+## Startup Order
+
+1. Log project name, semantic version, and release date.
+2. Initialize NVS, `config_manager`, ESP-NETIF, and the default event loop.
+3. Initialize the ST7735 display and LVGL integration.
+4. Mount microSD and register the LVGL `S:` filesystem.
+5. Initialize `app_gui` and start the single UI task.
+6. Optionally start `performance_monitor`.
+7. Initialize/start the reset coordinator and button manager.
+8. Initialize `wifi_manager` and its status callback.
+9. Initialize the application network coordinator.
+10. Initialize `firebase_auth` and `cloud_manager`; create the telemetry queue
+    without starting TLS.
+11. Initialize/start `sensor_manager`.
+12. Schedule the one-shot network coordinator.
+13. Start `cloud_manager` only after stored-Wi-Fi startup or successful
+    provisioning cleanup and Station adoption.
+
+## Runtime Event Flow
 
 ```text
 wifi_manager callback
-    -> map runtime state to app_network_coordinator_wifi_event_t
-    -> while provisioning, post CONNECTING_WIFI / WAITING_FOR_IP / FAILED only
-    -> otherwise update coordinator CONNECTING / ONLINE / OFFLINE state
-    -> verified normal ONLINE transition requests WIFI_STATUS
-    -> publish has_ipv4 to cloud_manager's retained network epoch
-    -> map wifi_manager_status_t to ui_wifi_status_t
-    -> app_gui_post_wifi_status()
+    -> network coordinator runtime event
+    -> cloud network epoch / IPv4 snapshot
+    -> copied Wi-Fi GUI model
 
 sensor_manager callback
-    -> map sensor_manager_status_t to ui_sensor_status_t
-    -> app_gui_post_sensor_status()
-    -> map the same snapshot to cloud_sensor_telemetry_t
-    -> cloud_manager_post_sensor_telemetry()
+    -> copied sensor GUI model
+    -> copied latest-value cloud telemetry
 
-cloud_manager status callback
-    -> map cloud_manager_status_t to ui_cloud_status_t
-    -> app_gui_post_cloud_status()
-    -> GUI task updates the Sensor screen Cloud row and indicator
+cloud_manager callback
+    -> copied cloud GUI model
 
-button_manager task callback
-    -> receive one copied PRESSED / RELEASED / LONG_PRESS event
-    -> map it to app_reset_coordinator input
-    -> post a copied event with zero queue wait and return
-
-app_reset_coordinator task
-    -> validate PRESSED / LONG_PRESS / RELEASED ordering
-    -> accept at most one reset request per physical press cycle
-    -> clear the ESP-IDF driver-owned persistent Wi-Fi copy through wifi_manager
-    -> clear and verify config_manager Wi-Fi state
-    -> queue a copied SUCCESS or FAILED result through app_gui
-    -> on verified success, wait at most 500 ms for the exact GUI acknowledgment
-    -> hold confirmed success for 1500 ms, otherwise use a 500 ms fallback
-    -> reboot after both cleanup layers succeed regardless of GUI availability
-    -> boot coordinator selects provisioning from NOT_CONFIGURED
+button_manager callback
+    -> copied reset input event
+    -> reset coordinator task
 
 provisioning_manager callback
-    -> validate and hold credentials pending
-    -> publish copied, non-sensitive progress outside the manager lock
-    -> release them only after Wi-Fi connection success
-    -> app_network_coordinator persists and verifies through config_manager
-    -> wifi_manager adopts the active Station connection
-
-app_network_coordinator task
-    -> resolve persistent configuration state
-    -> request BOOT or PROVISIONING through the GUI command queue
-    -> connect stored credentials or run bounded BLE provisioning
-    -> after BLE starts, copy its exact QR JSON into the GUI QR queue
-    -> publish real progress through the GUI latest-value status queue
-    -> if the pending handoff exhausts its IPv4 grace, stop/deinitialize BLE
-    -> allow the associated Station one bounded 5-second DHCP settle window
-    -> accept only a matching active SSID plus a valid IPv4 address
-    -> persist/verify and adopt only the confirmed active connection
-    -> on failure, zeroize credentials and wait up to 5 seconds for Station detach
-    -> clear session QR, show SUCCESS for 1500 ms, request WIFI_STATUS
-    -> publish CONNECTING or ONLINE readiness for deferred cloud startup
-
-app_main cloud gate
-    -> reject READY / STARTING / RESOLVING_CONFIG / PROVISIONING / FAILED
-    -> accept CONNECTING for stored Wi-Fi or ONLINE after provisioning handoff
-    -> cloud_manager_start()
-
-cloud task
-    -> wake on telemetry or Wi-Fi epoch edges
-    -> invalidate HTTP/TLS client on every changed network epoch
-    -> classify transport, HTTP, authentication, and deterministic failures
-    -> retry recoverable work with wakeable bounded backoff
+    -> copied progress/credential handoff
+    -> network coordinator persistence and adoption
 ```
 
-The callbacks copy their input and return quickly. The GUI task owns LVGL
-updates; the reset coordinator uses only public asynchronous GUI APIs and never
-calls LVGL. The cloud task owns authentication and HTTPS requests. The cloud
-telemetry queue exists before the sensor task starts, so a sensor callback
-cannot post into an uninitialized cloud component.
+Callbacks return quickly. The GUI task owns LVGL; the cloud task owns Firebase
+Authentication and HTTPS; the reset coordinator owns the ordered persistent
+cleanup transaction.
 
-## Current Configuration
+## Main Configuration
 
-- `PERFORMANCE_MONITOR` is disabled at compile time.
-- Sensor sampling period is 2000 ms with a 10000 ms stale timeout.
-- Cloud successful-upload period is 10000 ms.
-- Firebase token refresh margin is 300 seconds.
-- The telemetry endpoint is
-  `devices/esp32s3-001/latest.json` in Firebase Realtime Database.
-- Wi-Fi credentials are loaded from `config_manager`; production code contains
-  no hard-coded Wi-Fi SSID/password fallback.
-- BLE provisioning allows 120 seconds for one phone/session attempt. A Wi-Fi
-  handoff still pending at that boundary receives one additional 30-second IPv4
-  grace. If IPv4 is still pending, the coordinator stops and deinitializes BLE,
-  drains the final verified handoff, and gives the already-associated Station a
-  bounded 5-second DHCP settle window. Credentials are accepted only when the
-  active Station SSID matches the candidate SSID and a valid IPv4 address is
-  present. Failure zeroizes the candidate, requests Station detach, and waits
-  up to 5 seconds for `DISCONNECTED`/`READY` before retry.
-- BLE provisioning allows at most three sessions including the initial
-  session. Retryable terminal failures dwell for 1000 ms, clean fully to
-  `STOPPED`, then use a 1500 ms `RETRYING` backoff before a new generation.
-- BLE provisioning uses NimBLE, Security 1, five framework connection
-  attempts, and the Espressif `v1`/`ble` QR schema.
-- Provisioning progress uses dedicated generation-aware length-one overwrite
-  queues. A credential failure is again a non-terminal coordinator progress
-  event, matching `e66adb3`; bounded session timeout still owns cleanup/retry.
-- `sdkconfig.defaults` targets the N16R8 board: 16 MB flash plus 8 MiB Octal
-  PSRAM at 80 MHz. NimBLE's dynamic pools explicitly use the external-memory
-  allocator. Ordinary allocations larger than 16 KB also prefer PSRAM, while
-  32 KB of internal heap is reserved for internal/DMA-capable requests.
-  Wi-Fi/lwIP is not explicitly redirected with
-  `CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP`; LCD DMA buffers and Phase 7 task
-  stacks are not moved to PSRAM.
-  The same defaults also enable the custom partition table, Security 1,
-  required LVGL fonts, runtime statistics, the LVGL QR widget, and full
-  cross-signed CA-bundle verification for current Google/Firebase TLS chains.
-- The one-shot network coordinator task uses a 6 KB stack at priority 4.
-- The 12 KB cloud task is allocated only after stored connection startup or
-  successful provisioning cleanup and adoption.
-- Cloud retry waits start at 5000 ms, cap at 60000 ms, and are wakeable by a
-  network edge. A complete disconnect/reconnect during backoff advances the
-  non-zero epoch and invalidates the previous HTTP/TLS client.
-- `firebase_auth_init()` and `cloud_manager_init()` allocate only protected
-  state and queues during startup; authentication and TLS remain deferred to
-  the gated cloud task.
-- Firebase device credentials remain development values compiled into source.
-  They must move to protected local configuration before production or
-  publication.
+- DHT22 sample period: 2000 ms.
+- Sensor stale timeout: 10000 ms.
+- Cloud successful publish period: 10000 ms.
+- Firebase token refresh margin: 300 seconds.
+- Telemetry path: `devices/esp32s3-001/latest.json`.
+- Provisioning session timeout: 120 seconds.
+- Provisioning IPv4 grace: 30 seconds.
+- Maximum provisioning sessions: 3.
+- Cloud retry: 5 seconds to 60 seconds.
+- Factory-reset input: active-low GPIO9, five-second hold.
 
-## Ownership And Threading
+Firebase API key, device email, password, and optional expected UID come from
+local project Kconfig values in the generated, Git-ignored `sdkconfig`. They are
+compiled into development firmware and are not a production secret-storage
+mechanism.
 
-- `network_platform_init()` owns one-time NVS/config-manager, ESP-NETIF, and
-  event-loop setup.
-- Read-only config inspection never migrates implicitly. Boot attempts explicit
-  migration once, then re-inspects before any credential load.
-- `wifi_manager_connect()` runs only after config-manager has closed NVS and
-  released its mutex. The application credential copy is then zeroized.
-- `provisioning_manager` owns only transient BLE transport and credential
-  handoff; `config_manager` remains the durable storage authority.
-- `app_network_coordinator` owns boot and config-driven screen policy in a
-  dedicated task. It may post non-blocking `app_gui` screen requests but does
-  not call LVGL, create widgets, or render screens.
-- `app_reset_coordinator` owns application-level reset-input ordering in its
-  dedicated task. The button callback only performs a zero-wait copied queue
-  post. The coordinator first requests driver-owned persistent cleanup through
-  `wifi_manager`, then clears application Wi-Fi state through `config_manager`,
-  and reboots only after both operations succeed. It never calls LVGL or logs
-  credentials.
-- `sensor_manager` is a local service and continues sampling and updating the
-  GUI while provisioning waits, times out, or network connectivity is absent.
-- The single Wi-Fi callback fans out a short runtime event to the coordinator,
-  a non-blocking IPv4 snapshot to `cloud_manager`, and an independent GUI
-  snapshot. `wifi_manager` remains responsible for connection and reconnect
-  behavior. The cloud notification performs no HTTP/TLS work and safely
-  retains edges before the cloud task exists. Provisioning events cannot
-  promote coordinator state to `ONLINE` before persistence, cleanup, and
-  adoption.
-- The sensor callback can always post to an initialized cloud latest-value
-  queue; posting does not perform authentication, TLS, or network I/O.
-- The display handle has static lifetime because `ui_manager_lvgl` borrows it.
-- `app_gui` owns the task that calls `lv_timer_handler()`.
-- `app_gui` owns all screen construction, cleanup, rendering, transitions, and
-  cached provisioning QR/Wi-Fi/sensor/cloud UI models. Its QR cache follows
-  session invalidation rather than generic screen departure.
-- Wi-Fi, sensor, cloud, provisioning, and coordinator callbacks must not call
-  LVGL.
-- Sensor callbacks must not perform Firebase authentication or HTTP requests.
-- `firebase_auth` serializes network operations separately from short
-  token/status state access; `cloud_manager` is its current network caller.
-- There is no coordinated runtime shutdown path. Services are one-shot and run
-  for the life of the firmware.
+## Ownership Rules
 
-## Expected Cloud Logs
+- `main` composes services but does not own reusable domain logic.
+- `app_network_coordinator` owns boot/config-driven network policy.
+- `wifi_manager` owns Station connection, reconnect, and driver persistence.
+- `provisioning_manager` owns temporary BLE transport and credential handoff.
+- `config_manager` owns durable application configuration.
+- `sensor_manager` owns DHT22 sampling.
+- `firebase_auth` owns sign-in and token lifecycle.
+- `cloud_manager` owns authenticated telemetry and retry.
+- `app_gui` and `ui_manager_lvgl` own screens and LVGL synchronization.
+- `button_manager` publishes input events only.
+- `app_reset_coordinator` owns reset qualification and execution.
 
-After Wi-Fi receives an IP address and sensor data becomes available:
+## Build And Run
 
-```text
-I (...) MAIN_APP: Cloud manager started after network handoff: state=...
-I (...) FIREBASE_AUTH: Firebase Authentication sign-in successful
-D (...) CLOUD_MANAGER: Publishing telemetry: T=... C, H=... %
-D (...) CLOUD_MANAGER: Firebase HTTP status: 204
-D (...) CLOUD_MANAGER: Telemetry published successfully
-```
-
-Firebase may return HTTP 200 instead of 204 depending on response options; all
-HTTP 2xx statuses are accepted. The periodic request details are visible only
-when the `CLOUD_MANAGER` log level allows debug output; failures remain warning
-or error logs at the default level.
-
-## Build
-
-From the project root in an ESP-IDF 6.0.1 environment:
-
-```powershell
+```bash
 idf.py build
-```
-
-Flash and monitor after selecting the actual serial port:
-
-```powershell
 idf.py -p <PORT> flash monitor
 ```
 
-## Important Notes
+Before building, complete:
 
-- LVGL currently initializes before SD registration is checked. A failure in
-  either path stops the remaining startup sequence.
-- Missing Wi-Fi configuration starts BLE provisioning. Incomplete, invalid,
-  interrupted-write, and unsupported data is preserved and does not
-  auto-provision.
-- Production startup does not erase the complete NVS partition to recover from
-  NVS initialization errors.
-- Cloud state and its latest-value telemetry queue are initialized before
-  sensor sampling starts.
-- Checkpoint 6.3.2 was hardware-accepted on 2026-07-26 using provisioning
-  timeout, reset, reprovisioning, Wi-Fi adoption, Firebase upload, and GUI
-  cloud-state recovery.
-- Checkpoint 6.3.3 was hardware-accepted on 2026-07-26. Coordinator readiness
-  now follows later Wi-Fi connecting, IPv4 online, disconnect, retry, and
-  failure snapshots.
-- Checkpoint 6.3.4 is implemented and build-verified. Hardware confirmation is
-  still required for sensor/GUI operation during provisioning, provisioning
-  timeout and late-DHCP recovery, watchdog stability, reconnect, and Firebase
-  recovery.
-- Phase 6.4.1 application screen orchestration is implemented with hardware
-  testing pending. This does not mark Phase 6.4 complete.
-- Phase 6.4.3 Espressif-compatible BLE provisioning QR rendering is
-  implemented and build-verified. The user confirmed QR scanning and a
-  successful provisioned Wi-Fi connection on target hardware; the final
-  cross-phase regression matrix remains pending.
-- Phase 6.4.4 real provisioning progress and verified success routing are
-  implemented and build-verified. Hardware acceptance is pending for wrong
-  credentials followed by a clean replacement session, timeout cleanup,
-  real-state visibility, the 1500 ms success dwell, and final dashboard
-  routing. Phase 6.4 remains incomplete.
-- Phase 6.4.5 bounded same-boot provisioning recovery is implemented with
-  hardware testing pending. Static validation covers the three-session budget,
-  `STOPPED -> READY` reinitialization, queue reuse/reset, generation filtering,
-  terminal BLE memory release, and cloud gating. Phase 6.4 remains
-  incomplete.
-- Phase 6.4.6 cloud recovery is implemented with hardware testing pending.
-  Static validation covers network epochs, task wakeups, HTTP-client reset,
-  attempt classification, bounded 401/403 recovery, split Firebase Auth mutex
-  ownership, latest telemetry retention, and best-effort ESP32-S3 BLE release.
-  Final Phase 6.4 hardware acceptance remains pending.
-- Phase 6.4.7 closure is implemented with hardware regression pending.
-  `main` remains composition-only: one Wi-Fi callback fans copied snapshots to
-  coordinator, GUI, and cloud; cloud task creation stays gated until stored
-  connection startup or completed provisioning adoption. The project
-  roadmap's A-N matrix is the final acceptance procedure.
-- Firebase project setup and authenticated host testing are documented in
-  `components/cloud/cloud_manager/README.txt` and `Test/TestFirebase_Auth.ps1`.
-- Phase 7.1 button input was manually/hardware accepted by the user on
-  2026-08-01. GPIO polling, debounce, press/release, and one-shot long-press
-  detection are complete.
-- Phase 7.2 reset-input qualification was manually/hardware accepted by the
-  user on 2026-08-01. Non-blocking handoff, event ordering, and one accepted
-  diagnostic request per press cycle are complete; configuration erasure,
-  provisioning recovery, reboot policy, and UI confirmation remain deferred.
-- Phase 7.3 reset execution was manually/hardware accepted by the user on
-  2026-08-01. The reset transaction clears and verifies application Wi-Fi
-  state, removes the ESP-IDF driver-owned persistent copy, reboots into BLE
-  provisioning, and obtains IPv4 after reprovisioning without `erase-flash`.
-- Phase 7.4 reset-result UI is implemented and build-verified, with hardware
-  acceptance pending. Verified success receives a bounded display opportunity
-  before reboot; GUI failure cannot suppress the reboot. Persistent cleanup
-  failure shows a best-effort error, does not reboot, and remains retryable
-  after button release.
-- Phase 7.5 active-provisioning reset coordination is implemented and
-  build-verified, with hardware acceptance pending. A 10-second bounded
-  preparation closes the reset gate, quiesces provisioning, drains a verified
-  handoff that lost the reset race, disables reconnect, and confirms Station
-  detach before either persistent Wi-Fi layer is cleared; failure clears
-  nothing and suppresses reboot.
-- The current DHCP/network hardening preserves the `e66adb3` ownership
-  boundary: ESP-NETIF remains the only DHCP lifecycle owner and `wifi_manager`
-  serializes connect, disconnect, detach, and driver-restore operations. On a
-  grace-expired handoff, the coordinator now reaches clean BLE `STOPPED`,
-  deinitializes NimBLE, drains the final credential copy, and allows a bounded
-  5-second DHCP settle before validating matching SSID plus IPv4. Failed
-  validation securely clears the credential copy and detaches the unadopted
-  Station. The Phase 7 reset gate, reset exclusion, quiescence, and non-erasing
-  failure policy remain intact. The change is build-verified only; current
-  target-hardware regression acceptance is still pending and is not implied by
-  the earlier Phase 7.3 one-run acceptance.
-- Never log or commit passwords, ID tokens, refresh tokens, service-account
-  keys, or Firebase administrator credentials.
+- [`docs/SETUP.md`](../docs/SETUP.md)
+- [`components/cloud/firebase_auth/docs/FIREBASE_SETUP_AND_SECURITY.md`](../components/cloud/firebase_auth/docs/FIREBASE_SETUP_AND_SECURITY.md)
 
-**Phase 6.4.7 — IMPLEMENTED / HARDWARE REGRESSION PENDING**
+## Security Notes
 
-**Phase 6.4 — IMPLEMENTED / FINAL HARDWARE ACCEPTANCE PENDING**
+- Do not hard-code or log Wi-Fi credentials, Firebase passwords, ID tokens, or
+  refresh tokens.
+- Do not publish a local `sdkconfig` or a firmware binary built with real
+  credentials.
+- Realtime Database rules must deny anonymous access and authorize the intended
+  device UID only.
+- The database URL and device ID are deployment identifiers; move them to a
+  protected deployment configuration before fleet or production use.
 
-## Future Attention
-
-- Continue remaining Phase 6.3 work only when separately approved; checkpoint
-  6.3.4 implementation does not authorize the next checkpoint.
-- Move Firebase credentials out of source code.
-- Add a coordinated application controller only when runtime stop/restart is
-  required.
-- Replace development demo hooks only when their bring-up role is finished.
-- Complete the Phase 7.5 target-hardware lifecycle and credential-handoff race
-  matrix before accepting reset safety in every network state.
+See [`SECURITY.md`](../SECURITY.md).
