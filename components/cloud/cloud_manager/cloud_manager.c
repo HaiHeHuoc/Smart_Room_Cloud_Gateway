@@ -14,6 +14,7 @@
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_attr.h"
 
 #include "firebase_auth.h"
 
@@ -81,14 +82,14 @@ static cloud_manager_config_t s_config;
 static char s_firebase_latest_url[
     CLOUD_MANAGER_URL_BUFFER_SIZE];
 
-static char s_firebase_id_token[
+EXT_RAM_BSS_ATTR static char s_firebase_id_token[
     FIREBASE_AUTH_ID_TOKEN_BUFFER_SIZE];
 
-static char s_authenticated_url[
+EXT_RAM_BSS_ATTR static char s_authenticated_url[
     CLOUD_MANAGER_AUTH_URL_BUFFER_SIZE];
 
 /* Static because the reusable HTTP client retains the request-body pointer. */
-static char s_telemetry_payload[
+EXT_RAM_BSS_ATTR static char s_telemetry_payload[
     CLOUD_MANAGER_JSON_BUFFER_SIZE];
 
 /* Owned exclusively by the cloud task after cloud_manager_start(). */

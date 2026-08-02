@@ -920,7 +920,9 @@ static esp_err_t lvgl_image_handler_decode_png_stream_to_frame(
     }
     lv_draw_buf_clear(frame_draw_buf, NULL);
 
-    source_row = malloc(source_row_size);
+    source_row = heap_caps_malloc(source_row_size,
+                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
     if (source_row == NULL) {
         ESP_LOGE(TAG,
                  "No memory for %u-byte streaming PNG row",

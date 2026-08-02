@@ -69,8 +69,8 @@ static TaskHandle_t s_monitor_task_handle = NULL;
  * Two snapshots are needed to calculate runtime differences over one period.
  */
 #if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
-static TaskStatus_t s_start_snapshot[PERF_MONITOR_MAX_TASKS];
-static TaskStatus_t s_end_snapshot[PERF_MONITOR_MAX_TASKS];
+EXT_RAM_BSS_ATTR static TaskStatus_t s_start_snapshot[PERF_MONITOR_MAX_TASKS];
+EXT_RAM_BSS_ATTR static TaskStatus_t s_end_snapshot[PERF_MONITOR_MAX_TASKS];
 #endif
 
 /* Function Prototypes ------------------------------------------------------ */
