@@ -15,6 +15,7 @@
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_attr.h"
 
 /* Macros ------------------------------------------------------------------- */
 #define FIREBASE_AUTH_API_KEY_BUFFER_SIZE       192U
@@ -59,15 +60,15 @@ static char s_email[FIREBASE_AUTH_EMAIL_BUFFER_SIZE];
 static char s_password[FIREBASE_AUTH_PASSWORD_BUFFER_SIZE];
 static char s_expected_uid[FIREBASE_AUTH_UID_BUFFER_SIZE];
 
-static char s_id_token[FIREBASE_AUTH_ID_TOKEN_BUFFER_SIZE];
-static char s_refresh_token[FIREBASE_AUTH_REFRESH_TOKEN_BUFFER_SIZE];
 static char s_user_uid[FIREBASE_AUTH_UID_BUFFER_SIZE];
+EXT_RAM_BSS_ATTR static char s_id_token[FIREBASE_AUTH_ID_TOKEN_BUFFER_SIZE];
+EXT_RAM_BSS_ATTR static char s_refresh_token[FIREBASE_AUTH_REFRESH_TOKEN_BUFFER_SIZE];
 
 /* These buffers are single-owned while s_operation_mutex is held. */
-static char s_response_buffer[FIREBASE_AUTH_RESPONSE_BUFFER_SIZE];
-static char s_url_buffer[FIREBASE_AUTH_URL_BUFFER_SIZE];
-static char s_request_buffer[FIREBASE_AUTH_REQUEST_BUFFER_SIZE];
-static char s_refresh_token_snapshot[
+EXT_RAM_BSS_ATTR static char s_response_buffer[FIREBASE_AUTH_RESPONSE_BUFFER_SIZE];
+EXT_RAM_BSS_ATTR static char s_url_buffer[FIREBASE_AUTH_URL_BUFFER_SIZE];
+EXT_RAM_BSS_ATTR static char s_request_buffer[FIREBASE_AUTH_REQUEST_BUFFER_SIZE];
+EXT_RAM_BSS_ATTR static char s_refresh_token_snapshot[
     FIREBASE_AUTH_REFRESH_TOKEN_BUFFER_SIZE];
 
 /*

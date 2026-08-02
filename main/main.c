@@ -56,7 +56,7 @@
 #include "button_manager.h"
 
 /* Macros ------------------------------------------------------------------- */
-#define PERFORMANCE_MONITOR 0
+#define PERFORMANCE_MONITOR 1
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "MAIN_APP";
