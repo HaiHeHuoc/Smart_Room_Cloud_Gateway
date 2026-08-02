@@ -7,3 +7,11 @@ idf_component_register(
         esp_timer
         sensor_DHT22
 )
+
+# Scope the xTaskCreate -> xTaskCreateWithCaps override to this component only.
+# The DHT22 path remains task-context only and performs no flash/NVS work.
+target_compile_options(
+    ${COMPONENT_LIB}
+    PRIVATE
+        "-includepsram_task_create.h"
+)
