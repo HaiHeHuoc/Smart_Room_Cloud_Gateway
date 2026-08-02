@@ -455,7 +455,10 @@ static void lvgl_image_handler_gif_draw_cb(GIFDRAW *draw)
         if (state->disposal_method == 3U) {
             if (state->restore_buffer == NULL) {
                 state->restore_buffer =
-                    malloc(state->decode_draw_buf->data_size);
+                    heap_caps_malloc(
+                        state->decode_draw_buf->data_size,
+                        MALLOC_CAP_SPIRAM |
+                        MALLOC_CAP_8BIT);
             }
 
             if (state->restore_buffer != NULL) {
@@ -1603,7 +1606,11 @@ static esp_err_t lvgl_image_handler_show_gif_internal(const char *path)
 
     const uint32_t output_width = (uint32_t)output_width_px;
     const uint32_t output_height = (uint32_t)output_height_px;
-    lvgl_image_handler_gif_state_t *state = calloc(1U, sizeof(*state));
+    lvgl_image_handler_gif_state_t *state = heap_caps_calloc(
+                                            1U,
+                                            sizeof(*state),
+                                            MALLOC_CAP_SPIRAM |
+                                            MALLOC_CAP_8BIT);
     if (state == NULL) {
         ESP_LOGE(TAG, "No memory for GIF decoder state");
         return ESP_ERR_NO_MEM;
@@ -1689,9 +1696,12 @@ static esp_err_t lvgl_image_handler_show_gif_internal(const char *path)
         back_buffer_stride * output_height;
 
     state->back_draw_buf_data =
-        heap_caps_aligned_alloc(LV_DRAW_BUF_ALIGN,
-                                back_buffer_size,
-                                MALLOC_CAP_8BIT);
+        heap_caps_aligned_alloc(
+            LV_DRAW_BUF_ALIGN,
+            back_buffer_size,
+            MALLOC_CAP_SPIRAM |
+            MALLOC_CAP_8BIT);
+
     if (state->back_draw_buf_data == NULL) {
         ESP_LOGE(TAG,
                  "No ESP heap for %lu-byte GIF back buffer; largest block=%lu bytes",
