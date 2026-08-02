@@ -18,6 +18,10 @@
 
 #include "firebase_auth.h"
 
+#include "freertos/idf_additions.h"
+#include "esp_heap_caps.h"
+
+
 /* Macros ------------------------------------------------------------------- */
 #define CLOUD_MANAGER_TASK_NAME                    "cloud_manager"
 #define CLOUD_MANAGER_TASK_STACK_SIZE              12288U
@@ -95,7 +99,7 @@ EXT_RAM_BSS_ATTR static char s_telemetry_payload[
 /* Owned exclusively by the cloud task after cloud_manager_start(). */
 static esp_http_client_handle_t s_http_client;
 
-static char s_http_client_url[
+EXT_RAM_BSS_ATTR static char s_http_client_url[
     CLOUD_MANAGER_AUTH_URL_BUFFER_SIZE];
 
 static uint32_t s_http_client_network_epoch;
@@ -1533,13 +1537,14 @@ esp_err_t cloud_manager_start(void)
     TaskHandle_t task_handle = NULL;
 
     const BaseType_t task_result =
-        xTaskCreate(
+        xTaskCreateWithCaps(
             cloud_manager_task,
             CLOUD_MANAGER_TASK_NAME,
             CLOUD_MANAGER_TASK_STACK_SIZE,
             NULL,
             CLOUD_MANAGER_TASK_PRIORITY,
-            &task_handle);
+            &task_handle,
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
     if (task_result != pdPASS)
     {

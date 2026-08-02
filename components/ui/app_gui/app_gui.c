@@ -13,6 +13,9 @@
 #include "esp_check.h"
 #include "lvgl.h"
 
+#include "freertos/idf_additions.h"
+#include "esp_heap_caps.h"
+
 #if !LV_USE_QRCODE
 #error "Phase 6.4.3 requires CONFIG_LV_USE_QRCODE=y"
 #endif
@@ -3111,13 +3114,14 @@ esp_err_t app_gui_start_ui_task(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    BaseType_t task_ret = xTaskCreate(
+    BaseType_t task_ret = xTaskCreateWithCaps(
         app_gui_ui_task,
         "app_gui_ui",
         APP_GUI_UI_TASK_STACK_SIZE_BYTES,
         NULL,
         APP_GUI_TASK_PRIORITY,
-        &s_ui_task_handle
+        &s_ui_task_handle,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
     );
 
     if (task_ret != pdPASS) {
