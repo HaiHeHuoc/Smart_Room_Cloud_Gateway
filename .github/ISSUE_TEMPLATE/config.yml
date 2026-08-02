@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability or exposed credential
+    url: https://github.com/HaiHeHuoc/Smart_Room_Cloud_Gateway/blob/main/SECURITY.md
+    about: Do not disclose credentials or exploit details in a public issue. Follow the private reporting guidance in SECURITY.md.
