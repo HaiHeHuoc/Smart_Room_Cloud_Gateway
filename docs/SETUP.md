@@ -2,40 +2,42 @@
 
 ## Supported Baseline
 
-- ESP32-S3 N16R8
-- ESP-IDF 6.0.1
-- 16 MB flash
-- 8 MiB Octal PSRAM at 80 MHz
-- ST7735 128x160 SPI LCD
-- DHT22
-- FAT-formatted microSD card
-- Active-low factory-reset button
+| Item | Version / configuration |
+|---|---|
+| MCU | ESP32-S3 N16R8 |
+| Framework | ESP-IDF 6.0.1 |
+| Flash | 16 MB |
+| PSRAM | 8 MiB Octal, 80 MHz |
+| Display | ST7735 128x160 SPI TFT |
+| Sensor | DHT22 |
+| Storage | FAT-formatted microSD |
+| Input | Active-low GPIO9 reset button |
 
-## 1. Install ESP-IDF
+## 1. Install And Activate ESP-IDF
 
-Install and activate ESP-IDF 6.0.1 using Espressif's normal installer or command-line setup. Confirm:
+Install ESP-IDF 6.0.1 using Espressif's installer or command-line workflow.
+Activate its environment and confirm:
 
 ```bash
 idf.py --version
 ```
 
-The application manifest requires ESP-IDF 6.0 or newer, but the validated project baseline is 6.0.1.
-
 ## 2. Clone And Select The Target
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/HaiHeHuoc/Smart_Room_Cloud_Gateway.git
 cd Smart_Room_Cloud_Gateway
 idf.py set-target esp32s3
 ```
 
-Managed dependencies are resolved from `main/idf_component.yml` during configuration/build.
+Managed dependencies are resolved from `main/idf_component.yml` during
+configuration and build.
 
 ## 3. Wire The Hardware
 
-### LCD
+### ST7735 LCD
 
-| ST7735 signal | ESP32-S3 GPIO |
+| Signal | ESP32-S3 GPIO |
 |---|---:|
 | MOSI / SDA | 11 |
 | SCLK / SCL | 12 |
@@ -43,11 +45,11 @@ Managed dependencies are resolved from `main/idf_component.yml` during configura
 | DC / A0 | 13 |
 | RST / RES | 14 |
 | BL / LED | 15 |
-| MISO | Not used |
+| MISO | Not used by LCD |
 
-### MicroSD
+### Integrated microSD Interface
 
-| SD signal | ESP32-S3 GPIO |
+| Signal | ESP32-S3 GPIO |
 |---|---:|
 | MOSI | 16 |
 | MISO | 17 |
@@ -61,90 +63,42 @@ Managed dependencies are resolved from `main/idf_component.yml` during configura
 | DHT22 data | 4 | Use the required pull-up for the selected module |
 | Factory-reset button | 9 | Active low, internal pull-up, five-second hold |
 
-Confirm the exact voltage and module pin labels before applying power. The repository pin map is defined in `components/system/common/include/board_config.h`.
+Use 3.3 V logic and a common ground. Confirm the source-of-truth definitions in
+`components/system/common/include/board_config.h` before applying power.
 
 ## 4. Prepare The SD Card
 
-The current application treats SD mount failure as a startup failure.
-
-- Use a FAT-formatted card.
+- Format the card with a supported FAT filesystem.
 - Insert it before boot.
-- Automatic formatting is disabled to protect card data.
+- Automatic formatting is disabled.
 - The current SDSPI clock is intentionally conservative at 2 MHz.
 
-The card mounts at:
+The card mounts at `/sdcard`; LVGL exposes it through the `S:` drive.
 
-```text
-/sdcard
-```
+## 5. Configure Firebase Securely
 
-LVGL exposes it through the registered `S:` drive.
+Follow the complete guide:
 
-## 5. Configure Firebase Locally
+- [`components/cloud/firebase_auth/docs/FIREBASE_SETUP_AND_SECURITY.md`](../components/cloud/firebase_auth/docs/FIREBASE_SETUP_AND_SECURITY.md)
 
-Run:
+The minimum steps are:
 
-```bash
-idf.py menuconfig
-```
-
-Open:
+1. Enable Firebase Email/Password Authentication.
+2. Create a dedicated device user and record its UID.
+3. Create Realtime Database.
+4. Publish restrictive `auth.uid` Security Rules.
+5. Review Firebase API-key restrictions and quotas.
+6. Run `idf.py menuconfig` and set local development values under:
 
 ```text
 Smart Room Cloud Gateway
 └── Firebase development configuration
 ```
 
-Set:
+The generated `sdkconfig` is ignored by Git, but its values are compiled into
+the firmware image. Never publish a firmware binary built with real credentials.
 
-- Firebase Web API key
-- Dedicated device account email
-- Dedicated device account password
-- Optional expected Firebase UID
-
-The values are written to the local generated `sdkconfig`, which is ignored by Git.
-
-### Firebase Project Requirements
-
-1. Enable Email/Password authentication.
-2. Create a dedicated development device account.
-3. Enable Realtime Database.
-4. Restrict database rules to the intended device identity and path.
-5. Verify the URL used in `main/main.c` matches your Firebase project and region.
-
-The current telemetry path is a latest-value endpoint, not historical storage.
-
-### Security Warning
-
-Menuconfig prevents new credentials from being committed in source, but the values are still compiled into development firmware. Do not use an administrator account. Rotate any credential that has ever entered Git history.
-
-## 6. Review Important Configuration
-
-The repository `sdkconfig.defaults` enables:
-
-```text
-ESP32-S3 target
-16 MB flash
-custom partition table
-NimBLE
-8 MiB Octal PSRAM at 80 MHz
-external NimBLE allocation
-Wi-Fi/lwIP PSRAM preference
-external mbedTLS allocation
-external BSS support
-LVGL custom allocator and QR code support
-FreeRTOS runtime statistics
-```
-
-The custom partition table contains:
-
-| Partition | Size |
-|---|---:|
-| NVS | 24 KiB |
-| PHY init | 4 KiB |
-| Factory application | 4 MiB |
-
-## 7. Build
+## 6. Build
 
 ```bash
 idf.py build
@@ -157,13 +111,13 @@ idf.py fullclean
 idf.py build
 ```
 
-## 8. Flash And Monitor
+## 7. Flash And Monitor
 
 ```bash
 idf.py -p <PORT> flash monitor
 ```
 
-Examples of port names:
+Typical port names:
 
 ```text
 Windows: COM5
@@ -171,117 +125,108 @@ Linux:   /dev/ttyACM0
 macOS:   /dev/cu.usbmodemXXXX
 ```
 
-Do not copy an example port blindly; use the port assigned to your board.
+Exit the monitor with `Ctrl+]`.
 
-Exit the ESP-IDF monitor with:
+## 8. First Boot
 
-```text
-Ctrl+]
-```
-
-## 9. First Boot
-
-### Valid Stored Configuration
-
-Expected flow:
+### Stored Wi-Fi Configuration Is Valid
 
 ```text
 boot
--> display/LVGL/SD initialization
--> config validation
--> Wi-Fi connecting
--> IPv4 acquired
+-> display, LVGL, SD, and configuration initialization
+-> Wi-Fi connect and IPv4
 -> Wi-Fi status screen
 -> sensor dashboard
--> Firebase authentication and upload
+-> Firebase authentication and telemetry
 ```
 
 ### No Valid Wi-Fi Configuration
 
-Expected flow:
-
 ```text
 boot
--> provisioning screen
--> active BLE QR code
+-> BLE provisioning screen and QR
 -> phone sends credentials
 -> Wi-Fi and IPv4 verification
 -> NVS save and read-back
--> BLE cleanup
--> Wi-Fi status
--> sensor dashboard
+-> BLE cleanup and Station adoption
+-> Wi-Fi status and sensor dashboard
 ```
 
-Use an Espressif-compatible provisioning client that supports BLE transport and Security 1. The QR code is generated from the active service identity shown by the firmware.
+Use an Espressif-compatible provisioning client that supports BLE transport and
+Security 1. Do not publish a readable provisioning QR or Proof of Possession.
 
-## 10. Functional Checks
+## 9. Functional Verification
 
 ### Display
 
-- Correct orientation and colors.
+- Correct orientation and RGB order.
 - No clipping on the 160x128 logical layout.
 - Provisioning QR is scannable.
-- Sensor and cloud states update without flicker or freeze.
+- Sensor, Wi-Fi, and cloud states update without freezing.
 
 ### Sensor
 
 - Temperature and humidity update approximately every two seconds.
-- Invalid readings enter error/stale handling without crashing the UI.
+- Invalid readings enter stale/error handling without crashing the UI.
 
-### Cloud
+### Firebase
 
-- Firebase latest-value path changes after a valid sample.
-- Wi-Fi loss moves cloud state to wait/retry.
-- Network recovery returns cloud state to synchronization/online.
+- Authentication succeeds with the dedicated device account.
+- The configured UID guard accepts the expected identity.
+- Latest telemetry changes in Realtime Database.
+- Anonymous database access is rejected.
+- Wi-Fi loss enters Wait/Retry and recovery returns to Online.
 
 ### Factory Reset
 
-1. Hold the button for five seconds.
-2. Verify the reset result screen.
+1. Hold GPIO9 for five seconds.
+2. Verify the reset-result screen.
 3. Verify reboot.
 4. Verify the device returns to provisioning.
 5. Reprovision without running `erase-flash`.
 
-## 11. Runtime Diagnostics
+## 10. Runtime Diagnostics
 
-`performance_monitor` reports:
+`performance_monitor` can report:
 
-- CPU use for the system and each core.
-- Internal, PSRAM, and DMA-capable heap.
-- Minimum free heap and largest block.
-- Allocation/free block counts and a fragmentation estimate.
-- Task states, CPU percentages, stack high-water marks, and stack locations.
+- total and per-core CPU use;
+- Internal, PSRAM, and DMA-capable heap;
+- minimum free heap and largest block;
+- allocation/free block counts and fragmentation estimate;
+- task state, CPU percentage, stack high-water, and stack placement.
 
-Do not add Internal and DMA totals; their heap capabilities overlap.
+Internal and DMA-capable totals overlap and must not be added.
 
-## 12. Common Problems
+## 11. Common Problems
 
 | Symptom | Checks |
 |---|---|
-| White or blank LCD | Power, CS/DC/RST/BL, SPI host, ST7735 variant |
+| Blank LCD | Power, CS/DC/RST/BL, SPI host, ST7735 variant |
 | Wrong colors | RGB/BGR order and RGB565 byte order |
-| SD mount fails | Card format, wiring, CS, power, inserted before boot |
-| Provisioning QR missing | QR support in sdkconfig, active provisioning session, GUI logs |
-| Provisioning connects but no IPv4 | AP credentials, DHCP, signal, session grace logs |
-| Firebase init fails | All menuconfig fields are set and endpoint matches project |
-| TLS/auth retry | Internet, time/cert bundle, account permission, database rules |
-| Reset does not trigger | Active-low GPIO 9, debounce, full five-second press |
-| Build cannot find dependencies | Activate ESP-IDF and allow Component Manager resolution |
+| SD mount fails | FAT format, wiring, CS, power, inserted before boot |
+| Provisioning QR missing | QR support, active session, GUI logs |
+| Provisioning receives credentials but no IPv4 | AP credentials, DHCP, signal, grace logs |
+| Firebase login fails | Provider enabled, user enabled, menuconfig values, API restrictions |
+| Database permission denied | UID and Realtime Database Security Rules |
+| TLS/auth retry | Internet, certificate bundle, API restrictions, account state |
+| Reset does not trigger | Active-low GPIO9, debounce, full five-second hold |
+| Dependencies do not resolve | Activate ESP-IDF and allow Component Manager access |
 
-## 13. Clean Local Configuration
+## 12. Reset Local Build Configuration
 
-To reset local configuration without changing repository defaults:
+Linux/macOS:
 
 ```bash
 rm -f sdkconfig sdkconfig.old
 idf.py reconfigure
 ```
 
-On Windows PowerShell:
+Windows PowerShell:
 
 ```powershell
 Remove-Item sdkconfig,sdkconfig.old -ErrorAction SilentlyContinue
 idf.py reconfigure
 ```
 
-Run `idf.py menuconfig` again before building so Firebase development configuration is restored locally.
+Run `idf.py menuconfig` again before building so local Firebase development
+configuration is restored.
