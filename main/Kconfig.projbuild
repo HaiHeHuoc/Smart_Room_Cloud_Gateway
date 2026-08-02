@@ -1,0 +1,34 @@
+menu "Smart Room Cloud Gateway"
+
+    menu "Firebase development configuration"
+
+        config APP_FIREBASE_API_KEY
+            string "Firebase Web API key"
+            default ""
+            help
+                Web API key used by Firebase Authentication. Keep the value in
+                the local sdkconfig file and never commit real credentials.
+
+        config APP_FIREBASE_DEVICE_EMAIL
+            string "Firebase device account email"
+            default ""
+            help
+                Email of the dedicated development device account.
+
+        config APP_FIREBASE_DEVICE_PASSWORD
+            string "Firebase device account password"
+            default ""
+            help
+                Password of the dedicated development device account. This is
+                compiled into development firmware and is not a production
+                secret-storage design.
+
+        config APP_FIREBASE_DEVICE_UID
+            string "Expected Firebase device UID"
+            default ""
+            help
+                Optional UID guard. Leave empty to disable exact UID checking.
+
+    endmenu
+
+endmenu
