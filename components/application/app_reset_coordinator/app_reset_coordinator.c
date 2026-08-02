@@ -602,9 +602,10 @@ esp_err_t app_reset_coordinator_init(void)
     }
 
     QueueHandle_t input_queue =
-        xQueueCreate(
+        xQueueCreateWithCaps(
             APP_RESET_COORDINATOR_QUEUE_LENGTH,
-            sizeof(app_reset_coordinator_input_event_t));
+            sizeof(app_reset_coordinator_input_event_t),
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
     if (input_queue == NULL)
     {

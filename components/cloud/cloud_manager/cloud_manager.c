@@ -1462,9 +1462,10 @@ esp_err_t cloud_manager_init(
     }
 
     s_telemetry_queue =
-        xQueueCreate(
+        xQueueCreateWithCaps(
             CLOUD_MANAGER_TELEMETRY_QUEUE_LENGTH,
-            sizeof(cloud_sensor_telemetry_t));
+            sizeof(cloud_sensor_telemetry_t),
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
     if (s_telemetry_queue == NULL)
     {

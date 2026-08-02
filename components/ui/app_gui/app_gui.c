@@ -690,32 +690,32 @@ static lv_color_t app_gui_provisioning_state_color(
 static void app_gui_cleanup_queues(void)
 {
     if (s_command_queue != NULL) {
-        vQueueDelete(s_command_queue);
+        vQueueDeleteWithCaps(s_command_queue);
         s_command_queue = NULL;
     }
 
     if (s_provisioning_status_queue != NULL) {
-        vQueueDelete(s_provisioning_status_queue);
+        vQueueDeleteWithCaps(s_provisioning_status_queue);
         s_provisioning_status_queue = NULL;
     }
 
     if (s_provisioning_qr_queue != NULL) {
-        vQueueDelete(s_provisioning_qr_queue);
+        vQueueDeleteWithCaps(s_provisioning_qr_queue);
         s_provisioning_qr_queue = NULL;
     }
 
     if (s_wifi_status_queue != NULL) {
-        vQueueDelete(s_wifi_status_queue);
+        vQueueDeleteWithCaps(s_wifi_status_queue);
         s_wifi_status_queue = NULL;
     }
 
     if (s_sensor_status_queue != NULL) {
-        vQueueDelete(s_sensor_status_queue);
+        vQueueDeleteWithCaps(s_sensor_status_queue);
         s_sensor_status_queue = NULL;
     }
 
     if (s_cloud_status_queue != NULL) {
-        vQueueDelete(s_cloud_status_queue);
+        vQueueDeleteWithCaps(s_cloud_status_queue);
         s_cloud_status_queue = NULL;
     }
 }
@@ -3024,9 +3024,10 @@ esp_err_t app_gui_init(void)
     }
 
     s_command_queue =
-        xQueueCreate(
+        xQueueCreateWithCaps(
             APP_GUI_COMMAND_QUEUE_LENGTH,
-            sizeof(app_gui_command_t));
+            sizeof(app_gui_command_t),
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
     if (s_command_queue == NULL) {
         ESP_LOGE(TAG, "Failed to create GUI command queue");
@@ -3035,9 +3036,10 @@ esp_err_t app_gui_init(void)
     }
 
     s_provisioning_status_queue =
-        xQueueCreate(
+        xQueueCreateWithCaps(
             APP_GUI_PROVISIONING_STATUS_QUEUE_LENGTH,
-            sizeof(ui_provisioning_status_t));
+            sizeof(ui_provisioning_status_t),
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
     if (s_provisioning_status_queue == NULL) {
         ESP_LOGE(TAG, "Failed to create provisioning status queue");
@@ -3046,9 +3048,10 @@ esp_err_t app_gui_init(void)
     }
 
     s_provisioning_qr_queue =
-        xQueueCreate(
+        xQueueCreateWithCaps(
             APP_GUI_PROVISIONING_QR_QUEUE_LENGTH,
-            sizeof(app_gui_provisioning_qr_message_t));
+            sizeof(app_gui_provisioning_qr_message_t),
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
     if (s_provisioning_qr_queue == NULL) {
         ESP_LOGE(TAG, "Failed to create provisioning QR queue");
@@ -3057,9 +3060,10 @@ esp_err_t app_gui_init(void)
     }
 
     s_wifi_status_queue =
-        xQueueCreate(
+        xQueueCreateWithCaps(
             APP_GUI_WIFI_STATUS_QUEUE_LENGTH,
-            sizeof(ui_wifi_status_t)
+            sizeof(ui_wifi_status_t),
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
         );
 
     if (s_wifi_status_queue == NULL) {
@@ -3069,9 +3073,10 @@ esp_err_t app_gui_init(void)
     }
 
     s_sensor_status_queue =
-        xQueueCreate(
+        xQueueCreateWithCaps(
             APP_GUI_SENSOR_STATUS_QUEUE_LENGTH,
-            sizeof(ui_sensor_status_t)
+            sizeof(ui_sensor_status_t),
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
         );
 
     if (s_sensor_status_queue == NULL) {
@@ -3081,9 +3086,10 @@ esp_err_t app_gui_init(void)
     }
 
     s_cloud_status_queue =
-        xQueueCreate(
+        xQueueCreateWithCaps(
             APP_GUI_CLOUD_STATUS_QUEUE_LENGTH,
-            sizeof(ui_cloud_status_t)
+            sizeof(ui_cloud_status_t),
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
         );
 
     if (s_cloud_status_queue == NULL) {
