@@ -46,13 +46,29 @@ jobs:
             exit 1
           fi
 
-      - name: Reject obvious credential material
+      - name: Reject private keys
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          matches="$(
+            git grep -I -n -E -- \
+              '-----BEGIN ([A-Z0-9]+ )?PRIVATE KEY-----' \
+              -- . || true
+          )"
+
+          if [[ -n "${matches}" ]]; then
+            echo "Private key material detected:"
+            echo "${matches}"
+            exit 1
+          fi
+
+      - name: Reject obvious credential tokens in non-documentation files
         shell: bash
         run: |
           set -euo pipefail
 
           patterns=(
-            '-----BEGIN ([A-Z0-9]+ )?PRIVATE KEY-----'
             'AIza[0-9A-Za-z_-]{35}'
             'gh[pousr]_[0-9A-Za-z]{20,}'
             'github_pat_[0-9A-Za-z_]{20,}'
@@ -61,7 +77,11 @@ jobs:
 
           failed=0
           for pattern in "${patterns[@]}"; do
-            matches="$(git grep -I -n -E -- "${pattern}" -- . ':!*.md' || true)"
+            matches="$(
+              git grep -I -n -E -- "${pattern}" \
+                -- . ':(exclude)**/*.md' ':(exclude)*.md' || true
+            )"
+
             if [[ -n "${matches}" ]]; then
               echo "Potential credential material detected for pattern: ${pattern}"
               echo "${matches}"
@@ -71,13 +91,23 @@ jobs:
 
           exit "${failed}"
 
-      - name: Reject unsafe pull-request-target workflows
+      - name: Reject unsafe workflow triggers and broad write permissions
         shell: bash
         run: |
           set -euo pipefail
 
-          if git grep -n -E '^([[:space:]]*)pull_request_target:' -- '.github/workflows/*' 2>/dev/null; then
-            echo "pull_request_target is not allowed without a dedicated security review."
+          if git grep -n -E \
+            '^([[:space:]]*)pull_request_target:' \
+            -- '.github/workflows/*' 2>/dev/null; then
+            echo "pull_request_target is not allowed without dedicated security review."
+            exit 1
+          fi
+
+          if git grep -n -E \
+            '(write-all|contents:[[:space:]]*write|actions:[[:space:]]*write|pull-requests:[[:space:]]*write)' \
+            -- '.github/workflows/*' \
+               ':(exclude).github/workflows/repository-policy.yml' 2>/dev/null; then
+            echo "A workflow requests broad write permission. Review and narrow it before merge."
             exit 1
           fi
 
@@ -91,6 +121,7 @@ jobs:
             '.github/PULL_REQUEST_TEMPLATE.md'
             'CONTRIBUTING.md'
             'SECURITY.md'
+            'docs/REPOSITORY_PROTECTION.md'
           )
 
           for path in "${required_files[@]}"; do
