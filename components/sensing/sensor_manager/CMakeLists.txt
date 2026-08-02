@@ -5,6 +5,8 @@ idf_component_register(
         common
         dht
         esp_timer
+        freertos
+        heap
         sensor_DHT22
 )
 
