@@ -1,161 +1,102 @@
-# Portfolio Demo Guide
+# Version 1 Hardware Demo
 
-## Goal
+## Published Demo
 
-Produce a short, repeatable hardware demonstration that proves the project works end to end without exposing credentials, provisioning secrets, tokens, or private account information.
+- Video: [ESP32-S3 Smart Room Cloud Gateway demo](https://youtube.com/shorts/9C5_hecEgXA?feature=share)
+- Images: [`docs/media/`](media/README.md)
+- Release: `v1.0.0`
 
-## Recommended Duration
+The media was captured from the target-hardware project. It is presentation
+evidence, not a replacement for raw automated test logs.
 
-Target: 2-4 minutes.
+## Demonstrated Product Flow
 
-A shorter edited video is more useful for a portfolio than an unstructured serial-monitor recording.
+The portfolio sequence covers the main Version 1 story:
 
-## Required Preparation
+```text
+hardware overview
+-> BLE provisioning
+-> Wi-Fi status
+-> sensor dashboard
+-> Firebase telemetry
+-> network/cloud recovery
+-> five-second factory reset
+-> provisioning returns
+```
 
-- Flash the portfolio revision.
-- Insert the FAT-formatted SD card.
-- Use a dedicated Firebase development account.
-- Hide email addresses, tokens, API keys, QR contents, SSID/password input, and private database URLs.
-- Clear or blur unrelated serial output and desktop notifications.
-- Record the Git commit used for the demo.
-- Confirm the LCD is readable under the selected lighting.
+## Scene Guide
 
-## Primary Demo Script
-
-### 1. Hardware Overview — 10-15 seconds
+### 1. Hardware Overview
 
 Show:
 
-- ESP32-S3 board
-- ST7735 display
-- DHT22
-- microSD module/card
-- factory-reset button
+- ESP32-S3 N16R8 board;
+- ST7735 display and integrated microSD slot;
+- DHT22 sensor;
+- active-low GPIO9 factory-reset button;
+- power and wiring.
 
-Brief narration:
+### 2. BLE Wi-Fi Provisioning
 
-> This is an ESP32-S3 Smart Room Cloud Gateway built with ESP-IDF and FreeRTOS. It uses BLE for Wi-Fi provisioning, LVGL for the local dashboard, a DHT22 sensor, Firebase telemetry, NVS storage, and automatic recovery.
-
-### 2. BLE Provisioning — 30-45 seconds
-
-1. Boot with no valid Wi-Fi configuration.
-2. Show the provisioning screen and QR code.
-3. Scan with the provisioning client.
-4. Do not record the password entry.
-5. Submit the credentials.
-6. Show status progression:
+Expected progression:
 
 ```text
-Waiting for phone
+waiting for phone
 -> credentials received
 -> connecting
 -> waiting for IP
--> saving
--> cleaning up
+-> saving and read-back verification
+-> BLE cleanup
+-> connection adoption
 -> success
 ```
 
-Evidence to capture:
+Do not expose password entry, a readable Proof of Possession, or a reusable QR
+payload in public media.
 
-- QR displayed correctly.
-- Session count is visible.
-- Device receives IPv4.
-- UI routes to Wi-Fi status and then dashboard.
+### 3. Sensor And Firebase
 
-### 3. Sensor And Firebase — 20-30 seconds
+Show temperature and humidity on the LCD and the cloud state returning to
+Online. A Firebase Console view is optional; if used, sanitize account identity,
+tokens, private project data, and browser information.
 
-1. Show temperature and humidity updates on the LCD.
-2. Show the Firebase latest-value record changing.
-3. Blur private project/account details.
+### 4. Wi-Fi And Cloud Recovery
 
-Brief narration:
+From an Online state:
 
-> The sensor task publishes copied data to the UI and a latest-value cloud queue. The cloud task authenticates and uploads through HTTPS without blocking the sensor or UI tasks.
+1. Disable the access point or hotspot.
+2. Show Wi-Fi disconnect and Cloud Wait/Retry.
+3. Restore the network.
+4. Show reconnect, IPv4 recovery, Cloud Sync, and Cloud Online.
+5. Confirm the newest telemetry value is eventually uploaded.
 
-### 4. Wi-Fi And Cloud Recovery — 30-45 seconds
+### 5. Factory Reset
 
-1. Begin from Cloud Online.
-2. Turn the hotspot/router off.
-3. Show Wi-Fi disconnect and Cloud Wait/Retry.
-4. Turn the hotspot/router on.
-5. Show Wi-Fi reconnect, IPv4 recovery, Cloud Sync, and Cloud Online.
+1. Hold GPIO9 for five seconds.
+2. Show the reset-result UI.
+3. Show the controlled reboot.
+4. Confirm BLE provisioning returns without `erase-flash`.
 
-Evidence to capture:
+## Published Evidence Matrix
 
-- No reboot or provisioning restart.
-- GUI remains responsive.
-- Firebase receives the newest sensor value after recovery.
+| Evidence | File / URL | Status |
+|---|---|---|
+| Complete prototype | `docs/media/hardware-overview.jpg` | Published |
+| Provisioning screen | `docs/media/screen-provisioning.jpg` | Published |
+| Wi-Fi status | `docs/media/screen-wifi.jpg` | Published |
+| Sensor dashboard | `docs/media/screen-dashboard.jpg` | Published |
+| Reset result | `docs/media/screen-reset-result.jpg` | Published |
+| Hardware video | YouTube link above | Published |
+| Firebase Console screenshot | `firebase-latest.png` | Optional / not included |
+| Performance screenshot | `performance-report.png` | Optional / not included |
 
-### 5. Factory Reset — 25-40 seconds
+## Reproducibility Record
 
-1. Hold the reset button for five seconds.
-2. Show reset-result UI.
-3. Show reboot.
-4. Show the provisioning screen again.
-
-Brief narration:
-
-> The button task only publishes an event. A reset coordinator quiesces network activity, erases verified Wi-Fi persistence, presents the result through the UI task, and restarts into provisioning.
-
-### 6. Runtime Diagnostics — 15-20 seconds
-
-Show one performance report containing:
-
-- CPU use
-- Internal RAM
-- PSRAM
-- DMA-capable RAM
-- task count
-- selected task stack locations
-
-Highlight:
-
-```text
-app_gui_ui      PSRAM
-cloud_manager   PSRAM
-sensor_manager  PSRAM
-button_manager  PSRAM
-perf_monitor    INTERNAL
-```
-
-## Screenshot Checklist
-
-Capture at least these still images:
-
-| File | Content |
-|---|---|
-| `hardware-overview.jpg` | Full wired prototype |
-| `screen-provisioning.jpg` | Provisioning screen with QR blurred if needed |
-| `screen-wifi.jpg` | Wi-Fi status screen without private SSID if publishing publicly |
-| `screen-dashboard.jpg` | Sensor and cloud dashboard |
-| `screen-reset-result.jpg` | Factory-reset result screen |
-| `firebase-latest.png` | Sanitized Firebase latest-value record |
-| `performance-report.png` | Sanitized runtime diagnostics |
-
-Store files in `docs/media/`.
-
-## README Media Block
-
-After adding real files, insert a compact gallery into the root README:
-
-```markdown
-## Hardware Demo
-
-| Prototype | Dashboard |
-|---|---|
-| ![Prototype](docs/media/hardware-overview.jpg) | ![Dashboard](docs/media/screen-dashboard.jpg) |
-
-[Watch the demo video](<public-video-url>)
-```
-
-Do not add broken image links before the files exist.
-
-## Evidence Record
-
-For a reproducible portfolio demo, record:
+When recording a new demo, capture:
 
 ```text
 Firmware commit:
+Release/tag:
 ESP-IDF version:
 Board variant:
 Power source:
@@ -167,16 +108,19 @@ Demo date:
 Test duration:
 ```
 
-Do not include passwords, API credentials, token contents, provisioning Proof of Possession, or unredacted private identifiers.
+Do not record passwords, tokens, private URLs, a readable provisioning secret,
+or personal account data.
 
-## Acceptance Checklist
+## Public Media Checklist
 
-- [ ] Real hardware overview photo committed.
-- [ ] Provisioning screenshot/photo committed.
-- [ ] Sensor dashboard screenshot/photo committed.
-- [ ] Sanitized Firebase evidence committed.
-- [ ] Sanitized performance evidence committed.
-- [ ] Demo video uploaded to a public or shareable location.
-- [ ] Root README updated with real media links.
-- [ ] No secrets or personal information visible.
-- [ ] Video demonstrates provisioning, sensor/cloud, reconnect, and reset.
+- [x] Hardware overview committed.
+- [x] Provisioning screen committed.
+- [x] Wi-Fi status committed.
+- [x] Sensor dashboard committed.
+- [x] Reset-result screen committed.
+- [x] Demo video uploaded and linked.
+- [x] Root README contains the gallery and video link.
+- [ ] Optional Firebase screenshot added.
+- [ ] Optional performance screenshot added.
+
+The two unchecked optional screenshots are not release blockers.
