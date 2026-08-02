@@ -1144,33 +1144,62 @@ reconnect, cloud retry, UI-state, logging, and stability checks.
 
 ---
 
-## Sprint 9 — Polish for Portfolio
+## Sprint 9 — Polish for Portfolio — Implemented / Media Evidence Pending
 
 **Goal:** Make the project presentable for GitHub/CV/interview.
 
 ### Tasks
 
-- [ ] Write clean `README.md`.
-- [ ] Add architecture diagram.
-- [ ] Add state machine diagram.
-- [ ] Add setup instructions.
-- [ ] Add demo screenshots/photos.
+- [x] Write clean `README.md`.
+- [x] Add architecture diagram.
+- [x] Add state machine diagram.
+- [x] Add setup instructions.
+- [ ] Add real demo screenshots/photos.
 - [ ] Record short demo video.
-- [ ] Add known issues section.
-- [ ] Add future improvements section.
+- [x] Add known issues section.
+- [x] Add future improvements section.
+
+### Implementation Result
+
+Implemented directly on `main` on 2026-08-02:
+
+- [x] Added a root portfolio README with hardware, pin map, architecture,
+      runtime flows, setup, measured resources, security, and interview points.
+- [x] Added `docs/ARCHITECTURE.md` with ownership, task, queue, state-machine,
+      recovery, reset, and memory-placement design.
+- [x] Added `docs/SETUP.md` with wiring, menuconfig, Firebase, build, flash,
+      first-boot, diagnostics, and troubleshooting instructions.
+- [x] Added `docs/DEMO.md` and `docs/media/README.md` with a deterministic demo
+      script, shot list, evidence record, file naming, and sanitization rules.
+- [x] Added `docs/KNOWN_LIMITATIONS.md` with current limitations, deferred
+      features, product hardening, and future extension priorities.
+- [x] Added `PHASE_9_PORTFOLIO_STATUS.md` as the focused implementation and
+      remaining-media checklist.
+- [x] Removed real Firebase account values from the current source head and
+      moved local development configuration to `main/Kconfig.projbuild`.
+- [x] Updated Firebase authentication documentation for the menuconfig-based
+      credential source and required credential rotation.
+
+Real hardware photos, sanitized screenshots, and a video cannot be fabricated
+from source. Sprint 9 remains open only for those user-supplied media artifacts
+and final README media links.
 
 ### Done Criteria
 
-- [ ] Another developer can understand the project from README.
-- [ ] Build and setup steps are clear.
-- [ ] Architecture is explainable in interview.
-- [ ] Project has a clear demo path.
+- [x] Another developer can understand the project from README.
+- [x] Build and setup steps are clear.
+- [x] Architecture is explainable in interview.
+- [x] Project has a clear demo path.
+- [ ] Real hardware media and final demo link are published.
+
+**Sprint 9 — IMPLEMENTED / MEDIA EVIDENCE PENDING**
 
 ### Learning Topics
 
 - Technical documentation
 - Embedded portfolio presentation
 - Interview storytelling
+- Secret handling and public-repository hygiene
 
 ---
 
@@ -1896,8 +1925,8 @@ The project is considered portfolio-ready when:
 - [ ] Wi-Fi config survives reboot.
 - [ ] Button factory reset works.
 - [x] Device can recover from Wi-Fi disconnect.
-- [ ] Code is split into clear components.
-- [ ] README explains setup, architecture, and demo.
+- [x] Code is split into clear components.
+- [x] README explains setup, architecture, and demo.
 - [ ] There is at least one demo video or photo set.
 
 ---
@@ -1957,7 +1986,7 @@ Use this section to track daily/weekly progress.
 | 6 | BLE provisioning | In progress |  |  | Phase 6.4 implemented; final A-N hardware acceptance pending. |
 | 7 | Factory reset | In progress |  |  | Phases 7.1-7.3 hardware-accepted; Phases 7.4-7.5 are implemented with hardware acceptance pending. |
 | 8 | Reconnect + retry | Done |  | 2026-08-02 | User-confirmed target-hardware reconnect, cloud retry/recovery, UI-state, logging, and stability acceptance. |
-| 9 | Portfolio polish | Not started |  |  |  |
+| 9 | Portfolio polish | In progress | 2026-08-02 |  | Documentation and secret cleanup implemented; real photos/screenshots and demo video pending. |
 | 10 | Audio hardware validation | Proposed / Not started |  |  | New optional voice syllabus; hardware and GPIO gate. |
 | 11 | Production audio manager | Proposed / Not started |  |  | Requires Sprint 10 hardware acceptance. |
 | 12 | Xiaozhi build + transport | Proposed / Not started |  |  | Re-verify and exactly pin the reviewed dependency before implementation. |
@@ -1981,6 +2010,8 @@ Use this section to track daily/weekly progress.
 | 2026-06-30 | Avoid custom mobile app early | Prevent scope creep | Yes, after MVP |
 | 2026-06-30 | Stop BLE after provisioning | Reduce RAM/radio coexistence complexity | No |
 | 2026-07-26 | Run boot provisioning in a dedicated coordinator task and defer cloud task allocation until network handoff | Keep `app_main()` responsive and avoid BLE/cloud internal-RAM contention | No |
+| 2026-08-02 | Move Firebase development account values from committed source to project menuconfig | Prevent new portfolio revisions from carrying real credentials in source | Revisit for protected production storage |
+| 2026-08-02 | Keep Sprint 9 open only for real media evidence | Photos and video must come from actual hardware and cannot be fabricated from source | Close after media is published |
 
 ---
 
@@ -2005,30 +2036,28 @@ Key points to explain in interview:
 
 ## 18. Immediate Next Step
 
-Start with:
+Complete Sprint 9 media evidence:
 
 ```text
-Sprint 0: Project setup
-Sprint 1: LCD + LVGL bring-up
+Capture real hardware photos and sanitized screenshots
+    -> record the short demo video
+    -> add files under docs/media/
+    -> link the media from README.md
+    -> verify no credentials, tokens, QR payloads, or private identifiers are visible
 ```
 
-Do **not** start from BLE or Firebase first.
-
-Reason:
-
-```text
-LCD + LVGL gives fast visual feedback.
-Wi-Fi/Firebase/BLE can be added after the local UI foundation is stable.
-```
+Do not begin Sprint 10 audio hardware work until remaining Sprints 0-9
+acceptance is complete or explicitly deferred according to the approved roadmap.
 
 ---
 
 ## 19. Current Project State
 
 ```text
-Current phase: Planning
-Current focus: Prepare roadmap and tracking document
-Next action: Create ESP-IDF project skeleton and bring up LCD + LVGL
-Main risk: Scope creep from adding too many cloud/network features too early
-Recommended discipline: Finish one sprint at a time before adding optional features
+Current phase: Sprint 9 — Portfolio Polish
+Current focus: Real hardware media evidence and safe public presentation
+Completed in Sprint 9: README, diagrams, setup, demo plan, limitations, future work, menuconfig credential migration
+Next action: Capture photos/screenshots/video and add final media links
+Main risk: Publishing credentials, provisioning material, tokens, private URLs, or personal information
+Recommended discipline: Use only real sanitized evidence; do not fabricate hardware results
 ```
