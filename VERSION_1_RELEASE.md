@@ -2,115 +2,125 @@
 
 **Release:** `v1.0.0`  
 **Release date:** 2026-08-02  
-**Status:** Complete  
+**Status:** Complete / hardware accepted  
 **Owner:** Trần Long Hải (`HaiHeHuoc888`)
 
 ## Release Statement
 
 Version 1 covers Sprints 0–9 of the ESP32-S3 Smart Room Cloud Gateway roadmap.
+The owner confirmed completion of the remaining target-hardware acceptance
+items on 2026-08-02. This document is the authoritative Version 1 release
+record; the long roadmap remains implementation history.
 
-On 2026-08-02, the owner explicitly confirmed that all remaining test and target-hardware acceptance items are complete and requested that no additional verification or feature work be added before closing Version 1.
-
-This release record is the authoritative Version 1 closure status. Earlier roadmap sections may preserve historical pending checkboxes from the implementation period; those entries are superseded for Version 1 release status by this owner-confirmed closure record.
-
-## Version 1 Scope
+## Release Scope
 
 ```text
 ESP32-S3 N16R8
 + ST7735 LCD and LVGL dashboard
-+ SD card and LVGL filesystem support
-+ Wi-Fi Station management
++ microSD and LVGL filesystem
++ Wi-Fi Station management and reconnect
 + DHT22 sensor monitoring
 + Firebase Authentication and Realtime Database telemetry
-+ NVS configuration storage and migration
++ NVS configuration validation, persistence, migration, and reset
 + BLE Security 1 Wi-Fi provisioning with LCD QR code
-+ Button-driven factory reset and reboot-to-provisioning recovery
-+ Wi-Fi reconnect and bounded cloud retry
-+ Runtime CPU, heap, PSRAM, DMA, task, and stack diagnostics
-+ Portfolio architecture, setup, demo, limitations, and release documentation
++ GPIO9 factory reset and reboot-to-provisioning recovery
++ bounded cloud retry and latest-value telemetry
++ CPU, heap, PSRAM, DMA, task, and stack diagnostics
++ architecture, setup, demo, limitations, and security documentation
 ```
 
-## Sprint Closure
+## Sprint Status
 
-| Sprint | Scope | Version 1 status |
+| Sprint | Scope | Status |
 |---:|---|---|
 | 0 | Project setup | Complete |
-| 1 | LCD + LVGL bring-up | Complete |
-| 2 | Wi-Fi Station + LVGL status | Complete |
+| 1 | LCD + LVGL | Complete |
+| 2 | Wi-Fi Station + GUI | Complete |
 | 3 | Sensor manager + UI | Complete |
-| 4 | Firebase Realtime Database upload | Complete |
-| 5 | NVS configuration storage | Complete |
+| 4 | Firebase telemetry | Complete |
+| 5 | NVS configuration | Complete |
 | 6 | BLE Wi-Fi provisioning | Complete |
-| 7 | Button factory reset + recovery | Complete |
+| 7 | Factory reset + recovery | Complete |
 | 8 | Reconnect + cloud retry | Complete |
-| 9 | Portfolio polish | Complete |
+| 9 | Product documentation and media | Complete |
 
-## Final Acceptance Record
+## Accepted Behaviors
 
-The following Version 1 acceptance areas are marked complete by explicit owner confirmation:
+- [x] Clean ESP-IDF component structure and boot flow.
+- [x] ST7735/LVGL rendering and GUI ownership.
+- [x] Wi-Fi connect, disconnect, IPv4, and reconnect behavior.
+- [x] DHT22 sampling, stale/error state, and GUI updates.
+- [x] Firebase sign-in, token refresh, HTTPS upload, and cloud state.
+- [x] NVS save, load, migration, persistence, clear, and reset behavior.
+- [x] BLE provisioning, QR flow, credential handoff, retry, and cleanup.
+- [x] Factory-reset qualification, ordered cleanup, UI result, and reboot.
+- [x] Network/cloud recovery and newest-value retention.
+- [x] Runtime stability and resource observations.
+- [x] Product README, setup, architecture, security, demo, and limitations.
 
-- [x] Clean ESP-IDF project structure and boot flow.
-- [x] ST7735 LCD and LVGL rendering.
-- [x] Queue-driven GUI ownership and screen routing.
-- [x] Wi-Fi Station connect, disconnect, IPv4, and reconnect behavior.
-- [x] DHT22 periodic sampling, stale/error behavior, and GUI updates.
-- [x] Firebase authentication, HTTPS telemetry upload, and status display.
-- [x] NVS save, load, migration, persistence, invalid-state handling, clear, and reset behavior.
-- [x] BLE provisioning service, QR flow, credentials handoff, retry, timeout, cleanup, and Wi-Fi adoption.
-- [x] Provisioning replacement-session, stale-generation, retry-exhaustion, and recovery behavior.
-- [x] Factory-reset button debounce, long press, ordered reset transaction, UI result, persistent cleanup, and reboot-to-provisioning flow.
-- [x] Reset behavior during relevant Wi-Fi and provisioning lifecycle states.
-- [x] Wi-Fi outage, Internet outage, cloud backoff, transport/HTTP/auth recovery, and latest-value telemetry behavior.
-- [x] Runtime stability, watchdog/crash checks, task ownership, and resource observations.
-- [x] README, architecture, setup, demo, security, limitations, and future-roadmap documentation.
+## Product Evidence
 
-No additional production feature is required to close Version 1.
+### Video
 
-## Architecture Baseline For Version 2
+[Watch the Version 1 hardware demo](https://youtube.com/shorts/9C5_hecEgXA?feature=share)
 
-Version 2 must preserve the existing Version 1 ownership boundaries:
+### Images
 
-- `wifi_manager` owns Wi-Fi Station lifecycle and reconnect.
-- `provisioning_manager` owns temporary BLE provisioning.
-- `config_manager` owns persistent application configuration.
-- `cloud_manager` owns Firebase telemetry and retry.
-- `firebase_auth` owns token lifecycle.
-- `app_gui` owns application screens, copied models, queues, and LVGL objects.
-- `ui_manager_lvgl` owns LVGL initialization, display integration, tick, and synchronization.
-- `button_manager` publishes input events only.
-- `app_reset_coordinator` owns factory-reset orchestration.
-- Future `audio_manager` must own microphone, speaker, I2S, DMA, and PCM buffering.
-- Future `voice_assistant` must isolate `esp_xiaozhi` from the rest of the application.
+| Evidence | File |
+|---|---|
+| Wired prototype | `docs/media/hardware-overview.jpg` |
+| BLE provisioning | `docs/media/screen-provisioning.jpg` |
+| Wi-Fi status | `docs/media/screen-wifi.jpg` |
+| Sensor dashboard | `docs/media/screen-dashboard.jpg` |
+| Factory-reset result | `docs/media/screen-reset-result.jpg` |
 
-## Optional Portfolio Media
+See [`docs/media/README.md`](docs/media/README.md) for the rendered gallery and
+sanitization rules.
 
-Media is an optional presentation improvement and is not a Version 1 release blocker.
+## Security Boundary
 
-```text
-HaiHeHuoc888: update here + add the real prototype overview photo
-HaiHeHuoc888: update here + add the provisioning QR screen photo with sensitive QR content blurred
-HaiHeHuoc888: update here + add the Wi-Fi status screen photo
-HaiHeHuoc888: update here + add the sensor dashboard photo
-HaiHeHuoc888: update here + add the factory-reset result screen photo
-HaiHeHuoc888: update here + add a sanitized Firebase latest-value screenshot
-HaiHeHuoc888: update here + add a performance-monitor screenshot
-HaiHeHuoc888: update here + add the final Version 1 demo video link
-```
+Version 1 is suitable as a portfolio/development release. It is not a
+production device-security baseline.
 
-Detailed filenames and sanitization requirements are documented in `docs/media/V1_MEDIA_PLACEHOLDERS.md`.
+Current protections include:
 
-## Security Notes Before Public Publication
+- TLS certificate verification;
+- Firebase Email/Password Authentication;
+- ID-token refresh and optional exact UID validation;
+- Realtime Database authorization through Security Rules;
+- Git-ignored local `sdkconfig` values;
+- no intentional credential or token logging;
+- sensitive temporary-buffer zeroization.
 
-- Rotate credentials that previously appeared in Git history.
-- Keep Firebase development values in local `sdkconfig` through menuconfig.
-- Never publish Wi-Fi passwords, Firebase passwords, tokens, provisioning PoP values, QR payloads, private database URLs, or personal browser/account information.
-- Treat firmware binaries and serial logs as potentially sensitive development artifacts.
+Current limitations include:
+
+- the device password is compiled into development firmware;
+- no hardware-backed identity, NVS encryption, flash encryption, or secure boot;
+- no signed OTA or fleet credential-rotation policy;
+- App Check is not implemented.
+
+Before public publication, complete the owner actions in [`SECURITY.md`](SECURITY.md),
+especially credential rotation and Git-history review. Removing a credential
+from the current tree does not invalidate older commits.
+
+## Version 2 Architecture Baseline
+
+Version 2 must preserve the Version 1 ownership boundaries:
+
+- `wifi_manager`: Wi-Fi Station lifecycle and reconnect;
+- `provisioning_manager`: temporary BLE provisioning;
+- `config_manager`: persistent application configuration;
+- `cloud_manager`: telemetry and retry;
+- `firebase_auth`: authentication and token lifecycle;
+- `app_gui` / `ui_manager_lvgl`: UI models, screens, and LVGL;
+- `button_manager`: input events;
+- `app_reset_coordinator`: factory-reset orchestration;
+- future `audio_manager`: I2S, DMA, microphone, speaker, and PCM buffering;
+- future `voice_assistant`: isolation of `esp_xiaozhi` from the application.
 
 ## Release Boundary
 
-Version 1 is closed. New audio and Xiaozhi work begins in Version 2 and must follow the existing post-V1 sprint order rather than replacing or reopening Sprints 0–9.
-
 ```text
 VERSION 1 — COMPLETE
-NEXT BASELINE — VERSION 2 / AUDIO AND XIAOZHI EXTENSION
+NEXT — VERSION 2 / AUDIO AND XIAOZHI EXTENSION
 ```

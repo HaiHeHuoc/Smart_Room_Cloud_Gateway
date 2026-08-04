@@ -1,0 +1,14 @@
+# Repository-wide ownership
+#
+# This file requests review from the repository owner for every changed path.
+# Enforcement requires a branch ruleset with "Require review from Code Owners"
+# enabled for the protected branch.
+
+* @HaiHeHuoc
+
+# Security-sensitive and release-control paths remain explicitly owned.
+/.github/ @HaiHeHuoc
+/SECURITY.md @HaiHeHuoc
+/main/Kconfig.projbuild @HaiHeHuoc
+/components/cloud/ @HaiHeHuoc
+/components/connectivity/provisioning_manager/ @HaiHeHuoc

@@ -1,0 +1,65 @@
+name: Feature request
+description: Propose a focused improvement without changing repository ownership or security policy.
+title: "feature: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Proposals are welcome. The repository owner decides scope, priority, and merge. Do not include credentials or private project data.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: Explain the concrete problem this feature would solve.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest practical change.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Primary area
+      options:
+        - Application coordination
+        - Cloud / Firebase
+        - Wi-Fi / BLE provisioning
+        - Display / LVGL
+        - Sensor
+        - Storage / NVS / SD
+        - Input / factory reset
+        - Performance / memory
+        - Build / CI / documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: embedded_impact
+    attributes:
+      label: Embedded impact
+      description: Note timing, memory, stack, ISR, GPIO, DMA, concurrency, power, or compatibility impact.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Scope confirmation
+      options:
+        - label: This proposal does not require direct push access to the repository.
+          required: true
+        - label: I understand that changes must be submitted through a Pull Request and accepted by the owner.
+          required: true

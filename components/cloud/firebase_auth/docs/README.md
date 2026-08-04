@@ -1,41 +1,54 @@
-# firebase_auth Component Notes
+# `firebase_auth` Component
 
 ## Purpose
 
 `firebase_auth` implements Firebase Email/Password Authentication for the
 ESP32-S3. It signs in through Identity Toolkit, caches the returned ID and
-refresh tokens, refreshes the ID token before expiration, and gives callers a
-bounded copy of a currently valid ID token.
+refresh tokens, refreshes the ID token before expiration, optionally validates
+the exact user UID, and returns a bounded copy of a currently valid ID token.
 
-The component is synchronous by design. Call it from a normal network-owning
-task such as `cloud_manager`, never from an ISR, event callback, sensor
-callback, or LVGL callback.
+The component is synchronous by design. Call it only from a normal
+network-owning task such as `cloud_manager`, never from an ISR, Wi-Fi callback,
+sensor callback, or LVGL callback.
 
-## What Is Implemented
+## Version 1 Status
 
-- Email/Password sign-in through `accounts:signInWithPassword`.
+```text
+Release: v1.0.0
+Status: Implemented and hardware accepted
+```
+
+## Implemented Behavior
+
+- Email/Password sign-in through
+  `accounts:signInWithPassword`.
 - ID-token refresh through the Google Secure Token endpoint.
-- Optional exact UID validation after sign-in.
+- Optional exact UID validation.
 - Proactive refresh margin, defaulting to 300 seconds.
 - HTTPS certificate verification through `esp_crt_bundle_attach`.
-- Full default CA bundle with cross-signed certificate verification, required
-  for current Google/Firebase alternate certificate chains.
-- Bounded request, response, credential, token, and URL buffers.
-- JSON parsing through cJSON without logging tokens or credentials.
-- URL encoding for the refresh token request body.
-- A long-lived operation mutex that serializes synchronous sign-in/refresh and
-  owns the static HTTP request/response buffers.
-- A separate short-lived state mutex for atomic token/status copies and
-  mutations.
-- Status snapshots with HTTP result, token generation, and
-  sign-in/refresh/failure counters.
-- Refresh failure fallback to full sign-in only for credential errors, not for
-  ordinary transport failures.
+- Full ESP certificate bundle with cross-signed verification enabled.
+- Bounded credential, token, URL, request, and response buffers.
+- cJSON parsing without intentional credential or token logging.
+- URL encoding for refresh-token requests.
+- One operation mutex for serialized sign-in/refresh and static HTTP buffers.
+- One short-lived state mutex for token/status snapshots and mutations.
+- Token generation tracking after replacement or invalidation.
+- Zeroization of sensitive temporary buffers.
+- Status counters for sign-in, refresh, failure, HTTP result, and token expiry.
 
-## Initialization
+## Public API
+
+| API | Role |
+|---|---|
+| `firebase_auth_init()` | Copy configuration and initialize protected state |
+| `firebase_auth_get_valid_id_token()` | Return a valid copied token, signing in or refreshing when required |
+| `firebase_auth_invalidate_id_token()` | Clear only the ID token and preserve refresh-token recovery |
+| `firebase_auth_get_status()` | Copy state, counters, token flags, generation, and expiry |
+
+Example:
 
 ```c
-const firebase_auth_config_t auth_config = {
+const firebase_auth_config_t config = {
     .api_key = FIREBASE_API_KEY,
     .email = FIREBASE_DEVICE_EMAIL,
     .password = FIREBASE_DEVICE_PASSWORD,
@@ -43,78 +56,39 @@ const firebase_auth_config_t auth_config = {
     .refresh_margin_seconds = 300U,
 };
 
-ESP_ERROR_CHECK(firebase_auth_init(&auth_config));
-```
+ESP_ERROR_CHECK(firebase_auth_init(&config));
 
-Initialization copies all configured strings and creates both mutexes. It does
-not contact Firebase. The first call to `firebase_auth_get_valid_id_token()`
-performs sign-in when no cached token exists.
-
-## Development Configuration Source
-
-The current application maps the four `FIREBASE_*` macros to project Kconfig
-symbols declared in `main/Kconfig.projbuild`:
-
-```text
-Smart Room Cloud Gateway
-└── Firebase development configuration
-```
-
-Run `idf.py menuconfig` and set the Web API key, dedicated device account,
-password, and optional expected UID. Values are written to the local generated
-`sdkconfig`, which is ignored by Git. The repository source intentionally
-contains no real Firebase account values.
-
-These values are still compiled into development firmware. Menuconfig prevents
-new source commits from carrying them; it is not a production secret-storage
-mechanism.
-
-## Public API
-
-| API | Current role |
-| --- | --- |
-| `firebase_auth_init()` | Copy credentials/policy and initialize protected token state. |
-| `firebase_auth_get_valid_id_token()` | Return a copied valid token, signing in or refreshing synchronously when required. |
-| `firebase_auth_invalidate_id_token()` | Atomically clear only the cached ID token, preserve the refresh token, advance token generation, and report acceptance. |
-| `firebase_auth_get_status()` | Copy state, token-presence flags, token generation, counters, HTTP status, and expiry uptime. |
-
-Use a destination sized by the public macro:
-
-```c
 char id_token[FIREBASE_AUTH_ID_TOKEN_BUFFER_SIZE];
-
-esp_err_t ret = firebase_auth_get_valid_id_token(
+ESP_ERROR_CHECK(firebase_auth_get_valid_id_token(
     id_token,
-    sizeof(id_token));
+    sizeof(id_token)));
 ```
 
-Do not log the returned buffer.
+Never log `id_token`.
 
 ## Token Lifecycle
 
 ```text
 no refresh token
     -> Email/Password sign-in
-    -> cache ID token + refresh token + UID + expiry
+    -> cache ID token, refresh token, UID, and expiry
 
 valid ID token
-    -> return copied token
+    -> copy token to caller
 
 ID token near expiry
-    -> refresh with cached refresh token
-    -> cache replacement tokens and expiry
+    -> refresh using cached refresh token
+    -> atomically replace tokens and expiry
 
 refresh credential rejected
     -> clear refresh token
-    -> one full Email/Password sign-in
+    -> one full sign-in attempt
 ```
 
-`firebase_auth_invalidate_id_token()` is used after Firebase returns HTTP 401
-or for the single forced HTTP 403 recovery. It returns `esp_err_t`, advances a
-non-zero token generation, and preserves the refresh token. The next token
-request therefore attempts refresh first. A successful sign-in or refresh also
-advances the generation, allowing `cloud_manager` to reject an HTTP client
-configured for an obsolete authenticated identity.
+`firebase_auth_invalidate_id_token()` preserves the refresh token so the next
+request attempts refresh first. Invalidation and every successful token
+replacement advance a non-zero generation, allowing `cloud_manager` to discard
+an HTTP client configured for an obsolete authenticated identity.
 
 ## State Model
 
@@ -126,84 +100,76 @@ UNINITIALIZED
     -> CREDENTIAL_ERROR, NETWORK_ERROR, or INTERNAL_ERROR on failure
 ```
 
-The status expiry value uses `esp_timer` uptime, not wall-clock time. SNTP is
-therefore not required for the current expiration calculation.
+Token expiry uses `esp_timer` uptime, not wall-clock time; SNTP is not required
+for the current expiration calculation.
 
-## Memory And Threading Notes
+## Configuration Source
 
-- Authentication calls may block for the configured 15-second HTTP timeout.
-- Static buffers include an 8 KB response buffer, 4 KB request buffer, 4 KB ID
-  token buffer, and 2 KB refresh token buffer.
-- The operation mutex is held during synchronous sign-in/refresh so only one
-  request uses the static URL, request, response, and refresh-snapshot buffers.
-- The state mutex is held only while copying or replacing token/status fields.
-  It is released before DNS, TLS, and HTTP work, so public status reads and ID
-  token invalidation do not wait behind the 15-second network timeout.
-- Token replacement is committed atomically under the state mutex; callers
-  never copy a partially updated token.
-- `get_status()` and token invalidation use bounded state-mutex waits. Token
-  retrieval still waits for the active authentication operation because the
-  component intentionally supports only one sign-in/refresh at a time.
-- There is no deinit API; initialization is one-shot.
+The application maps `FIREBASE_*` macros to project Kconfig values declared in
+`main/Kconfig.projbuild`:
 
-## Security Notes
+```text
+Smart Room Cloud Gateway
+└── Firebase development configuration
+```
 
-- Keep `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y`; do not
-  replace bundle validation with a pinned Google intermediate or disabled
-  certificate verification.
-- A Firebase Web API key identifies the project but is not an administrator
-  secret.
-- Device account passwords are sensitive and are compiled into development
-  firmware from the local menuconfig-generated `sdkconfig`.
-- Never embed service-account keys, administrator credentials, private keys,
-  ID tokens, or refresh tokens in firmware.
-- Authentication response/request buffers and temporary refresh-token copies
-  are overwritten after use. Cleanup failures are logged without logging the
-  request, response, URL query, credential, or token.
-- Restrict Realtime Database access with `auth.uid` rules for the expected
-  device UID.
-- Use a dedicated restricted account rather than a personal or administrator
-  account.
-- Rotate every credential that has ever entered Git history. Removing it from
-  the current source does not invalidate old commits or clones.
-- Move the device credential to protected local configuration, encrypted NVS,
-  or a hardware-backed strategy before production deployment.
+The generated `sdkconfig` is ignored by Git. These values are still compiled
+into development firmware and must not be described as production secret
+storage.
 
-Firebase project setup and the verified PowerShell flow are documented in
-`components/cloud/cloud_manager/README.txt` and `Test/TestFirebase_Auth.ps1`.
+Complete setup, database rules, API-key restrictions, host testing, and public
+release controls are documented in:
 
-## Future Attention
+- [`FIREBASE_SETUP_AND_SECURITY.md`](FIREBASE_SETUP_AND_SECURITY.md)
 
-- Add explicit credential rotation and deinit only when required by product
-  lifecycle behavior.
-- Consider NVS encryption or a hardware-backed credential strategy when the
-  board security model is defined.
-- Replace application-composition endpoint constants with protected,
-  device-specific deployment configuration when production requirements exist.
+## Threading And Memory
 
-## Phase 6.4.6 Status
+- Authentication may block for the configured 15-second HTTP timeout.
+- Large token/request/response buffers are placed in external RAM where
+  configured.
+- The operation mutex is held across one sign-in or refresh operation.
+- The state mutex is held only for short copies and updates; DNS/TLS/HTTP work
+  occurs without the state mutex.
+- Token replacement is atomic under the state mutex.
+- `get_status()` and invalidation use bounded state-mutex waits.
+- The component supports one-shot initialization and has no deinit API.
 
-**IMPLEMENTED / HARDWARE TEST PENDING**
+## Security Contract
 
-The mutex split and observable token invalidation support cloud recovery from
-rejected tokens without blocking status access behind network I/O. Hardware
-tests must still cover refresh, 401 recovery, persistent 403/credential
-failure, cleanup diagnostics, and the full token-expiry window.
+- Keep certificate-bundle verification enabled.
+- Use a dedicated restricted device account.
+- Apply Realtime Database Security Rules based on `auth.uid`.
+- Configure the expected UID guard whenever practical.
+- Never embed a service-account private key, administrator credential, database
+  secret, ID token, or refresh token in source or firmware.
+- Never print passwords or tokens.
+- Rotate every credential that has entered Git history.
+- Do not publish `sdkconfig`, firmware binaries, or logs containing real values.
+- Treat a Firebase Web API key as a project identifier, not as database
+  authorization; still apply API restrictions and quota controls.
+- Production deployments require protected per-device credentials, encrypted
+  storage, secure boot/flash encryption, rotation, and revocation.
 
-## Phase 6.4.7 Closure Status
+## Integration Boundary
 
-**IMPLEMENTED / HARDWARE REGRESSION PENDING**
+`firebase_auth` owns authentication and token lifecycle. `cloud_manager` owns
+telemetry, network readiness, HTTP client lifecycle, attempt classification,
+and retry policy. `main` provides configuration and composition only.
 
-Authentication network operations remain serialized independently from the
-short token/status mutex. Sign-in, refresh, rejected-token invalidation, token
-generation, and secure temporary-buffer cleanup remain owned here; the cloud
-task owns retry policy and HTTP telemetry clients. The final A-N hardware
-matrix in the project roadmap covers rejected-token recovery and persistent
-authorization failure without a hot authentication loop.
+## Troubleshooting
 
-Local URL, JSON, allocation, and refresh-token encoding failures also leave a
-terminal diagnostic snapshot instead of retaining `SIGNING_IN` or
-`REFRESHING`. They use `INTERNAL_ERROR`, allowing the cloud manager to classify
-the underlying `esp_err_t` without treating local failures as rejected
-credentials. Partial refresh request/token buffers are cleared before those
-errors return.
+| State / error | Likely checks |
+|---|---|
+| `CREDENTIAL_ERROR` | Email/password, user enabled, UID guard, response parsing |
+| `NETWORK_ERROR` | DNS, Internet, TLS, Firebase availability |
+| `INTERNAL_ERROR` | Buffer sizing, allocation, encoding, local request construction |
+| HTTP 403 / blocked API | Firebase API-key restrictions and enabled Auth APIs |
+| Repeated token rejection | Database rules, expected UID, account state, token generation |
+
+## Related Files
+
+- [`firebase_auth.h`](../include/firebase_auth.h)
+- [`firebase_auth.c`](../firebase_auth.c)
+- [`cloud_manager` documentation](../../cloud_manager/docs/README.md)
+- [`project setup`](../../../../docs/SETUP.md)
+- [`security policy`](../../../../SECURITY.md)
