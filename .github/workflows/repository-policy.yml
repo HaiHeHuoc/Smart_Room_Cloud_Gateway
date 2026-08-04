@@ -1,0 +1,132 @@
+name: Repository policy
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repository-policy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository-policy:
+    name: Repository policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout source without write credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Reject tracked secrets and generated artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          forbidden_files="$({
+            git ls-files | grep -E '(^|/)(sdkconfig|sdkconfig\.old)$' || true
+            git ls-files | grep -E '(^|/)\.env($|\.)' || true
+            git ls-files | grep -E '(^|/)(secrets|credentials|build)/' || true
+            git ls-files | grep -Ei 'serviceAccountKey.*\.json$' || true
+            git ls-files | grep -Ei 'firebase-adminsdk.*\.json$' || true
+            git ls-files | grep -E '\.(bin|elf|map)$' || true
+          } | sort -u)"
+
+          if [[ -n "${forbidden_files}" ]]; then
+            echo "Tracked sensitive or generated files are not allowed:"
+            echo "${forbidden_files}"
+            exit 1
+          fi
+
+      - name: Reject private keys
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          matches="$(
+            git grep -I -n -E -- \
+              '-----BEGIN ([A-Z0-9]+ )?PRIVATE KEY-----' \
+              -- . || true
+          )"
+
+          if [[ -n "${matches}" ]]; then
+            echo "Private key material detected:"
+            echo "${matches}"
+            exit 1
+          fi
+
+      - name: Reject obvious credential tokens in non-documentation files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          patterns=(
+            'AIza[0-9A-Za-z_-]{35}'
+            'gh[pousr]_[0-9A-Za-z]{20,}'
+            'github_pat_[0-9A-Za-z_]{20,}'
+            'AKIA[0-9A-Z]{16}'
+          )
+
+          failed=0
+          for pattern in "${patterns[@]}"; do
+            matches="$(
+              git grep -I -n -E -- "${pattern}" \
+                -- . ':(exclude)**/*.md' ':(exclude)*.md' || true
+            )"
+
+            if [[ -n "${matches}" ]]; then
+              echo "Potential credential material detected for pattern: ${pattern}"
+              echo "${matches}"
+              failed=1
+            fi
+          done
+
+          exit "${failed}"
+
+      - name: Reject unsafe workflow triggers and broad write permissions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if git grep -n -E \
+            '^([[:space:]]*)pull_request_target:' \
+            -- '.github/workflows/*' 2>/dev/null; then
+            echo "pull_request_target is not allowed without dedicated security review."
+            exit 1
+          fi
+
+          if git grep -n -E \
+            '(write-all|contents:[[:space:]]*write|actions:[[:space:]]*write|pull-requests:[[:space:]]*write)' \
+            -- '.github/workflows/*' \
+               ':(exclude).github/workflows/repository-policy.yml' 2>/dev/null; then
+            echo "A workflow requests broad write permission. Review and narrow it before merge."
+            exit 1
+          fi
+
+      - name: Verify repository governance files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          required_files=(
+            '.github/CODEOWNERS'
+            '.github/PULL_REQUEST_TEMPLATE.md'
+            'CONTRIBUTING.md'
+            'SECURITY.md'
+            'docs/REPOSITORY_PROTECTION.md'
+          )
+
+          for path in "${required_files[@]}"; do
+            if [[ ! -f "${path}" ]]; then
+              echo "Missing required governance file: ${path}"
+              exit 1
+            fi
+          done

@@ -1,65 +1,114 @@
 # ESP32-S3 Smart Room Cloud Gateway
 
-A practical ESP-IDF project that turns an ESP32-S3 into a smart-room gateway with BLE Wi-Fi provisioning, an LVGL dashboard, DHT22 monitoring, Firebase Realtime Database telemetry, NVS configuration, factory-reset recovery, network retry, and runtime diagnostics.
-
-## Version 1 Status
+An ESP-IDF smart-room gateway for the ESP32-S3 N16R8 with a local LVGL
+dashboard, BLE Wi-Fi provisioning, DHT22 monitoring, authenticated Firebase
+Realtime Database telemetry, persistent configuration, automatic recovery, and
+runtime resource diagnostics.
 
 ```text
 Release: v1.0.0
-Status: COMPLETE
-Closed: 2026-08-02
+Status: Hardware accepted / Version 1 complete
+Target: ESP32-S3 N16R8
+Framework: ESP-IDF 6.0.1 + FreeRTOS
 ```
 
-Version 1 covers Sprints 0–9. The project owner has confirmed all remaining test and target-hardware acceptance items as complete.
+## Product Demo
 
-- [Version 1 release record](VERSION_1_RELEASE.md)
-- [Sprint 9 portfolio closure](PHASE_9_PORTFOLIO_STATUS.md)
-- [Historical roadmap and implementation tracking](ESP32S3_Smart_Room_Cloud_Gateway_Roadmap.md)
+[![Watch the ESP32-S3 Smart Room Cloud Gateway demo](docs/media/screen-dashboard.jpg)](https://youtube.com/shorts/9C5_hecEgXA?feature=share)
 
-The roadmap preserves detailed implementation history and may contain older pending checkboxes. `VERSION_1_RELEASE.md` is the authoritative Version 1 closure status.
+> Select the dashboard image to watch the target-hardware demo.
 
-## Highlights
-
-- ESP32-S3 N16R8 with 16 MB flash and 8 MiB Octal PSRAM.
-- ESP-IDF 6.0.1 and FreeRTOS.
-- ST7735 128x160 SPI LCD with LVGL 9.
-- BLE Security 1 Wi-Fi provisioning with an LCD QR code.
-- Wi-Fi Station connection with exponential-backoff reconnect.
-- DHT22 temperature and humidity monitoring.
-- Authenticated Firebase Realtime Database telemetry over HTTPS REST.
-- NVS schema validation, migration, persistence, and factory reset.
-- Queue-driven GUI with a single LVGL owner task.
-- Latest-value cloud queue with bounded retry and network-edge wake-up.
-- CPU, heap, fragmentation, task, and stack diagnostics.
-- Explicit PSRAM placement for selected task stacks and bulk allocations.
-
-## Version 1 Feature Status
-
-| Area | Status |
+| Prototype | BLE provisioning |
 |---|---|
-| Project structure and ESP-IDF workflow | Done |
-| LCD and LVGL | Done |
-| Wi-Fi Station and reconnect | Done |
-| Sensor monitoring | Done |
-| Firebase authentication and telemetry | Done |
-| NVS configuration storage | Done |
-| BLE Wi-Fi provisioning | Done |
-| Factory reset and recovery | Done |
-| Cloud retry and recovery | Done |
-| Portfolio documentation | Done |
-| Voice/Xiaozhi extension | Version 2 roadmap |
+| ![Wired ESP32-S3 prototype](docs/media/hardware-overview.jpg) | ![BLE provisioning screen](docs/media/screen-provisioning.jpg) |
+
+| Wi-Fi status | Sensor dashboard | Factory reset result |
+|---|---|---|
+| ![Wi-Fi status](docs/media/screen-wifi.jpg) | ![Sensor dashboard](docs/media/screen-dashboard.jpg) | ![Factory-reset result](docs/media/screen-reset-result.jpg) |
+
+See the [media index](docs/media/README.md) for the evidence list and public
+sanitization rules.
+
+## Version 1 Capabilities
+
+- ST7735 128x160 SPI display with LVGL 9.
+- DHT22 temperature and humidity sampling with stale/error handling.
+- BLE Security 1 Wi-Fi provisioning with an LCD QR code.
+- NVS-backed configuration validation, persistence, migration, and reset.
+- Wi-Fi Station reconnect with exponential backoff.
+- Firebase Email/Password authentication and ID-token refresh.
+- Authenticated latest-value telemetry upload over HTTPS REST.
+- Bounded cloud retry with network-edge and token-generation invalidation.
+- GPIO9 five-second factory reset and reboot-to-provisioning recovery.
+- CPU, Internal RAM, PSRAM, DMA-capable heap, task, and stack diagnostics.
+- Explicit PSRAM placement for selected task stacks and bulk buffers.
+
+## System Overview
+
+```mermaid
+flowchart LR
+    Phone[Provisioning client]
+    Firebase[Firebase Realtime Database]
+    DHT[DHT22]
+    Button[GPIO9 reset button]
+    LCD[ST7735 + microSD]
+
+    subgraph Device[ESP32-S3 N16R8]
+        Coordinator[Network coordinator]
+        Provisioning[BLE provisioning]
+        WiFi[Wi-Fi manager]
+        Config[NVS config manager]
+        Sensor[Sensor manager]
+        Auth[Firebase auth]
+        Cloud[Cloud manager]
+        GUI[App GUI / LVGL]
+        Reset[Reset coordinator]
+    end
+
+    Phone <-->|BLE Security 1| Provisioning
+    Provisioning --> Coordinator
+    Coordinator --> Config
+    Coordinator --> WiFi
+    DHT --> Sensor
+    Sensor --> GUI
+    Sensor --> Cloud
+    WiFi --> GUI
+    WiFi --> Cloud
+    Auth --> Cloud
+    Cloud <-->|HTTPS REST| Firebase
+    GUI --> LCD
+    Button --> Reset
+    Reset --> Config
+```
+
+### Ownership Boundaries
+
+| Component | Responsibility |
+|---|---|
+| `wifi_manager` | Wi-Fi Station lifecycle and reconnect |
+| `provisioning_manager` | Temporary BLE provisioning transport |
+| `config_manager` | Persistent application configuration |
+| `sensor_manager` | DHT22 sampling and sensor state |
+| `firebase_auth` | Sign-in, token cache, refresh, UID validation |
+| `cloud_manager` | Latest-value telemetry and retry policy |
+| `app_gui` / `ui_manager_lvgl` | Screens, copied UI models, LVGL ownership |
+| `button_manager` | Debounced input event publication |
+| `app_reset_coordinator` | Ordered factory-reset transaction |
+
+Callbacks copy data and return quickly. Network, sensor, button, provisioning,
+and cloud callbacks never call LVGL directly.
 
 ## Hardware
 
 | Device | Purpose |
 |---|---|
-| ESP32-S3 N16R8 | Main controller |
+| ESP32-S3 N16R8 | Main controller, 16 MB flash, 8 MiB Octal PSRAM |
 | ST7735 128x160 TFT | LVGL dashboard and provisioning QR |
+| Integrated microSD slot/card | FAT filesystem and LVGL assets |
 | DHT22 | Temperature and humidity |
-| MicroSD card | FAT filesystem and LVGL assets |
 | Active-low push button | Five-second factory reset |
 
-### Pin Map
+### GPIO Map
 
 | Function | GPIO |
 |---|---:|
@@ -76,100 +125,117 @@ The roadmap preserves detailed implementation history and may contain older pend
 | DHT22 data | 4 |
 | Factory-reset button | 9 |
 
-Confirm wiring against [`board_config.h`](components/system/common/include/board_config.h).
+Always confirm the source of truth in
+[`board_config.h`](components/system/common/include/board_config.h) before
+rewiring hardware.
 
-## Architecture
-
-```mermaid
-flowchart LR
-    Phone[Phone provisioning client]
-    Firebase[Firebase RTDB]
-    LCD[ST7735 LCD]
-    DHT[DHT22]
-    Button[Reset button]
-
-    subgraph Firmware[ESP32-S3 firmware]
-        Coordinator[app_network_coordinator]
-        Provisioning[provisioning_manager]
-        WiFi[wifi_manager]
-        Config[config_manager]
-        Sensor[sensor_manager]
-        Cloud[cloud_manager]
-        Auth[firebase_auth]
-        GUI[app_gui]
-        LVGL[ui_manager_lvgl]
-        Reset[app_reset_coordinator]
-        Input[button_manager]
-    end
-
-    Phone <-->|BLE Security 1| Provisioning
-    Provisioning --> Coordinator
-    Coordinator --> Config
-    Coordinator --> WiFi
-    DHT --> Sensor
-    Sensor --> Cloud
-    Sensor --> GUI
-    WiFi --> Cloud
-    WiFi --> GUI
-    Auth --> Cloud
-    Cloud <-->|HTTPS REST| Firebase
-    Cloud --> GUI
-    GUI --> LVGL --> LCD
-    Button --> Input --> Reset
-    Reset --> Config
-```
-
-### Ownership Rules
-
-- `wifi_manager` owns Wi-Fi Station lifecycle and reconnect.
-- `provisioning_manager` owns temporary BLE provisioning.
-- `config_manager` owns persistent application configuration.
-- `cloud_manager` owns telemetry upload and retry.
-- `firebase_auth` owns token lifecycle.
-- `app_gui` owns application screens, copied models, queues, and LVGL objects.
-- `ui_manager_lvgl` owns LVGL initialization, display integration, tick, and synchronization.
-- `button_manager` publishes input events only.
-- `app_reset_coordinator` owns the ordered factory-reset transaction.
-
-No network, sensor, button, provisioning, or cloud callback calls LVGL directly.
-
-Read [the architecture guide](docs/ARCHITECTURE.md) for the detailed task, queue, state-machine, and memory model.
-
-## Main Runtime Flow
+## Runtime Flow
 
 ```text
-first boot or no valid Wi-Fi configuration
-    -> BLE provisioning screen and QR
-    -> verified Wi-Fi and IPv4
-    -> save and read back configuration through NVS
+first boot / no valid Wi-Fi configuration
+    -> display BLE provisioning QR
+    -> receive credentials securely over BLE
+    -> verify Wi-Fi and IPv4
+    -> persist and read back configuration
     -> stop BLE and adopt the Station connection
-    -> Wi-Fi status screen
-    -> sensor dashboard
-    -> authenticated Firebase upload
+    -> show dashboard
+    -> authenticate and upload telemetry
 ```
 
-Runtime recovery:
+Recovery behavior:
 
 ```text
 Wi-Fi or Internet unavailable
     -> Wi-Fi reconnect or Cloud Wait/Retry
     -> network restored
-    -> cloud task wakes
-    -> newest telemetry uploads
+    -> stale HTTP/TLS client discarded
+    -> newest telemetry uploaded
     -> Cloud Online
 ```
 
 Factory reset:
 
 ```text
-five-second button hold
+hold GPIO9 for five seconds
     -> quiesce network/provisioning work
-    -> clear application and driver Wi-Fi persistence
+    -> clear driver and application Wi-Fi persistence
     -> verify NOT_CONFIGURED
-    -> display reset result
-    -> reboot
-    -> provisioning screen returns
+    -> present reset result
+    -> reboot into BLE provisioning
 ```
+
+## Quick Start
+
+### Requirements
+
+- ESP-IDF 6.0.1.
+- ESP32-S3 N16R8 and the hardware listed above.
+- FAT-formatted microSD card inserted before boot.
+- Firebase project with Email/Password Authentication and Realtime Database.
+- Espressif-compatible BLE Security 1 provisioning client.
+
+### Configure And Build
+
+```bash
+git clone https://github.com/HaiHeHuoc/Smart_Room_Cloud_Gateway.git
+cd Smart_Room_Cloud_Gateway
+idf.py set-target esp32s3
+idf.py menuconfig
+idf.py build
+idf.py -p <PORT> flash monitor
+```
+
+Configure Firebase under:
+
+```text
+Smart Room Cloud Gateway
+└── Firebase development configuration
+```
+
+Complete guides:
+
+- [Hardware, build, flash, and first-boot setup](docs/SETUP.md)
+- [Firebase Authentication and Security setup](components/cloud/firebase_auth/docs/FIREBASE_SETUP_AND_SECURITY.md)
+
+## Firebase Security Model
+
+Version 1 uses a dedicated Email/Password device account. `firebase_auth`
+obtains and refreshes an ID token; `cloud_manager` authenticates Realtime
+Database REST requests with that token. Database authorization must be enforced
+with restrictive rules based on `auth.uid`.
+
+Development values are entered through local `menuconfig` and generated into
+`sdkconfig`, which is ignored by Git. They are still compiled into the firmware
+image. This is appropriate for the documented portfolio/development release,
+not a production secret-storage architecture.
+
+Never commit or publish:
+
+- Firebase passwords, ID tokens, or refresh tokens;
+- service-account JSON files or private keys;
+- Wi-Fi credentials or provisioning secrets;
+- `sdkconfig` containing real local values;
+- firmware binaries built with real credentials.
+
+See [SECURITY.md](SECURITY.md) for the repository security policy and public
+release checklist.
+
+## Runtime Snapshot
+
+Representative accepted report after PSRAM optimization:
+
+| Metric | Observation |
+|---|---:|
+| CPU used | 3.2% |
+| Internal RAM free | 203,951 B |
+| Internal RAM minimum | 160,427 B |
+| Largest Internal block | 88,064 B |
+| PSRAM free | 8,163,340 B |
+| DMA-capable RAM free | 196,163 B |
+| Tasks | 17 |
+
+These are workload snapshots, not fixed guarantees. Internal and DMA-capable
+heap capabilities overlap and must not be added.
 
 ## Repository Layout
 
@@ -185,133 +251,41 @@ components/storage/      NVS configuration and SD card
 components/system/       shared configuration and diagnostics
 components/ui/           LVGL runtime, screens, filesystem, and images
 docs/                    architecture, setup, demo, limitations, and media
+Test/                    host and component test utilities
 ```
-
-## Quick Start
-
-### Requirements
-
-- ESP-IDF 6.0.1.
-- Correctly wired ESP32-S3 target hardware.
-- FAT-formatted microSD card inserted during startup.
-- Firebase project with Email/Password authentication and Realtime Database.
-- BLE provisioning client compatible with Espressif Security 1.
-
-### Configure
-
-```bash
-idf.py set-target esp32s3
-idf.py menuconfig
-```
-
-Open:
-
-```text
-Smart Room Cloud Gateway
-└── Firebase development configuration
-```
-
-Set the Firebase Web API key, dedicated development device account, password, and optional expected UID. These values are stored in the local generated `sdkconfig`, which is ignored by Git.
-
-### Build And Flash
-
-```bash
-idf.py build
-idf.py -p <PORT> flash monitor
-```
-
-Full instructions: [Setup and build guide](docs/SETUP.md).
-
-## Runtime Snapshot
-
-Representative user-measured report after PSRAM optimization:
-
-| Metric | Value |
-|---|---:|
-| CPU used | 3.2% |
-| Internal RAM free | 203,951 B |
-| Internal RAM minimum | 160,427 B |
-| Largest internal block | 88,064 B |
-| PSRAM free | 8,163,340 B |
-| DMA-capable RAM free | 196,163 B |
-| Tasks | 17 |
-
-Selected task stacks:
-
-| Task | Location | Minimum remaining |
-|---|---|---:|
-| `app_gui_ui` | PSRAM | 20,880 B |
-| `cloud_manager` | PSRAM | 8,052 B |
-| `sensor_manager` | PSRAM | 2,240 B |
-| `button_manager` | PSRAM | 2,360 B |
-| `perf_monitor` | Internal | 4,536 B |
-
-These values are representative workload snapshots, not fixed guarantees. Internal and DMA-capable heap totals overlap and must not be added.
-
-## Version 1 Demo
-
-The recommended portfolio sequence is:
-
-```text
-hardware overview
--> BLE QR provisioning
--> Wi-Fi status
--> sensor dashboard
--> Firebase update
--> hotspot off/on recovery
--> long-press factory reset
--> provisioning returns
-```
-
-HaiHeHuoc888: update here + add the real Version 1 hardware gallery using files under `docs/media/`.
-
-HaiHeHuoc888: update here + add the final Version 1 demo video link.
-
-See:
-
-- [Demo guide](docs/DEMO.md)
-- [Version 1 media placeholders](docs/media/V1_MEDIA_PLACEHOLDERS.md)
-- [Media capture and sanitization guide](docs/media/README.md)
-
-## Known Limitations
-
-- Development Firebase values are compiled into development firmware.
-- Credentials that previously appeared in Git history must be rotated before public publication.
-- Telemetry is latest-value only; there is no offline historical queue.
-- SD card removal is not detected and no public unmount API exists.
-- Provisioning currently uses a development Proof of Possession.
-- No OTA, MQTT, custom mobile app, or local web dashboard is included in Version 1.
-
-See [Known limitations and future work](docs/KNOWN_LIMITATIONS.md).
-
-## Security
-
-- Never commit Wi-Fi credentials, Firebase account credentials, tokens, provisioning secrets, or private keys.
-- Configure development Firebase values locally through menuconfig.
-- Use a restricted device account and restricted database rules.
-- Rotate any credential that has ever been committed, even after removal from the current source.
-- Treat provisioning QR payloads, serial logs, screenshots, videos, and firmware binaries as potentially sensitive development artifacts.
 
 ## Documentation
 
 - [Version 1 release record](VERSION_1_RELEASE.md)
-- [Sprint 9 portfolio closure](PHASE_9_PORTFOLIO_STATUS.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Setup and build](docs/SETUP.md)
-- [Demo guide](docs/DEMO.md)
+- [Firebase setup and security](components/cloud/firebase_auth/docs/FIREBASE_SETUP_AND_SECURITY.md)
+- [Hardware demo](docs/DEMO.md)
+- [Media index](docs/media/README.md)
 - [Known limitations and future work](docs/KNOWN_LIMITATIONS.md)
-- [Version 1 media placeholders](docs/media/V1_MEDIA_PLACEHOLDERS.md)
-- [Historical roadmap](ESP32S3_Smart_Room_Cloud_Gateway_Roadmap.md)
-- [Optional Xiaozhi extension roadmap](XIAOZHI_IMPLEMENTATION_ROADMAP.md)
+- [Historical implementation roadmap](ESP32S3_Smart_Room_Cloud_Gateway_Roadmap.md)
+- [Version 2 Xiaozhi roadmap](XIAOZHI_IMPLEMENTATION_ROADMAP.md)
 
-## Interview Talking Points
+## Known Product Boundaries
 
-The project demonstrates ESP-IDF component boundaries, FreeRTOS tasks and queues, safe LVGL ownership, BLE-to-Wi-Fi provisioning, NVS recovery, authenticated HTTPS telemetry, reconnect/backoff design, lifecycle and race-condition handling, and measured Internal RAM/PSRAM/DMA behavior.
+- Telemetry keeps only the newest pending value; there is no offline history.
+- Device credentials are compiled into development firmware.
+- No secure-boot, flash-encryption, OTA, or hardware-backed identity policy is
+  included in Version 1.
+- Provisioning uses a development Proof of Possession rather than a
+  manufacturing-time per-device secret.
+- SD card removal and runtime service deinitialization are not implemented.
+
+See [Known limitations and future work](docs/KNOWN_LIMITATIONS.md) for details.
 
 ## Version 2 Direction
 
-Version 1 is closed. Version 2 begins with audio hardware validation and must preserve Version 1 component ownership before integrating `esp_xiaozhi` through project-owned `audio_manager` and `voice_assistant` layers.
+Version 2 begins with audio hardware validation, followed by a project-owned
+`audio_manager`, an isolated `voice_assistant` adapter, and staged
+`esp_xiaozhi` integration. It must preserve all Version 1 ownership boundaries.
 
 ## License
 
-No explicit open-source license is currently included. Until the owner selects one, treat the repository as source-available portfolio code rather than reusable open-source software.
+No explicit open-source license is currently included. Until the owner selects
+one, the repository is source-available portfolio code under default copyright
+rather than an open-source distribution.

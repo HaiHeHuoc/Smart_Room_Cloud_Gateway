@@ -1,465 +1,164 @@
-# Provisioning Manager
+# `provisioning_manager` Component
 
 ## Purpose
 
-`provisioning_manager` owns the temporary BLE Wi-Fi provisioning transport.
-It wraps Espressif `network_provisioning`, validates and deep-copies received
-credentials, releases BLE resources asynchronously, and exposes verified
-credentials without owning persistent storage or reconnect policy.
+`provisioning_manager` owns temporary BLE Wi-Fi provisioning. It wraps
+Espressif `network_provisioning`, uses BLE Security 1, deep-copies received
+credentials, publishes non-sensitive progress, supports bounded same-boot
+replacement sessions, and releases BLE resources after the retry envelope.
 
-Phase 6.2 is complete. The application starts this component only when
-`config_manager` reports `NOT_CONFIGURED`. Phase 6.4.3 adds a bounded copy API
-for the QR payload of the service that is actually active. Phase 6.4.4 adds a
-single copied progress callback for application orchestration. Phase 6.4.5
-adds clean same-boot `STOPPED -> READY` reinitialization and session-generation
-metadata for bounded application retries.
+It does not own persistent storage, normal Wi-Fi reconnect, cloud upload, GUI
+rendering, or application reboot policy.
 
-## Component Structure
+## Version 1 Status
 
 ```text
-components/connectivity/provisioning_manager/
-|-- CMakeLists.txt
-|-- provisioning_manager.c
-|-- include/
-|   `-- provisioning_manager.h
-`-- docs/
-    `-- README.md
+Release: v1.0.0
+Status: Implemented and hardware accepted
 ```
 
 ## Implemented Behavior
 
-- Initializes Espressif Network Provisioning Manager with the BLE scheme.
-- Uses Security 1 with a temporary development Proof of Possession.
-- Builds the BLE service name as `PROV_` plus the last three Station MAC bytes.
-- Matches the official `wifi_prov` example's five framework connection
-  attempts for each received credential set.
-- Builds the official Security 1 QR JSON only after the BLE service starts.
-- Caches the exact active service identity and exposes only a caller-owned QR
-  payload copy while the service remains `ACTIVE`.
-- Starts BLE provisioning only from the `READY` state.
-- Reinitializes from either `UNINITIALIZED` or a fully cleaned `STOPPED` state
-  for a new non-zero session generation.
-- Reuses one retained credential queue and calls `xQueueReset()` before each
-  replacement session instead of allocating a queue per retry.
-- Prevents concurrent callers from claiming the same lifecycle transition.
-- Deep-copies and validates framework-owned credentials on receipt.
-- Keeps credentials pending until the framework reports Wi-Fi success.
-- Can explicitly bind one still-pending copy to its session generation so
-  clean framework teardown preserves it in RAM for a bounded late-DHCP check.
-- Promotes that retained copy only after the Wi-Fi owner reports IPv4 on the
-  exact pending SSID; otherwise it securely discards the copy.
-- Exposes a thread-safe, non-sensitive boolean handoff snapshot.
-- Discards pending credentials after a failed connection attempt.
-- Delivers one verified copy through a length-one FreeRTOS queue.
-- Publishes non-sensitive `STARTING`, waiting, credential, Wi-Fi result,
-  stopping, stopped, and terminal-failure progress snapshots with the exact
-  session generation that produced each event.
-- Invokes the single registered progress callback outside the state critical
-  section; the callback never receives credentials, QR JSON, or a manager-owned
-  pointer.
-- Requests provisioning shutdown asynchronously.
-- De-initializes the framework after `NETWORK_PROV_END`.
-- Retains BLE controller memory across intermediate clean stops and releases
-  it through an explicit terminal API after the retry envelope ends.
-- Exposes a thread-safe state snapshot for application-side polling.
-- Clears temporary credential copies and never logs passwords or PoP.
-
-## Dependencies
-
-| Dependency | Use |
-|---|---|
-| `esp_common` | Public `esp_err_t` API |
-| `bt` | ESP32-S3 BLE memory retention and terminal release |
-| `esp_hw_support` | Station MAC address |
-| `esp_wifi` | Framework Wi-Fi credential type |
-| `freertos` | Queue, state spinlock, and one-shot cleanup task |
-| `log` | Lifecycle and error logging |
-| `network_provisioning` | BLE transport and provisioning framework |
-
-The application manifest currently selects
-`espressif/network_provisioning` version `^1.2.4`.
+- BLE transport through Espressif Network Provisioning Manager.
+- Security 1 with a development Proof of Possession.
+- Unique service name derived from the final Station MAC bytes.
+- Espressif-compatible `v1` / `ble` QR payload.
+- Five framework connection attempts per received credential set.
+- Bounded QR-payload copy while the matching session is active.
+- Deep-copy validation and zeroization of Wi-Fi credentials.
+- Length-one verified credential handoff queue.
+- Non-sensitive, generation-aware progress callback.
+- Clean `STOPPED -> READY` reinitialization for replacement sessions.
+- Exact generation filtering for stale asynchronous events.
+- Bounded late-DHCP handoff validation using matching SSID and IPv4.
+- Asynchronous deinitialization to avoid framework callback deadlock.
+- Explicit terminal BLE memory release after the retry envelope.
+- No intentional password or Proof-of-Possession logging.
 
 ## Public API
 
 | API | Responsibility |
 |---|---|
-| `provisioning_manager_register_progress_callback()` | Register, idempotently retain, or unregister the single copied progress callback |
-| `provisioning_manager_init(generation)` | Initialize or cleanly reinitialize the BLE scheme and enter `READY` |
-| `provisioning_manager_start()` | Start advertising and enter `ACTIVE` |
-| `provisioning_manager_get_qr_payload(generation, ...)` | Copy the exact generation's active BLE QR JSON |
+| `provisioning_manager_register_progress_callback()` | Register one copied progress callback |
+| `provisioning_manager_init(generation)` | Initialize or cleanly reinitialize one generation |
+| `provisioning_manager_start()` | Start BLE advertising and provisioning |
+| `provisioning_manager_get_qr_payload()` | Copy the exact active generation's QR JSON |
 | `provisioning_manager_stop()` | Begin asynchronous shutdown |
-| `provisioning_manager_release_ble_memory()` | Permanently release retained BLE memory after the retry envelope |
-| `provisioning_manager_get_state()` | Copy the current lifecycle state |
-| `provisioning_manager_is_wifi_handoff_pending()` | Report whether received credentials are still connecting or awaiting application consumption |
-| `provisioning_manager_arm_late_wifi_handoff(generation)` | Bind one pending RAM copy to the grace-expired session before teardown |
-| `provisioning_manager_confirm_late_wifi_handoff(generation, ssid)` | Exact-match a late connected SSID and move the retained copy to the verified queue |
-| `provisioning_manager_discard_late_wifi_handoff(generation)` | Zeroize an armed unverified copy on timeout, reset, or error |
-| `provisioning_manager_receive_wifi_credentials()` | Wait for credentials from a framework-confirmed connection |
+| `provisioning_manager_release_ble_memory()` | Permanently release BLE memory after final use |
+| `provisioning_manager_get_state()` | Copy lifecycle state |
+| `provisioning_manager_is_wifi_handoff_pending()` | Report pending framework connection/handoff |
+| `provisioning_manager_arm_late_wifi_handoff()` | Bind one pending copy to a generation |
+| `provisioning_manager_confirm_late_wifi_handoff()` | Verify matching active SSID and promote the copy |
+| `provisioning_manager_discard_late_wifi_handoff()` | Zeroize an unverified retained copy |
+| `provisioning_manager_receive_wifi_credentials()` | Receive a verified caller-owned credential copy |
 
-All public APIs return `esp_err_t`. The component does not call
-`ESP_ERROR_CHECK()` and leaves policy decisions to the application.
-Generation zero is reserved. `provisioning_manager_get_qr_payload()` requires a
-`PROVISIONING_MANAGER_QR_PAYLOAD_BUFFER_SIZE` buffer, never returns an internal
-pointer, and returns `ESP_ERR_INVALID_STATE` outside the matching active
-session.
+Generation zero is reserved. QR and credential APIs return caller-owned copies,
+not manager-owned pointers.
 
-## Espressif wifi_prov Alignment
-
-The implementation follows
-`managed_components/espressif__network_provisioning/examples/wifi_prov` for
-the interoperable provisioning contract:
-
-- BLE transport through `network_prov_scheme_ble`;
-- NimBLE controller configuration;
-- Security 1 with Proof of Possession;
-- five framework Wi-Fi connection attempts;
-- QR version `v1` and transport `ble`;
-- QR JSON schema:
-
-```json
-{"ver":"v1","name":"PROV_XXXXXX","pop":"<development-pop>","transport":"ble"}
-```
-
-The application intentionally does not copy the example's global event
-handler, direct `esp_wifi_connect()` call, credential logging, custom endpoint,
-or provisioning-state reset callback. It also replaces the example's immediate
-`FREE_BTDM` policy with `NETWORK_PROV_EVENT_HANDLER_NONE`, retaining BLE across
-the bounded same-boot retry envelope. After the framework is fully
-deinitialized and no later session is allowed, the application explicitly
-releases the ESP32-S3 BLE-only allocation with
-`esp_bt_mem_release(ESP_BT_MODE_BLE)`. Those behaviors preserve the existing
-`wifi_manager`, coordinator, security, and Phase 6.4 ownership boundaries.
-
-## State Lifecycle
+## Lifecycle
 
 ```text
-UNINITIALIZED -> READY -> STARTING -> ACTIVE -> STOPPING -> STOPPED
-                   ^                                      |
-                   +--------- next generation ------------+
-                     \
-                      +-------------------------------> FAILED
+UNINITIALIZED
+    -> READY
+    -> STARTING
+    -> ACTIVE
+    -> STOPPING
+    -> STOPPED
+    -> READY for the next non-zero generation
+
+any initialization/start/cleanup failure
+    -> FAILED
 ```
 
-- `READY -> STARTING` and `ACTIVE -> STOPPING` are claimed atomically.
-- `STOPPING` covers BLE transport shutdown and framework de-initialization.
-- `STOPPED` is a clean barrier: framework deinitialization and the cleanup task
-  have completed, so the next generation may re-enter `READY`.
-- Initialization, startup, cleanup-task creation, or de-initialization errors
-  enter `FAILED`.
-- `FAILED` is not silently reset. A new session is forbidden unless the
-  previous session reached `STOPPED`.
+`STOPPED` is a clean barrier. A failed session is not silently reused.
 
 ## Credential Handoff
 
 ```text
-NETWORK_PROV_WIFI_CRED_RECV
-    -> validate and copy to pending storage
-    -> mark Wi-Fi handoff pending
-    -> wait for the framework connection result
+credentials received
+    -> validate and deep-copy
+    -> framework attempts Wi-Fi connection
 
-NETWORK_PROV_WIFI_CRED_FAIL
-    -> clear pending credentials
-    -> clear handoff-pending state
+framework failure
+    -> zeroize pending copy
 
-NETWORK_PROV_WIFI_CRED_SUCCESS
-    -> move the pending copy into the handoff queue
+framework success
+    -> move independent copy to length-one queue
     -> application persists through config_manager
-    -> clear handoff-pending state after application consumption
+    -> application adopts Station through wifi_manager
 
-grace expiry with handoff still pending
-    -> arm the copy for the exact session generation
-    -> clean framework and BLE transport to STOPPED
-    -> retain the copy in RAM only for the coordinator's bounded settle
-    -> exact connected-SSID plus IPv4 confirmation moves it to the same queue
-    -> timeout, mismatch, error, or reset securely discards it
+grace expires while connection is still pending
+    -> bind copy to the current generation
+    -> stop and deinitialize BLE
+    -> allow bounded DHCP settle
+    -> require matching SSID plus valid IPv4
+    -> promote or zeroize the copy
 ```
 
-The queue holds an independent copy. The caller must clear its output after
-persistence or on every error path. The component never calls
-`config_manager`, `wifi_manager`, GUI, cloud, or reboot APIs from its callback.
-The handoff-pending API returns only a boolean, matching `e66adb3`. Progress
-snapshots contain only a non-zero session generation, an enum, `esp_err_t`, and
-the framework's non-sensitive Wi-Fi failure reason; they never expose SSID or
-password contents.
-
-## Timeout Boundary Handling
-
-The credential receive API honors each caller-supplied finite timeout. The
-application coordinator calls it in finite polling slices so Phase 7 reset can
-preempt safely. The normal 120-second session remains the primary deadline. A
-handoff still pending at that boundary gets one configured 30-second IPv4
-grace. Upstream `network_provisioning` retries Station disconnects but has no
-deadline for association without `IP_EVENT_STA_GOT_IP`.
-
-Some DHCP replies arrive only after BLE teardown. At grace expiry the
-coordinator performs a final non-blocking queue receive, claims reset exclusion,
-drains once more, and arms the exact generation. Cleanup preserves an armed
-pending copy only when deinitialization succeeds. Once state is `STOPPED`, the
-coordinator drains a final framework success before polling `wifi_manager` for
-at most five seconds. `CONNECTED`, valid IPv4, and an exact SSID match are all
-required before this manager places the retained copy in the verified queue.
-ESP-NETIF remains the only DHCP lifecycle owner; this component neither starts
-nor stops DHCP.
-
-`WIFI_CREDENTIAL_FAILED` remains non-terminal coordinator progress, matching
-`e66adb3`. A late timeout, mismatch, error, or factory-reset request zeroizes the
-retained copy. Non-reset failure then detaches the unadopted Station before a
-replacement session can start.
+The caller must clear its credential copy after persistence or error handling.
+Progress snapshots never contain SSID, password, QR JSON, or internal pointers.
 
 ## Threading And Cleanup
 
-The component protects only lifecycle state and short pending-credential copy
-operations with `s_state_lock`. No BLE, Wi-Fi, logging, queue, task-creation,
-or framework API is called while that spinlock is held.
+- Short lifecycle state and credential-copy operations use a critical section.
+- BLE, Wi-Fi, logging, queue, task, and callback operations execute outside the
+  critical section.
+- Progress callbacks run in normal task context and must return quickly.
+- Framework deinitialization runs in a one-shot cleanup task because direct
+  deinitialization from the framework end callback can deadlock.
+- The retained queue is overwritten with a zero item before reset because queue
+  reset alone does not guarantee erasure of backing storage.
+- Active service identity and QR payload are cleared when their session ends.
 
-The progress callback and its context are copied while the lock is held, then
-the callback is invoked after the lock is released. The callback runs in normal
-task context, must return promptly, must not retain its snapshot pointer, and
-must not call LVGL.
+## Development Proof Of Possession
 
-The upstream framework invokes the direct `NETWORK_PROV_END` callback while it
-still owns an internal mutex. Calling `network_prov_mgr_deinit()` directly from
-that callback deadlocks. The component therefore creates a one-shot
-`prov_cleanup` task with a 4 KiB stack and priority 4. The callback returns,
-the framework releases its mutex, and the cleanup task safely performs
-de-initialization. State remains `STOPPING` during `NETWORK_PROV_DEINIT`; only
-the cleanup task, after `network_prov_mgr_deinit()` returns, publishes
-`STOPPED`. This prevents a new session from racing a logically active cleanup
-task.
+Version 1 currently contains a fixed development Proof of Possession in the
+component source. It is deliberately documented as a development value, not a
+production secret.
 
-Cleanup normally clears `handoff_pending` and zeroizes an unverified in-flight
-copy. The only exception is an explicitly armed copy whose generation matches
-the session being cleaned and whose framework deinitialization succeeded. That
-copy and its pending flag survive only for the coordinator-owned five-second
-late-DHCP settle. If a framework-confirmed item is already queued, cleanup also
-preserves the flag until the application receives and scrubs that item, or
-terminal BLE release discards it.
+Publishing the repository reveals this value. That is acceptable only for the
+portfolio/development threat model where:
 
-If the cleanup task cannot be created, the component enters `FAILED` instead
-of remaining indefinitely in `STOPPING`.
+- provisioning is temporary;
+- the device is under owner control;
+- BLE is stopped after provisioning;
+- no claim of unique per-device provisioning security is made.
 
-If BLE service startup fails, framework deinitialization is still attempted.
-A cleanup failure leaves the manager in `FAILED` and blocks reuse, while the
-API and terminal progress retain the original service-start error as the
-primary failure. The cleanup error remains available in a separate diagnostic
-log.
+Before a production deployment, replace it with a unique per-device value
+provisioned during manufacturing or loaded from protected configuration. Do not
+publish readable provisioning QR codes because they also contain the active
+Proof of Possession.
 
-The progress callback registration and credential queue survive a clean stop.
-The next `init(generation)` clears pending credentials and handoff flags,
-resets the queue, clears active identity, and initializes the framework again.
-Each asynchronous terminal event uses a captured generation so a late old
-`STOPPED` callback cannot be relabeled as the new session.
+## Security Contract
 
-The ESP32-S3 target is configured for NimBLE/BLE rather than Classic
-Bluetooth. No Classic-BT release is attempted at session initialization. BLE
-controller/host memory is retained across intermediate retries, then
-`provisioning_manager_release_ble_memory()` calls
-`esp_bt_mem_release(ESP_BT_MODE_BLE)` only from clean `STOPPED` after the full
-retry envelope terminates. The call is idempotent:
-`ESP_ERR_NOT_FOUND` is accepted as already released; other release failures
-increment a diagnostic counter and remain visible as warnings.
+- Never log Wi-Fi passwords, QR payloads, or the Proof of Possession.
+- Zeroize caller and manager credential copies after ownership ends.
+- Do not leave BLE provisioning active during normal operation.
+- Do not use the development PoP as a production authentication factor.
+- Do not publish screenshots/video containing a reusable QR payload.
+- Preserve generation checks so stale session events cannot persist or adopt
+  credentials.
+- Factory reset must quiesce provisioning before persistent erasure.
 
-Terminal memory reclamation is best-effort application cleanup. It cannot
-replace a storage, adoption, timeout, or configuration result. In particular,
-successful provisioning first verifies IPv4, adopts the Station connection,
-sets coordinator `ONLINE`, publishes `SUCCESS`, preserves the 1500 ms dwell
-and screen route, and only then attempts BLE memory release. Release failure
-remains diagnostic only and does not close the cloud gate or replace the
-network result.
+See [`SECURITY.md`](../../../../SECURITY.md) for public-release controls.
 
-The retained length-one credential queue is explicitly overwritten with a
-zero item before every reset and after application delivery or terminal
-cleanup. This is required because FreeRTOS receive/reset operations do not
-guarantee erasure of the queue's backing item storage.
+## Application Integration
 
-The active service name and QR payload are cleared when stop begins and on
-startup, cleanup, or de-initialization failure. QR construction failure does
-not stop an otherwise valid BLE session; the coordinator reports the
-best-effort GUI publication failure and provisioning can still continue
-manually.
+`app_network_coordinator` owns:
 
-## Basic Usage
+- deciding when provisioning is required;
+- session timeout, retry count, and backoff;
+- persisting verified credentials;
+- Wi-Fi adoption and final screen routing;
+- terminal BLE memory-release timing.
 
-```c
-esp_err_t ret = provisioning_manager_register_progress_callback(
-    application_progress_callback,
-    NULL);
-
-const uint32_t generation = 1U;
-
-ret = provisioning_manager_init(generation);
-if (ret != ESP_OK) {
-    return ret;
-}
-
-ret = provisioning_manager_start();
-if (ret != ESP_OK) {
-    return ret;
-}
-
-char qr_payload[PROVISIONING_MANAGER_QR_PAYLOAD_BUFFER_SIZE];
-ret = provisioning_manager_get_qr_payload(
-    generation,
-    qr_payload,
-    sizeof(qr_payload));
-/* Copy to the UI queue, then securely clear this caller-owned buffer. */
-
-provisioning_manager_wifi_credentials_t credentials;
-ret = provisioning_manager_receive_wifi_credentials(&credentials, 120000U);
-
-ret = provisioning_manager_stop();
-if (ret != ESP_OK) {
-    return ret;
-}
-
-provisioning_manager_state_t state;
-ret = provisioning_manager_get_state(&state);
-
-/* Call only when no later same-boot provisioning session is allowed. */
-ret = provisioning_manager_release_ble_memory();
-/* Log ret as cleanup diagnostics; do not replace the network result. */
-```
-
-The caller should poll with a finite delay and timeout. A tight polling loop
-would waste CPU and flood the state log.
-
-## Production Integration
-
-The production provisioning path in `main.c`:
-
-1. Starts provisioning only when Wi-Fi state is `NOT_CONFIGURED`.
-2. Waits with a finite session timeout for framework-verified credentials.
-3. Gives a handoff still pending at the session deadline one bounded IPv4
-   grace, followed only when necessary by clean BLE teardown and a bounded
-   five-second late-DHCP reconciliation.
-4. Accepts the late copy only for matching generation, exact SSID, and valid
-   IPv4; all other exits zeroize it before retry or reset.
-5. Persists verified credentials only through `config_manager`.
-6. Re-reads state and data; continues only after successful verification.
-7. Waits for BLE cleanup and the active Station connection.
-8. Lets `wifi_manager` adopt the connection and own later Wi-Fi events.
-9. Clears every application credential copy.
-10. Maps manager progress to the GUI through coordinator-owned latest-value
-   status publication.
-
-Integrity states such as `INCOMPLETE`, `INVALID_DATA`, and
-`UNSUPPORTED_VERSION` are preserved and do not automatically start
-provisioning.
-
-## Security Notes
-
-- The current Proof of Possession is a development value compiled into
-  firmware. It is not a production credential.
-- The QR payload contains that PoP. It is copied only into bounded transient
-  buffers and must never be logged.
-- The upstream `security1` log tag is reduced to `WARN` before a session so
-  normal serial output does not print session key material.
-- Production devices should use a device-specific value obtained from
-  protected configuration or manufacturing data.
-- Do not log or document real Proofs of Possession, SSIDs, passwords, tokens,
-  private keys, or administrator credentials.
-- The component logs the BLE service name but never logs Wi-Fi credentials.
-- Late-handoff APIs never persist credentials. The coordinator must keep their
-  use generation-bound, serialized with reset preparation, and finitely timed;
-  this component zeroizes the retained RAM copy on discard and terminal paths.
-
-## Ownership Boundaries
-
-This component owns:
-
-- BLE provisioning scheme lifecycle.
-- Provisioning service naming and current Security 1 setup.
-- Exact active QR identity and payload construction.
-- Lifecycle state synchronization.
-- Transient validation and credential handoff after connection success.
-- BLE stop and framework cleanup.
-
-This component does not own:
-
-- Application NVS schema or persistent Wi-Fi configuration.
-- Persistent credential writes or direct calls to `config_manager`.
-- Station reconnect policy owned by `wifi_manager`.
-- GUI, sensor, cloud, Firebase, factory-reset, or reboot policy.
-
-## Expected Bring-Up Logs
-
-```text
-I (...) PROVISIONING_MANAGER: Provisioning manager initialized
-I (...) PROVISIONING_MANAGER: BLE provisioning active with service name: PROV_XXXXXX
-I (...) APP_NETWORK_COORDINATOR: Active provisioning QR payload queued for GUI
-I (...) PROVISIONING_MANAGER: Provisioning stop requested
-I (...) PROVISIONING_MANAGER: Provisioning service stopped
-I (...) PROVISIONING_MANAGER: Provisioning manager de-initialized
-```
+`provisioning_manager` remains a transport/lifecycle component and does not
+call `config_manager`, `wifi_manager`, LVGL, cloud, or reboot APIs.
 
 ## Future Attention
 
-- Replace the development Proof of Possession with a production strategy.
-- Phase 7.5 factory-reset policy remains application-owned: the network
-  coordinator uses state, stop, verified-drain, and generation-bound late
-  discard APIs to quiesce this manager before persistent erasure. Hardware race
-  acceptance is pending.
-
-## Phase 6.4.6 BLE Release Correction
-
-**IMPLEMENTED / HARDWARE TEST PENDING**
-
-Static inspection of ESP-IDF 6.0.1, the ESP32-S3 target configuration, and the
-installed `network_provisioning` BLE scheme confirms the terminal release mode
-is `ESP_BT_MODE_BLE`. Hardware tests must still verify successful release,
-already-released handling, injected release failure, multi-session retention,
-and continued Wi-Fi/cloud success when optional reclamation fails.
-- Add focused automated tests around callback ordering where the upstream
-  framework can be isolated.
-
-## Phase 6.2 Verification
-
-- BLE credential transfer and successful Station connection were exercised on
-  hardware.
-- Credential persistence and read-back validation were exercised.
-- The `6.2.3B-4` injected NVS persistence failure and retry recovery test
-  passed on hardware.
-- The temporary fault-injection code was removed after acceptance.
-
-## Phase 6.4.3 Status
-
-**IMPLEMENTED / HARDWARE TEST PENDING**
-
-The QR contract, active-session copy API, five framework connection attempts,
-NimBLE/Security1 defaults, and build have been verified statically. The user
-confirmed a phone QR scan and successful provisioned Wi-Fi connection on the
-target. Full callback ordering, persistence/reboot, replacement-session,
-cleanup, and endurance coverage remains in the final A-N hardware matrix.
-
-## Phase 6.4.4 Status
-
-**IMPLEMENTED / HARDWARE TEST PENDING**
-
-The manager exposes copied lifecycle facts required by the coordinator. The
-2026-08-01 selective network restore removed the later credential-attempt
-generation API and restored `WIFI_CREDENTIAL_FAILED` as a non-terminal
-coordinator progress event, matching `e66adb3`. Terminal manager failures and
-stop/deinit still invalidate the active session identity. Hardware regression
-testing remains required.
-
-## Phase 6.4.5 Status
-
-**IMPLEMENTED / HARDWARE TEST PENDING**
-
-The manager now supports clean same-boot reinitialization from `STOPPED`,
-retains and resets one credential queue, preserves the single callback
-registration, attaches a non-zero generation to progress and QR snapshots,
-keeps `STOPPING` until the cleanup task has fully returned, and retains BLE
-memory only until the bounded retry envelope ends. Hardware must still verify
-that replacement BLE sessions advertise without reboot and repeated cycles do
-not leak controller, queue, or credential resources.
-
-## Phase 6.4.7 Closure Status
-
-**IMPLEMENTED / HARDWARE REGRESSION PENDING**
-
-Static closure review confirms one retained credential queue, one progress
-callback, generation-bound QR/progress data, `STOPPED` before replacement
-sessions, credential zeroization, and BLE retention between retries. The
-Phase 6.4 final hardware matrix in the project roadmap remains the acceptance
-authority; no additional provisioning feature is introduced here.
+- Move the Proof of Possession to protected per-device configuration.
+- Add manufacturing identity and revocation policy.
+- Consider Security 2 only after device identity, key provisioning, and product
+  lifecycle requirements are defined.
+- Add a public stop/deinit contract only when runtime reprovisioning is required.
