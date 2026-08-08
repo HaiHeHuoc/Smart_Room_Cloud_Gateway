@@ -55,6 +55,8 @@
 /* Button manager ----------------------------------------------------------- */
 #include "button_manager.h"
 
+#include "audio_test.h"
+
 /* Macros ------------------------------------------------------------------- */
 #define PERFORMANCE_MONITOR 1
 
@@ -90,6 +92,7 @@ static const button_manager_config_t BUTTON_MANAGER_CONFIG =
         FACTORY_RESET_BUTTON_LONG_PRESS_MS,
 };
 
+/* Coordinator owns provisioning lifecycle; Wi-Fi reconnect remains separate. */
 static const app_network_coordinator_config_t
     APP_NETWORK_COORDINATOR_CONFIG =
 {
@@ -138,6 +141,11 @@ static const firebase_auth_config_t FIREBASE_AUTH_CONFIG =
  */
 static esp_err_t network_platform_init(void);
 
+/**
+ * @brief Forward one button-manager event to the reset coordinator queue.
+ *
+ * Runs in button task context and must not directly access storage or LVGL.
+ */
 static void app_button_event_callback(
     const button_manager_event_data_t *event_data,
     void *user_context);
@@ -194,6 +202,12 @@ static bool app_map_wifi_status_to_network_event(
 static bool app_network_state_allows_cloud_start(
     app_network_coordinator_state_t state);
 
+/**
+ * @brief Run one microphone diagnostic then delete this dedicated task.
+ *
+ * @param[in] arg Unused task argument.
+ */
+static void audio_test_task(void *arg);
 /* Application -------------------------------------------------------------- */
 /** @brief Initialize the current application services and run diagnostics. */
 void app_main(void)
@@ -536,6 +550,26 @@ void app_main(void)
     }
 
     bool cloud_started = false;
+
+    esp_err_t audio_ret = audio_test_init();
+
+    if (audio_ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to initialize audio test: %s",
+            esp_err_to_name(audio_ret));
+    }
+
+
+    BaseType_t task_ret =
+        xTaskCreate(
+            audio_test_task,
+            "audio_test",
+            4096,
+            NULL,
+            5,
+            NULL);
 
     while (1)
     {
@@ -1072,4 +1106,31 @@ static void app_button_event_callback(
             "Failed to forward button event to reset coordinator: %s",
             esp_err_to_name(post_ret));
     }
+}
+
+static void audio_test_task(void *arg)
+{
+    (void)arg;
+
+    size_t samples_recorded = 0U;
+
+    const esp_err_t ret =
+        audio_test_record_once(&samples_recorded);
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Audio RX test failed: %s",
+            esp_err_to_name(ret));
+    }
+    else
+    {
+        ESP_LOGI(
+            TAG,
+            "Audio RX test passed: samples=%lu",
+            (unsigned long)samples_recorded);
+    }
+
+    vTaskDelete(NULL);
 }
