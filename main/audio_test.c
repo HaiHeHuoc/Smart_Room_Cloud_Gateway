@@ -1581,10 +1581,6 @@ esp_err_t audio_test_record_once(
                 &gain_stats);
     }
 
-ret =
-    audio_test_play_recording_once(
-        *samples_recorded);
-
     const esp_err_t stop_ret =
         audio_test_stop_i2s_rx();
 
