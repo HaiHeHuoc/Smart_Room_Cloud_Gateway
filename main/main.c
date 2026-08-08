@@ -397,7 +397,6 @@ void app_main(void)
             }
         }
     }
-
     esp_err_t wifi_ret =
         wifi_manager_init();
 
@@ -799,7 +798,6 @@ static void app_wifi_status_callback(
             esp_err_to_name(ret)
         );
     }
-
     const esp_err_t cloud_network_error =
         cloud_manager_notify_network_state(
             status->has_ipv4_address);
@@ -1145,20 +1143,21 @@ static void audio_test_task(void *arg)
         (unsigned long)samples_recorded);
 
     ret =
-        audio_test_play_tone_once();
+        audio_test_play_recording_once(
+            samples_recorded);
 
     if (ret != ESP_OK)
     {
         ESP_LOGE(
             TAG,
-            "Audio TX tone test failed: %s",
+            "Recorded audio playback failed: %s",
             esp_err_to_name(ret));
     }
     else
     {
         ESP_LOGI(
             TAG,
-            "Audio TX tone test passed");
+            "Recorded audio playback passed");
     }
 
     vTaskDelete(NULL);
