@@ -221,7 +221,134 @@ static esp_err_t audio_test_stop_i2s_tx(void);
 /** @brief Generate and synchronously transmit the configured diagnostic tone. */
 static esp_err_t audio_test_play_tone(void);
 
+static esp_err_t audio_test_play_recording(
+    size_t sample_count);
+
 /* Static Functions --------------------------------------------------------- */
+static esp_err_t audio_test_play_recording(
+    size_t sample_count)
+{
+    ESP_RETURN_ON_FALSE(
+        s_tx_channel != NULL,
+        ESP_ERR_INVALID_STATE,
+        TAG,
+        "TX channel is not started");
+
+    ESP_RETURN_ON_FALSE(
+        s_playback_buffer != NULL,
+        ESP_ERR_INVALID_STATE,
+        TAG,
+        "Playback buffer is NULL");
+
+    ESP_RETURN_ON_FALSE(
+        sample_count > 0U,
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "Playback sample count is zero");
+
+    if (sample_count >
+        AUDIO_TEST_BUFFER_SAMPLES)
+    {
+        sample_count =
+            AUDIO_TEST_BUFFER_SAMPLES;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Starting recorded audio playback: "
+        "samples=%lu duration=%.2f s",
+        (unsigned long)sample_count,
+        (double)sample_count /
+            (double)AUDIO_TEST_SAMPLE_RATE_HZ);
+
+    size_t played = 0U;
+
+    while (played < sample_count)
+    {
+        const size_t remaining =
+            sample_count - played;
+
+        const size_t frames =
+            (remaining >
+             AUDIO_TEST_FRAMES_PER_BLOCK)
+                ? AUDIO_TEST_FRAMES_PER_BLOCK
+                : remaining;
+
+        /*
+         * Convert mono PCM16 playback data into stereo PCM16.
+         *
+         * Both slots contain the same sample so playback is independent
+         * of the MAX98357 channel selection.
+         */
+        for (size_t frame = 0U;
+             frame < frames;
+             ++frame)
+        {
+            const int16_t sample =
+                s_playback_buffer[
+                    played + frame];
+
+            const size_t base =
+                frame *
+                AUDIO_TEST_SLOT_COUNT;
+
+            s_tx_block[base] =
+                sample;
+
+            s_tx_block[base + 1U] =
+                sample;
+        }
+
+        const size_t bytes_to_write =
+            frames *
+            AUDIO_TEST_SLOT_COUNT *
+            sizeof(int16_t);
+
+        size_t bytes_written = 0U;
+
+        const esp_err_t ret =
+            i2s_channel_write(
+                s_tx_channel,
+                s_tx_block,
+                bytes_to_write,
+                &bytes_written,
+                pdMS_TO_TICKS(
+                    AUDIO_TEST_I2S_TIMEOUT_MS));
+
+        if (ret != ESP_OK)
+        {
+            ESP_LOGE(
+                TAG,
+                "Recorded playback write failed: %s",
+                esp_err_to_name(ret));
+
+            return ret;
+        }
+
+        if (bytes_written != bytes_to_write)
+        {
+            ESP_LOGE(
+                TAG,
+                "Partial playback write: "
+                "written=%lu expected=%lu",
+                (unsigned long)bytes_written,
+                (unsigned long)bytes_to_write);
+
+            return ESP_FAIL;
+        }
+
+        played += frames;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Recorded audio playback completed: "
+        "samples=%lu",
+        (unsigned long)played);
+
+    return ESP_OK;
+}
+
 static int16_t audio_test_apply_pcm16_gain(
     int16_t sample,
     int32_t gain,
@@ -1454,6 +1581,10 @@ esp_err_t audio_test_record_once(
                 &gain_stats);
     }
 
+ret =
+    audio_test_play_recording_once(
+        *samples_recorded);
+
     const esp_err_t stop_ret =
         audio_test_stop_i2s_rx();
 
@@ -1690,6 +1821,48 @@ esp_err_t audio_test_play_tone_once(void)
             TAG,
             "Speaker tone test failed: %s",
             esp_err_to_name(ret));
+    }
+
+    return ret;
+}
+
+esp_err_t audio_test_play_recording_once(
+    size_t sample_count)
+{
+    ESP_RETURN_ON_FALSE(
+        s_initialized,
+        ESP_ERR_INVALID_STATE,
+        TAG,
+        "Audio test is not initialized");
+
+    esp_err_t ret =
+        audio_test_start_i2s_tx();
+
+    if (ret != ESP_OK)
+    {
+        return ret;
+    }
+
+    ret =
+        audio_test_play_recording(
+            sample_count);
+
+    const esp_err_t stop_ret =
+        audio_test_stop_i2s_tx();
+
+    const esp_err_t safe_ret =
+        audio_test_configure_amplifier_safe_state();
+
+    if ((ret == ESP_OK) &&
+        (stop_ret != ESP_OK))
+    {
+        ret = stop_ret;
+    }
+
+    if ((ret == ESP_OK) &&
+        (safe_ret != ESP_OK))
+    {
+        ret = safe_ret;
     }
 
     return ret;

@@ -70,6 +70,9 @@ esp_err_t audio_test_deinit(void);
  */
 esp_err_t audio_test_play_tone_once(void);
 
+esp_err_t audio_test_play_recording_once(
+    size_t sample_count);
+
 #ifdef __cplusplus
 }
 #endif
