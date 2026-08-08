@@ -560,16 +560,26 @@ void app_main(void)
             "Failed to initialize audio test: %s",
             esp_err_to_name(audio_ret));
     }
+    else
+    {
+        BaseType_t task_ret =
+            xTaskCreate(
+                audio_test_task,
+                "audio_test",
+                4096,
+                NULL,
+                5,
+                NULL);
 
+        if (task_ret != pdPASS)
+        {
+            ESP_LOGE(
+                TAG,
+                "Failed to create audio test task");
 
-    BaseType_t task_ret =
-        xTaskCreate(
-            audio_test_task,
-            "audio_test",
-            4096,
-            NULL,
-            5,
-            NULL);
+            (void)audio_test_deinit();
+        }
+    }
 
     while (1)
     {
@@ -1114,8 +1124,9 @@ static void audio_test_task(void *arg)
 
     size_t samples_recorded = 0U;
 
-    const esp_err_t ret =
-        audio_test_record_once(&samples_recorded);
+    esp_err_t ret =
+        audio_test_record_once(
+            &samples_recorded);
 
     if (ret != ESP_OK)
     {
@@ -1123,13 +1134,31 @@ static void audio_test_task(void *arg)
             TAG,
             "Audio RX test failed: %s",
             esp_err_to_name(ret));
+
+        vTaskDelete(NULL);
+        return;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Audio RX test passed: samples=%lu",
+        (unsigned long)samples_recorded);
+
+    ret =
+        audio_test_play_tone_once();
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Audio TX tone test failed: %s",
+            esp_err_to_name(ret));
     }
     else
     {
         ESP_LOGI(
             TAG,
-            "Audio RX test passed: samples=%lu",
-            (unsigned long)samples_recorded);
+            "Audio TX tone test passed");
     }
 
     vTaskDelete(NULL);
