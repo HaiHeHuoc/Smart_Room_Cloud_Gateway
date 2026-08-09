@@ -1,0 +1,22 @@
+menu "Audio manager"
+
+    config AUDIO_MANAGER_WAV_VALIDATION_ONCE
+        bool "Play one WAV at audio-task startup (Phase 11.4.2 validation)"
+        default n
+        help
+            Enable the bounded Phase 11.4.2 WAV playback proof once when the
+            audio manager task starts. After success or failure, the original
+            record, DSP, and recorded-playback stability loop continues.
+
+            This is a temporary validation mechanism, not the Phase 11.4.3
+            production playback-control API.
+
+    config AUDIO_MANAGER_WAV_VALIDATION_PATH
+        string "Absolute WAV validation path"
+        default "/sdcard/audio/test.wav"
+        depends on AUDIO_MANAGER_WAV_VALIDATION_ONCE
+        help
+            Absolute path below the sd_card_manager VFS mount. The file must
+            be canonical PCM16 mono at 16000 Hz.
+
+endmenu

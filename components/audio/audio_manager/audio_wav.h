@@ -67,6 +67,11 @@ void audio_wav_stream_reset(audio_wav_stream_t *stream);
  * This parser is separate from opening so fixture tests can supply a normal
  * FILE without requiring SD mount state. The caller retains ownership of file.
  * Only PCM integer, mono, 16-kHz, 16-bit little-endian WAV data is accepted.
+ *
+ * @return ESP_OK for a valid canonical WAV, ESP_ERR_NOT_SUPPORTED for a valid
+ *         but unsupported audio format, ESP_ERR_INVALID_RESPONSE when the
+ *         existing file is not RIFF/WAVE or lacks fmt/data, or a deterministic
+ *         argument, size, seek, or read error.
  */
 esp_err_t audio_wav_parse_file(
     FILE *file,
@@ -78,6 +83,9 @@ esp_err_t audio_wav_parse_file(
  * path must be a non-empty absolute path rooted at SD_MOUNT_POINT. The helper
  * checks sd_card_manager_is_mounted(), opens one read-only FILE handle, parses
  * it, and allocates its fixed reusable read buffer once.
+ *
+ * @return ESP_ERR_NOT_FOUND only when the path cannot be found;
+ *         audio_wav_parse_file() semantics apply after fopen succeeds.
  */
 esp_err_t audio_wav_stream_open(
     audio_wav_stream_t *stream,

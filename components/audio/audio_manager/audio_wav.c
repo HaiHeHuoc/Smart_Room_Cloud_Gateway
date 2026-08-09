@@ -345,7 +345,8 @@ esp_err_t audio_wav_parse_file(
 
     if (!found_format || !found_data)
     {
-        return ESP_ERR_NOT_FOUND;
+        /* The file exists, but its RIFF structure is not a valid WAV. */
+        return ESP_ERR_INVALID_RESPONSE;
     }
 
     if ((info->data_size_bytes == 0U) ||
@@ -459,7 +460,14 @@ esp_err_t audio_wav_stream_read(
     if (!sd_card_manager_is_mounted())
     {
         ESP_LOGW(TAG, "SD filesystem became unavailable during WAV read");
-        (void)audio_wav_stream_close(stream);
+        const esp_err_t close_result = audio_wav_stream_close(stream);
+        if (close_result != ESP_OK)
+        {
+            ESP_LOGW(
+                TAG,
+                "WAV cleanup after unavailable SD failed: %s",
+                esp_err_to_name(close_result));
+        }
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -490,7 +498,14 @@ esp_err_t audio_wav_stream_read(
             (unsigned)requested_bytes,
             (unsigned)received_bytes,
             esp_err_to_name(result));
-        (void)audio_wav_stream_close(stream);
+        const esp_err_t close_result = audio_wav_stream_close(stream);
+        if (close_result != ESP_OK)
+        {
+            ESP_LOGW(
+                TAG,
+                "WAV cleanup after read failure failed: %s",
+                esp_err_to_name(close_result));
+        }
         return result;
     }
 

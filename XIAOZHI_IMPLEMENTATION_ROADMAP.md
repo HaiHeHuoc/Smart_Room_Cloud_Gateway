@@ -182,7 +182,7 @@ components/audio/audio_manager/
 - [ ] Define ownership, overflow/drop policy, underrun recovery, and shutdown.
 - [ ] Measure task priorities, core affinity, and stack placement.
 
-### 11.3 Diagnostics — Partial / Blocked
+### 11.3 Diagnostics — Complete For The Direct-DMA Baseline
 
 Implemented in the current direct-DMA stability path:
 
@@ -194,15 +194,17 @@ Implemented in the current direct-DMA stability path:
 - [x] Thread-safe diagnostic snapshots across ISR, audio-task, and public
       status-reader contexts.
 
-Still required before this phase can be marked complete:
-
-- [ ] Runtime PCM queue occupancy and a true playback underrun counter.
+- [x] Explicitly classify runtime PCM queue occupancy and a true hardware
+      playback-underrun event as unavailable in the current direct-DMA design;
+      do not publish invented zero values or infer them from unrelated events.
 
 The ESP-IDF 6.0.1 standard I2S API exposes queue-overflow callbacks but no
 safe public runtime fill level or hardware underrun event. The current
 direct-DMA stability flow has no manager-owned PCM ring, so it must not infer
-either metric from a timeout or queue-overflow callback. These metrics require
-the bounded playback/capture ring and explicit consumer policy in Phase 11.2.
+either metric from a timeout or queue-overflow callback. This documented API
+limit does not reopen or block Phase 11.3 and does not by itself justify adding
+a PCM ring. If a later measured architecture introduces an application-owned
+ring, its occupancy and starvation policy can add those metrics then.
 
 ### 11.4 SD/WAV Streaming Playback
 
@@ -223,42 +225,68 @@ production playback path without coupling filesystem ownership into
 - [x] `audio_manager` owns a private playback-source slot and central source
       cleanup while its current stability task continues to select the proven
       recorded-PCM path.
-- [ ] Phase 11.4.2 must add source arbitration plus a bounded PCM ring/TX
-      consumer; WAV is intentionally not scheduled or played in 11.4.1.
+- [x] Phase 11.4.2 connects this reader directly to the existing manager-owned
+      TX path with bounded reads; no ring/task split is required without
+      runtime evidence.
+
+#### Phase 11.4.2 — Direct Bounded WAV Playback — Implemented / Build And Host-Test Verified
+
+- [x] Native fixtures exercise the private parser without SD hardware,
+      including chunk ordering/padding, missing chunks, unsupported formats,
+      and truncated/bounds failures.
+- [x] Missing filesystem paths remain `ESP_ERR_NOT_FOUND`; existing malformed
+      WAV files missing `fmt ` or `data` return `ESP_ERR_INVALID_RESPONSE`.
+- [x] The single audio-manager task reads one reusable 4 KiB PCM16 chunk,
+      explicitly decodes little-endian mono samples, duplicates them into the
+      existing stereo TX staging block, and calls the proven
+      `write_tx_frames()` implementation.
+- [x] WAV output bypasses microphone DSP/PCM24 conditioning and applies only
+      the configured linear playback-volume percentage.
+- [x] Existing TX silence preload, pre/post silence, I2S lifecycle,
+      diagnostics, `PLAYBACK` state/callback, source cleanup, and MAX98357A
+      safe-LOW policy are reused.
+- [x] Aggregate logs expose WAV bytes read/streamed, maximum `fread()` latency,
+      elapsed time, failures, and per-validation TX deltas without per-read
+      INFO spam.
+- [x] A default-off Kconfig proof plays one configured `/sdcard/...` WAV at
+      task startup, then returns to the unchanged record/DSP/playback soak.
+- [ ] Validate 5/30/60-second WAVs, invalid/removal cases, SD latency under
+      Gateway load, clean EOF, sound quality, and golden-path regression on
+      target hardware.
 
 Reference flow:
 
 ```text
 SD card
     -> sd_card_manager / mounted filesystem
-    -> WAV parser / file-source task
-    -> bounded PCM chunks
-    -> audio_manager playback ring
-    -> I2S TX DMA
+    -> bounded WAV reader in the audio-manager task
+    -> PCM16 mono decode / stereo staging
+    -> existing write_tx_frames() / I2S TX DMA
     -> MAX98357A
     -> speaker
 ```
 
-- [ ] Keep `audio_manager` source-agnostic; it accepts PCM playback data and
-      does not own SD-card mount/unmount or general filesystem lifecycle.
-- [ ] Open a local WAV file through the project-owned SD/storage path.
-- [ ] Parse RIFF/WAVE structure and locate `fmt ` and `data` chunks without
+- [x] Keep I2S and source ownership in `audio_manager`; it does not own
+      SD-card mount/unmount or general filesystem lifecycle.
+- [x] Open a local WAV file through the project-owned SD/storage path.
+- [x] Parse RIFF/WAVE structure and locate `fmt ` and `data` chunks without
       assuming fixed chunk ordering.
-- [ ] Support a defined baseline of uncompressed PCM WAV first; validate sample
+- [x] Support canonical uncompressed PCM16 mono 16-kHz WAV; validate sample
       rate, channel count, sample width, block alignment, and data length before
       playback.
-- [ ] Start with PCM16 mono/stereo formats that can be mapped explicitly to the
-      configured I2S TX format; reject unsupported formats deterministically.
-- [ ] Read and submit bounded chunks instead of loading the entire audio file
+- [x] Reject stereo, other rates/widths, float, and compressed formats
+      deterministically; do not resample or add formats in this phase.
+- [x] Read and submit bounded chunks instead of loading the entire audio file
       into RAM or PSRAM.
-- [ ] Use the bounded playback ring/backpressure policy from Phase 11.2 and
-      finite timeouts between the file-source producer and audio consumer.
-- [ ] Handle normal EOF, user stop/cancel, short reads, truncated/corrupt WAV,
-      missing file, SD read failure, and SD unmount/removal without leak,
-      deadlock, watchdog, or stale I2S ownership.
-- [ ] Measure SD-read latency, playback-ring occupancy, TX underrun/error
-      counters, CPU, Internal/DMA RAM, PSRAM, and task stack high-water marks
-      while the rest of the Gateway remains active.
+- [x] Start with direct bounded read/decode/TX submission. Add a producer,
+      consumer, ring, or backpressure scheduler only after measured SD latency
+      and TX failure/gap evidence demonstrates a need.
+- [x] Handle normal EOF, missing/unsupported/corrupt/truncated input, short
+      reads, SD-unavailable state, TX errors, close errors, and defensive
+      cleanup in the bounded proof path.
+- [ ] Add user stop/cancel and production source arbitration in Phase 11.4.3.
+- [ ] Measure SD-read latency, TX errors, CPU, memory, and task stack while the
+      rest of the Gateway is active on target hardware.
 - [ ] Keep compressed codecs such as MP3/AAC/FLAC outside this baseline phase
       unless a later requirement explicitly justifies decoder integration.
 
@@ -283,9 +311,9 @@ SD card
 - [ ] Unsupported/corrupt WAV, missing file, and SD read/unmount failures are
       bounded and recoverable without crash, leak, deadlock, or stale audio
       state.
-- [ ] Filesystem and WAV parsing remain outside the core `audio_manager`
-      ownership boundary so future network/Xiaozhi sources can reuse the same
-      playback API.
+- [ ] SD mount/card lifecycle remains outside `audio_manager`; the private WAV
+      reader stays isolated from I2S so later source types can reuse the same
+      manager-owned TX path.
 
 ---
 

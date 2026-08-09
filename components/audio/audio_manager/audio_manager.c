@@ -12,6 +12,7 @@
 #include "audio_manager.h"
 #include "audio_dsp.h"
 #include "audio_wav.h"
+#include "sdkconfig.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -83,6 +84,18 @@ typedef struct
 
 typedef struct
 {
+    uint64_t data_bytes_read;
+    uint64_t data_bytes_streamed;
+    uint32_t expected_data_bytes;
+    uint32_t expected_duration_ms;
+    uint32_t read_count;
+    uint32_t read_failure_count;
+    uint32_t max_fread_duration_us;
+    uint32_t playback_elapsed_ms;
+} audio_wav_playback_metrics_t;
+
+typedef struct
+{
     size_t samples_recorded;
     int32_t dc_offset_pcm24;
     uint32_t raw_average_pcm24;
@@ -96,6 +109,7 @@ typedef struct
     uint32_t dsp_total_yields;
     audio_dsp_ns_metrics_t ns;
     audio_dsp_playback_stats_t playback;
+    audio_wav_playback_metrics_t wav;
 } audio_cycle_metrics_t;
 
 typedef struct
@@ -138,7 +152,7 @@ typedef struct
 
     audio_manager_config_t config;
 
-    /* One manager-owned source slot; Phase 11.4.1 keeps WAV private/idle. */
+    /* One manager-owned source slot; only this task/lifecycle owns it. */
     audio_playback_source_t playback_source;
 
     size_t sample_capacity;
@@ -220,9 +234,14 @@ static esp_err_t stop_i2s_tx(void);
 static esp_err_t write_tx_frames(size_t frame_count);
 static esp_err_t write_silence_blocks(uint32_t block_count);
 static int32_t apply_playback_volume_percent(int32_t sample_pcm24);
+static int16_t decode_wav_pcm16_le(const uint8_t *sample_bytes);
+static int16_t apply_wav_volume_percent(int16_t sample_pcm16);
 static esp_err_t play_recording(
     size_t sample_count,
     audio_dsp_playback_stats_t *stats);
+static esp_err_t play_wav_stream(
+    audio_wav_stream_t *stream,
+    audio_wav_playback_metrics_t *metrics);
 
 static void dsp_cooperative_yield(void *context);
 static void log_ns_metrics(const audio_dsp_ns_metrics_t *metrics);
@@ -233,13 +252,16 @@ static esp_err_t process_once(
     size_t sample_count,
     audio_cycle_metrics_t *metrics);
 static esp_err_t playback_once(
-    const audio_playback_source_t *source,
+    audio_playback_source_t *source,
     audio_cycle_metrics_t *metrics);
 static esp_err_t audio_manager_select_recording_playback_source(
     size_t sample_count);
+static esp_err_t audio_manager_select_wav_playback_source(const char *path);
 static esp_err_t audio_manager_release_playback_source(void);
 static esp_err_t force_cycle_cleanup(void);
 static esp_err_t run_cycle(audio_cycle_metrics_t *metrics);
+static const char *audio_manager_wav_validation_path(void);
+static esp_err_t run_wav_validation_once(const char *path);
 static void log_cycle_diagnostics(
     uint32_t cycle,
     const audio_manager_diagnostics_t *before);
@@ -1038,6 +1060,37 @@ static int32_t apply_playback_volume_percent(int32_t sample_pcm24)
         AUDIO_DSP_VOLUME_PERCENT_MAX);
 }
 
+static int16_t decode_wav_pcm16_le(const uint8_t *sample_bytes)
+{
+    const uint16_t raw_sample =
+        (uint16_t)((uint16_t)sample_bytes[0] |
+                   ((uint16_t)sample_bytes[1] << 8U));
+    const int32_t signed_sample =
+        (raw_sample <= (uint16_t)INT16_MAX)
+            ? (int32_t)raw_sample
+            : (int32_t)raw_sample - 65536;
+    return (int16_t)signed_sample;
+}
+
+static int16_t apply_wav_volume_percent(int16_t sample_pcm16)
+{
+    const int32_t scaled =
+        ((int32_t)sample_pcm16 *
+         (int32_t)s_runtime.config.playback_volume_percent) /
+        (int32_t)AUDIO_DSP_VOLUME_PERCENT_MAX;
+
+    if (scaled > INT16_MAX)
+    {
+        return INT16_MAX;
+    }
+    if (scaled < INT16_MIN)
+    {
+        return INT16_MIN;
+    }
+
+    return (int16_t)scaled;
+}
+
 static esp_err_t play_recording(
     size_t sample_count,
     audio_dsp_playback_stats_t *stats)
@@ -1110,6 +1163,127 @@ static esp_err_t play_recording(
     }
 
     return ESP_OK;
+}
+
+static esp_err_t play_wav_stream(
+    audio_wav_stream_t *stream,
+    audio_wav_playback_metrics_t *metrics)
+{
+    if ((stream == NULL) ||
+        (stream->file == NULL) ||
+        (stream->buffer == NULL) ||
+        (metrics == NULL))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    memset(metrics, 0, sizeof(*metrics));
+    metrics->expected_data_bytes = stream->info.data_size_bytes;
+    metrics->expected_duration_ms = stream->info.duration_ms;
+
+    esp_err_t result = ESP_OK;
+    const int64_t playback_start_us = esp_timer_get_time();
+
+    while (stream->data_bytes_remaining > 0U)
+    {
+        const uint8_t *pcm_bytes = NULL;
+        size_t bytes_read = 0U;
+        const int64_t read_start_us = esp_timer_get_time();
+        const esp_err_t read_result = audio_wav_stream_read(
+            stream,
+            &pcm_bytes,
+            &bytes_read);
+        const int64_t read_duration_us =
+            esp_timer_get_time() - read_start_us;
+        const uint32_t bounded_read_duration_us =
+            (read_duration_us <= 0)
+                ? 0U
+                : ((uint64_t)read_duration_us > UINT32_MAX)
+                    ? UINT32_MAX
+                    : (uint32_t)read_duration_us;
+
+        ++metrics->read_count;
+        if (bounded_read_duration_us > metrics->max_fread_duration_us)
+        {
+            metrics->max_fread_duration_us = bounded_read_duration_us;
+        }
+
+        if (read_result != ESP_OK)
+        {
+            ++metrics->read_failure_count;
+            result = read_result;
+            break;
+        }
+
+        if ((pcm_bytes == NULL) || (bytes_read == 0U))
+        {
+            ++metrics->read_failure_count;
+            result = ESP_ERR_INVALID_RESPONSE;
+            break;
+        }
+
+        if ((bytes_read % sizeof(int16_t)) != 0U)
+        {
+            ++metrics->read_failure_count;
+            result = ESP_ERR_INVALID_SIZE;
+            break;
+        }
+
+        metrics->data_bytes_read += bytes_read;
+        const size_t sample_count = bytes_read / sizeof(int16_t);
+        size_t sample_offset = 0U;
+
+        while (sample_offset < sample_count)
+        {
+            size_t frames = sample_count - sample_offset;
+            if (frames > AUDIO_MANAGER_FRAMES_PER_BLOCK)
+            {
+                frames = AUDIO_MANAGER_FRAMES_PER_BLOCK;
+            }
+
+            for (size_t frame = 0U; frame < frames; ++frame)
+            {
+                const size_t sample_byte_offset =
+                    (sample_offset + frame) * sizeof(int16_t);
+                const int16_t mono_sample = apply_wav_volume_percent(
+                    decode_wav_pcm16_le(&pcm_bytes[sample_byte_offset]));
+                const size_t slot = frame * AUDIO_MANAGER_SLOT_COUNT;
+                s_tx_block[slot] = mono_sample;
+                s_tx_block[slot + 1U] = mono_sample;
+            }
+
+            result = write_tx_frames(frames);
+            if (result != ESP_OK)
+            {
+                break;
+            }
+
+            metrics->data_bytes_streamed += frames * sizeof(int16_t);
+            sample_offset += frames;
+        }
+
+        if (result != ESP_OK)
+        {
+            break;
+        }
+    }
+
+    const int64_t elapsed_us = esp_timer_get_time() - playback_start_us;
+    metrics->playback_elapsed_ms =
+        (elapsed_us <= 0)
+            ? 0U
+            : ((uint64_t)elapsed_us / 1000U > UINT32_MAX)
+                ? UINT32_MAX
+                : (uint32_t)((uint64_t)elapsed_us / 1000U);
+
+    if ((result == ESP_OK) &&
+        ((metrics->data_bytes_read != metrics->expected_data_bytes) ||
+         (metrics->data_bytes_streamed != metrics->expected_data_bytes)))
+    {
+        result = ESP_ERR_INVALID_SIZE;
+    }
+
+    return result;
 }
 
 /* Static Functions: DSP / Pipeline ---------------------------------------- */
@@ -1341,19 +1515,35 @@ static esp_err_t process_once(
 }
 
 static esp_err_t playback_once(
-    const audio_playback_source_t *source,
+    audio_playback_source_t *source,
     audio_cycle_metrics_t *metrics)
 {
-    if ((source == NULL) ||
-        (source->kind != AUDIO_PLAYBACK_SOURCE_RECORDED_PCM24) ||
-        (source->recorded_sample_count == 0U) ||
-        (source->recorded_sample_count > s_runtime.sample_capacity) ||
-        (metrics == NULL))
+    if ((source == NULL) || (metrics == NULL))
     {
         return ESP_ERR_INVALID_ARG;
     }
 
-    const size_t sample_count = source->recorded_sample_count;
+    switch (source->kind)
+    {
+        case AUDIO_PLAYBACK_SOURCE_RECORDED_PCM24:
+            if ((source->recorded_sample_count == 0U) ||
+                (source->recorded_sample_count > s_runtime.sample_capacity))
+            {
+                return ESP_ERR_INVALID_ARG;
+            }
+            break;
+
+        case AUDIO_PLAYBACK_SOURCE_WAV_PCM16:
+            if ((source->wav_stream.file == NULL) ||
+                (source->wav_stream.buffer == NULL))
+            {
+                return ESP_ERR_INVALID_STATE;
+            }
+            break;
+
+        default:
+            return ESP_ERR_INVALID_ARG;
+    }
 
     esp_err_t result = start_i2s_tx();
     if (result != ESP_OK)
@@ -1367,16 +1557,35 @@ static esp_err_t playback_once(
     if (result == ESP_OK)
     {
         audio_manager_set_state(AUDIO_MANAGER_STATE_PLAYBACK);
-        ESP_LOGI(
-            TAG,
-            "PLAYBACK samples=%u volume=%u/100 gain=%u.%02ux limiter=+/-%d",
-            (unsigned)sample_count,
-            (unsigned)s_runtime.config.playback_volume_percent,
-            (unsigned)(AUDIO_DSP_PLAYBACK_GAIN_Q8 / AUDIO_DSP_Q8_ONE),
-            (unsigned)(((AUDIO_DSP_PLAYBACK_GAIN_Q8 % AUDIO_DSP_Q8_ONE) * 100U) /
-                       AUDIO_DSP_Q8_ONE),
-            AUDIO_DSP_PLAYBACK_PEAK_LIMIT_PCM16);
-        result = play_recording(sample_count, &metrics->playback);
+
+        if (source->kind == AUDIO_PLAYBACK_SOURCE_RECORDED_PCM24)
+        {
+            ESP_LOGI(
+                TAG,
+                "PLAYBACK samples=%u volume=%u/100 gain=%u.%02ux limiter=+/-%d",
+                (unsigned)source->recorded_sample_count,
+                (unsigned)s_runtime.config.playback_volume_percent,
+                (unsigned)(AUDIO_DSP_PLAYBACK_GAIN_Q8 / AUDIO_DSP_Q8_ONE),
+                (unsigned)(((AUDIO_DSP_PLAYBACK_GAIN_Q8 %
+                              AUDIO_DSP_Q8_ONE) * 100U) /
+                            AUDIO_DSP_Q8_ONE),
+                AUDIO_DSP_PLAYBACK_PEAK_LIMIT_PCM16);
+            result = play_recording(
+                source->recorded_sample_count,
+                &metrics->playback);
+        }
+        else
+        {
+            ESP_LOGI(
+                TAG,
+                "WAV PLAYBACK data_bytes=%u duration=%ums volume=%u/100 policy=linear_pcm16",
+                (unsigned)source->wav_stream.info.data_size_bytes,
+                (unsigned)source->wav_stream.info.duration_ms,
+                (unsigned)s_runtime.config.playback_volume_percent);
+            result = play_wav_stream(
+                &source->wav_stream,
+                &metrics->wav);
+        }
     }
 
     if (result == ESP_OK)
@@ -1391,9 +1600,8 @@ static esp_err_t playback_once(
         result = stop_result;
     }
 
-    audio_manager_set_state(AUDIO_MANAGER_STATE_IDLE);
-
-    if (result == ESP_OK)
+    if ((result == ESP_OK) &&
+        (source->kind == AUDIO_PLAYBACK_SOURCE_RECORDED_PCM24))
     {
         log_playback_result(&metrics->playback);
     }
@@ -1417,6 +1625,36 @@ static esp_err_t audio_manager_select_recording_playback_source(
 
     s_runtime.playback_source.kind = AUDIO_PLAYBACK_SOURCE_RECORDED_PCM24;
     s_runtime.playback_source.recorded_sample_count = sample_count;
+    return ESP_OK;
+}
+
+static esp_err_t audio_manager_select_wav_playback_source(const char *path)
+{
+    if ((path == NULL) || (path[0] == '\0'))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_runtime.playback_source.kind != AUDIO_PLAYBACK_SOURCE_NONE)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if ((s_runtime.playback_source.wav_stream.file != NULL) ||
+        (s_runtime.playback_source.wav_stream.buffer != NULL))
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const esp_err_t result = audio_wav_stream_open(
+        &s_runtime.playback_source.wav_stream,
+        path);
+    if (result != ESP_OK)
+    {
+        return result;
+    }
+
+    s_runtime.playback_source.kind = AUDIO_PLAYBACK_SOURCE_WAV_PCM16;
     return ESP_OK;
 }
 
@@ -1519,6 +1757,107 @@ static esp_err_t run_cycle(audio_cycle_metrics_t *metrics)
     return result;
 }
 
+static const char *audio_manager_wav_validation_path(void)
+{
+#ifdef CONFIG_AUDIO_MANAGER_WAV_VALIDATION_ONCE
+    return CONFIG_AUDIO_MANAGER_WAV_VALIDATION_PATH;
+#else
+    return NULL;
+#endif
+}
+
+static esp_err_t run_wav_validation_once(const char *path)
+{
+    if ((path == NULL) || (path[0] == '\0'))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    ESP_LOGI(TAG, "========== WAV VALIDATION ONCE ==========");
+    ESP_LOGI(TAG, "WAV validation path=%s", path);
+
+    audio_manager_diagnostics_t diagnostics_before = {0};
+    audio_manager_snapshot_diagnostics(&diagnostics_before);
+
+    audio_cycle_metrics_t metrics = {0};
+    uint32_t expected_data_bytes = 0U;
+    uint32_t expected_duration_ms = 0U;
+
+    esp_err_t result = audio_manager_select_wav_playback_source(path);
+    if (result == ESP_OK)
+    {
+        expected_data_bytes =
+            s_runtime.playback_source.wav_stream.info.data_size_bytes;
+        expected_duration_ms =
+            s_runtime.playback_source.wav_stream.info.duration_ms;
+        result = playback_once(&s_runtime.playback_source, &metrics);
+    }
+
+    const esp_err_t cleanup_result = force_cycle_cleanup();
+    if ((result == ESP_OK) && (cleanup_result != ESP_OK))
+    {
+        result = cleanup_result;
+    }
+    else if ((result != ESP_OK) && (cleanup_result != ESP_OK))
+    {
+        ESP_LOGE(
+            TAG,
+            "WAV cleanup also failed: %s",
+            esp_err_to_name(cleanup_result));
+    }
+
+    audio_manager_diagnostics_t diagnostics_after = {0};
+    audio_manager_snapshot_diagnostics(&diagnostics_after);
+
+    ESP_LOGI(
+        TAG,
+        "WAV_DIAG result=%s expected_bytes=%u duration=%ums read_bytes=%llu streamed_bytes=%llu reads=%u read_fail=%u max_fread_us=%u elapsed=%ums tx_requested=%llu tx_written=%llu tx_q_ovf=%u tx_timeout=%u tx_partial=%u max_tx_us=%u",
+        esp_err_to_name(result),
+        (unsigned)expected_data_bytes,
+        (unsigned)expected_duration_ms,
+        (unsigned long long)metrics.wav.data_bytes_read,
+        (unsigned long long)metrics.wav.data_bytes_streamed,
+        (unsigned)metrics.wav.read_count,
+        (unsigned)metrics.wav.read_failure_count,
+        (unsigned)metrics.wav.max_fread_duration_us,
+        (unsigned)metrics.wav.playback_elapsed_ms,
+        (unsigned long long)(diagnostics_after.tx_bytes_requested -
+                             diagnostics_before.tx_bytes_requested),
+        (unsigned long long)(diagnostics_after.tx_bytes_written -
+                             diagnostics_before.tx_bytes_written),
+        (unsigned)(diagnostics_after.tx_queue_overflow_count -
+                   diagnostics_before.tx_queue_overflow_count),
+        (unsigned)(diagnostics_after.tx_timeout_count -
+                   diagnostics_before.tx_timeout_count),
+        (unsigned)(diagnostics_after.tx_partial_write_count -
+                   diagnostics_before.tx_partial_write_count),
+        (unsigned)diagnostics_after.max_tx_write_duration_us);
+
+    if (audio_manager_take_status_mutex("storing WAV validation result"))
+    {
+        s_runtime.status.last_error = result;
+        audio_manager_refresh_diagnostics_locked();
+        xSemaphoreGive(s_runtime.status_mutex);
+    }
+
+    if (result == ESP_OK)
+    {
+        audio_manager_notify_status_changed();
+        ESP_LOGI(TAG, "WAV validation PASS");
+    }
+    else
+    {
+        audio_manager_set_state(AUDIO_MANAGER_STATE_ERROR);
+        ESP_LOGE(
+            TAG,
+            "WAV validation FAIL: %s",
+            esp_err_to_name(result));
+        audio_manager_set_state(AUDIO_MANAGER_STATE_IDLE);
+    }
+
+    return result;
+}
+
 /* Static Functions: Stability Task ---------------------------------------- */
 static void log_cycle_diagnostics(
     uint32_t cycle,
@@ -1572,6 +1911,14 @@ static void audio_manager_task(void *argument)
         "Audio manager task started: record=%us volume=%u/100",
         (unsigned)s_runtime.config.record_duration_seconds,
         (unsigned)s_runtime.config.playback_volume_percent);
+
+    const char *const wav_validation_path =
+        audio_manager_wav_validation_path();
+    if (wav_validation_path != NULL)
+    {
+        (void)run_wav_validation_once(wav_validation_path);
+        log_heap_state("wav_validation_end");
+    }
 
     while (true)
     {

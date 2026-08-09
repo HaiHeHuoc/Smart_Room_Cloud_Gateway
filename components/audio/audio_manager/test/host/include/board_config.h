@@ -1,0 +1,6 @@
+#ifndef TEST_HOST_BOARD_CONFIG_H
+#define TEST_HOST_BOARD_CONFIG_H
+
+#define SD_MOUNT_POINT "/sdcard"
+
+#endif /* TEST_HOST_BOARD_CONFIG_H */
