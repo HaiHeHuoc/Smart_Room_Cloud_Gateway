@@ -1277,10 +1277,28 @@ NVS erase/write, provisioning start/stop, or reboot directly.
 
 ---
 
-## Sprint 10 — Audio Hardware Validation — New / Not Started
+## Sprint 10 — Audio Hardware Validation — In Progress
 
 **Goal:** Prove microphone capture and speaker output independently before
 adding a production audio component or Xiaozhi dependency.
+
+### Phase 10.4 — RX/TX Coexistence Stress Test — COMPLETE
+
+- The test-only audio path performs bounded sequential microphone capture and
+  recorded PCM playback while the existing firmware services remain active.
+- Each cycle releases the RX channel before TX starts; teardown attempts to
+  stop both channels, drives amplifier DIN low, and releases both PSRAM
+  buffers even after a partial failure.
+- The test logs RX/TX queue-overflow counters, I2S timing gaps and durations,
+  PCM statistics, task stack headroom, and Internal/DMA/PSRAM free, minimum,
+  and largest-block values.
+- The current test task is configured for 100 cycles, exceeding the 20-cycle
+  repetition target. Hardware acceptance for this checkpoint was confirmed by
+  the user through `END PHASE 10.4`; retain the corresponding serial evidence
+  with the hardware test record.
+- This checkpoint does not complete Sprint 10. The remaining hardware pin-map,
+  electrical, simultaneous RX/TX, CPU-load, and recorded-evidence acceptance
+  items below remain open.
 
 ### Placement And Dependencies
 
@@ -1987,7 +2005,7 @@ Use this section to track daily/weekly progress.
 | 7 | Factory reset | In progress |  |  | Phases 7.1-7.3 hardware-accepted; Phases 7.4-7.5 are implemented with hardware acceptance pending. |
 | 8 | Reconnect + retry | Done |  | 2026-08-02 | User-confirmed target-hardware reconnect, cloud retry/recovery, UI-state, logging, and stability acceptance. |
 | 9 | Portfolio polish | In progress | 2026-08-02 |  | Documentation and secret cleanup implemented; real photos/screenshots and demo video pending. |
-| 10 | Audio hardware validation | Proposed / Not started |  |  | New optional voice syllabus; hardware and GPIO gate. |
+| 10 | Audio hardware validation | In progress; 10.4 complete |  |  | Hardware and GPIO gate remains; only RX/TX coexistence stress checkpoint is complete. |
 | 11 | Production audio manager | Proposed / Not started |  |  | Requires Sprint 10 hardware acceptance. |
 | 12 | Xiaozhi build + transport | Proposed / Not started |  |  | Re-verify and exactly pin the reviewed dependency before implementation. |
 | 13 | Voice assistant adapter | Proposed / Not started |  |  | Only adapter may depend directly on `esp_xiaozhi`. |

@@ -59,7 +59,8 @@
 
 /* Macros ------------------------------------------------------------------- */
 #define PERFORMANCE_MONITOR 1
-#define AUDIO_TEST_CYCLE_COUNT 10U
+/* Test-only repeated RX/TX count; hardware acceptance requires >= 20 cycles. */
+#define AUDIO_TEST_CYCLE_COUNT 100U
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "MAIN_APP";
@@ -204,7 +205,7 @@ static bool app_network_state_allows_cloud_start(
     app_network_coordinator_state_t state);
 
 /**
- * @brief Run one microphone diagnostic then delete this dedicated task.
+ * @brief Run bounded RX/TX coexistence cycles, release audio resources, and exit.
  *
  * @param[in] arg Unused task argument.
  */
