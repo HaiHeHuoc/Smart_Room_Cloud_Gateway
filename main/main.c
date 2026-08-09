@@ -59,6 +59,7 @@
 
 /* Macros ------------------------------------------------------------------- */
 #define PERFORMANCE_MONITOR 1
+#define AUDIO_TEST_CYCLE_COUNT 10U
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "MAIN_APP";
@@ -1120,44 +1121,110 @@ static void audio_test_task(void *arg)
 {
     (void)arg;
 
-    size_t samples_recorded = 0U;
+    uint32_t completed_cycles = 0U;
+    uint32_t rx_failures = 0U;
+    uint32_t tx_failures = 0U;
 
-    esp_err_t ret =
-        audio_test_record_once(
-            &samples_recorded);
+    ESP_LOGI(
+        TAG,
+        "Starting audio coexistence stress test: cycles=%u",
+        AUDIO_TEST_CYCLE_COUNT);
 
-    if (ret != ESP_OK)
+    for (uint32_t cycle = 1U;
+         cycle <= AUDIO_TEST_CYCLE_COUNT;
+         ++cycle)
     {
-        ESP_LOGE(
+        ESP_LOGI(
             TAG,
-            "Audio RX test failed: %s",
-            esp_err_to_name(ret));
+            "========== AUDIO CYCLE %lu/%u ==========",
+            (unsigned long)cycle,
+            AUDIO_TEST_CYCLE_COUNT);
 
-        vTaskDelete(NULL);
-        return;
+        size_t samples_recorded = 0U;
+
+        esp_err_t ret =
+            audio_test_record_once(
+                &samples_recorded);
+
+        if (ret != ESP_OK)
+        {
+            rx_failures++;
+
+            ESP_LOGE(
+                TAG,
+                "Cycle %lu RX failed: %s",
+                (unsigned long)cycle,
+                esp_err_to_name(ret));
+
+            break;
+        }
+
+        ESP_LOGI(
+            TAG,
+            "Cycle %lu RX passed: samples=%lu",
+            (unsigned long)cycle,
+            (unsigned long)samples_recorded);
+
+        ret =
+            audio_test_play_recording_once(
+                samples_recorded);
+
+        if (ret != ESP_OK)
+        {
+            tx_failures++;
+
+            ESP_LOGE(
+                TAG,
+                "Cycle %lu TX failed: %s",
+                (unsigned long)cycle,
+                esp_err_to_name(ret));
+
+            break;
+        }
+
+        completed_cycles++;
+
+        ESP_LOGI(
+            TAG,
+            "Cycle %lu playback passed",
+            (unsigned long)cycle);
+
+        ESP_LOGI(
+            TAG,
+            "Cycle %lu stack remaining=%u bytes",
+            (unsigned long)cycle,
+            (unsigned)uxTaskGetStackHighWaterMark(NULL));
     }
 
     ESP_LOGI(
         TAG,
-        "Audio RX test passed: samples=%lu",
-        (unsigned long)samples_recorded);
+        "========== AUDIO STRESS SUMMARY ==========");
 
-    ret =
-        audio_test_play_recording_once(
-            samples_recorded);
+    ESP_LOGI(
+        TAG,
+        "Completed cycles: %lu/%u",
+        (unsigned long)completed_cycles,
+        AUDIO_TEST_CYCLE_COUNT);
 
-    if (ret != ESP_OK)
+    ESP_LOGI(
+        TAG,
+        "RX failures: %lu",
+        (unsigned long)rx_failures);
+
+    ESP_LOGI(
+        TAG,
+        "TX failures: %lu",
+        (unsigned long)tx_failures);
+
+    const esp_err_t deinit_ret =
+        audio_test_deinit();
+
+    if (deinit_ret != ESP_OK)
     {
-        ESP_LOGE(
+        ESP_LOGW(
             TAG,
-            "Recorded audio playback failed: %s",
-            esp_err_to_name(ret));
-    }
-    else
-    {
-        ESP_LOGI(
-            TAG,
-            "Recorded audio playback passed");
+            "Audio test deinit failed: %s",
+            esp_err_to_name(deinit_ret));
     }
 
     vTaskDelete(NULL);
