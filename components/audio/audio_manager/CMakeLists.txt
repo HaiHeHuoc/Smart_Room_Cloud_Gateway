@@ -8,11 +8,15 @@ idf_component_register(
     PRIV_INCLUDE_DIRS
         "."
     REQUIRES
+        esp_common
         common
     PRIV_REQUIRES
+        freertos
+        log
         esp_driver_i2s
         esp_driver_gpio
         esp_timer
+        heap
+        esp_hw_support
         esp_psram
-        freertos
 )
