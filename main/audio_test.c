@@ -380,6 +380,11 @@ static esp_err_t audio_test_play_recording(
 
         if (ret != ESP_OK)
         {
+            if (ret == ESP_ERR_TIMEOUT)
+            {
+                s_tx_write_timeout_count++;
+            }
+
             ESP_LOGE(
                 TAG,
                 "Recorded playback write failed: %s",
@@ -1014,47 +1019,23 @@ static esp_err_t audio_test_start_i2s_rx(void)
         return ret;
     }
 
-    i2s_event_callbacks_t rx_callbacks = {
-    .on_recv = NULL,
-    .on_recv_q_ovf = audio_test_rx_overflow_callback,
-    .on_sent = NULL,
-    .on_send_q_ovf = NULL,
+    const i2s_event_callbacks_t rx_callbacks = {
+        .on_recv = NULL,
+        .on_recv_q_ovf = audio_test_rx_overflow_callback,
+        .on_sent = NULL,
+        .on_send_q_ovf = NULL,
     };
 
-    ret = i2s_channel_register_event_callback(
-        s_rx_channel,
-        &rx_callbacks,
-        (void*)&s_rx_overflow_count
-    );
+    ret =
+        i2s_channel_register_event_callback(
+            s_rx_channel,
+            &rx_callbacks,
+            NULL);
 
     if (ret != ESP_OK)
     {
         (void)i2s_del_channel(s_rx_channel);
         s_rx_channel = NULL;
-        return ret;
-    }
-
-    i2s_event_callbacks_t tx_callbacks = {
-        .on_recv = NULL,
-        .on_recv_q_ovf = NULL,
-        .on_sent = NULL,
-        .on_send_q_ovf =
-            audio_test_tx_send_q_ovf_callback,
-    };
-
-    ret =
-        i2s_channel_register_event_callback(
-            s_tx_channel,
-            &tx_callbacks,
-            (void*)s_tx_send_q_ovf_count);
-
-    if (ret != ESP_OK)
-    {
-        (void)i2s_del_channel(
-            s_tx_channel);
-
-        s_tx_channel = NULL;
-
         return ret;
     }
 
@@ -1252,6 +1233,28 @@ static esp_err_t audio_test_start_i2s_tx(void)
 
     if (ret != ESP_OK)
     {
+        s_tx_channel = NULL;
+        return ret;
+    }
+
+    const i2s_event_callbacks_t tx_callbacks = {
+        .on_recv = NULL,
+        .on_recv_q_ovf = NULL,
+        .on_sent = NULL,
+        .on_send_q_ovf =
+            audio_test_tx_send_q_ovf_callback,
+    };
+
+    ret =
+        i2s_channel_register_event_callback(
+            s_tx_channel,
+            &tx_callbacks,
+            NULL);
+
+    if (ret != ESP_OK)
+    {
+        (void)i2s_del_channel(
+            s_tx_channel);
         s_tx_channel = NULL;
         return ret;
     }
