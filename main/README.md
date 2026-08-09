@@ -31,7 +31,9 @@ Status: Implemented and hardware accepted
     without starting TLS.
 11. Initialize/start `sensor_manager`.
 12. Schedule the one-shot network coordinator.
-13. Start `cloud_manager` only after stored-Wi-Fi startup or successful
+13. Initialize `audio_manager`, register its copied GUI status adapter, and
+    start its private record/DSP/playback stability task.
+14. Start `cloud_manager` only after stored-Wi-Fi startup or successful
     provisioning cleanup and Station adoption.
 
 ## Runtime Event Flow
@@ -45,6 +47,10 @@ wifi_manager callback
 sensor_manager callback
     -> copied sensor GUI model
     -> copied latest-value cloud telemetry
+
+audio_manager callback
+    -> copied audio GUI model
+    -> app_gui task renders dashboard status
 
 cloud_manager callback
     -> copied cloud GUI model
@@ -74,6 +80,7 @@ cleanup transaction.
 - Maximum provisioning sessions: 3.
 - Cloud retry: 5 seconds to 60 seconds.
 - Factory-reset input: active-low GPIO9, five-second hold.
+- Audio stability cycle: five-second recording, DSP, and playback at 100% volume.
 
 Firebase API key, device email, password, and optional expected UID come from
 local project Kconfig values in the generated, Git-ignored `sdkconfig`. They are
@@ -88,6 +95,7 @@ mechanism.
 - `provisioning_manager` owns temporary BLE transport and credential handoff.
 - `config_manager` owns durable application configuration.
 - `sensor_manager` owns DHT22 sampling.
+- `audio_manager` owns I2S RX/TX, PCM stability buffers, and audio diagnostics.
 - `firebase_auth` owns sign-in and token lifecycle.
 - `cloud_manager` owns authenticated telemetry and retry.
 - `app_gui` and `ui_manager_lvgl` own screens and LVGL synchronization.

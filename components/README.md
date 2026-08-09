@@ -12,6 +12,8 @@ components/
 |-- application/
 |   |-- app_network_coordinator/
 |   `-- app_reset_coordinator/
+|-- audio/
+|   `-- audio_manager/
 |-- cloud/
 |   |-- cloud_manager/
 |   `-- firebase_auth/
@@ -48,6 +50,7 @@ not define facade APIs or runtime behavior.
 | Domain | Components | Primary responsibility |
 |---|---|---|
 | Application | `app_network_coordinator`, `app_reset_coordinator` | Network boot policy and ordered factory reset |
+| Audio | `audio_manager` | I2S microphone/speaker ownership, PCM stability flow, and copied status diagnostics |
 | Cloud | `cloud_manager`, `firebase_auth` | Authenticated Firebase telemetry and token lifecycle |
 | Connectivity | `provisioning_manager`, `wifi_manager` | BLE provisioning and Wi-Fi Station lifecycle |
 | Display | `display_driver`, `waveshare__esp_lcd_st7735` | LCD bus and panel integration |
@@ -70,6 +73,7 @@ not define facade APIs or runtime behavior.
 - Application composition: [`main/README.md`](../main/README.md)
 - System architecture: [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)
 - Build and hardware setup: [`docs/SETUP.md`](../docs/SETUP.md)
+- Audio manager: [`audio/audio_manager/docs/README.md`](audio/audio_manager/docs/README.md)
 - Firebase Authentication component:
   [`cloud/firebase_auth/docs/README.md`](cloud/firebase_auth/docs/README.md)
 - Firebase setup and security:

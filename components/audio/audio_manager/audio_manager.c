@@ -5,7 +5,7 @@
  * The proven NewSolution audio path is intentionally preserved. This refactor
  * aligns lifecycle, status, callback, and state handling with the other
  * manager components in Smart Room Cloud Gateway so the same status model can
- * later feed app_gui without coupling audio_manager to LVGL.
+ * feed app_gui without coupling audio_manager to LVGL.
  */
 
 /* Includes ----------------------------------------------------------------- */
@@ -99,6 +99,23 @@ typedef struct
 
 typedef struct
 {
+    bool capture_i2s_active;
+    bool playback_i2s_active;
+    uint32_t rx_overflow_count;
+    uint32_t rx_timeout_count;
+    uint32_t tx_queue_overflow_count;
+    uint32_t tx_timeout_count;
+    uint32_t tx_partial_write_count;
+    uint32_t max_rx_read_duration_us;
+    uint32_t max_tx_write_duration_us;
+    uint64_t rx_bytes_requested;
+    uint64_t rx_bytes_read;
+    uint64_t tx_bytes_requested;
+    uint64_t tx_bytes_written;
+} audio_manager_diagnostics_t;
+
+typedef struct
+{
     bool initialized;
     bool rx_enabled;
     bool tx_enabled;
@@ -132,16 +149,10 @@ DMA_ATTR static int16_t s_tx_block[
 DMA_ATTR static const int16_t s_silence_block[
     AUDIO_MANAGER_FRAMES_PER_BLOCK * AUDIO_MANAGER_SLOT_COUNT] = {0};
 
-/* ISR callbacks remain counter-only. */
-DRAM_ATTR static volatile uint32_t s_rx_overflow_isr_count;
-DRAM_ATTR static volatile uint32_t s_tx_overflow_isr_count;
-
-/* Task-owned diagnostics. */
-static uint32_t s_rx_timeout_count;
-static uint32_t s_tx_timeout_count;
-static uint32_t s_tx_partial_write_count;
-static uint32_t s_max_rx_read_duration_us;
-static uint32_t s_max_tx_write_duration_us;
+/* Both ISR callbacks and tasks update these diagnostics. */
+DRAM_ATTR static portMUX_TYPE s_diagnostics_lock =
+    portMUX_INITIALIZER_UNLOCKED;
+DRAM_ATTR static audio_manager_diagnostics_t s_diagnostics = {0};
 
 /* Function Prototypes ------------------------------------------------------ */
 static bool audio_manager_rx_overflow_callback(
@@ -153,6 +164,21 @@ static bool audio_manager_tx_overflow_callback(
     i2s_event_data_t *event,
     void *user_context);
 
+static bool audio_manager_take_status_mutex(const char *operation);
+static void audio_manager_reset_diagnostics(void);
+static void audio_manager_snapshot_diagnostics(
+    audio_manager_diagnostics_t *diagnostics);
+static void audio_manager_set_capture_i2s_active(bool active);
+static void audio_manager_set_playback_i2s_active(bool active);
+static void audio_manager_record_rx_io(
+    esp_err_t result,
+    size_t bytes_read,
+    int64_t duration_us);
+static void audio_manager_record_tx_io(
+    esp_err_t result,
+    size_t bytes_requested,
+    size_t bytes_written,
+    int64_t duration_us);
 static void audio_manager_refresh_diagnostics_locked(void);
 static void audio_manager_notify_status_changed(void);
 static void audio_manager_set_state(audio_manager_state_t state);
@@ -194,23 +220,151 @@ static esp_err_t force_cycle_cleanup(void);
 static esp_err_t run_cycle(audio_cycle_metrics_t *metrics);
 static void log_cycle_diagnostics(
     uint32_t cycle,
-    uint32_t rx_overflow_before,
-    uint32_t rx_timeout_before,
-    uint32_t tx_overflow_before,
-    uint32_t tx_timeout_before,
-    uint32_t tx_partial_before);
+    const audio_manager_diagnostics_t *before);
 static void audio_manager_task(void *argument);
 
 /* Static Functions: Status / Callback ------------------------------------- */
+static bool audio_manager_take_status_mutex(const char *operation)
+{
+    if (s_runtime.status_mutex == NULL)
+    {
+        return false;
+    }
+
+    if (xSemaphoreTake(
+            s_runtime.status_mutex,
+            pdMS_TO_TICKS(AUDIO_MANAGER_MUTEX_TIMEOUT_MS)) == pdTRUE)
+    {
+        return true;
+    }
+
+    ESP_LOGE(
+        TAG,
+        "Status mutex timeout while %s",
+        (operation != NULL) ? operation : "updating diagnostics");
+    return false;
+}
+
+static void audio_manager_reset_diagnostics(void)
+{
+    portENTER_CRITICAL(&s_diagnostics_lock);
+    s_diagnostics = (audio_manager_diagnostics_t) {0};
+    portEXIT_CRITICAL(&s_diagnostics_lock);
+}
+
+static void audio_manager_snapshot_diagnostics(
+    audio_manager_diagnostics_t *diagnostics)
+{
+    if (diagnostics == NULL)
+    {
+        return;
+    }
+
+    portENTER_CRITICAL(&s_diagnostics_lock);
+    *diagnostics = s_diagnostics;
+    portEXIT_CRITICAL(&s_diagnostics_lock);
+}
+
+static void audio_manager_set_capture_i2s_active(bool active)
+{
+    portENTER_CRITICAL(&s_diagnostics_lock);
+    s_diagnostics.capture_i2s_active = active;
+    portEXIT_CRITICAL(&s_diagnostics_lock);
+}
+
+static void audio_manager_set_playback_i2s_active(bool active)
+{
+    portENTER_CRITICAL(&s_diagnostics_lock);
+    s_diagnostics.playback_i2s_active = active;
+    portEXIT_CRITICAL(&s_diagnostics_lock);
+}
+
+static void audio_manager_record_rx_io(
+    esp_err_t result,
+    size_t bytes_read,
+    int64_t duration_us)
+{
+    const uint32_t bounded_duration_us =
+        (duration_us <= 0)
+            ? 0U
+            : ((uint64_t)duration_us > UINT32_MAX)
+                ? UINT32_MAX
+                : (uint32_t)duration_us;
+
+    portENTER_CRITICAL(&s_diagnostics_lock);
+    s_diagnostics.rx_bytes_requested += sizeof(s_rx_block);
+    s_diagnostics.rx_bytes_read += bytes_read;
+
+    if (bounded_duration_us > s_diagnostics.max_rx_read_duration_us)
+    {
+        s_diagnostics.max_rx_read_duration_us = bounded_duration_us;
+    }
+
+    if (result == ESP_ERR_TIMEOUT)
+    {
+        ++s_diagnostics.rx_timeout_count;
+    }
+
+    portEXIT_CRITICAL(&s_diagnostics_lock);
+}
+
+static void audio_manager_record_tx_io(
+    esp_err_t result,
+    size_t bytes_requested,
+    size_t bytes_written,
+    int64_t duration_us)
+{
+    const uint32_t bounded_duration_us =
+        (duration_us <= 0)
+            ? 0U
+            : ((uint64_t)duration_us > UINT32_MAX)
+                ? UINT32_MAX
+                : (uint32_t)duration_us;
+
+    portENTER_CRITICAL(&s_diagnostics_lock);
+    s_diagnostics.tx_bytes_requested += bytes_requested;
+    s_diagnostics.tx_bytes_written += bytes_written;
+
+    if (bounded_duration_us > s_diagnostics.max_tx_write_duration_us)
+    {
+        s_diagnostics.max_tx_write_duration_us = bounded_duration_us;
+    }
+
+    if (result == ESP_ERR_TIMEOUT)
+    {
+        ++s_diagnostics.tx_timeout_count;
+    }
+
+    if (bytes_written != bytes_requested)
+    {
+        ++s_diagnostics.tx_partial_write_count;
+    }
+
+    portEXIT_CRITICAL(&s_diagnostics_lock);
+}
+
 static void audio_manager_refresh_diagnostics_locked(void)
 {
-    s_runtime.status.rx_overflow_count = s_rx_overflow_isr_count;
-    s_runtime.status.rx_timeout_count = s_rx_timeout_count;
-    s_runtime.status.tx_queue_overflow_count = s_tx_overflow_isr_count;
-    s_runtime.status.tx_timeout_count = s_tx_timeout_count;
-    s_runtime.status.tx_partial_write_count = s_tx_partial_write_count;
-    s_runtime.status.max_rx_read_duration_us = s_max_rx_read_duration_us;
-    s_runtime.status.max_tx_write_duration_us = s_max_tx_write_duration_us;
+    audio_manager_diagnostics_t diagnostics = {0};
+    audio_manager_snapshot_diagnostics(&diagnostics);
+
+    s_runtime.status.capture_i2s_active = diagnostics.capture_i2s_active;
+    s_runtime.status.playback_i2s_active = diagnostics.playback_i2s_active;
+    s_runtime.status.rx_bytes_requested = diagnostics.rx_bytes_requested;
+    s_runtime.status.rx_bytes_read = diagnostics.rx_bytes_read;
+    s_runtime.status.tx_bytes_requested = diagnostics.tx_bytes_requested;
+    s_runtime.status.tx_bytes_written = diagnostics.tx_bytes_written;
+    s_runtime.status.rx_overflow_count = diagnostics.rx_overflow_count;
+    s_runtime.status.rx_timeout_count = diagnostics.rx_timeout_count;
+    s_runtime.status.tx_queue_overflow_count =
+        diagnostics.tx_queue_overflow_count;
+    s_runtime.status.tx_timeout_count = diagnostics.tx_timeout_count;
+    s_runtime.status.tx_partial_write_count =
+        diagnostics.tx_partial_write_count;
+    s_runtime.status.max_rx_read_duration_us =
+        diagnostics.max_rx_read_duration_us;
+    s_runtime.status.max_tx_write_duration_us =
+        diagnostics.max_tx_write_duration_us;
 
     if (s_runtime.task_handle != NULL)
     {
@@ -230,7 +384,7 @@ static void audio_manager_notify_status_changed(void)
     audio_manager_status_callback_t callback;
     void *callback_context;
 
-    if (xSemaphoreTake(s_runtime.status_mutex, portMAX_DELAY) != pdTRUE)
+    if (!audio_manager_take_status_mutex("publishing status"))
     {
         return;
     }
@@ -258,7 +412,7 @@ static void audio_manager_set_state(audio_manager_state_t state)
 
     bool changed = false;
 
-    if (xSemaphoreTake(s_runtime.status_mutex, portMAX_DELAY) != pdTRUE)
+    if (!audio_manager_take_status_mutex("updating state"))
     {
         return;
     }
@@ -287,7 +441,9 @@ static bool IRAM_ATTR audio_manager_rx_overflow_callback(
     (void)handle;
     (void)event;
     (void)user_context;
-    ++s_rx_overflow_isr_count;
+    portENTER_CRITICAL_ISR(&s_diagnostics_lock);
+    ++s_diagnostics.rx_overflow_count;
+    portEXIT_CRITICAL_ISR(&s_diagnostics_lock);
     return false;
 }
 
@@ -299,7 +455,9 @@ static bool IRAM_ATTR audio_manager_tx_overflow_callback(
     (void)handle;
     (void)event;
     (void)user_context;
-    ++s_tx_overflow_isr_count;
+    portENTER_CRITICAL_ISR(&s_diagnostics_lock);
+    ++s_diagnostics.tx_queue_overflow_count;
+    portEXIT_CRITICAL_ISR(&s_diagnostics_lock);
     return false;
 }
 
@@ -420,6 +578,7 @@ static esp_err_t start_i2s_rx(void)
     {
         result = i2s_channel_enable(s_runtime.rx_channel);
         s_runtime.rx_enabled = (result == ESP_OK);
+        audio_manager_set_capture_i2s_active(s_runtime.rx_enabled);
     }
 
     if (result != ESP_OK)
@@ -431,6 +590,7 @@ static esp_err_t start_i2s_rx(void)
         (void)i2s_del_channel(s_runtime.rx_channel);
         s_runtime.rx_channel = NULL;
         s_runtime.rx_enabled = false;
+        audio_manager_set_capture_i2s_active(false);
     }
 
     return result;
@@ -441,6 +601,7 @@ static esp_err_t stop_i2s_rx(void)
     if (s_runtime.rx_channel == NULL)
     {
         s_runtime.rx_enabled = false;
+        audio_manager_set_capture_i2s_active(false);
         return ESP_OK;
     }
 
@@ -457,6 +618,7 @@ static esp_err_t stop_i2s_rx(void)
     }
 
     s_runtime.rx_enabled = false;
+    audio_manager_set_capture_i2s_active(false);
     const esp_err_t delete_result = i2s_del_channel(s_runtime.rx_channel);
     s_runtime.rx_channel = NULL;
 
@@ -483,17 +645,7 @@ static esp_err_t read_rx_block(size_t *frames_read)
         AUDIO_MANAGER_I2S_TIMEOUT_MS);
 
     const int64_t duration_us = esp_timer_get_time() - start_us;
-    if ((duration_us > 0) &&
-        ((uint64_t)duration_us > s_max_rx_read_duration_us))
-    {
-        s_max_rx_read_duration_us =
-            (duration_us > UINT32_MAX) ? UINT32_MAX : (uint32_t)duration_us;
-    }
-
-    if (result == ESP_ERR_TIMEOUT)
-    {
-        ++s_rx_timeout_count;
-    }
+    audio_manager_record_rx_io(result, bytes_read, duration_us);
 
     if (result != ESP_OK)
     {
@@ -752,12 +904,14 @@ static esp_err_t start_i2s_tx(void)
 
     result = i2s_channel_enable(s_runtime.tx_channel);
     s_runtime.tx_enabled = (result == ESP_OK);
+    audio_manager_set_playback_i2s_active(s_runtime.tx_enabled);
 
     if (result != ESP_OK)
     {
         (void)i2s_del_channel(s_runtime.tx_channel);
         s_runtime.tx_channel = NULL;
         s_runtime.tx_enabled = false;
+        audio_manager_set_playback_i2s_active(false);
     }
 
     return result;
@@ -768,6 +922,7 @@ static esp_err_t stop_i2s_tx(void)
     if (s_runtime.tx_channel == NULL)
     {
         s_runtime.tx_enabled = false;
+        audio_manager_set_playback_i2s_active(false);
         return hold_amplifier_data_low();
     }
 
@@ -784,6 +939,7 @@ static esp_err_t stop_i2s_tx(void)
     }
 
     s_runtime.tx_enabled = false;
+    audio_manager_set_playback_i2s_active(false);
     const esp_err_t delete_result = i2s_del_channel(s_runtime.tx_channel);
     s_runtime.tx_channel = NULL;
     const esp_err_t gpio_result = hold_amplifier_data_low();
@@ -822,22 +978,11 @@ static esp_err_t write_tx_frames(size_t frame_count)
         AUDIO_MANAGER_I2S_TIMEOUT_MS);
 
     const int64_t duration_us = esp_timer_get_time() - start_us;
-    if ((duration_us > 0) &&
-        ((uint64_t)duration_us > s_max_tx_write_duration_us))
-    {
-        s_max_tx_write_duration_us =
-            (duration_us > UINT32_MAX) ? UINT32_MAX : (uint32_t)duration_us;
-    }
-
-    if (result == ESP_ERR_TIMEOUT)
-    {
-        ++s_tx_timeout_count;
-    }
-
-    if (bytes_written != bytes_to_write)
-    {
-        ++s_tx_partial_write_count;
-    }
+    audio_manager_record_tx_io(
+        result,
+        bytes_to_write,
+        bytes_written,
+        duration_us);
 
     if (result != ESP_OK)
     {
@@ -1044,6 +1189,9 @@ static esp_err_t record_once(size_t *samples_recorded)
         return result;
     }
 
+    /* RX is active during startup discard and slot detection too. */
+    audio_manager_set_state(AUDIO_MANAGER_STATE_RECORDING);
+
     result = discard_microphone_startup();
     if (result == ESP_OK)
     {
@@ -1052,7 +1200,6 @@ static esp_err_t record_once(size_t *samples_recorded)
 
     if (result == ESP_OK)
     {
-        audio_manager_set_state(AUDIO_MANAGER_STATE_RECORDING);
         ESP_LOGI(
             TAG,
             "RECORDING %u seconds",
@@ -1302,34 +1449,44 @@ static esp_err_t run_cycle(audio_cycle_metrics_t *metrics)
 /* Static Functions: Stability Task ---------------------------------------- */
 static void log_cycle_diagnostics(
     uint32_t cycle,
-    uint32_t rx_overflow_before,
-    uint32_t rx_timeout_before,
-    uint32_t tx_overflow_before,
-    uint32_t tx_timeout_before,
-    uint32_t tx_partial_before)
+    const audio_manager_diagnostics_t *before)
 {
+    if (before == NULL)
+    {
+        return;
+    }
+
+    audio_manager_diagnostics_t after = {0};
+    audio_manager_snapshot_diagnostics(&after);
+
     const uint32_t rx_overflow_delta =
-        s_rx_overflow_isr_count - rx_overflow_before;
+        after.rx_overflow_count - before->rx_overflow_count;
     const uint32_t rx_timeout_delta =
-        s_rx_timeout_count - rx_timeout_before;
+        after.rx_timeout_count - before->rx_timeout_count;
     const uint32_t tx_overflow_delta =
-        s_tx_overflow_isr_count - tx_overflow_before;
+        after.tx_queue_overflow_count - before->tx_queue_overflow_count;
     const uint32_t tx_timeout_delta =
-        s_tx_timeout_count - tx_timeout_before;
+        after.tx_timeout_count - before->tx_timeout_count;
     const uint32_t tx_partial_delta =
-        s_tx_partial_write_count - tx_partial_before;
+        after.tx_partial_write_count - before->tx_partial_write_count;
+    const uint64_t rx_bytes_delta =
+        after.rx_bytes_read - before->rx_bytes_read;
+    const uint64_t tx_bytes_delta =
+        after.tx_bytes_written - before->tx_bytes_written;
 
     ESP_LOGI(
         TAG,
-        "CYCLE_DIAG #%u rx_ovf=%u rx_timeout=%u tx_q_ovf=%u tx_timeout=%u tx_partial=%u max_rx_us=%u max_tx_us=%u stack_hwm=%u_bytes",
+        "CYCLE_DIAG #%u rx_bytes=%llu tx_bytes=%llu rx_ovf=%u rx_timeout=%u tx_q_ovf=%u tx_timeout=%u tx_partial=%u max_rx_us=%u max_tx_us=%u stack_hwm=%u_bytes",
         (unsigned)cycle,
+        (unsigned long long)rx_bytes_delta,
+        (unsigned long long)tx_bytes_delta,
         (unsigned)rx_overflow_delta,
         (unsigned)rx_timeout_delta,
         (unsigned)tx_overflow_delta,
         (unsigned)tx_timeout_delta,
         (unsigned)tx_partial_delta,
-        (unsigned)s_max_rx_read_duration_us,
-        (unsigned)s_max_tx_write_duration_us,
+        (unsigned)after.max_rx_read_duration_us,
+        (unsigned)after.max_tx_write_duration_us,
         (unsigned)uxTaskGetStackHighWaterMark(NULL));
 }
 
@@ -1347,17 +1504,14 @@ static void audio_manager_task(void *argument)
     {
         uint32_t cycle = 0U;
 
-        if (xSemaphoreTake(s_runtime.status_mutex, portMAX_DELAY) == pdTRUE)
+        if (audio_manager_take_status_mutex("starting cycle"))
         {
             cycle = ++s_runtime.status.cycles_started;
             xSemaphoreGive(s_runtime.status_mutex);
         }
 
-        const uint32_t rx_overflow_before = s_rx_overflow_isr_count;
-        const uint32_t rx_timeout_before = s_rx_timeout_count;
-        const uint32_t tx_overflow_before = s_tx_overflow_isr_count;
-        const uint32_t tx_timeout_before = s_tx_timeout_count;
-        const uint32_t tx_partial_before = s_tx_partial_write_count;
+        audio_manager_diagnostics_t diagnostics_before = {0};
+        audio_manager_snapshot_diagnostics(&diagnostics_before);
 
         ESP_LOGI(
             TAG,
@@ -1367,7 +1521,7 @@ static void audio_manager_task(void *argument)
         audio_cycle_metrics_t metrics;
         const esp_err_t result = run_cycle(&metrics);
 
-        if (xSemaphoreTake(s_runtime.status_mutex, portMAX_DELAY) == pdTRUE)
+        if (audio_manager_take_status_mutex("storing cycle diagnostics"))
         {
             s_runtime.status.last_samples_recorded = metrics.samples_recorded;
             s_runtime.status.last_error = result;
@@ -1419,11 +1573,7 @@ static void audio_manager_task(void *argument)
 
         log_cycle_diagnostics(
             cycle,
-            rx_overflow_before,
-            rx_timeout_before,
-            tx_overflow_before,
-            tx_timeout_before,
-            tx_partial_before);
+            &diagnostics_before);
         log_heap_state("cycle_end");
 
         if (result != ESP_OK)
@@ -1523,13 +1673,7 @@ esp_err_t audio_manager_init(const audio_manager_config_t *config)
     memset(s_runtime.recording_pcm24, 0, s_runtime.recording_bytes);
     audio_dsp_workspace_init(s_runtime.dsp_workspace);
 
-    s_rx_overflow_isr_count = 0U;
-    s_tx_overflow_isr_count = 0U;
-    s_rx_timeout_count = 0U;
-    s_tx_timeout_count = 0U;
-    s_tx_partial_write_count = 0U;
-    s_max_rx_read_duration_us = 0U;
-    s_max_tx_write_duration_us = 0U;
+    audio_manager_reset_diagnostics();
 
     s_runtime.initialized = true;
     s_runtime.status = (audio_manager_status_t) {
@@ -1584,10 +1728,11 @@ esp_err_t audio_manager_register_status_callback(
     s_runtime.status_callback = callback;
     s_runtime.status_callback_context = user_context;
 
+    audio_manager_refresh_diagnostics_locked();
     audio_manager_status_t status_snapshot = s_runtime.status;
     xSemaphoreGive(s_runtime.status_mutex);
 
-    /* Seed future GUI/adapters immediately with the current lifecycle state. */
+    /* Seed GUI/adapters immediately with the current lifecycle state. */
     if (callback != NULL)
     {
         callback(&status_snapshot, user_context);
