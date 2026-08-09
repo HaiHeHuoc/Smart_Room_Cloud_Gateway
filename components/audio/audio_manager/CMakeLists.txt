@@ -1,0 +1,18 @@
+idf_component_register(
+    SRCS
+        "audio_manager.c"
+        "audio_dsp.c"
+        "audio_dsp_cooperative.c"
+    INCLUDE_DIRS
+        "include"
+    PRIV_INCLUDE_DIRS
+        "."
+    REQUIRES
+        common
+    PRIV_REQUIRES
+        esp_driver_i2s
+        esp_driver_gpio
+        esp_timer
+        esp_psram
+        freertos
+)
