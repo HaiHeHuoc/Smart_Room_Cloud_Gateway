@@ -2,11 +2,11 @@
 
 /**
  * @file audio_test.h
- * @brief Public API for the one-shot microphone capture diagnostic.
+ * @brief Public API for the bounded RX/TX audio coexistence diagnostic.
  *
- * The module owns its I2S receive channel and PSRAM capture buffer. Call its
- * APIs only from task context; it does not provide ISR-safe entry points or
- * concurrent capture support.
+ * The module owns its I2S channels and PSRAM capture/playback buffers. Call
+ * its APIs only from task context; it does not provide ISR-safe entry points
+ * or concurrent capture support.
  */
 
 /* Includes ----------------------------------------------------------------- */
@@ -25,8 +25,9 @@ extern "C"
 /**
  * @brief Initialize the microphone capture diagnostic.
  *
- * Allocates the capture buffer and configures the speaker data pin to its safe
- * low state. Must complete successfully before recording.
+ * Allocates the capture and playback buffers in PSRAM and configures the
+ * speaker data pin to its safe low state. Must complete successfully before
+ * recording or playback.
  *
  * @return ESP_OK on success; otherwise an ESP-IDF error code.
  */
@@ -46,16 +47,12 @@ esp_err_t audio_test_record_once(
     size_t *samples_recorded);
 
 /**
- * @brief Start the audio test module.
- *
- * @return ESP_OK on success; otherwise an ESP-IDF error code.
- */
-esp_err_t audio_test_start(void);
-
-/**
  * @brief Release diagnostic resources and leave the amplifier data pin low.
  *
- * Safe to call after a partial initialization or failed capture.
+ * Safe to call after a partial initialization or failed capture. It attempts
+ * to release both I2S directions before returning the first cleanup error.
+ *
+ * @return ESP_OK on success; otherwise the first ESP-IDF cleanup error.
  */
 esp_err_t audio_test_deinit(void);
 
@@ -70,6 +67,17 @@ esp_err_t audio_test_deinit(void);
  */
 esp_err_t audio_test_play_tone_once(void);
 
+/**
+ * @brief Play the PCM16 recording captured by audio_test_record_once().
+ *
+ * Blocks in task context until all requested samples have been transmitted or
+ * an I2S error occurs. @p sample_count is clamped to the capture-buffer size.
+ * The module retains ownership of the recording buffer.
+ *
+ * @param[in] sample_count Number of captured mono PCM16 samples to play.
+ *
+ * @return ESP_OK on success; otherwise an ESP-IDF error code.
+ */
 esp_err_t audio_test_play_recording_once(
     size_t sample_count);
 

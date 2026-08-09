@@ -1,7 +1,7 @@
 /* Includes ----------------------------------------------------------------- */
 /*
- * One-shot microphone diagnostic. The captured PCM buffer remains private to
- * this module; it is allocated in PSRAM so normal application services retain
+ * RX/TX coexistence diagnostic. Capture and playback buffers remain private to
+ * this module and are allocated in PSRAM so normal application services retain
  * Internal RAM headroom.
  */
 
@@ -157,14 +157,6 @@ static int64_t s_last_tx_write_us = 0;
 static int64_t s_max_tx_write_gap_us = 0;
 static int64_t s_max_tx_write_duration_us = 0;
 
-/* Global Variables --------------------------------------------------------- */
-
-/* Retained for external diagnostic inspection; capture uses local snapshots. */
-audio_test_pcm_stats_t stats = {
-    .min_sample = INT32_MAX,
-    .max_sample = INT32_MIN,
-};
-
 /* Function Prototypes ------------------------------------------------------ */
 
 /** @brief Configure the amplifier data pin so the speaker remains silent. */
@@ -214,6 +206,7 @@ static esp_err_t audio_test_capture(
     audio_test_pcm16_stats_t *pcm16_stats,
     audio_test_pcm16_gain_stats_t *gain_stats);
 
+/** @brief Down-convert a sign-extended 24-bit PCM sample to PCM16. */
 static int16_t audio_test_pcm24_to_pcm16(
     int32_t pcm24);
 
@@ -232,9 +225,11 @@ static esp_err_t audio_test_stop_i2s_tx(void);
 /** @brief Generate and synchronously transmit the configured diagnostic tone. */
 static esp_err_t audio_test_play_tone(void);
 
+/** @brief Stream a bounded portion of the captured PCM16 buffer over I2S TX. */
 static esp_err_t audio_test_play_recording(
     size_t sample_count);
 
+/** @brief Count I2S transmit-queue overflows without performing blocking work. */
 static bool audio_test_tx_send_q_ovf_callback(
     i2s_chan_handle_t handle,
     i2s_event_data_t *event,
@@ -1193,16 +1188,18 @@ static void audio_test_log_memory(
 
     ESP_LOGI(
         TAG,
-        "[%s] DMA free=%lu largest=%lu",
+        "[%s] DMA free=%lu min=%lu largest=%lu",
         stage,
         (unsigned long)dma_free,
+        (unsigned long)dma_minimum,
         (unsigned long)dma_largest);
 
     ESP_LOGI(
         TAG,
-        "[%s] PSRAM free=%lu largest=%lu",
+        "[%s] PSRAM free=%lu min=%lu largest=%lu",
         stage,
         (unsigned long)psram_free,
+        (unsigned long)psram_minimum,
         (unsigned long)psram_largest);
 
 
@@ -1495,36 +1492,28 @@ esp_err_t audio_test_init(void)
             MALLOC_CAP_SPIRAM |
             MALLOC_CAP_8BIT);
 
-    if (!esp_ptr_external_ram(s_audio_buffer))
-    {
-        ESP_LOGE(
-            TAG,
-            "Audio buffer was not allocated in PSRAM");
-
-        free(s_audio_buffer);
-        s_audio_buffer = NULL;
-
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    ESP_RETURN_ON_FALSE(
-        s_playback_buffer != NULL,
-        ESP_ERR_NO_MEM,
-        TAG,
-        "Failed to allocate playback buffer");
-
-    ESP_RETURN_ON_FALSE(
-        esp_ptr_external_ram(s_playback_buffer),
-        ESP_ERR_INVALID_STATE,
-        TAG,
-        "Playback buffer is not in PSRAM");
-
     if (s_playback_buffer == NULL)
     {
+        ESP_LOGE(TAG, "Failed to allocate playback buffer");
         free(s_audio_buffer);
         s_audio_buffer = NULL;
 
         return ESP_ERR_NO_MEM;
+    }
+
+    if (!esp_ptr_external_ram(s_audio_buffer) ||
+        !esp_ptr_external_ram(s_playback_buffer))
+    {
+        ESP_LOGE(
+            TAG,
+            "Audio buffers were not allocated in PSRAM");
+
+        free(s_playback_buffer);
+        s_playback_buffer = NULL;
+        free(s_audio_buffer);
+        s_audio_buffer = NULL;
+
+        return ESP_ERR_INVALID_STATE;
     }
 
     ESP_LOGI(
@@ -1556,6 +1545,9 @@ esp_err_t audio_test_deinit(void)
     const esp_err_t rx_ret =
         audio_test_stop_i2s_rx();
 
+    const esp_err_t tx_ret =
+        audio_test_stop_i2s_tx();
+
     if (rx_ret != ESP_OK)
     {
         ESP_LOGW(
@@ -1564,21 +1556,26 @@ esp_err_t audio_test_deinit(void)
             esp_err_to_name(rx_ret));
     }
 
-    if (!s_initialized)
+    if (tx_ret != ESP_OK)
     {
-        return ESP_OK;
+        ESP_LOGW(
+            TAG,
+            "Failed to stop TX during deinit: %s",
+            esp_err_to_name(tx_ret));
     }
 
-    ESP_LOGI(
-        TAG,
-        "Deinitializing audio coexistence test");
-
-    ESP_RETURN_ON_ERROR(
+    const esp_err_t safe_ret =
         gpio_set_level(
             AUDIO_GPIO_SPK_DOUT,
-            0),
-        TAG,
-        "Failed to hold amplifier DIN LOW");
+            0);
+
+    if (safe_ret != ESP_OK)
+    {
+        ESP_LOGW(
+            TAG,
+            "Failed to hold amplifier DIN LOW during deinit: %s",
+            esp_err_to_name(safe_ret));
+    }
 
     if (s_audio_buffer != NULL)
     {
@@ -1600,7 +1597,17 @@ esp_err_t audio_test_deinit(void)
         TAG,
         "Audio coexistence test deinitialized");
 
-    return ESP_OK;
+    if (rx_ret != ESP_OK)
+    {
+        return rx_ret;
+    }
+
+    if (tx_ret != ESP_OK)
+    {
+        return tx_ret;
+    }
+
+    return safe_ret;
 }
 
 /**
@@ -1631,9 +1638,18 @@ esp_err_t audio_test_record_once(
         "Audio buffer is not allocated");
 
     size_t captured = 0U;
-    audio_test_pcm_stats_t pcm_stats = {0};
-    audio_test_pcm16_stats_t pcm16_stats = {0};
-    audio_test_pcm16_gain_stats_t gain_stats = {0};
+    audio_test_pcm_stats_t pcm_stats = {
+        .min_sample = INT32_MAX,
+        .max_sample = INT32_MIN,
+    };
+    audio_test_pcm16_stats_t pcm16_stats = {
+        .min_sample = INT16_MAX,
+        .max_sample = INT16_MIN,
+    };
+    audio_test_pcm16_gain_stats_t gain_stats = {
+        .min_sample = INT16_MAX,
+        .max_sample = INT16_MIN,
+    };
 
     ESP_LOGI(
         TAG,
@@ -1936,6 +1952,12 @@ esp_err_t audio_test_play_tone_once(void)
     return ret;
 }
 
+/**
+ * @brief Play a bounded portion of the captured PCM16 recording.
+ *
+ * Starts and stops the temporary TX channel within this blocking task-context
+ * call. It preserves the original playback error when teardown also fails.
+ */
 esp_err_t audio_test_play_recording_once(
     size_t sample_count)
 {
