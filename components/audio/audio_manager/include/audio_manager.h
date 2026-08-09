@@ -96,11 +96,13 @@ typedef struct
 /**
  * @brief Receive a copied audio status snapshot after a state/result change.
  *
- * The callback runs in audio manager task context after the status mutex has
- * been released. Keep it non-blocking. The status pointer is temporary and
- * must not be retained after the callback returns. This contract is intended
- * to support a future app_gui queue adapter without allowing audio_manager to
- * depend directly on LVGL or app_gui.
+ * The callback always executes in task context after the status mutex has been
+ * released. During lifecycle calls it may execute in the caller task; during
+ * runtime state changes it executes in the audio manager task. It is never
+ * invoked from the I2S ISR callbacks. Keep it non-blocking. The status pointer
+ * is temporary and must not be retained after the callback returns. This
+ * contract is intended to support a future app_gui queue adapter without
+ * allowing audio_manager to depend directly on LVGL or app_gui.
  */
 typedef void (*audio_manager_status_callback_t)(
     const audio_manager_status_t *status,
@@ -142,9 +144,7 @@ esp_err_t audio_manager_register_status_callback(
  */
 esp_err_t audio_manager_start(void);
 
-/**
- * @brief Copy the current manager status under a bounded mutex wait.
- */
+/** @brief Copy the current manager status under a bounded mutex wait. */
 esp_err_t audio_manager_get_status(
     audio_manager_status_t *status);
 
