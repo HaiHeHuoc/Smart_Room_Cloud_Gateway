@@ -187,11 +187,55 @@ components/audio/audio_manager/
 Track state, capture/playback activity, overflow/underrun counts, byte counts,
 queue occupancy, and last error.
 
-### 11.4 Stress Closure
+### 11.4 SD/WAV Streaming Playback
+
+**Goal:** Prove that a local audio-file source can stream bounded PCM into the
+production playback path without coupling filesystem ownership into
+`audio_manager`.
+
+Reference flow:
+
+```text
+SD card
+    -> sd_card_manager / mounted filesystem
+    -> WAV parser / file-source task
+    -> bounded PCM chunks
+    -> audio_manager playback ring
+    -> I2S TX DMA
+    -> MAX98357A
+    -> speaker
+```
+
+- [ ] Keep `audio_manager` source-agnostic; it accepts PCM playback data and
+      does not own SD-card mount/unmount or general filesystem lifecycle.
+- [ ] Open a local WAV file through the project-owned SD/storage path.
+- [ ] Parse RIFF/WAVE structure and locate `fmt ` and `data` chunks without
+      assuming fixed chunk ordering.
+- [ ] Support a defined baseline of uncompressed PCM WAV first; validate sample
+      rate, channel count, sample width, block alignment, and data length before
+      playback.
+- [ ] Start with PCM16 mono/stereo formats that can be mapped explicitly to the
+      configured I2S TX format; reject unsupported formats deterministically.
+- [ ] Read and submit bounded chunks instead of loading the entire audio file
+      into RAM or PSRAM.
+- [ ] Use the bounded playback ring/backpressure policy from Phase 11.2 and
+      finite timeouts between the file-source producer and audio consumer.
+- [ ] Handle normal EOF, user stop/cancel, short reads, truncated/corrupt WAV,
+      missing file, SD read failure, and SD unmount/removal without leak,
+      deadlock, watchdog, or stale I2S ownership.
+- [ ] Measure SD-read latency, playback-ring occupancy, TX underrun/error
+      counters, CPU, Internal/DMA RAM, PSRAM, and task stack high-water marks
+      while the rest of the Gateway remains active.
+- [ ] Keep compressed codecs such as MP3/AAC/FLAC outside this baseline phase
+      unless a later requirement explicitly justifies decoder integration.
+
+### 11.5 Stress Closure
 
 - [ ] Run 1,000 start/stop cycles.
 - [ ] Test repeated init/deinit and partial-init cleanup.
 - [ ] Test queue full, starvation, producer/consumer imbalance, and reconnect.
+- [ ] Include repeated SD/WAV start/stop and EOF cycles with normal Gateway
+      services active.
 - [ ] Confirm no monotonic internal, DMA, or PSRAM loss.
 
 ## Acceptance
@@ -200,6 +244,15 @@ queue occupancy, and last error.
 - [ ] No unbounded allocation or queue.
 - [ ] No duplicate task/channel or use-after-free.
 - [ ] Worst-case stack remaining >= 20%.
+- [ ] A supported PCM WAV stored on SD plays end-to-end through
+      `audio_manager` -> I2S TX -> speaker without loading the full file into
+      memory.
+- [ ] Unsupported/corrupt WAV, missing file, and SD read/unmount failures are
+      bounded and recoverable without crash, leak, deadlock, or stale audio
+      state.
+- [ ] Filesystem and WAV parsing remain outside the core `audio_manager`
+      ownership boundary so future network/Xiaozhi sources can reuse the same
+      playback API.
 
 ---
 
