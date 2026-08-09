@@ -55,12 +55,11 @@
 /* Button manager ----------------------------------------------------------- */
 #include "button_manager.h"
 
-#include "audio_test.h"
+/* Audio manager ------------------------------------------------------------ */
+#include "audio_manager.h"
 
 /* Macros ------------------------------------------------------------------- */
 #define PERFORMANCE_MONITOR 1
-/* Test-only repeated RX/TX count; hardware acceptance requires >= 20 cycles. */
-#define AUDIO_TEST_CYCLE_COUNT 100U
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "MAIN_APP";
@@ -204,12 +203,6 @@ static bool app_map_wifi_status_to_network_event(
 static bool app_network_state_allows_cloud_start(
     app_network_coordinator_state_t state);
 
-/**
- * @brief Run bounded RX/TX coexistence cycles, release audio resources, and exit.
- *
- * @param[in] arg Unused task argument.
- */
-static void audio_test_task(void *arg);
 /* Application -------------------------------------------------------------- */
 /** @brief Initialize the current application services and run diagnostics. */
 void app_main(void)
@@ -399,6 +392,7 @@ void app_main(void)
             }
         }
     }
+
     esp_err_t wifi_ret =
         wifi_manager_init();
 
@@ -552,33 +546,41 @@ void app_main(void)
 
     bool cloud_started = false;
 
-    esp_err_t audio_ret = audio_test_init();
+    /*
+     * NewSolution audio integration: app_main only initializes the component
+     * and requests its private infinite soak task. Record/DSP/playback logic
+     * and task ownership remain completely inside audio_manager.
+     */
+    const audio_manager_config_t audio_config =
+        audio_manager_default_config();
+
+    esp_err_t audio_ret =
+        audio_manager_init(&audio_config);
 
     if (audio_ret != ESP_OK)
     {
         ESP_LOGE(
             TAG,
-            "Failed to initialize audio test: %s",
+            "Failed to initialize audio manager: %s",
             esp_err_to_name(audio_ret));
     }
     else
     {
-        BaseType_t task_ret =
-            xTaskCreate(
-                audio_test_task,
-                "audio_test",
-                4096,
-                NULL,
-                5,
-                NULL);
+        audio_ret = audio_manager_test_start();
 
-        if (task_ret != pdPASS)
+        if (audio_ret != ESP_OK)
         {
             ESP_LOGE(
                 TAG,
-                "Failed to create audio test task");
-
-            (void)audio_test_deinit();
+                "Failed to start audio manager stability task: %s",
+                esp_err_to_name(audio_ret));
+        }
+        else
+        {
+            ESP_LOGI(
+                TAG,
+                "Audio manager stability task started: record=%us",
+                (unsigned)audio_config.record_duration_seconds);
         }
     }
 
@@ -677,6 +679,7 @@ static esp_err_t network_platform_init(void)
 
         return ret;
     }
+
     /*
      * Create the default system event loop.
      *
@@ -733,7 +736,8 @@ static void app_wifi_status_callback(
 {
     (void)user_data;
 
-    if (status == NULL) {
+    if (status == NULL)
+    {
         return;
     }
 
@@ -778,28 +782,26 @@ static void app_wifi_status_callback(
         ui_status.ssid,
         sizeof(ui_status.ssid),
         "%s",
-        status->ssid
-    );
+        status->ssid);
 
     snprintf(
         ui_status.ipv4_address,
         sizeof(ui_status.ipv4_address),
         "%s",
-        status->ipv4_address
-    );
+        status->ipv4_address);
 
     const esp_err_t ret =
         app_gui_post_wifi_status(
-            &ui_status
-        );
+            &ui_status);
 
-    if (ret != ESP_OK) {
+    if (ret != ESP_OK)
+    {
         ESP_LOGW(
             TAG,
             "Failed to forward Wi-Fi status to UI: %s",
-            esp_err_to_name(ret)
-        );
+            esp_err_to_name(ret));
     }
+
     const esp_err_t cloud_network_error =
         cloud_manager_notify_network_state(
             status->has_ipv4_address);
@@ -814,7 +816,6 @@ static void app_wifi_status_callback(
             esp_err_to_name(cloud_network_error));
     }
 
-
     ESP_LOGD(
         TAG,
         "Wi-Fi callback: state=%s, ip=%s, reason=%u",
@@ -822,8 +823,7 @@ static void app_wifi_status_callback(
         status->has_ipv4_address
             ? status->ipv4_address
             : "<none>",
-        (unsigned int)status->disconnect_reason
-    );
+        (unsigned int)status->disconnect_reason);
 }
 
 static ui_sensor_state_t app_map_sensor_state(
@@ -1099,6 +1099,7 @@ static void app_button_event_callback(
                 (int)event_data->event);
             return;
     }
+
     /*
      * Non-blocking queue post only.
      *
@@ -1116,117 +1117,4 @@ static void app_button_event_callback(
             "Failed to forward button event to reset coordinator: %s",
             esp_err_to_name(post_ret));
     }
-}
-
-static void audio_test_task(void *arg)
-{
-    (void)arg;
-
-    uint32_t completed_cycles = 0U;
-    uint32_t rx_failures = 0U;
-    uint32_t tx_failures = 0U;
-
-    ESP_LOGI(
-        TAG,
-        "Starting audio coexistence stress test: cycles=%u",
-        AUDIO_TEST_CYCLE_COUNT);
-
-    for (uint32_t cycle = 1U;
-         cycle <= AUDIO_TEST_CYCLE_COUNT;
-         ++cycle)
-    {
-        ESP_LOGI(
-            TAG,
-            "========== AUDIO CYCLE %lu/%u ==========",
-            (unsigned long)cycle,
-            AUDIO_TEST_CYCLE_COUNT);
-
-        size_t samples_recorded = 0U;
-
-        esp_err_t ret =
-            audio_test_record_once(
-                &samples_recorded);
-
-        if (ret != ESP_OK)
-        {
-            rx_failures++;
-
-            ESP_LOGE(
-                TAG,
-                "Cycle %lu RX failed: %s",
-                (unsigned long)cycle,
-                esp_err_to_name(ret));
-
-            break;
-        }
-
-        ESP_LOGI(
-            TAG,
-            "Cycle %lu RX passed: samples=%lu",
-            (unsigned long)cycle,
-            (unsigned long)samples_recorded);
-
-        ret =
-            audio_test_play_recording_once(
-                samples_recorded);
-
-        if (ret != ESP_OK)
-        {
-            tx_failures++;
-
-            ESP_LOGE(
-                TAG,
-                "Cycle %lu TX failed: %s",
-                (unsigned long)cycle,
-                esp_err_to_name(ret));
-
-            break;
-        }
-
-        completed_cycles++;
-
-        ESP_LOGI(
-            TAG,
-            "Cycle %lu playback passed",
-            (unsigned long)cycle);
-
-        ESP_LOGI(
-            TAG,
-            "Cycle %lu stack remaining=%u bytes",
-            (unsigned long)cycle,
-            (unsigned)uxTaskGetStackHighWaterMark(NULL));
-    }
-
-    ESP_LOGI(
-        TAG,
-        "========== AUDIO STRESS SUMMARY ==========");
-
-    ESP_LOGI(
-        TAG,
-        "Completed cycles: %lu/%u",
-        (unsigned long)completed_cycles,
-        AUDIO_TEST_CYCLE_COUNT);
-
-    ESP_LOGI(
-        TAG,
-        "RX failures: %lu",
-        (unsigned long)rx_failures);
-
-    ESP_LOGI(
-        TAG,
-        "TX failures: %lu",
-        (unsigned long)tx_failures);
-
-    const esp_err_t deinit_ret =
-        audio_test_deinit();
-
-    if (deinit_ret != ESP_OK)
-    {
-        ESP_LOGW(
-            TAG,
-            "Audio test deinit failed: %s",
-            esp_err_to_name(deinit_ret));
-    }
-
-    vTaskDelete(NULL);
 }
