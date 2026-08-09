@@ -27,6 +27,7 @@
 #define APP_GUI_PROVISIONING_QR_QUEUE_LENGTH 1U
 #define APP_GUI_WIFI_STATUS_QUEUE_LENGTH 1U
 #define APP_GUI_SENSOR_STATUS_QUEUE_LENGTH 5U
+#define APP_GUI_AUDIO_STATUS_QUEUE_LENGTH 1U
 #define APP_GUI_CLOUD_STATUS_QUEUE_LENGTH 1U
 #define APP_GUI_UI_TASK_STACK_SIZE_BYTES   (24U * 1024U)
 #define APP_GUI_TASK_PRIORITY              5U
@@ -64,6 +65,32 @@
 #define APP_GUI_DASHBOARD_MARGIN_PX               4
 #define APP_GUI_DASHBOARD_RIGHT_X_PX             82
 #define APP_GUI_DASHBOARD_RIGHT_WIDTH_PX         76
+#define APP_GUI_DASHBOARD_STATUS_PANEL_HEIGHT_PX \
+    (APP_GUI_DASHBOARD_HEIGHT_PX - \
+     APP_GUI_DASHBOARD_HEADER_HEIGHT_PX - 1)
+/*
+ * Montserrat 10 has an 11-pixel line height. The 102-pixel status panel
+ * therefore uses symmetric 12/11/12/11/12-pixel outer/inter-row gaps.
+ */
+#define APP_GUI_DASHBOARD_STATUS_LABEL_HEIGHT_PX 11
+#define APP_GUI_DASHBOARD_STATUS_OUTER_GAP_PX    12
+#define APP_GUI_DASHBOARD_STATUS_SMALL_GAP_PX    11
+#define APP_GUI_DASHBOARD_STATUS_LARGE_GAP_PX    12
+#define APP_GUI_DASHBOARD_STATUS_WIFI_Y_PX \
+    (APP_GUI_DASHBOARD_HEADER_HEIGHT_PX + \
+     APP_GUI_DASHBOARD_STATUS_OUTER_GAP_PX)
+#define APP_GUI_DASHBOARD_STATUS_CLOUD_Y_PX \
+    (APP_GUI_DASHBOARD_STATUS_WIFI_Y_PX + \
+     APP_GUI_DASHBOARD_STATUS_LABEL_HEIGHT_PX + \
+     APP_GUI_DASHBOARD_STATUS_SMALL_GAP_PX)
+#define APP_GUI_DASHBOARD_STATUS_SENSOR_Y_PX \
+    (APP_GUI_DASHBOARD_STATUS_CLOUD_Y_PX + \
+     APP_GUI_DASHBOARD_STATUS_LABEL_HEIGHT_PX + \
+     APP_GUI_DASHBOARD_STATUS_LARGE_GAP_PX)
+#define APP_GUI_DASHBOARD_STATUS_AUDIO_Y_PX \
+    (APP_GUI_DASHBOARD_STATUS_SENSOR_Y_PX + \
+     APP_GUI_DASHBOARD_STATUS_LABEL_HEIGHT_PX + \
+     APP_GUI_DASHBOARD_STATUS_SMALL_GAP_PX)
 
 /* Type Definitions --------------------------------------------------------- */
 typedef enum
@@ -102,6 +129,7 @@ typedef struct
     lv_obj_t *wifi_ip_label;
     lv_obj_t *sensor_temperature_label;
     lv_obj_t *sensor_humidity_label;
+    lv_obj_t *sensor_audio_label;
     lv_obj_t *sensor_state_label;
     lv_obj_t *sensor_wifi_label;
     lv_obj_t *sensor_wifi_dot;
@@ -122,6 +150,7 @@ static QueueHandle_t s_provisioning_status_queue = NULL;
 static QueueHandle_t s_provisioning_qr_queue = NULL;
 static QueueHandle_t s_wifi_status_queue = NULL;
 static QueueHandle_t s_sensor_status_queue = NULL;
+static QueueHandle_t s_audio_status_queue = NULL;
 static QueueHandle_t s_cloud_status_queue = NULL;
 static TaskHandle_t s_ui_task_handle = NULL;
 static app_gui_screen_id_t s_current_screen_id = APP_GUI_SCREEN_NONE;
@@ -144,6 +173,11 @@ static bool s_latest_wifi_status_available = false;
 static ui_wifi_status_t s_latest_wifi_status = {0};
 static bool s_latest_sensor_status_available = false;
 static ui_sensor_status_t s_latest_sensor_status = {0};
+static bool s_latest_audio_status_available = false;
+static ui_audio_status_t s_latest_audio_status = {
+    .state = UI_AUDIO_STATE_UNAVAILABLE,
+    .last_error = ESP_OK,
+};
 static bool s_latest_cloud_status_available = false;
 static ui_cloud_status_t s_latest_cloud_status = {0};
 
@@ -164,6 +198,7 @@ static lv_timer_t *s_wifi_screen_timer = NULL;
 /* Sensor object references are valid only while the sensor screen is active. */
 static lv_obj_t *s_sensor_temperature_label = NULL;
 static lv_obj_t *s_sensor_humidity_label = NULL;
+static lv_obj_t *s_sensor_audio_label = NULL;
 static lv_obj_t *s_sensor_state_label = NULL;
 static lv_obj_t *s_sensor_wifi_label = NULL;
 static lv_obj_t *s_sensor_wifi_dot = NULL;
@@ -253,6 +288,10 @@ static const char *app_gui_wifi_state_to_string(ui_wifi_state_t state);
 static lv_color_t app_gui_wifi_state_color(ui_wifi_state_t state);
 static const char *app_gui_sensor_state_to_string(ui_sensor_state_t state);
 static lv_color_t app_gui_sensor_state_color(ui_sensor_state_t state);
+static const char *app_gui_audio_status_to_string(
+    const ui_audio_status_t *status);
+static lv_color_t app_gui_audio_status_color(
+    const ui_audio_status_t *status);
 static const char *app_gui_cloud_state_to_string(ui_cloud_state_t state);
 static lv_color_t app_gui_cloud_state_color(ui_cloud_state_t state);
 static lv_obj_t *app_gui_create_dashboard_rule(
@@ -278,6 +317,8 @@ static void app_gui_render_wifi_status(
     const ui_wifi_status_t *status);
 static void app_gui_render_sensor_status(
     const ui_sensor_status_t *status);
+static void app_gui_render_audio_status(
+    const ui_audio_status_t *status);
 static void app_gui_render_sensor_wifi_status(
     const ui_wifi_status_t *status);
 static void app_gui_render_cloud_status(
@@ -304,6 +345,7 @@ static void app_gui_process_provisioning_status_queue(void);
 static void app_gui_process_commands(void);
 static void app_gui_process_provisioning_qr_payload(void);
 static void app_gui_process_sensor_status(void);
+static void app_gui_process_audio_status(void);
 static void app_gui_process_wifi_status(void);
 static void app_gui_process_cloud_status(void);
 static void app_gui_log_stack_usage(const char *task_name);
@@ -687,6 +729,84 @@ static lv_color_t app_gui_provisioning_state_color(
     }
 }
 
+static const char *app_gui_audio_status_to_string(
+    const ui_audio_status_t *status)
+{
+    if (status == NULL)
+    {
+        return "Audio: --";
+    }
+
+    if ((status->state == UI_AUDIO_STATE_IDLE) &&
+        (status->last_error != ESP_OK))
+    {
+        return "Audio: ERR";
+    }
+
+    switch (status->state)
+    {
+        case UI_AUDIO_STATE_READY:
+            return "Audio: Ready";
+
+        case UI_AUDIO_STATE_IDLE:
+            return "Audio: Idle";
+
+        case UI_AUDIO_STATE_RECORDING:
+            return "Audio: REC";
+
+        case UI_AUDIO_STATE_PROCESSING:
+            return "Audio: DSP";
+
+        case UI_AUDIO_STATE_PLAYBACK:
+            return "Audio: PLAY";
+
+        case UI_AUDIO_STATE_ERROR:
+            return "Audio: ERR";
+
+        case UI_AUDIO_STATE_UNAVAILABLE:
+        default:
+            return "Audio: --";
+    }
+}
+
+static lv_color_t app_gui_audio_status_color(
+    const ui_audio_status_t *status)
+{
+    if ((status == NULL) ||
+        (status->state == UI_AUDIO_STATE_UNAVAILABLE))
+    {
+        return lv_color_hex(0x7B858A);
+    }
+
+    if ((status->state == UI_AUDIO_STATE_IDLE) &&
+        (status->last_error != ESP_OK))
+    {
+        return lv_color_hex(0xF06464);
+    }
+
+    switch (status->state)
+    {
+        case UI_AUDIO_STATE_RECORDING:
+            return lv_color_hex(0xF06464);
+
+        case UI_AUDIO_STATE_PROCESSING:
+            return lv_color_hex(0xFFC857);
+
+        case UI_AUDIO_STATE_PLAYBACK:
+            return lv_color_hex(0x49C978);
+
+        case UI_AUDIO_STATE_ERROR:
+            return lv_color_hex(0xF06464);
+
+        case UI_AUDIO_STATE_READY:
+            return lv_color_hex(0x4DB6E5);
+
+        case UI_AUDIO_STATE_IDLE:
+        default:
+            return lv_color_hex(0x7B858A);
+    }
+}
+
 static void app_gui_cleanup_queues(void)
 {
     if (s_command_queue != NULL) {
@@ -712,6 +832,11 @@ static void app_gui_cleanup_queues(void)
     if (s_sensor_status_queue != NULL) {
         vQueueDeleteWithCaps(s_sensor_status_queue);
         s_sensor_status_queue = NULL;
+    }
+
+    if (s_audio_status_queue != NULL) {
+        vQueueDeleteWithCaps(s_audio_status_queue);
+        s_audio_status_queue = NULL;
     }
 
     if (s_cloud_status_queue != NULL) {
@@ -750,6 +875,7 @@ static void app_gui_capture_widget_refs(
     refs->wifi_ip_label = s_wifi_ip_label;
     refs->sensor_temperature_label = s_sensor_temperature_label;
     refs->sensor_humidity_label = s_sensor_humidity_label;
+    refs->sensor_audio_label = s_sensor_audio_label;
     refs->sensor_state_label = s_sensor_state_label;
     refs->sensor_wifi_label = s_sensor_wifi_label;
     refs->sensor_wifi_dot = s_sensor_wifi_dot;
@@ -778,6 +904,7 @@ static void app_gui_clear_widget_refs(void)
     s_wifi_ip_label = NULL;
     s_sensor_temperature_label = NULL;
     s_sensor_humidity_label = NULL;
+    s_sensor_audio_label = NULL;
     s_sensor_state_label = NULL;
     s_sensor_wifi_label = NULL;
     s_sensor_wifi_dot = NULL;
@@ -812,6 +939,7 @@ static void app_gui_apply_widget_refs(
     s_wifi_ip_label = refs->wifi_ip_label;
     s_sensor_temperature_label = refs->sensor_temperature_label;
     s_sensor_humidity_label = refs->sensor_humidity_label;
+    s_sensor_audio_label = refs->sensor_audio_label;
     s_sensor_state_label = refs->sensor_state_label;
     s_sensor_wifi_label = refs->sensor_wifi_label;
     s_sensor_wifi_dot = refs->sensor_wifi_dot;
@@ -1683,8 +1811,7 @@ static esp_err_t app_gui_create_sensor_screen(
         APP_GUI_DASHBOARD_COLUMN_X_PX,
         APP_GUI_DASHBOARD_HEADER_HEIGHT_PX,
         1,
-        APP_GUI_DASHBOARD_HEIGHT_PX -
-            APP_GUI_DASHBOARD_HEADER_HEIGHT_PX - 1);
+        APP_GUI_DASHBOARD_STATUS_PANEL_HEIGHT_PX);
     s_sensor_wifi_dot = app_gui_create_dashboard_dot(
         screen,
         128,
@@ -1731,10 +1858,15 @@ static esp_err_t app_gui_create_sensor_screen(
         app_gui_create_sensor_value_label(screen, 47, "-");
     s_sensor_humidity_label =
         app_gui_create_sensor_value_label(screen, 91, "-");
+    s_sensor_audio_label =
+        app_gui_create_sensor_value_label(
+            screen,
+            APP_GUI_DASHBOARD_STATUS_AUDIO_Y_PX,
+            "Audio: --");
     s_sensor_wifi_label =
         app_gui_create_sensor_value_label(
             screen,
-            38,
+            APP_GUI_DASHBOARD_STATUS_WIFI_Y_PX,
             !wifi_status_available
                 ? "Wi-Fi: --"
                 : (wifi_online
@@ -1743,15 +1875,19 @@ static esp_err_t app_gui_create_sensor_screen(
     s_sensor_cloud_label =
         app_gui_create_sensor_value_label(
             screen,
-            68,
+            APP_GUI_DASHBOARD_STATUS_CLOUD_Y_PX,
             cloud_status_available
                 ? app_gui_cloud_state_to_string(cloud_state)
                 : "Cloud: --");
     s_sensor_state_label =
-        app_gui_create_sensor_value_label(screen, 98, "Sensor: --");
+        app_gui_create_sensor_value_label(
+            screen,
+            APP_GUI_DASHBOARD_STATUS_SENSOR_Y_PX,
+            "Sensor: --");
 
     if ((s_sensor_temperature_label == NULL) ||
         (s_sensor_humidity_label == NULL) ||
+        (s_sensor_audio_label == NULL) ||
         (s_sensor_wifi_label == NULL) ||
         (s_sensor_cloud_label == NULL) ||
         (s_sensor_state_label == NULL)) {
@@ -1784,6 +1920,7 @@ static esp_err_t app_gui_create_sensor_screen(
         s_sensor_wifi_label,
         s_sensor_cloud_label,
         s_sensor_state_label,
+        s_sensor_audio_label,
     };
 
     for (size_t index = 0U;
@@ -1793,6 +1930,13 @@ static esp_err_t app_gui_create_sensor_screen(
         lv_obj_set_width(
             right_values[index],
             APP_GUI_DASHBOARD_RIGHT_WIDTH_PX);
+        lv_obj_set_height(
+            right_values[index],
+            APP_GUI_DASHBOARD_STATUS_LABEL_HEIGHT_PX);
+        lv_obj_set_style_pad_ver(
+            right_values[index],
+            0,
+            LV_PART_MAIN);
         lv_obj_set_style_text_font(
             right_values[index],
             &lv_font_montserrat_10,
@@ -1815,6 +1959,11 @@ static esp_err_t app_gui_create_sensor_screen(
     lv_obj_set_style_text_color(
         s_sensor_state_label,
         app_gui_sensor_state_color(UI_SENSOR_STATE_INITIALIZING),
+        LV_PART_MAIN);
+
+    lv_obj_set_style_text_color(
+        s_sensor_audio_label,
+        inactive_color,
         LV_PART_MAIN);
 
     return ESP_OK;
@@ -2197,6 +2346,23 @@ static void app_gui_render_sensor_status(
         LV_PART_MAIN);
 }
 
+static void app_gui_render_audio_status(
+    const ui_audio_status_t *status)
+{
+    if ((status == NULL) || (s_sensor_audio_label == NULL))
+    {
+        return;
+    }
+
+    lv_label_set_text(
+        s_sensor_audio_label,
+        app_gui_audio_status_to_string(status));
+    lv_obj_set_style_text_color(
+        s_sensor_audio_label,
+        app_gui_audio_status_color(status),
+        LV_PART_MAIN);
+}
+
 static void app_gui_render_sensor_wifi_status(
     const ui_wifi_status_t *status)
 {
@@ -2272,6 +2438,7 @@ static bool app_gui_render_cached_status(
     bool provisioning_qr_available = false;
     bool wifi_available = false;
     bool sensor_available = false;
+    bool audio_available = false;
     bool cloud_available = false;
     ui_provisioning_status_t provisioning_status = {
         .session_generation = 0U,
@@ -2284,6 +2451,10 @@ static bool app_gui_render_cached_status(
     ui_provisioning_qr_payload_t provisioning_qr_payload = {0};
     ui_wifi_status_t wifi_status = {0};
     ui_sensor_status_t sensor_status = {0};
+    ui_audio_status_t audio_status = {
+        .state = UI_AUDIO_STATE_UNAVAILABLE,
+        .last_error = ESP_OK,
+    };
     ui_cloud_status_t cloud_status = {0};
 
     taskENTER_CRITICAL(&s_screen_id_lock);
@@ -2312,6 +2483,8 @@ static bool app_gui_render_cached_status(
         wifi_status = s_latest_wifi_status;
         sensor_available = s_latest_sensor_status_available;
         sensor_status = s_latest_sensor_status;
+        audio_available = s_latest_audio_status_available;
+        audio_status = s_latest_audio_status;
         cloud_available = s_latest_cloud_status_available;
         cloud_status = s_latest_cloud_status;
     }
@@ -2369,6 +2542,10 @@ static bool app_gui_render_cached_status(
 
     if (sensor_available) {
         app_gui_render_sensor_status(&sensor_status);
+    }
+
+    if (audio_available) {
+        app_gui_render_audio_status(&audio_status);
     }
 
     if (cloud_available) {
@@ -2861,6 +3038,39 @@ static void app_gui_process_sensor_status(void)
     );
 }
 
+/* Audio Queue Processing -------------------------------------------------- */
+static void app_gui_process_audio_status(void)
+{
+    ui_audio_status_t audio_status = {
+        .state = UI_AUDIO_STATE_UNAVAILABLE,
+        .last_error = ESP_OK,
+    };
+
+    if ((s_audio_status_queue == NULL) ||
+        (xQueueReceive(
+            s_audio_status_queue,
+            &audio_status,
+            0) != pdTRUE))
+    {
+        return;
+    }
+
+    taskENTER_CRITICAL(&s_screen_id_lock);
+    s_latest_audio_status = audio_status;
+    s_latest_audio_status_available = true;
+    taskEXIT_CRITICAL(&s_screen_id_lock);
+
+    app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
+
+    if ((app_gui_get_screen_id(&screen_id) == ESP_OK) &&
+        (screen_id == APP_GUI_SCREEN_SENSOR_DASHBOARD))
+    {
+        ui_manager_lvgl_wait_for_mutex();
+        app_gui_render_audio_status(&audio_status);
+        ui_manager_lvgl_release_mutex();
+    }
+}
+
 /* Cloud Queue Processing ------------------------------------------------- */
 static void app_gui_process_cloud_status(void)
 {
@@ -2976,6 +3186,8 @@ static void app_gui_process_lvgl(void)
 
     app_gui_process_sensor_status();
 
+    app_gui_process_audio_status();
+
     app_gui_process_cloud_status();
 
     app_gui_process_wifi_status();
@@ -3018,6 +3230,7 @@ esp_err_t app_gui_init(void)
         (s_provisioning_qr_queue != NULL) ||
         (s_wifi_status_queue != NULL) ||
         (s_sensor_status_queue != NULL) ||
+        (s_audio_status_queue != NULL) ||
         (s_cloud_status_queue != NULL)) {
         ESP_LOGW(TAG, "Application GUI is already initialized");
         return ESP_ERR_INVALID_STATE;
@@ -3085,6 +3298,19 @@ esp_err_t app_gui_init(void)
         return ESP_ERR_NO_MEM;
     }
 
+    s_audio_status_queue =
+        xQueueCreateWithCaps(
+            APP_GUI_AUDIO_STATUS_QUEUE_LENGTH,
+            sizeof(ui_audio_status_t),
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
+        );
+
+    if (s_audio_status_queue == NULL) {
+        ESP_LOGE(TAG, "Failed to create audio GUI status queue");
+        app_gui_cleanup_queues();
+        return ESP_ERR_NO_MEM;
+    }
+
     s_cloud_status_queue =
         xQueueCreateWithCaps(
             APP_GUI_CLOUD_STATUS_QUEUE_LENGTH,
@@ -3110,6 +3336,7 @@ esp_err_t app_gui_start_ui_task(void)
         (s_provisioning_qr_queue == NULL) ||
         (s_wifi_status_queue == NULL) ||
         (s_sensor_status_queue == NULL) ||
+        (s_audio_status_queue == NULL) ||
         (s_cloud_status_queue == NULL)) {
         ESP_LOGE(TAG, "Application GUI is not initialized");
         return ESP_ERR_INVALID_STATE;
@@ -3316,6 +3543,30 @@ esp_err_t app_gui_post_sensor_status(
          */
         ESP_LOGE(TAG, "GUI Sensor queue updating TimeOut");
         return ESP_ERR_TIMEOUT;
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t app_gui_post_audio_status(
+    const ui_audio_status_t *status)
+{
+    if (status == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_audio_status_queue == NULL)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (xQueueOverwrite(
+            s_audio_status_queue,
+            status) != pdTRUE)
+    {
+        ESP_LOGW(TAG, "Failed to post audio status to UI");
+        return ESP_FAIL;
     }
 
     return ESP_OK;

@@ -171,6 +171,15 @@ static void app_sensor_status_callback(
     const sensor_manager_status_t *status,
     void *user_context);
 
+/** @brief Map an audio manager pipeline state to its compact GUI equivalent. */
+static ui_audio_state_t app_map_audio_state(
+    audio_manager_state_t state);
+
+/** @brief Copy audio status into the GUI queue without calling LVGL. */
+static void app_audio_status_callback(
+    const audio_manager_status_t *status,
+    void *user_context);
+
 /** @brief Map a cloud manager state to its application GUI equivalent. */
 static ui_cloud_state_t app_map_cloud_state(
     cloud_manager_state_t state);
@@ -566,7 +575,20 @@ void app_main(void)
     }
     else
     {
-        audio_ret = audio_manager_test_start();
+        const esp_err_t audio_gui_ret =
+            audio_manager_register_status_callback(
+                app_audio_status_callback,
+                NULL);
+
+        if (audio_gui_ret != ESP_OK)
+        {
+            ESP_LOGW(
+                TAG,
+                "Failed to register audio GUI status callback: %s",
+                esp_err_to_name(audio_gui_ret));
+        }
+
+        audio_ret = audio_manager_start();
 
         if (audio_ret != ESP_OK)
         {
@@ -845,6 +867,63 @@ static ui_sensor_state_t app_map_sensor_state(
         case SENSOR_MANAGER_STATE_RUNNING:
         default:
             return UI_SENSOR_STATE_INITIALIZING;
+    }
+}
+
+static ui_audio_state_t app_map_audio_state(
+    audio_manager_state_t state)
+{
+    switch (state)
+    {
+        case AUDIO_MANAGER_STATE_INITIALIZED:
+            return UI_AUDIO_STATE_READY;
+
+        case AUDIO_MANAGER_STATE_IDLE:
+            return UI_AUDIO_STATE_IDLE;
+
+        case AUDIO_MANAGER_STATE_RECORDING:
+            return UI_AUDIO_STATE_RECORDING;
+
+        case AUDIO_MANAGER_STATE_PROCESSING:
+            return UI_AUDIO_STATE_PROCESSING;
+
+        case AUDIO_MANAGER_STATE_PLAYBACK:
+            return UI_AUDIO_STATE_PLAYBACK;
+
+        case AUDIO_MANAGER_STATE_ERROR:
+            return UI_AUDIO_STATE_ERROR;
+
+        case AUDIO_MANAGER_STATE_UNINITIALIZED:
+        default:
+            return UI_AUDIO_STATE_UNAVAILABLE;
+    }
+}
+
+static void app_audio_status_callback(
+    const audio_manager_status_t *status,
+    void *user_context)
+{
+    (void)user_context;
+
+    if (status == NULL)
+    {
+        return;
+    }
+
+    const ui_audio_status_t ui_status =
+    {
+        .state = app_map_audio_state(status->state),
+        .last_error = status->last_error,
+    };
+
+    const esp_err_t ret = app_gui_post_audio_status(&ui_status);
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGD(
+            TAG,
+            "Audio GUI update dropped: %s",
+            esp_err_to_name(ret));
     }
 }
 
