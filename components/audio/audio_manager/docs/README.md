@@ -44,7 +44,7 @@ static void app_audio_status_callback(
 }
 ```
 
-The callback executes in audio-manager task context after the internal status mutex has been released. It must return quickly and must not call LVGL directly.
+The callback always executes in task context after the internal status mutex has been released. Lifecycle calls may invoke it in the caller task, while runtime state transitions invoke it in the audio manager task. It is never invoked from the I2S ISR callbacks. The callback must return quickly and must not call LVGL directly.
 
 Suggested GUI meanings:
 
