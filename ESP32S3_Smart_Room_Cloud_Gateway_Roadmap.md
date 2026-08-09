@@ -1377,9 +1377,10 @@ adding a production audio component or Xiaozhi dependency.
 production microphone, speaker, I2S, buffering, and audio status behavior.
 
 **Current checkpoint:** The NewSolution stability foundation, copied GUI state
-adapter, and partial Phase 11.3 diagnostics are implemented. Sprint 11 remains
-gated by Sprint 10 hardware acceptance and by the missing manager-owned PCM
-ring needed for live occupancy and true underrun diagnostics.
+adapter, partial Phase 11.3 diagnostics, and a build-verified Phase 11.4.1
+private SD/WAV reader foundation are implemented. Sprint 11 remains gated by
+Sprint 10 hardware acceptance and by the missing manager-owned PCM ring needed
+for live occupancy, true underrun diagnostics, and scheduled WAV playback.
 
 ### Placement And Dependencies
 
