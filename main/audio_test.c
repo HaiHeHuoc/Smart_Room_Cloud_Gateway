@@ -37,6 +37,8 @@
 
 #define AUDIO_TEST_SLOT_COUNT           2U
 #define AUDIO_TEST_FRAMES_PER_BLOCK     256U
+#define AUDIO_TEST_FRAMES_DMA_COUNTER     8U
+
 #define AUDIO_TEST_I2S_TIMEOUT_MS       1000U
 
 #define AUDIO_TEST_STARTUP_DISCARD_BLOCKS   40U
@@ -146,6 +148,15 @@ static int64_t s_max_rx_read_duration_us = 0;
 static int64_t s_max_rx_processing_gap_us = 0;
 static int64_t s_last_rx_read_return_us = 0;
 
+static volatile uint32_t s_tx_send_q_ovf_count = 0U;
+
+static uint32_t s_tx_write_timeout_count = 0U;
+static uint32_t s_tx_partial_write_count = 0U;
+
+static int64_t s_last_tx_write_us = 0;
+static int64_t s_max_tx_write_gap_us = 0;
+static int64_t s_max_tx_write_duration_us = 0;
+
 /* Global Variables --------------------------------------------------------- */
 
 /* Retained for external diagnostic inspection; capture uses local snapshots. */
@@ -224,7 +235,26 @@ static esp_err_t audio_test_play_tone(void);
 static esp_err_t audio_test_play_recording(
     size_t sample_count);
 
+static bool audio_test_tx_send_q_ovf_callback(
+    i2s_chan_handle_t handle,
+    i2s_event_data_t *event,
+    void *user_ctx);
+
 /* Static Functions --------------------------------------------------------- */
+static bool IRAM_ATTR audio_test_tx_send_q_ovf_callback(
+    i2s_chan_handle_t handle,
+    i2s_event_data_t *event,
+    void *user_ctx)
+{
+    (void)handle;
+    (void)event;
+    (void)user_ctx;
+
+    s_tx_send_q_ovf_count++;
+
+    return false;
+}
+
 static esp_err_t audio_test_play_recording(
     size_t sample_count)
 {
@@ -306,14 +336,47 @@ static esp_err_t audio_test_play_recording(
 
         size_t bytes_written = 0U;
 
+        const int64_t write_start_us =
+            esp_timer_get_time();
+
+        if (s_last_tx_write_us != 0)
+        {
+            const int64_t gap_us =
+                write_start_us -
+                s_last_tx_write_us;
+
+            if (gap_us >
+                s_max_tx_write_gap_us)
+            {
+                s_max_tx_write_gap_us =
+                    gap_us;
+            }
+        }
+
         const esp_err_t ret =
             i2s_channel_write(
                 s_tx_channel,
                 s_tx_block,
                 bytes_to_write,
                 &bytes_written,
-                pdMS_TO_TICKS(
-                    AUDIO_TEST_I2S_TIMEOUT_MS));
+                AUDIO_TEST_I2S_TIMEOUT_MS);
+
+        const int64_t write_end_us =
+            esp_timer_get_time();
+
+        const int64_t duration_us =
+            write_end_us -
+            write_start_us;
+
+        if (duration_us >
+            s_max_tx_write_duration_us)
+        {
+            s_max_tx_write_duration_us =
+                duration_us;
+        }
+
+        s_last_tx_write_us =
+            write_end_us;
 
         if (ret != ESP_OK)
         {
@@ -327,6 +390,7 @@ static esp_err_t audio_test_play_recording(
 
         if (bytes_written != bytes_to_write)
         {
+            s_tx_partial_write_count++;
             ESP_LOGE(
                 TAG,
                 "Partial playback write: "
@@ -934,7 +998,7 @@ static esp_err_t audio_test_start_i2s_rx(void)
             I2S_NUM_0,
             I2S_ROLE_MASTER);
 
-    channel_config.dma_desc_num = 6;
+    channel_config.dma_desc_num = AUDIO_TEST_FRAMES_DMA_COUNTER;
     channel_config.dma_frame_num =
         AUDIO_TEST_FRAMES_PER_BLOCK;
 
@@ -950,7 +1014,7 @@ static esp_err_t audio_test_start_i2s_rx(void)
         return ret;
     }
 
-    i2s_event_callbacks_t callbacks = {
+    i2s_event_callbacks_t rx_callbacks = {
     .on_recv = NULL,
     .on_recv_q_ovf = audio_test_rx_overflow_callback,
     .on_sent = NULL,
@@ -959,7 +1023,7 @@ static esp_err_t audio_test_start_i2s_rx(void)
 
     ret = i2s_channel_register_event_callback(
         s_rx_channel,
-        &callbacks,
+        &rx_callbacks,
         (void*)&s_rx_overflow_count
     );
 
@@ -967,6 +1031,30 @@ static esp_err_t audio_test_start_i2s_rx(void)
     {
         (void)i2s_del_channel(s_rx_channel);
         s_rx_channel = NULL;
+        return ret;
+    }
+
+    i2s_event_callbacks_t tx_callbacks = {
+        .on_recv = NULL,
+        .on_recv_q_ovf = NULL,
+        .on_sent = NULL,
+        .on_send_q_ovf =
+            audio_test_tx_send_q_ovf_callback,
+    };
+
+    ret =
+        i2s_channel_register_event_callback(
+            s_tx_channel,
+            &tx_callbacks,
+            (void*)s_tx_send_q_ovf_count);
+
+    if (ret != ESP_OK)
+    {
+        (void)i2s_del_channel(
+            s_tx_channel);
+
+        s_tx_channel = NULL;
+
         return ret;
     }
 
@@ -1099,11 +1187,27 @@ static void audio_test_log_memory(
             MALLOC_CAP_SPIRAM |
             MALLOC_CAP_8BIT);
 
+    const size_t internal_minimum =
+        heap_caps_get_minimum_free_size(
+            MALLOC_CAP_INTERNAL |
+            MALLOC_CAP_8BIT);
+
+    const size_t dma_minimum =
+        heap_caps_get_minimum_free_size(
+            MALLOC_CAP_INTERNAL |
+            MALLOC_CAP_DMA);
+
+    const size_t psram_minimum =
+        heap_caps_get_minimum_free_size(
+            MALLOC_CAP_SPIRAM |
+            MALLOC_CAP_8BIT);
+
     ESP_LOGI(
         TAG,
-        "[%s] INTERNAL free=%lu largest=%lu",
+        "[%s] INTERNAL free=%lu min=%lu largest=%lu",
         stage,
         (unsigned long)internal_free,
+        (unsigned long)internal_minimum,
         (unsigned long)internal_largest);
 
     ESP_LOGI(
@@ -1119,6 +1223,9 @@ static void audio_test_log_memory(
         stage,
         (unsigned long)psram_free,
         (unsigned long)psram_largest);
+
+
+
 }
 
 static esp_err_t audio_test_start_i2s_tx(void)
@@ -1133,7 +1240,7 @@ static esp_err_t audio_test_start_i2s_tx(void)
             I2S_NUM_0,
             I2S_ROLE_MASTER);
 
-    channel_config.dma_desc_num = 6;
+    channel_config.dma_desc_num = AUDIO_TEST_FRAMES_DMA_COUNTER;
     channel_config.dma_frame_num =
         AUDIO_TEST_FRAMES_PER_BLOCK;
 
@@ -1743,6 +1850,7 @@ ESP_LOGI(
         (unsigned long)checksum);
 
 
+
     return ret;
 }
 
@@ -1785,6 +1893,9 @@ esp_err_t audio_test_play_tone_once(void)
      */
     const esp_err_t stop_ret =
         audio_test_stop_i2s_tx();
+
+    audio_test_log_memory(
+        "after TX playback");
 
     /*
      * After I2S releases GPIO7, explicitly return the amplifier DIN
@@ -1831,6 +1942,14 @@ esp_err_t audio_test_play_recording_once(
         TAG,
         "Audio test is not initialized");
 
+    s_tx_send_q_ovf_count = 0U;
+    s_tx_write_timeout_count = 0U;
+    s_tx_partial_write_count = 0U;
+
+    s_last_tx_write_us = 0;
+    s_max_tx_write_gap_us = 0;
+    s_max_tx_write_duration_us = 0;
+
     esp_err_t ret =
         audio_test_start_i2s_tx();
 
@@ -1845,6 +1964,41 @@ esp_err_t audio_test_play_recording_once(
 
     const esp_err_t stop_ret =
         audio_test_stop_i2s_tx();
+
+ESP_LOGI(
+    TAG,
+    "TX send queue overflow count: %lu",
+    (unsigned long)
+        s_tx_send_q_ovf_count);
+
+ESP_LOGI(
+    TAG,
+    "TX write timeout count: %lu",
+    (unsigned long)
+        s_tx_write_timeout_count);
+
+ESP_LOGI(
+    TAG,
+    "TX partial write count: %lu",
+    (unsigned long)
+        s_tx_partial_write_count);
+
+ESP_LOGI(
+    TAG,
+    "TX max write gap: %lld us (%.2f ms)",
+    s_max_tx_write_gap_us,
+    (double)s_max_tx_write_gap_us /
+        1000.0);
+
+ESP_LOGI(
+    TAG,
+    "TX max write duration: %lld us (%.2f ms)",
+    s_max_tx_write_duration_us,
+    (double)s_max_tx_write_duration_us /
+        1000.0);
+
+    audio_test_log_memory(
+        "after TX playback");
 
     const esp_err_t safe_ret =
         audio_test_configure_amplifier_safe_state();
