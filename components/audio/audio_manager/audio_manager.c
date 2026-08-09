@@ -144,11 +144,11 @@ static uint32_t s_max_rx_read_duration_us;
 static uint32_t s_max_tx_write_duration_us;
 
 /* Function Prototypes ------------------------------------------------------ */
-static bool IRAM_ATTR audio_manager_rx_overflow_callback(
+static bool audio_manager_rx_overflow_callback(
     i2s_chan_handle_t handle,
     i2s_event_data_t *event,
     void *user_context);
-static bool IRAM_ATTR audio_manager_tx_overflow_callback(
+static bool audio_manager_tx_overflow_callback(
     i2s_chan_handle_t handle,
     i2s_event_data_t *event,
     void *user_context);
