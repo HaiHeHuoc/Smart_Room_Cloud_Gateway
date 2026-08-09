@@ -1,13 +1,14 @@
 /**
  * @file audio_manager.c
- * @brief NewSolution stability-first INMP441 -> DSP -> MAX98357A manager.
+ * @brief Stability-first INMP441 -> DSP -> MAX98357A audio manager.
  *
- * This implementation intentionally prioritizes proven hardware behavior and
- * long-soak stability over the final production component architecture.
- * The manager owns one internal test task that continuously executes:
- * record -> process -> playback -> defensive cleanup -> repeat.
+ * The proven NewSolution audio path is intentionally preserved. This refactor
+ * aligns lifecycle, status, callback, and state handling with the other
+ * manager components in Smart Room Cloud Gateway so the same status model can
+ * later feed app_gui without coupling audio_manager to LVGL.
  */
 
+/* Includes ----------------------------------------------------------------- */
 #include "audio_manager.h"
 #include "audio_dsp.h"
 
@@ -28,27 +29,39 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
-/* Proven transport baseline ------------------------------------------------ */
-#define AUDIO_MANAGER_SAMPLE_RATE_HZ             AUDIO_DSP_SAMPLE_RATE_HZ
-#define AUDIO_MANAGER_SLOT_COUNT                 2U
-#define AUDIO_MANAGER_FRAMES_PER_BLOCK           256U
-#define AUDIO_MANAGER_DMA_DESC_NUM               8U
-#define AUDIO_MANAGER_I2S_TIMEOUT_MS             1000U
+/* Macros ------------------------------------------------------------------- */
+#define AUDIO_MANAGER_DEFAULT_RECORD_SECONDS          5U
+#define AUDIO_MANAGER_DEFAULT_VOLUME_PERCENT          100U
 
-/* Proven INMP441/MAX98357 cycle policy ------------------------------------ */
-#define AUDIO_MANAGER_STARTUP_DISCARD_BLOCKS     40U
-#define AUDIO_MANAGER_SLOT_DETECT_BLOCKS         20U
-#define AUDIO_MANAGER_PRE_PLAYBACK_DELAY_MS      500U
-#define AUDIO_MANAGER_PRE_PLAYBACK_SILENCE_BLOCKS 32U
-#define AUDIO_MANAGER_POST_PLAYBACK_SILENCE_BLOCKS 32U
+#define AUDIO_MANAGER_TASK_NAME                       "audio_manager"
+#define AUDIO_MANAGER_TASK_STACK_SIZE                 8192U
+#define AUDIO_MANAGER_TASK_PRIORITY                   5U
+#define AUDIO_MANAGER_INTER_CYCLE_DELAY_MS            250U
+#define AUDIO_MANAGER_MUTEX_TIMEOUT_MS                100U
+
+/* Proven transport baseline. Do not change during structural refactor. */
+#define AUDIO_MANAGER_SAMPLE_RATE_HZ                  AUDIO_DSP_SAMPLE_RATE_HZ
+#define AUDIO_MANAGER_SLOT_COUNT                      2U
+#define AUDIO_MANAGER_FRAMES_PER_BLOCK                256U
+#define AUDIO_MANAGER_DMA_DESC_NUM                    8U
+#define AUDIO_MANAGER_I2S_TIMEOUT_MS                  1000U
+
+/* Proven INMP441/MAX98357 cycle policy. */
+#define AUDIO_MANAGER_STARTUP_DISCARD_BLOCKS          40U
+#define AUDIO_MANAGER_SLOT_DETECT_BLOCKS              20U
+#define AUDIO_MANAGER_PRE_PLAYBACK_DELAY_MS           500U
+#define AUDIO_MANAGER_PRE_PLAYBACK_SILENCE_BLOCKS     32U
+#define AUDIO_MANAGER_POST_PLAYBACK_SILENCE_BLOCKS    32U
 
 _Static_assert(AUDIO_MANAGER_SLOT_COUNT == 2U,
                "Standard I2S transport requires two slots");
 _Static_assert(AUDIO_MANAGER_SAMPLE_RATE_HZ == AUDIO_SAMPLE_RATE_HZ,
                "DSP and board sample rates must match");
 
+/* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "AUDIO_MANAGER";
 
+/* Type Definitions --------------------------------------------------------- */
 typedef enum
 {
     MICROPHONE_SLOT_LEFT = 0,
@@ -89,18 +102,26 @@ typedef struct
     bool initialized;
     bool rx_enabled;
     bool tx_enabled;
+
     audio_manager_config_t config;
+
     size_t sample_capacity;
     size_t recording_bytes;
     int32_t *recording_pcm24;
     audio_dsp_workspace_t *dsp_workspace;
+
     i2s_chan_handle_t rx_channel;
     i2s_chan_handle_t tx_channel;
-    TaskHandle_t test_task;
+
+    TaskHandle_t task_handle;
     SemaphoreHandle_t status_mutex;
+
     audio_manager_status_t status;
+    audio_manager_status_callback_t status_callback;
+    void *status_callback_context;
 } audio_manager_runtime_t;
 
+/* Static Variables --------------------------------------------------------- */
 static audio_manager_runtime_t s_runtime = {0};
 
 /* Small I2S staging stays in Internal/DMA RAM; long history stays in PSRAM. */
@@ -122,6 +143,142 @@ static uint32_t s_tx_partial_write_count;
 static uint32_t s_max_rx_read_duration_us;
 static uint32_t s_max_tx_write_duration_us;
 
+/* Function Prototypes ------------------------------------------------------ */
+static bool IRAM_ATTR audio_manager_rx_overflow_callback(
+    i2s_chan_handle_t handle,
+    i2s_event_data_t *event,
+    void *user_context);
+static bool IRAM_ATTR audio_manager_tx_overflow_callback(
+    i2s_chan_handle_t handle,
+    i2s_event_data_t *event,
+    void *user_context);
+
+static void audio_manager_refresh_diagnostics_locked(void);
+static void audio_manager_notify_status_changed(void);
+static void audio_manager_set_state(audio_manager_state_t state);
+
+static void log_heap_state(const char *label);
+static esp_err_t hold_amplifier_data_low(void);
+
+static esp_err_t start_i2s_rx(void);
+static esp_err_t stop_i2s_rx(void);
+static esp_err_t read_rx_block(size_t *frames_read);
+static esp_err_t discard_microphone_startup(void);
+static void update_slot_stats(slot_stats_t *stats, int32_t sample);
+static esp_err_t detect_microphone_slot(microphone_slot_t *selected_slot);
+static esp_err_t record_audio(
+    microphone_slot_t selected_slot,
+    size_t *samples_recorded);
+
+static esp_err_t start_i2s_tx(void);
+static esp_err_t stop_i2s_tx(void);
+static esp_err_t write_tx_frames(size_t frame_count);
+static esp_err_t write_silence_blocks(uint32_t block_count);
+static int32_t apply_playback_volume_percent(int32_t sample_pcm24);
+static esp_err_t play_recording(
+    size_t sample_count,
+    audio_dsp_playback_stats_t *stats);
+
+static void dsp_cooperative_yield(void *context);
+static void log_ns_metrics(const audio_dsp_ns_metrics_t *metrics);
+static void log_playback_result(const audio_dsp_playback_stats_t *playback);
+
+static esp_err_t record_once(size_t *samples_recorded);
+static esp_err_t process_once(
+    size_t sample_count,
+    audio_cycle_metrics_t *metrics);
+static esp_err_t playback_once(
+    size_t sample_count,
+    audio_cycle_metrics_t *metrics);
+static esp_err_t force_cycle_cleanup(void);
+static esp_err_t run_cycle(audio_cycle_metrics_t *metrics);
+static void log_cycle_diagnostics(
+    uint32_t cycle,
+    uint32_t rx_overflow_before,
+    uint32_t rx_timeout_before,
+    uint32_t tx_overflow_before,
+    uint32_t tx_timeout_before,
+    uint32_t tx_partial_before);
+static void audio_manager_task(void *argument);
+
+/* Static Functions: Status / Callback ------------------------------------- */
+static void audio_manager_refresh_diagnostics_locked(void)
+{
+    s_runtime.status.rx_overflow_count = s_rx_overflow_isr_count;
+    s_runtime.status.rx_timeout_count = s_rx_timeout_count;
+    s_runtime.status.tx_queue_overflow_count = s_tx_overflow_isr_count;
+    s_runtime.status.tx_timeout_count = s_tx_timeout_count;
+    s_runtime.status.tx_partial_write_count = s_tx_partial_write_count;
+    s_runtime.status.max_rx_read_duration_us = s_max_rx_read_duration_us;
+    s_runtime.status.max_tx_write_duration_us = s_max_tx_write_duration_us;
+
+    if (s_runtime.task_handle != NULL)
+    {
+        s_runtime.status.task_stack_high_water_bytes =
+            uxTaskGetStackHighWaterMark(s_runtime.task_handle);
+    }
+}
+
+static void audio_manager_notify_status_changed(void)
+{
+    if (s_runtime.status_mutex == NULL)
+    {
+        return;
+    }
+
+    audio_manager_status_t status_snapshot;
+    audio_manager_status_callback_t callback;
+    void *callback_context;
+
+    if (xSemaphoreTake(s_runtime.status_mutex, portMAX_DELAY) != pdTRUE)
+    {
+        return;
+    }
+
+    audio_manager_refresh_diagnostics_locked();
+    status_snapshot = s_runtime.status;
+    callback = s_runtime.status_callback;
+    callback_context = s_runtime.status_callback_context;
+
+    xSemaphoreGive(s_runtime.status_mutex);
+
+    /* Never invoke application code while holding the manager mutex. */
+    if (callback != NULL)
+    {
+        callback(&status_snapshot, callback_context);
+    }
+}
+
+static void audio_manager_set_state(audio_manager_state_t state)
+{
+    if (s_runtime.status_mutex == NULL)
+    {
+        return;
+    }
+
+    bool changed = false;
+
+    if (xSemaphoreTake(s_runtime.status_mutex, portMAX_DELAY) != pdTRUE)
+    {
+        return;
+    }
+
+    if (s_runtime.status.state != state)
+    {
+        s_runtime.status.state = state;
+        changed = true;
+    }
+
+    xSemaphoreGive(s_runtime.status_mutex);
+
+    if (changed)
+    {
+        ESP_LOGD(TAG, "State -> %s", audio_manager_state_to_string(state));
+        audio_manager_notify_status_changed();
+    }
+}
+
+/* Static Functions: I2S Callbacks ----------------------------------------- */
 static bool IRAM_ATTR audio_manager_rx_overflow_callback(
     i2s_chan_handle_t handle,
     i2s_event_data_t *event,
@@ -146,46 +303,7 @@ static bool IRAM_ATTR audio_manager_tx_overflow_callback(
     return false;
 }
 
-static void status_lock(void)
-{
-    if (s_runtime.status_mutex != NULL)
-    {
-        (void)xSemaphoreTake(s_runtime.status_mutex, portMAX_DELAY);
-    }
-}
-
-static void status_unlock(void)
-{
-    if (s_runtime.status_mutex != NULL)
-    {
-        xSemaphoreGive(s_runtime.status_mutex);
-    }
-}
-
-static void set_state(audio_manager_state_t state)
-{
-    status_lock();
-    s_runtime.status.state = state;
-    status_unlock();
-}
-
-static void refresh_diagnostics_locked(void)
-{
-    s_runtime.status.rx_overflow_count = s_rx_overflow_isr_count;
-    s_runtime.status.rx_timeout_count = s_rx_timeout_count;
-    s_runtime.status.tx_queue_overflow_count = s_tx_overflow_isr_count;
-    s_runtime.status.tx_timeout_count = s_tx_timeout_count;
-    s_runtime.status.tx_partial_write_count = s_tx_partial_write_count;
-    s_runtime.status.max_rx_read_duration_us = s_max_rx_read_duration_us;
-    s_runtime.status.max_tx_write_duration_us = s_max_tx_write_duration_us;
-
-    if (s_runtime.test_task != NULL)
-    {
-        s_runtime.status.test_task_stack_high_water_bytes =
-            uxTaskGetStackHighWaterMark(s_runtime.test_task);
-    }
-}
-
+/* Static Functions: Resource Diagnostics --------------------------------- */
 static void log_heap_state(const char *label)
 {
     const size_t internal_free =
@@ -219,6 +337,7 @@ static void log_heap_state(const char *label)
         (unsigned)psram_largest);
 }
 
+/* Static Functions: RX / INMP441 ------------------------------------------ */
 static esp_err_t hold_amplifier_data_low(void)
 {
     esp_err_t result = gpio_reset_pin(AUDIO_GPIO_SPK_DOUT);
@@ -364,7 +483,8 @@ static esp_err_t read_rx_block(size_t *frames_read)
         AUDIO_MANAGER_I2S_TIMEOUT_MS);
 
     const int64_t duration_us = esp_timer_get_time() - start_us;
-    if ((duration_us > 0) && ((uint64_t)duration_us > s_max_rx_read_duration_us))
+    if ((duration_us > 0) &&
+        ((uint64_t)duration_us > s_max_rx_read_duration_us))
     {
         s_max_rx_read_duration_us =
             (duration_us > UINT32_MAX) ? UINT32_MAX : (uint32_t)duration_us;
@@ -407,6 +527,7 @@ static esp_err_t discard_microphone_startup(void)
             return result;
         }
     }
+
     return ESP_OK;
 }
 
@@ -419,6 +540,7 @@ static void update_slot_stats(slot_stats_t *stats, int32_t sample)
 
     const uint32_t magnitude =
         (sample < 0) ? (uint32_t)(-(int64_t)sample) : (uint32_t)sample;
+
     stats->absolute_sum += magnitude;
     ++stats->sample_count;
     if (magnitude > stats->peak)
@@ -495,6 +617,7 @@ static esp_err_t record_audio(
 
     const size_t selected_slot_index =
         (selected_slot == MICROPHONE_SLOT_RIGHT) ? 1U : 0U;
+
     size_t captured = 0U;
     size_t next_progress = AUDIO_MANAGER_SAMPLE_RATE_HZ;
 
@@ -540,6 +663,7 @@ static esp_err_t record_audio(
     return ESP_OK;
 }
 
+/* Static Functions: TX / MAX98357A ---------------------------------------- */
 static esp_err_t start_i2s_tx(void)
 {
     if (s_runtime.tx_channel != NULL)
@@ -608,7 +732,7 @@ static esp_err_t start_i2s_tx(void)
         return result;
     }
 
-    /* Proven reference behavior: preload DMA with silence before enabling TX. */
+    /* Proven behavior: preload DMA with silence before enabling TX clocks. */
     size_t loaded = sizeof(s_silence_block);
     while (loaded == sizeof(s_silence_block))
     {
@@ -672,6 +796,7 @@ static esp_err_t stop_i2s_tx(void)
     {
         return delete_result;
     }
+
     return gpio_result;
 }
 
@@ -697,7 +822,8 @@ static esp_err_t write_tx_frames(size_t frame_count)
         AUDIO_MANAGER_I2S_TIMEOUT_MS);
 
     const int64_t duration_us = esp_timer_get_time() - start_us;
-    if ((duration_us > 0) && ((uint64_t)duration_us > s_max_tx_write_duration_us))
+    if ((duration_us > 0) &&
+        ((uint64_t)duration_us > s_max_tx_write_duration_us))
     {
         s_max_tx_write_duration_us =
             (duration_us > UINT32_MAX) ? UINT32_MAX : (uint32_t)duration_us;
@@ -734,6 +860,7 @@ static esp_err_t write_silence_blocks(uint32_t block_count)
             return result;
         }
     }
+
     return ESP_OK;
 }
 
@@ -818,6 +945,7 @@ static esp_err_t play_recording(
     return ESP_OK;
 }
 
+/* Static Functions: DSP / Pipeline ---------------------------------------- */
 static void dsp_cooperative_yield(void *context)
 {
     dsp_scheduler_stats_t *const stats = (dsp_scheduler_stats_t *)context;
@@ -825,6 +953,7 @@ static void dsp_cooperative_yield(void *context)
     {
         ++stats->total_yields;
     }
+
     vTaskDelay(1U);
 }
 
@@ -923,7 +1052,7 @@ static esp_err_t record_once(size_t *samples_recorded)
 
     if (result == ESP_OK)
     {
-        set_state(AUDIO_MANAGER_STATE_RECORDING);
+        audio_manager_set_state(AUDIO_MANAGER_STATE_RECORDING);
         ESP_LOGI(
             TAG,
             "RECORDING %u seconds",
@@ -937,7 +1066,7 @@ static esp_err_t record_once(size_t *samples_recorded)
         result = stop_result;
     }
 
-    set_state(AUDIO_MANAGER_STATE_IDLE);
+    audio_manager_set_state(AUDIO_MANAGER_STATE_IDLE);
     return result;
 }
 
@@ -952,7 +1081,7 @@ static esp_err_t process_once(
         return ESP_ERR_INVALID_ARG;
     }
 
-    set_state(AUDIO_MANAGER_STATE_PROCESSING);
+    audio_manager_set_state(AUDIO_MANAGER_STATE_PROCESSING);
     memset(metrics, 0, sizeof(*metrics));
     metrics->samples_recorded = sample_count;
 
@@ -997,7 +1126,7 @@ static esp_err_t process_once(
             dsp_cooperative_yield,
             &scheduler))
     {
-        set_state(AUDIO_MANAGER_STATE_IDLE);
+        audio_manager_set_state(AUDIO_MANAGER_STATE_IDLE);
         return ESP_FAIL;
     }
 
@@ -1038,7 +1167,7 @@ static esp_err_t process_once(
         (unsigned)(metrics->dsp_realtime_factor_milli % 1000U));
 
     log_ns_metrics(&metrics->ns);
-    set_state(AUDIO_MANAGER_STATE_IDLE);
+    audio_manager_set_state(AUDIO_MANAGER_STATE_IDLE);
     return ESP_OK;
 }
 
@@ -1064,7 +1193,7 @@ static esp_err_t playback_once(
 
     if (result == ESP_OK)
     {
-        set_state(AUDIO_MANAGER_STATE_PLAYBACK);
+        audio_manager_set_state(AUDIO_MANAGER_STATE_PLAYBACK);
         ESP_LOGI(
             TAG,
             "PLAYBACK samples=%u volume=%u/100 gain=%u.%02ux limiter=+/-%d",
@@ -1089,7 +1218,7 @@ static esp_err_t playback_once(
         result = stop_result;
     }
 
-    set_state(AUDIO_MANAGER_STATE_IDLE);
+    audio_manager_set_state(AUDIO_MANAGER_STATE_IDLE);
 
     if (result == ESP_OK)
     {
@@ -1121,7 +1250,7 @@ static esp_err_t force_cycle_cleanup(void)
         first_error = gpio_result;
     }
 
-    set_state(AUDIO_MANAGER_STATE_IDLE);
+    audio_manager_set_state(AUDIO_MANAGER_STATE_IDLE);
     return first_error;
 }
 
@@ -1170,6 +1299,7 @@ static esp_err_t run_cycle(audio_cycle_metrics_t *metrics)
     return result;
 }
 
+/* Static Functions: Stability Task ---------------------------------------- */
 static void log_cycle_diagnostics(
     uint32_t cycle,
     uint32_t rx_overflow_before,
@@ -1203,25 +1333,25 @@ static void log_cycle_diagnostics(
         (unsigned)uxTaskGetStackHighWaterMark(NULL));
 }
 
-static void audio_manager_test_task(void *argument)
+static void audio_manager_task(void *argument)
 {
     (void)argument;
 
-    status_lock();
-    s_runtime.status.test_running = true;
-    status_unlock();
-
     ESP_LOGI(
         TAG,
-        "Infinite audio stability task started: record=%us volume=%u/100",
+        "Audio manager task started: record=%us volume=%u/100",
         (unsigned)s_runtime.config.record_duration_seconds,
         (unsigned)s_runtime.config.playback_volume_percent);
 
     while (true)
     {
-        status_lock();
-        const uint32_t cycle = ++s_runtime.status.cycles_started;
-        status_unlock();
+        uint32_t cycle = 0U;
+
+        if (xSemaphoreTake(s_runtime.status_mutex, portMAX_DELAY) == pdTRUE)
+        {
+            cycle = ++s_runtime.status.cycles_started;
+            xSemaphoreGive(s_runtime.status_mutex);
+        }
 
         const uint32_t rx_overflow_before = s_rx_overflow_isr_count;
         const uint32_t rx_timeout_before = s_rx_timeout_count;
@@ -1229,28 +1359,36 @@ static void audio_manager_test_task(void *argument)
         const uint32_t tx_timeout_before = s_tx_timeout_count;
         const uint32_t tx_partial_before = s_tx_partial_write_count;
 
-        ESP_LOGI(TAG, "========== AUDIO MANAGER CYCLE #%u ==========" ,
-                 (unsigned)cycle);
+        ESP_LOGI(
+            TAG,
+            "========== AUDIO MANAGER CYCLE #%u ==========",
+            (unsigned)cycle);
 
         audio_cycle_metrics_t metrics;
         const esp_err_t result = run_cycle(&metrics);
 
-        status_lock();
-        s_runtime.status.last_samples_recorded = metrics.samples_recorded;
-        s_runtime.status.last_error = result;
-        refresh_diagnostics_locked();
+        if (xSemaphoreTake(s_runtime.status_mutex, portMAX_DELAY) == pdTRUE)
+        {
+            s_runtime.status.last_samples_recorded = metrics.samples_recorded;
+            s_runtime.status.last_error = result;
+            audio_manager_refresh_diagnostics_locked();
 
-        if (result == ESP_OK)
-        {
-            ++s_runtime.status.cycles_completed;
-            s_runtime.status.state = AUDIO_MANAGER_STATE_IDLE;
+            if (result == ESP_OK)
+            {
+                ++s_runtime.status.cycles_completed;
+                s_runtime.status.state = AUDIO_MANAGER_STATE_IDLE;
+            }
+            else
+            {
+                ++s_runtime.status.cycles_failed;
+                s_runtime.status.state = AUDIO_MANAGER_STATE_ERROR;
+            }
+
+            xSemaphoreGive(s_runtime.status_mutex);
         }
-        else
-        {
-            ++s_runtime.status.cycles_failed;
-            s_runtime.status.state = AUDIO_MANAGER_STATE_ERROR;
-        }
-        status_unlock();
+
+        /* Publish result/counters even when state remains IDLE after success. */
+        audio_manager_notify_status_changed();
 
         if (result == ESP_OK)
         {
@@ -1288,27 +1426,22 @@ static void audio_manager_test_task(void *argument)
             tx_partial_before);
         log_heap_state("cycle_end");
 
-        status_lock();
-        if (s_runtime.status.state == AUDIO_MANAGER_STATE_ERROR)
+        if (result != ESP_OK)
         {
-            /* Preserve last_error/counters but recover state for the next soak cycle. */
-            s_runtime.status.state = AUDIO_MANAGER_STATE_IDLE;
+            /* Preserve last_error/counters but recover lifecycle for next cycle. */
+            audio_manager_set_state(AUDIO_MANAGER_STATE_IDLE);
         }
-        refresh_diagnostics_locked();
-        status_unlock();
 
-        vTaskDelay(pdMS_TO_TICKS(s_runtime.config.inter_cycle_delay_ms));
+        vTaskDelay(pdMS_TO_TICKS(AUDIO_MANAGER_INTER_CYCLE_DELAY_MS));
     }
 }
 
+/* Public API --------------------------------------------------------------- */
 audio_manager_config_t audio_manager_default_config(void)
 {
     return (audio_manager_config_t) {
         .record_duration_seconds = AUDIO_MANAGER_DEFAULT_RECORD_SECONDS,
         .playback_volume_percent = AUDIO_MANAGER_DEFAULT_VOLUME_PERCENT,
-        .test_task_stack_size = AUDIO_MANAGER_DEFAULT_TEST_TASK_STACK_SIZE,
-        .test_task_priority = AUDIO_MANAGER_DEFAULT_TEST_TASK_PRIORITY,
-        .inter_cycle_delay_ms = AUDIO_MANAGER_DEFAULT_INTER_CYCLE_DELAY_MS,
     };
 }
 
@@ -1325,9 +1458,7 @@ esp_err_t audio_manager_init(const audio_manager_config_t *config)
     }
 
     if ((config->record_duration_seconds == 0U) ||
-        (config->playback_volume_percent > AUDIO_DSP_VOLUME_PERCENT_MAX) ||
-        (config->test_task_stack_size < 4096U) ||
-        (config->test_task_priority >= configMAX_PRIORITIES))
+        (config->playback_volume_percent > AUDIO_DSP_VOLUME_PERCENT_MAX))
     {
         return ESP_ERR_INVALID_ARG;
     }
@@ -1402,14 +1533,12 @@ esp_err_t audio_manager_init(const audio_manager_config_t *config)
 
     s_runtime.initialized = true;
     s_runtime.status = (audio_manager_status_t) {
-        .state = AUDIO_MANAGER_STATE_IDLE,
-        .initialized = true,
-        .test_running = false,
+        .state = AUDIO_MANAGER_STATE_INITIALIZED,
         .last_error = ESP_OK,
     };
 
     ESP_LOGI(TAG, "================================================");
-    ESP_LOGI(TAG, "NewSolution audio manager initialized");
+    ESP_LOGI(TAG, "Audio manager initialized");
     ESP_LOGI(
         TAG,
         "Pins BCLK=GPIO%d WS=GPIO%d MIC_DIN=GPIO%d SPK_DOUT=GPIO%d",
@@ -1436,32 +1565,67 @@ esp_err_t audio_manager_init(const audio_manager_config_t *config)
     return ESP_OK;
 }
 
-esp_err_t audio_manager_test_start(void)
+esp_err_t audio_manager_register_status_callback(
+    audio_manager_status_callback_t callback,
+    void *user_context)
 {
-    if (!s_runtime.initialized)
+    if (!s_runtime.initialized || (s_runtime.status_mutex == NULL))
     {
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (s_runtime.test_task != NULL)
+    if (xSemaphoreTake(
+            s_runtime.status_mutex,
+            pdMS_TO_TICKS(AUDIO_MANAGER_MUTEX_TIMEOUT_MS)) != pdTRUE)
     {
-        return ESP_OK;
+        return ESP_ERR_TIMEOUT;
     }
 
+    s_runtime.status_callback = callback;
+    s_runtime.status_callback_context = user_context;
+
+    audio_manager_status_t status_snapshot = s_runtime.status;
+    xSemaphoreGive(s_runtime.status_mutex);
+
+    /* Seed future GUI/adapters immediately with the current lifecycle state. */
+    if (callback != NULL)
+    {
+        callback(&status_snapshot, user_context);
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t audio_manager_start(void)
+{
+    if (!s_runtime.initialized || (s_runtime.status_mutex == NULL))
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (s_runtime.task_handle != NULL)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    audio_manager_set_state(AUDIO_MANAGER_STATE_IDLE);
+
     const BaseType_t result = xTaskCreate(
-        audio_manager_test_task,
-        "audio_manager_test",
-        s_runtime.config.test_task_stack_size,
+        audio_manager_task,
+        AUDIO_MANAGER_TASK_NAME,
+        AUDIO_MANAGER_TASK_STACK_SIZE,
         NULL,
-        (UBaseType_t)s_runtime.config.test_task_priority,
-        &s_runtime.test_task);
+        AUDIO_MANAGER_TASK_PRIORITY,
+        &s_runtime.task_handle);
 
     if (result != pdPASS)
     {
-        s_runtime.test_task = NULL;
+        s_runtime.task_handle = NULL;
+        audio_manager_set_state(AUDIO_MANAGER_STATE_INITIALIZED);
         return ESP_ERR_NO_MEM;
     }
 
+    ESP_LOGI(TAG, "Started");
     return ESP_OK;
 }
 
@@ -1477,10 +1641,17 @@ esp_err_t audio_manager_get_status(audio_manager_status_t *status)
         return ESP_ERR_INVALID_STATE;
     }
 
-    status_lock();
-    refresh_diagnostics_locked();
+    if (xSemaphoreTake(
+            s_runtime.status_mutex,
+            pdMS_TO_TICKS(AUDIO_MANAGER_MUTEX_TIMEOUT_MS)) != pdTRUE)
+    {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    audio_manager_refresh_diagnostics_locked();
     *status = s_runtime.status;
-    status_unlock();
+
+    xSemaphoreGive(s_runtime.status_mutex);
     return ESP_OK;
 }
 
@@ -1491,7 +1662,7 @@ esp_err_t audio_manager_deinit(void)
         return ESP_OK;
     }
 
-    if (s_runtime.test_task != NULL)
+    if (s_runtime.task_handle != NULL)
     {
         return ESP_ERR_INVALID_STATE;
     }
@@ -1518,17 +1689,31 @@ const char *audio_manager_state_to_string(audio_manager_state_t state)
     {
         case AUDIO_MANAGER_STATE_UNINITIALIZED:
             return "UNINITIALIZED";
+
+        case AUDIO_MANAGER_STATE_INITIALIZED:
+            return "INITIALIZED";
+
         case AUDIO_MANAGER_STATE_IDLE:
             return "IDLE";
+
         case AUDIO_MANAGER_STATE_RECORDING:
             return "RECORDING";
+
         case AUDIO_MANAGER_STATE_PROCESSING:
             return "PROCESSING";
+
         case AUDIO_MANAGER_STATE_PLAYBACK:
             return "PLAYBACK";
+
         case AUDIO_MANAGER_STATE_ERROR:
             return "ERROR";
+
         default:
             return "UNKNOWN";
     }
+}
+
+esp_err_t audio_manager_test_start(void)
+{
+    return audio_manager_start();
 }
