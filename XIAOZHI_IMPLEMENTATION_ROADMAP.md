@@ -210,6 +210,22 @@ the bounded playback/capture ring and explicit consumer policy in Phase 11.2.
 production playback path without coupling filesystem ownership into
 `audio_manager`.
 
+#### Phase 11.4.1 — SD/WAV Streaming Foundation — Implemented / Build Verified
+
+- [x] Private `audio_wav` reader uses the already-mounted `sd_card_manager`
+      VFS path and never owns SD SPI, FATFS mount/unmount, or LVGL filesystem
+      lifecycle.
+- [x] Bounded RIFF chunk parser validates canonical PCM16 mono 16-kHz WAV,
+      skips unknown aligned chunks, validates data bounds, and rejects corrupt
+      or unsupported input without assuming a 44-byte header.
+- [x] One reusable 4 KiB PCM buffer is allocated once per private stream; no
+      whole WAV is loaded and no allocation occurs per read chunk.
+- [x] `audio_manager` owns a private playback-source slot and central source
+      cleanup while its current stability task continues to select the proven
+      recorded-PCM path.
+- [ ] Phase 11.4.2 must add source arbitration plus a bounded PCM ring/TX
+      consumer; WAV is intentionally not scheduled or played in 11.4.1.
+
 Reference flow:
 
 ```text

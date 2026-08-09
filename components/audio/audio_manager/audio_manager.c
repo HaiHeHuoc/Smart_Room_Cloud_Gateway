@@ -11,6 +11,7 @@
 /* Includes ----------------------------------------------------------------- */
 #include "audio_manager.h"
 #include "audio_dsp.h"
+#include "audio_wav.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -114,6 +115,21 @@ typedef struct
     uint64_t tx_bytes_written;
 } audio_manager_diagnostics_t;
 
+/* Only audio_manager task or lifecycle code may select/release a source. */
+typedef enum
+{
+    AUDIO_PLAYBACK_SOURCE_NONE = 0,
+    AUDIO_PLAYBACK_SOURCE_RECORDED_PCM24,
+    AUDIO_PLAYBACK_SOURCE_WAV_PCM16,
+} audio_playback_source_kind_t;
+
+typedef struct
+{
+    audio_playback_source_kind_t kind;
+    size_t recorded_sample_count;
+    audio_wav_stream_t wav_stream;
+} audio_playback_source_t;
+
 typedef struct
 {
     bool initialized;
@@ -121,6 +137,9 @@ typedef struct
     bool tx_enabled;
 
     audio_manager_config_t config;
+
+    /* One manager-owned source slot; Phase 11.4.1 keeps WAV private/idle. */
+    audio_playback_source_t playback_source;
 
     size_t sample_capacity;
     size_t recording_bytes;
@@ -214,8 +233,11 @@ static esp_err_t process_once(
     size_t sample_count,
     audio_cycle_metrics_t *metrics);
 static esp_err_t playback_once(
-    size_t sample_count,
+    const audio_playback_source_t *source,
     audio_cycle_metrics_t *metrics);
+static esp_err_t audio_manager_select_recording_playback_source(
+    size_t sample_count);
+static esp_err_t audio_manager_release_playback_source(void);
 static esp_err_t force_cycle_cleanup(void);
 static esp_err_t run_cycle(audio_cycle_metrics_t *metrics);
 static void log_cycle_diagnostics(
@@ -1319,15 +1341,19 @@ static esp_err_t process_once(
 }
 
 static esp_err_t playback_once(
-    size_t sample_count,
+    const audio_playback_source_t *source,
     audio_cycle_metrics_t *metrics)
 {
-    if ((sample_count == 0U) ||
-        (sample_count > s_runtime.sample_capacity) ||
+    if ((source == NULL) ||
+        (source->kind != AUDIO_PLAYBACK_SOURCE_RECORDED_PCM24) ||
+        (source->recorded_sample_count == 0U) ||
+        (source->recorded_sample_count > s_runtime.sample_capacity) ||
         (metrics == NULL))
     {
         return ESP_ERR_INVALID_ARG;
     }
+
+    const size_t sample_count = source->recorded_sample_count;
 
     esp_err_t result = start_i2s_tx();
     if (result != ESP_OK)
@@ -1375,6 +1401,41 @@ static esp_err_t playback_once(
     return result;
 }
 
+static esp_err_t audio_manager_select_recording_playback_source(
+    size_t sample_count)
+{
+    if ((sample_count == 0U) ||
+        (sample_count > s_runtime.sample_capacity))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_runtime.playback_source.kind != AUDIO_PLAYBACK_SOURCE_NONE)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    s_runtime.playback_source.kind = AUDIO_PLAYBACK_SOURCE_RECORDED_PCM24;
+    s_runtime.playback_source.recorded_sample_count = sample_count;
+    return ESP_OK;
+}
+
+static esp_err_t audio_manager_release_playback_source(void)
+{
+    esp_err_t result = ESP_OK;
+
+    if ((s_runtime.playback_source.kind == AUDIO_PLAYBACK_SOURCE_WAV_PCM16) ||
+        (s_runtime.playback_source.wav_stream.file != NULL) ||
+        (s_runtime.playback_source.wav_stream.buffer != NULL))
+    {
+        result = audio_wav_stream_close(&s_runtime.playback_source.wav_stream);
+    }
+
+    s_runtime.playback_source.kind = AUDIO_PLAYBACK_SOURCE_NONE;
+    s_runtime.playback_source.recorded_sample_count = 0U;
+    return result;
+}
+
 static esp_err_t force_cycle_cleanup(void)
 {
     esp_err_t first_error = ESP_OK;
@@ -1389,6 +1450,12 @@ static esp_err_t force_cycle_cleanup(void)
     if ((first_error == ESP_OK) && (tx_result != ESP_OK))
     {
         first_error = tx_result;
+    }
+
+    const esp_err_t source_result = audio_manager_release_playback_source();
+    if ((first_error == ESP_OK) && (source_result != ESP_OK))
+    {
+        first_error = source_result;
     }
 
     const esp_err_t gpio_result = hold_amplifier_data_low();
@@ -1431,8 +1498,14 @@ static esp_err_t run_cycle(audio_cycle_metrics_t *metrics)
 
     if (result == ESP_OK)
     {
+        result = audio_manager_select_recording_playback_source(
+            samples_recorded);
+    }
+
+    if (result == ESP_OK)
+    {
         vTaskDelay(pdMS_TO_TICKS(AUDIO_MANAGER_PRE_PLAYBACK_DELAY_MS));
-        result = playback_once(samples_recorded, metrics);
+        result = playback_once(&s_runtime.playback_source, metrics);
     }
 
     metrics->samples_recorded = samples_recorded;

@@ -3,6 +3,7 @@ idf_component_register(
         "audio_manager.c"
         "audio_dsp.c"
         "audio_dsp_cooperative.c"
+        "audio_wav.c"
     INCLUDE_DIRS
         "include"
     PRIV_INCLUDE_DIRS
@@ -19,4 +20,5 @@ idf_component_register(
         heap
         esp_hw_support
         esp_psram
+        sd_card_manager
 )

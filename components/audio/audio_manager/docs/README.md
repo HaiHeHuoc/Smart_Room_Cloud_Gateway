@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`audio_manager` owns the current Phase 11 audio foundation for the INMP441 microphone and MAX98357A speaker path. The implementation preserves the hardware-proven NewSolution behavior while exposing lifecycle state and a thread-safe status callback compatible with the rest of the Smart Room Cloud Gateway manager architecture.
+`audio_manager` owns the current Phase 11 audio foundation for the INMP441 microphone and MAX98357A speaker path. The implementation preserves the hardware-proven NewSolution behavior while exposing lifecycle state and a thread-safe status callback compatible with the rest of the Smart Room Cloud Gateway manager architecture. Phase 11.4.1 adds a private bounded WAV source reader without changing the proven I2S/DSP path.
 
 ## State Model
 
@@ -73,6 +73,87 @@ Suggested GUI meanings:
 The current dashboard renders these concise labels: `Audio: --`, `Audio: Ready`,
 `Audio: Idle`, `Audio: REC`, `Audio: DSP`, `Audio: PLAY`, and `Audio: ERR`.
 
+## Phase 11.4.1 SD/WAV Streaming Foundation
+
+`audio_wav.c` and `audio_wav.h` are private implementation files, not public
+`audio_manager` API. They establish the file-source side of future playback:
+
+```text
+mounted SD VFS path
+    -> private RIFF/WAVE parser
+    -> one bounded PCM16 reader buffer
+    -> future manager-owned TX consumer
+```
+
+The manager now owns one private playback-source slot. The existing stability
+loop explicitly selects its retained PCM24 recording as that source and releases
+it during the normal cleanup path. The WAV stream slot remains unused until
+Phase 11.4.2 adds source arbitration and connects bounded PCM to the existing
+manager-owned TX path. No second audio task, I2S channel owner, GUI state, or
+public API is introduced here.
+
+### SD ownership and paths
+
+- `sd_card_manager` remains the sole owner of SDSPI, FATFS mount/unmount, and
+  card hardware lifecycle.
+- The reader checks `sd_card_manager_is_mounted()` then uses normal C stdio on
+  an absolute VFS file path under `SD_MOUNT_POINT` (currently `/sdcard`).
+- `S:/...` paths and `lvgl_sd_fs` are LVGL-only and are never used here.
+- The helper does not call `sd_card_manager_init()`, FATFS mount APIs, SPI APIs,
+  or LVGL.
+
+### Accepted WAV contract
+
+Only this format is accepted:
+
+| Field | Required value |
+| --- | --- |
+| Container | `RIFF` / `WAVE`, little-endian |
+| Encoding | PCM integer (`audio_format == 1`) |
+| Channels | 1 (mono) |
+| Sample rate | 16,000 Hz |
+| Sample width | 16 bits |
+| Block alignment / byte rate | 2 bytes / 32,000 bytes per second |
+
+Stereo, float, ADPCM/compressed, 8/24/32-bit, and non-16-kHz inputs return a
+deterministic unsupported-format error. There is no resampling or channel
+mixing in this foundation.
+
+### Parser, memory, and error contract
+
+The parser reads the RIFF header then iterates every chunk. It locates `fmt `
+and `data` without assuming a 44-byte header, safely skips `LIST`, `JUNK`, and
+unknown chunks, and applies required even-byte chunk padding. All chunk end
+offsets are checked against both the RIFF-declared and actual file bounds.
+
+Each open stream owns exactly one `FILE *` and one 4 KiB Internal-RAM buffer.
+The buffer matches the current SDSPI 4 KiB transfer ceiling and holds 128 ms of
+canonical PCM16 mono. It is allocated once at open, reused by every `fread()`,
+and freed at close; it requires only Internal 8-bit RAM and is never passed to
+I2S directly. It is not a full-WAV/PSRAM allocation. Playback memory is
+therefore independent of WAV duration.
+
+`audio_wav_stream_open()` closes the local file on every parse/allocation
+failure. `audio_wav_stream_read()` treats a short read before the declared data
+end as corruption or I/O failure and closes the stream before returning. Close
+always releases the buffer even if `fclose()` reports an error. The private
+reader is single-owner and not thread-safe; future calls must remain serialized
+by the audio manager task/lifecycle owner.
+
+`audio_wav_parse_file()` remains separately callable inside the component so a
+test harness can exercise valid PCM16 fixtures, metadata/odd-padding chunks,
+truncated files, missing chunks, unsupported formats, and oversized chunk
+lengths without requiring a mounted SD card.
+
+| Fixture class | Expected parser result |
+| --- | --- |
+| PCM16 mono 16-kHz, including `JUNK`/`LIST` chunks | Accepted; data offset and payload length reported |
+| Odd-sized unknown metadata chunk | Accepted after one-byte RIFF padding skip |
+| Large canonical WAV | Accepted with the same 4 KiB stream buffer |
+| Random file, truncated RIFF, missing `fmt ` or `data` | Deterministic malformed/missing error |
+| Stereo, 44.1-kHz, 8/24/32-bit, float, ADPCM | Deterministic unsupported-format error |
+| Declared data/chunk length beyond file bounds | Deterministic invalid-size error |
+
 ## Proven Audio Behavior Preserved
 
 This structural refactor intentionally does not change the known-good audio path:
@@ -91,6 +172,8 @@ This structural refactor intentionally does not change the known-good audio path
 - TX DMA silence preload and pre/post playback silence remain unchanged.
 - MAX98357A data remains LOW while TX is inactive.
 - RX/TX remain half-duplex with defensive cleanup every cycle.
+- Phase 11.4.1 does not create a WAV playback task or call the existing TX
+  helpers from the file reader.
 
 ## Status And Diagnostics
 
@@ -134,3 +217,6 @@ This remains the golden hardware-soak path while the component architecture is n
 - The current task is a stability flow, not the final source-agnostic streaming API required by later Xiaozhi work.
 - The compatibility `audio_manager_test_start()` alias remains only for legacy callers and should be removed after those callers migrate.
 - Live I2S queue occupancy and a true TX-underrun counter remain deferred until the Phase 11.2 manager-owned PCM ring exists.
+- Phase 11.4.2 must arbitrate sources and feed the validated WAV reader into
+  the manager-owned TX/ring path; end-to-end SD playback remains hardware
+  validation work.
