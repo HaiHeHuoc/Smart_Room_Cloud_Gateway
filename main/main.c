@@ -59,7 +59,7 @@
 #include "audio_manager.h"
 
 /* Macros ------------------------------------------------------------------- */
-#define PERFORMANCE_MONITOR 1
+#define PERFORMANCE_MONITOR 0
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "MAIN_APP";
