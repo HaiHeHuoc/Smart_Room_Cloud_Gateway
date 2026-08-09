@@ -1,0 +1,1534 @@
+/**
+ * @file audio_manager.c
+ * @brief NewSolution stability-first INMP441 -> DSP -> MAX98357A manager.
+ *
+ * This implementation intentionally prioritizes proven hardware behavior and
+ * long-soak stability over the final production component architecture.
+ * The manager owns one internal test task that continuously executes:
+ * record -> process -> playback -> defensive cleanup -> repeat.
+ */
+
+#include "audio_manager.h"
+#include "audio_dsp.h"
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+
+#include "board_config.h"
+#include "driver/gpio.h"
+#include "driver/i2s_std.h"
+#include "esp_attr.h"
+#include "esp_heap_caps.h"
+#include "esp_log.h"
+#include "esp_memory_utils.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
+
+/* Proven transport baseline ------------------------------------------------ */
+#define AUDIO_MANAGER_SAMPLE_RATE_HZ             AUDIO_DSP_SAMPLE_RATE_HZ
+#define AUDIO_MANAGER_SLOT_COUNT                 2U
+#define AUDIO_MANAGER_FRAMES_PER_BLOCK           256U
+#define AUDIO_MANAGER_DMA_DESC_NUM               8U
+#define AUDIO_MANAGER_I2S_TIMEOUT_MS             1000U
+
+/* Proven INMP441/MAX98357 cycle policy ------------------------------------ */
+#define AUDIO_MANAGER_STARTUP_DISCARD_BLOCKS     40U
+#define AUDIO_MANAGER_SLOT_DETECT_BLOCKS         20U
+#define AUDIO_MANAGER_PRE_PLAYBACK_DELAY_MS      500U
+#define AUDIO_MANAGER_PRE_PLAYBACK_SILENCE_BLOCKS 32U
+#define AUDIO_MANAGER_POST_PLAYBACK_SILENCE_BLOCKS 32U
+
+_Static_assert(AUDIO_MANAGER_SLOT_COUNT == 2U,
+               "Standard I2S transport requires two slots");
+_Static_assert(AUDIO_MANAGER_SAMPLE_RATE_HZ == AUDIO_SAMPLE_RATE_HZ,
+               "DSP and board sample rates must match");
+
+static const char *const TAG = "AUDIO_MANAGER";
+
+typedef enum
+{
+    MICROPHONE_SLOT_LEFT = 0,
+    MICROPHONE_SLOT_RIGHT = 1,
+} microphone_slot_t;
+
+typedef struct
+{
+    uint64_t absolute_sum;
+    uint32_t peak;
+    uint32_t sample_count;
+} slot_stats_t;
+
+typedef struct
+{
+    uint32_t total_yields;
+} dsp_scheduler_stats_t;
+
+typedef struct
+{
+    size_t samples_recorded;
+    int32_t dc_offset_pcm24;
+    uint32_t raw_average_pcm24;
+    uint32_t raw_peak_pcm24;
+    uint32_t band_average_pcm24;
+    uint32_t band_peak_pcm24;
+    uint32_t ns_average_pcm24;
+    uint32_t ns_peak_pcm24;
+    uint32_t dsp_processing_ms;
+    uint32_t dsp_realtime_factor_milli;
+    uint32_t dsp_total_yields;
+    audio_dsp_ns_metrics_t ns;
+    audio_dsp_playback_stats_t playback;
+} audio_cycle_metrics_t;
+
+typedef struct
+{
+    bool initialized;
+    bool rx_enabled;
+    bool tx_enabled;
+    audio_manager_config_t config;
+    size_t sample_capacity;
+    size_t recording_bytes;
+    int32_t *recording_pcm24;
+    audio_dsp_workspace_t *dsp_workspace;
+    i2s_chan_handle_t rx_channel;
+    i2s_chan_handle_t tx_channel;
+    TaskHandle_t test_task;
+    SemaphoreHandle_t status_mutex;
+    audio_manager_status_t status;
+} audio_manager_runtime_t;
+
+static audio_manager_runtime_t s_runtime = {0};
+
+/* Small I2S staging stays in Internal/DMA RAM; long history stays in PSRAM. */
+DMA_ATTR static int32_t s_rx_block[
+    AUDIO_MANAGER_FRAMES_PER_BLOCK * AUDIO_MANAGER_SLOT_COUNT];
+DMA_ATTR static int16_t s_tx_block[
+    AUDIO_MANAGER_FRAMES_PER_BLOCK * AUDIO_MANAGER_SLOT_COUNT];
+DMA_ATTR static const int16_t s_silence_block[
+    AUDIO_MANAGER_FRAMES_PER_BLOCK * AUDIO_MANAGER_SLOT_COUNT] = {0};
+
+/* ISR callbacks remain counter-only. */
+DRAM_ATTR static volatile uint32_t s_rx_overflow_isr_count;
+DRAM_ATTR static volatile uint32_t s_tx_overflow_isr_count;
+
+/* Task-owned diagnostics. */
+static uint32_t s_rx_timeout_count;
+static uint32_t s_tx_timeout_count;
+static uint32_t s_tx_partial_write_count;
+static uint32_t s_max_rx_read_duration_us;
+static uint32_t s_max_tx_write_duration_us;
+
+static bool IRAM_ATTR audio_manager_rx_overflow_callback(
+    i2s_chan_handle_t handle,
+    i2s_event_data_t *event,
+    void *user_context)
+{
+    (void)handle;
+    (void)event;
+    (void)user_context;
+    ++s_rx_overflow_isr_count;
+    return false;
+}
+
+static bool IRAM_ATTR audio_manager_tx_overflow_callback(
+    i2s_chan_handle_t handle,
+    i2s_event_data_t *event,
+    void *user_context)
+{
+    (void)handle;
+    (void)event;
+    (void)user_context;
+    ++s_tx_overflow_isr_count;
+    return false;
+}
+
+static void status_lock(void)
+{
+    if (s_runtime.status_mutex != NULL)
+    {
+        (void)xSemaphoreTake(s_runtime.status_mutex, portMAX_DELAY);
+    }
+}
+
+static void status_unlock(void)
+{
+    if (s_runtime.status_mutex != NULL)
+    {
+        xSemaphoreGive(s_runtime.status_mutex);
+    }
+}
+
+static void set_state(audio_manager_state_t state)
+{
+    status_lock();
+    s_runtime.status.state = state;
+    status_unlock();
+}
+
+static void refresh_diagnostics_locked(void)
+{
+    s_runtime.status.rx_overflow_count = s_rx_overflow_isr_count;
+    s_runtime.status.rx_timeout_count = s_rx_timeout_count;
+    s_runtime.status.tx_queue_overflow_count = s_tx_overflow_isr_count;
+    s_runtime.status.tx_timeout_count = s_tx_timeout_count;
+    s_runtime.status.tx_partial_write_count = s_tx_partial_write_count;
+    s_runtime.status.max_rx_read_duration_us = s_max_rx_read_duration_us;
+    s_runtime.status.max_tx_write_duration_us = s_max_tx_write_duration_us;
+
+    if (s_runtime.test_task != NULL)
+    {
+        s_runtime.status.test_task_stack_high_water_bytes =
+            uxTaskGetStackHighWaterMark(s_runtime.test_task);
+    }
+}
+
+static void log_heap_state(const char *label)
+{
+    const size_t internal_free =
+        heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const size_t internal_min =
+        heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const size_t internal_largest =
+        heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const size_t dma_free = heap_caps_get_free_size(MALLOC_CAP_DMA);
+    const size_t dma_min = heap_caps_get_minimum_free_size(MALLOC_CAP_DMA);
+    const size_t dma_largest = heap_caps_get_largest_free_block(MALLOC_CAP_DMA);
+    const size_t psram_free =
+        heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    const size_t psram_min =
+        heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    const size_t psram_largest =
+        heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+    ESP_LOGI(
+        TAG,
+        "HEAP[%s] internal=%u min=%u largest=%u dma=%u min=%u largest=%u psram=%u min=%u largest=%u",
+        (label != NULL) ? label : "?",
+        (unsigned)internal_free,
+        (unsigned)internal_min,
+        (unsigned)internal_largest,
+        (unsigned)dma_free,
+        (unsigned)dma_min,
+        (unsigned)dma_largest,
+        (unsigned)psram_free,
+        (unsigned)psram_min,
+        (unsigned)psram_largest);
+}
+
+static esp_err_t hold_amplifier_data_low(void)
+{
+    esp_err_t result = gpio_reset_pin(AUDIO_GPIO_SPK_DOUT);
+    if (result != ESP_OK)
+    {
+        return result;
+    }
+
+    result = gpio_set_direction(AUDIO_GPIO_SPK_DOUT, GPIO_MODE_OUTPUT);
+    if (result != ESP_OK)
+    {
+        return result;
+    }
+
+    return gpio_set_level(AUDIO_GPIO_SPK_DOUT, 0);
+}
+
+static esp_err_t start_i2s_rx(void)
+{
+    if (s_runtime.rx_channel != NULL)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    i2s_chan_config_t channel_config =
+        I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+    channel_config.dma_desc_num = AUDIO_MANAGER_DMA_DESC_NUM;
+    channel_config.dma_frame_num = AUDIO_MANAGER_FRAMES_PER_BLOCK;
+
+    esp_err_t result = i2s_new_channel(
+        &channel_config,
+        NULL,
+        &s_runtime.rx_channel);
+    if (result != ESP_OK)
+    {
+        s_runtime.rx_channel = NULL;
+        return result;
+    }
+
+    const i2s_event_callbacks_t callbacks = {
+        .on_recv = NULL,
+        .on_recv_q_ovf = audio_manager_rx_overflow_callback,
+        .on_sent = NULL,
+        .on_send_q_ovf = NULL,
+    };
+
+    result = i2s_channel_register_event_callback(
+        s_runtime.rx_channel,
+        &callbacks,
+        NULL);
+    if (result != ESP_OK)
+    {
+        (void)i2s_del_channel(s_runtime.rx_channel);
+        s_runtime.rx_channel = NULL;
+        return result;
+    }
+
+    i2s_std_config_t config = {
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(AUDIO_MANAGER_SAMPLE_RATE_HZ),
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(
+            I2S_DATA_BIT_WIDTH_32BIT,
+            I2S_SLOT_MODE_STEREO),
+        .gpio_cfg = {
+            .mclk = I2S_GPIO_UNUSED,
+            .bclk = AUDIO_GPIO_BCLK,
+            .ws = AUDIO_GPIO_WS,
+            .dout = I2S_GPIO_UNUSED,
+            .din = AUDIO_GPIO_MIC_DIN,
+            .invert_flags = {
+                .mclk_inv = false,
+                .bclk_inv = false,
+                .ws_inv = false,
+            },
+        },
+    };
+    config.slot_cfg.slot_mask = I2S_STD_SLOT_BOTH;
+
+    result = i2s_channel_init_std_mode(s_runtime.rx_channel, &config);
+    if (result == ESP_OK)
+    {
+        result = i2s_channel_enable(s_runtime.rx_channel);
+        s_runtime.rx_enabled = (result == ESP_OK);
+    }
+
+    if (result != ESP_OK)
+    {
+        if (s_runtime.rx_enabled)
+        {
+            (void)i2s_channel_disable(s_runtime.rx_channel);
+        }
+        (void)i2s_del_channel(s_runtime.rx_channel);
+        s_runtime.rx_channel = NULL;
+        s_runtime.rx_enabled = false;
+    }
+
+    return result;
+}
+
+static esp_err_t stop_i2s_rx(void)
+{
+    if (s_runtime.rx_channel == NULL)
+    {
+        s_runtime.rx_enabled = false;
+        return ESP_OK;
+    }
+
+    esp_err_t first_error = ESP_OK;
+
+    if (s_runtime.rx_enabled)
+    {
+        const esp_err_t disable_result =
+            i2s_channel_disable(s_runtime.rx_channel);
+        if (disable_result != ESP_OK)
+        {
+            first_error = disable_result;
+        }
+    }
+
+    s_runtime.rx_enabled = false;
+    const esp_err_t delete_result = i2s_del_channel(s_runtime.rx_channel);
+    s_runtime.rx_channel = NULL;
+
+    return (first_error != ESP_OK) ? first_error : delete_result;
+}
+
+static esp_err_t read_rx_block(size_t *frames_read)
+{
+    if (frames_read == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *frames_read = 0U;
+    size_t bytes_read = 0U;
+    const int64_t start_us = esp_timer_get_time();
+
+    /* ESP-IDF new I2S channel APIs take timeout directly in milliseconds. */
+    const esp_err_t result = i2s_channel_read(
+        s_runtime.rx_channel,
+        s_rx_block,
+        sizeof(s_rx_block),
+        &bytes_read,
+        AUDIO_MANAGER_I2S_TIMEOUT_MS);
+
+    const int64_t duration_us = esp_timer_get_time() - start_us;
+    if ((duration_us > 0) && ((uint64_t)duration_us > s_max_rx_read_duration_us))
+    {
+        s_max_rx_read_duration_us =
+            (duration_us > UINT32_MAX) ? UINT32_MAX : (uint32_t)duration_us;
+    }
+
+    if (result == ESP_ERR_TIMEOUT)
+    {
+        ++s_rx_timeout_count;
+    }
+
+    if (result != ESP_OK)
+    {
+        return result;
+    }
+
+    const size_t bytes_per_frame =
+        AUDIO_MANAGER_SLOT_COUNT * sizeof(int32_t);
+    if ((bytes_read % bytes_per_frame) != 0U)
+    {
+        ESP_LOGW(
+            TAG,
+            "RX byte count is not frame aligned: %u",
+            (unsigned)bytes_read);
+    }
+
+    *frames_read = bytes_read / bytes_per_frame;
+    return ESP_OK;
+}
+
+static esp_err_t discard_microphone_startup(void)
+{
+    for (uint32_t block = 0U;
+         block < AUDIO_MANAGER_STARTUP_DISCARD_BLOCKS;
+         ++block)
+    {
+        size_t frames_read = 0U;
+        const esp_err_t result = read_rx_block(&frames_read);
+        if (result != ESP_OK)
+        {
+            return result;
+        }
+    }
+    return ESP_OK;
+}
+
+static void update_slot_stats(slot_stats_t *stats, int32_t sample)
+{
+    if (stats == NULL)
+    {
+        return;
+    }
+
+    const uint32_t magnitude =
+        (sample < 0) ? (uint32_t)(-(int64_t)sample) : (uint32_t)sample;
+    stats->absolute_sum += magnitude;
+    ++stats->sample_count;
+    if (magnitude > stats->peak)
+    {
+        stats->peak = magnitude;
+    }
+}
+
+static esp_err_t detect_microphone_slot(microphone_slot_t *selected_slot)
+{
+    if (selected_slot == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    slot_stats_t left = {0};
+    slot_stats_t right = {0};
+
+    for (uint32_t block = 0U;
+         block < AUDIO_MANAGER_SLOT_DETECT_BLOCKS;
+         ++block)
+    {
+        size_t frames_read = 0U;
+        const esp_err_t result = read_rx_block(&frames_read);
+        if (result != ESP_OK)
+        {
+            return result;
+        }
+
+        for (size_t frame = 0U; frame < frames_read; ++frame)
+        {
+            const size_t base = frame * AUDIO_MANAGER_SLOT_COUNT;
+            update_slot_stats(
+                &left,
+                audio_dsp_convert_raw_slot_to_pcm24(s_rx_block[base]));
+            update_slot_stats(
+                &right,
+                audio_dsp_convert_raw_slot_to_pcm24(s_rx_block[base + 1U]));
+        }
+    }
+
+    const uint64_t left_average =
+        (left.sample_count == 0U) ? 0U : left.absolute_sum / left.sample_count;
+    const uint64_t right_average =
+        (right.sample_count == 0U) ? 0U : right.absolute_sum / right.sample_count;
+
+    *selected_slot =
+        (right_average > left_average)
+            ? MICROPHONE_SLOT_RIGHT
+            : MICROPHONE_SLOT_LEFT;
+
+    ESP_LOGI(
+        TAG,
+        "SLOT_DETECT left_avg=%llu left_peak=%u right_avg=%llu right_peak=%u selected=%s",
+        (unsigned long long)left_average,
+        (unsigned)left.peak,
+        (unsigned long long)right_average,
+        (unsigned)right.peak,
+        (*selected_slot == MICROPHONE_SLOT_LEFT) ? "LEFT" : "RIGHT");
+
+    return ESP_OK;
+}
+
+static esp_err_t record_audio(
+    microphone_slot_t selected_slot,
+    size_t *samples_recorded)
+{
+    if ((samples_recorded == NULL) ||
+        (s_runtime.recording_pcm24 == NULL) ||
+        (s_runtime.sample_capacity == 0U))
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const size_t selected_slot_index =
+        (selected_slot == MICROPHONE_SLOT_RIGHT) ? 1U : 0U;
+    size_t captured = 0U;
+    size_t next_progress = AUDIO_MANAGER_SAMPLE_RATE_HZ;
+
+    while (captured < s_runtime.sample_capacity)
+    {
+        size_t frames_read = 0U;
+        const esp_err_t result = read_rx_block(&frames_read);
+        if (result != ESP_OK)
+        {
+            *samples_recorded = captured;
+            return result;
+        }
+
+        const size_t remaining = s_runtime.sample_capacity - captured;
+        if (frames_read > remaining)
+        {
+            frames_read = remaining;
+        }
+
+        for (size_t frame = 0U; frame < frames_read; ++frame)
+        {
+            const size_t source_index =
+                (frame * AUDIO_MANAGER_SLOT_COUNT) + selected_slot_index;
+            s_runtime.recording_pcm24[captured + frame] =
+                audio_dsp_convert_raw_slot_to_pcm24(s_rx_block[source_index]);
+        }
+
+        captured += frames_read;
+
+        while ((captured >= next_progress) &&
+               (next_progress <= s_runtime.sample_capacity))
+        {
+            ESP_LOGI(
+                TAG,
+                "Recorded %u/%u seconds",
+                (unsigned)(next_progress / AUDIO_MANAGER_SAMPLE_RATE_HZ),
+                (unsigned)s_runtime.config.record_duration_seconds);
+            next_progress += AUDIO_MANAGER_SAMPLE_RATE_HZ;
+        }
+    }
+
+    *samples_recorded = captured;
+    return ESP_OK;
+}
+
+static esp_err_t start_i2s_tx(void)
+{
+    if (s_runtime.tx_channel != NULL)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    i2s_chan_config_t channel_config =
+        I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+    channel_config.dma_desc_num = AUDIO_MANAGER_DMA_DESC_NUM;
+    channel_config.dma_frame_num = AUDIO_MANAGER_FRAMES_PER_BLOCK;
+
+    esp_err_t result = i2s_new_channel(
+        &channel_config,
+        &s_runtime.tx_channel,
+        NULL);
+    if (result != ESP_OK)
+    {
+        s_runtime.tx_channel = NULL;
+        return result;
+    }
+
+    const i2s_event_callbacks_t callbacks = {
+        .on_recv = NULL,
+        .on_recv_q_ovf = NULL,
+        .on_sent = NULL,
+        .on_send_q_ovf = audio_manager_tx_overflow_callback,
+    };
+
+    result = i2s_channel_register_event_callback(
+        s_runtime.tx_channel,
+        &callbacks,
+        NULL);
+    if (result != ESP_OK)
+    {
+        (void)i2s_del_channel(s_runtime.tx_channel);
+        s_runtime.tx_channel = NULL;
+        return result;
+    }
+
+    i2s_std_config_t config = {
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(AUDIO_MANAGER_SAMPLE_RATE_HZ),
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(
+            I2S_DATA_BIT_WIDTH_16BIT,
+            I2S_SLOT_MODE_STEREO),
+        .gpio_cfg = {
+            .mclk = I2S_GPIO_UNUSED,
+            .bclk = AUDIO_GPIO_BCLK,
+            .ws = AUDIO_GPIO_WS,
+            .dout = AUDIO_GPIO_SPK_DOUT,
+            .din = I2S_GPIO_UNUSED,
+            .invert_flags = {
+                .mclk_inv = false,
+                .bclk_inv = false,
+                .ws_inv = false,
+            },
+        },
+    };
+    config.slot_cfg.slot_mask = I2S_STD_SLOT_BOTH;
+
+    result = i2s_channel_init_std_mode(s_runtime.tx_channel, &config);
+    if (result != ESP_OK)
+    {
+        (void)i2s_del_channel(s_runtime.tx_channel);
+        s_runtime.tx_channel = NULL;
+        return result;
+    }
+
+    /* Proven reference behavior: preload DMA with silence before enabling TX. */
+    size_t loaded = sizeof(s_silence_block);
+    while (loaded == sizeof(s_silence_block))
+    {
+        loaded = 0U;
+        result = i2s_channel_preload_data(
+            s_runtime.tx_channel,
+            s_silence_block,
+            sizeof(s_silence_block),
+            &loaded);
+        if (result != ESP_OK)
+        {
+            (void)i2s_del_channel(s_runtime.tx_channel);
+            s_runtime.tx_channel = NULL;
+            return result;
+        }
+    }
+
+    result = i2s_channel_enable(s_runtime.tx_channel);
+    s_runtime.tx_enabled = (result == ESP_OK);
+
+    if (result != ESP_OK)
+    {
+        (void)i2s_del_channel(s_runtime.tx_channel);
+        s_runtime.tx_channel = NULL;
+        s_runtime.tx_enabled = false;
+    }
+
+    return result;
+}
+
+static esp_err_t stop_i2s_tx(void)
+{
+    if (s_runtime.tx_channel == NULL)
+    {
+        s_runtime.tx_enabled = false;
+        return hold_amplifier_data_low();
+    }
+
+    esp_err_t first_error = ESP_OK;
+
+    if (s_runtime.tx_enabled)
+    {
+        const esp_err_t disable_result =
+            i2s_channel_disable(s_runtime.tx_channel);
+        if (disable_result != ESP_OK)
+        {
+            first_error = disable_result;
+        }
+    }
+
+    s_runtime.tx_enabled = false;
+    const esp_err_t delete_result = i2s_del_channel(s_runtime.tx_channel);
+    s_runtime.tx_channel = NULL;
+    const esp_err_t gpio_result = hold_amplifier_data_low();
+
+    if (first_error != ESP_OK)
+    {
+        return first_error;
+    }
+    if (delete_result != ESP_OK)
+    {
+        return delete_result;
+    }
+    return gpio_result;
+}
+
+static esp_err_t write_tx_frames(size_t frame_count)
+{
+    if ((frame_count == 0U) ||
+        (frame_count > AUDIO_MANAGER_FRAMES_PER_BLOCK))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const size_t bytes_to_write =
+        frame_count * AUDIO_MANAGER_SLOT_COUNT * sizeof(int16_t);
+    size_t bytes_written = 0U;
+    const int64_t start_us = esp_timer_get_time();
+
+    /* ESP-IDF new I2S channel APIs take timeout directly in milliseconds. */
+    const esp_err_t result = i2s_channel_write(
+        s_runtime.tx_channel,
+        s_tx_block,
+        bytes_to_write,
+        &bytes_written,
+        AUDIO_MANAGER_I2S_TIMEOUT_MS);
+
+    const int64_t duration_us = esp_timer_get_time() - start_us;
+    if ((duration_us > 0) && ((uint64_t)duration_us > s_max_tx_write_duration_us))
+    {
+        s_max_tx_write_duration_us =
+            (duration_us > UINT32_MAX) ? UINT32_MAX : (uint32_t)duration_us;
+    }
+
+    if (result == ESP_ERR_TIMEOUT)
+    {
+        ++s_tx_timeout_count;
+    }
+
+    if (bytes_written != bytes_to_write)
+    {
+        ++s_tx_partial_write_count;
+    }
+
+    if (result != ESP_OK)
+    {
+        return result;
+    }
+
+    return (bytes_written == bytes_to_write) ? ESP_OK : ESP_FAIL;
+}
+
+static esp_err_t write_silence_blocks(uint32_t block_count)
+{
+    memset(s_tx_block, 0, sizeof(s_tx_block));
+
+    for (uint32_t block = 0U; block < block_count; ++block)
+    {
+        const esp_err_t result =
+            write_tx_frames(AUDIO_MANAGER_FRAMES_PER_BLOCK);
+        if (result != ESP_OK)
+        {
+            return result;
+        }
+    }
+    return ESP_OK;
+}
+
+static int32_t apply_playback_volume_percent(int32_t sample_pcm24)
+{
+    return (int32_t)(
+        ((int64_t)sample_pcm24 * s_runtime.config.playback_volume_percent) /
+        AUDIO_DSP_VOLUME_PERCENT_MAX);
+}
+
+static esp_err_t play_recording(
+    size_t sample_count,
+    audio_dsp_playback_stats_t *stats)
+{
+    if ((s_runtime.recording_pcm24 == NULL) ||
+        (sample_count == 0U) ||
+        (stats == NULL))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    memset(stats, 0, sizeof(*stats));
+    size_t sample_index = 0U;
+
+    while (sample_index < sample_count)
+    {
+        size_t frames = sample_count - sample_index;
+        if (frames > AUDIO_MANAGER_FRAMES_PER_BLOCK)
+        {
+            frames = AUDIO_MANAGER_FRAMES_PER_BLOCK;
+        }
+
+        for (size_t frame = 0U; frame < frames; ++frame)
+        {
+            bool soft_compressed = false;
+            bool limited = false;
+            const int32_t volume_scaled_pcm24 =
+                apply_playback_volume_percent(
+                    s_runtime.recording_pcm24[sample_index + frame]);
+
+            const int16_t mono_sample = audio_dsp_prepare_output_sample(
+                volume_scaled_pcm24,
+                sample_index + frame,
+                sample_count,
+                &soft_compressed,
+                &limited);
+
+            const uint32_t magnitude =
+                (mono_sample < 0)
+                    ? (uint32_t)(-(int32_t)mono_sample)
+                    : (uint32_t)mono_sample;
+
+            stats->absolute_sum += magnitude;
+            ++stats->sample_count;
+            if (magnitude > stats->peak)
+            {
+                stats->peak = magnitude;
+            }
+            if (soft_compressed)
+            {
+                ++stats->soft_compressed_samples;
+            }
+            if (limited)
+            {
+                ++stats->limited_samples;
+            }
+
+            const size_t slot = frame * AUDIO_MANAGER_SLOT_COUNT;
+            s_tx_block[slot] = mono_sample;
+            s_tx_block[slot + 1U] = mono_sample;
+        }
+
+        const esp_err_t result = write_tx_frames(frames);
+        if (result != ESP_OK)
+        {
+            return result;
+        }
+
+        sample_index += frames;
+    }
+
+    return ESP_OK;
+}
+
+static void dsp_cooperative_yield(void *context)
+{
+    dsp_scheduler_stats_t *const stats = (dsp_scheduler_stats_t *)context;
+    if (stats != NULL)
+    {
+        ++stats->total_yields;
+    }
+    vTaskDelay(1U);
+}
+
+static void log_ns_metrics(const audio_dsp_ns_metrics_t *metrics)
+{
+    if (metrics == NULL)
+    {
+        return;
+    }
+
+    const uint32_t floor_per_mille =
+        (metrics->processed_bin_frames == 0U)
+            ? 0U
+            : (uint32_t)(((uint64_t)metrics->floor_bin_frames * 1000U) /
+                         metrics->processed_bin_frames);
+    const uint32_t protected_per_mille =
+        (metrics->processed_bin_frames == 0U)
+            ? 0U
+            : (uint32_t)(((uint64_t)metrics->speech_protected_bin_frames * 1000U) /
+                         metrics->processed_bin_frames);
+    const uint32_t average_gain_milli =
+        (uint32_t)(metrics->average_gain * 1000.0f + 0.5f);
+    const uint32_t minimum_gain_milli =
+        (uint32_t)(metrics->minimum_gain * 1000.0f + 0.5f);
+    const uint32_t maximum_gain_milli =
+        (uint32_t)(metrics->maximum_gain * 1000.0f + 0.5f);
+
+    ESP_LOGI(
+        TAG,
+        "NS frames=%u updates=%u yields=%u avg_gain=%u.%03u min=%u.%03u max=%u.%03u floor=%u.%u%% protected=%u.%u%%",
+        (unsigned)metrics->processed_frames,
+        (unsigned)metrics->noise_updates,
+        (unsigned)metrics->cooperative_yields,
+        (unsigned)(average_gain_milli / 1000U),
+        (unsigned)(average_gain_milli % 1000U),
+        (unsigned)(minimum_gain_milli / 1000U),
+        (unsigned)(minimum_gain_milli % 1000U),
+        (unsigned)(maximum_gain_milli / 1000U),
+        (unsigned)(maximum_gain_milli % 1000U),
+        (unsigned)(floor_per_mille / 10U),
+        (unsigned)(floor_per_mille % 10U),
+        (unsigned)(protected_per_mille / 10U),
+        (unsigned)(protected_per_mille % 10U));
+}
+
+static void log_playback_result(const audio_dsp_playback_stats_t *playback)
+{
+    if (playback == NULL)
+    {
+        return;
+    }
+
+    const uint32_t output_average =
+        (playback->sample_count == 0U)
+            ? 0U
+            : (uint32_t)(playback->absolute_sum / playback->sample_count);
+
+    ESP_LOGI(
+        TAG,
+        "PLAYBACK output_avg=%u peak=%u soft=%u/%u limited=%u/%u",
+        (unsigned)output_average,
+        (unsigned)playback->peak,
+        (unsigned)playback->soft_compressed_samples,
+        (unsigned)playback->sample_count,
+        (unsigned)playback->limited_samples,
+        (unsigned)playback->sample_count);
+}
+
+static esp_err_t record_once(size_t *samples_recorded)
+{
+    if (samples_recorded == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *samples_recorded = 0U;
+    microphone_slot_t selected_slot = MICROPHONE_SLOT_LEFT;
+
+    esp_err_t result = hold_amplifier_data_low();
+    if (result != ESP_OK)
+    {
+        return result;
+    }
+
+    result = start_i2s_rx();
+    if (result != ESP_OK)
+    {
+        return result;
+    }
+
+    result = discard_microphone_startup();
+    if (result == ESP_OK)
+    {
+        result = detect_microphone_slot(&selected_slot);
+    }
+
+    if (result == ESP_OK)
+    {
+        set_state(AUDIO_MANAGER_STATE_RECORDING);
+        ESP_LOGI(
+            TAG,
+            "RECORDING %u seconds",
+            (unsigned)s_runtime.config.record_duration_seconds);
+        result = record_audio(selected_slot, samples_recorded);
+    }
+
+    const esp_err_t stop_result = stop_i2s_rx();
+    if ((result == ESP_OK) && (stop_result != ESP_OK))
+    {
+        result = stop_result;
+    }
+
+    set_state(AUDIO_MANAGER_STATE_IDLE);
+    return result;
+}
+
+static esp_err_t process_once(
+    size_t sample_count,
+    audio_cycle_metrics_t *metrics)
+{
+    if ((sample_count < AUDIO_DSP_NS_FFT_SIZE) ||
+        (sample_count > s_runtime.sample_capacity) ||
+        (metrics == NULL))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    set_state(AUDIO_MANAGER_STATE_PROCESSING);
+    memset(metrics, 0, sizeof(*metrics));
+    metrics->samples_recorded = sample_count;
+
+    dsp_scheduler_stats_t scheduler = {0};
+
+    audio_dsp_calculate_level_cooperative(
+        s_runtime.recording_pcm24,
+        sample_count,
+        &metrics->raw_average_pcm24,
+        &metrics->raw_peak_pcm24,
+        dsp_cooperative_yield,
+        &scheduler);
+
+    const int64_t dsp_start_us = esp_timer_get_time();
+
+    metrics->dc_offset_pcm24 = audio_dsp_calculate_dc_offset_cooperative(
+        s_runtime.recording_pcm24,
+        sample_count,
+        dsp_cooperative_yield,
+        &scheduler);
+
+    audio_dsp_apply_speech_band_filter_in_place_cooperative(
+        s_runtime.recording_pcm24,
+        sample_count,
+        metrics->dc_offset_pcm24,
+        dsp_cooperative_yield,
+        &scheduler);
+
+    audio_dsp_calculate_level_cooperative(
+        s_runtime.recording_pcm24,
+        sample_count,
+        &metrics->band_average_pcm24,
+        &metrics->band_peak_pcm24,
+        dsp_cooperative_yield,
+        &scheduler);
+
+    if (!audio_dsp_apply_adaptive_ns_in_place_cooperative(
+            s_runtime.recording_pcm24,
+            sample_count,
+            s_runtime.dsp_workspace,
+            &metrics->ns,
+            dsp_cooperative_yield,
+            &scheduler))
+    {
+        set_state(AUDIO_MANAGER_STATE_IDLE);
+        return ESP_FAIL;
+    }
+
+    const int64_t elapsed_us = esp_timer_get_time() - dsp_start_us;
+
+    audio_dsp_calculate_level_cooperative(
+        s_runtime.recording_pcm24,
+        sample_count,
+        &metrics->ns_average_pcm24,
+        &metrics->ns_peak_pcm24,
+        dsp_cooperative_yield,
+        &scheduler);
+
+    metrics->dsp_processing_ms = (uint32_t)(elapsed_us / 1000LL);
+    metrics->dsp_total_yields = scheduler.total_yields;
+
+    const uint64_t audio_duration_us =
+        ((uint64_t)sample_count * 1000000ULL) /
+        AUDIO_MANAGER_SAMPLE_RATE_HZ;
+    metrics->dsp_realtime_factor_milli =
+        (audio_duration_us == 0U)
+            ? 0U
+            : (uint32_t)(((uint64_t)elapsed_us * 1000ULL) /
+                         audio_duration_us);
+
+    ESP_LOGI(
+        TAG,
+        "DSP dc=%ld pcm16_eq raw_avg=%u raw_peak=%u band_avg=%u band_peak=%u ns_avg=%u ns_peak=%u time=%ums rt=%u.%03u",
+        (long)metrics->dc_offset_pcm24,
+        (unsigned)(metrics->raw_average_pcm24 / AUDIO_DSP_PCM24_SCALE_FACTOR),
+        (unsigned)(metrics->raw_peak_pcm24 / AUDIO_DSP_PCM24_SCALE_FACTOR),
+        (unsigned)(metrics->band_average_pcm24 / AUDIO_DSP_PCM24_SCALE_FACTOR),
+        (unsigned)(metrics->band_peak_pcm24 / AUDIO_DSP_PCM24_SCALE_FACTOR),
+        (unsigned)(metrics->ns_average_pcm24 / AUDIO_DSP_PCM24_SCALE_FACTOR),
+        (unsigned)(metrics->ns_peak_pcm24 / AUDIO_DSP_PCM24_SCALE_FACTOR),
+        (unsigned)metrics->dsp_processing_ms,
+        (unsigned)(metrics->dsp_realtime_factor_milli / 1000U),
+        (unsigned)(metrics->dsp_realtime_factor_milli % 1000U));
+
+    log_ns_metrics(&metrics->ns);
+    set_state(AUDIO_MANAGER_STATE_IDLE);
+    return ESP_OK;
+}
+
+static esp_err_t playback_once(
+    size_t sample_count,
+    audio_cycle_metrics_t *metrics)
+{
+    if ((sample_count == 0U) ||
+        (sample_count > s_runtime.sample_capacity) ||
+        (metrics == NULL))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_err_t result = start_i2s_tx();
+    if (result != ESP_OK)
+    {
+        return result;
+    }
+
+    result = write_silence_blocks(
+        AUDIO_MANAGER_PRE_PLAYBACK_SILENCE_BLOCKS);
+
+    if (result == ESP_OK)
+    {
+        set_state(AUDIO_MANAGER_STATE_PLAYBACK);
+        ESP_LOGI(
+            TAG,
+            "PLAYBACK samples=%u volume=%u/100 gain=%u.%02ux limiter=+/-%d",
+            (unsigned)sample_count,
+            (unsigned)s_runtime.config.playback_volume_percent,
+            (unsigned)(AUDIO_DSP_PLAYBACK_GAIN_Q8 / AUDIO_DSP_Q8_ONE),
+            (unsigned)(((AUDIO_DSP_PLAYBACK_GAIN_Q8 % AUDIO_DSP_Q8_ONE) * 100U) /
+                       AUDIO_DSP_Q8_ONE),
+            AUDIO_DSP_PLAYBACK_PEAK_LIMIT_PCM16);
+        result = play_recording(sample_count, &metrics->playback);
+    }
+
+    if (result == ESP_OK)
+    {
+        result = write_silence_blocks(
+            AUDIO_MANAGER_POST_PLAYBACK_SILENCE_BLOCKS);
+    }
+
+    const esp_err_t stop_result = stop_i2s_tx();
+    if ((result == ESP_OK) && (stop_result != ESP_OK))
+    {
+        result = stop_result;
+    }
+
+    set_state(AUDIO_MANAGER_STATE_IDLE);
+
+    if (result == ESP_OK)
+    {
+        log_playback_result(&metrics->playback);
+    }
+
+    return result;
+}
+
+static esp_err_t force_cycle_cleanup(void)
+{
+    esp_err_t first_error = ESP_OK;
+
+    const esp_err_t rx_result = stop_i2s_rx();
+    if ((first_error == ESP_OK) && (rx_result != ESP_OK))
+    {
+        first_error = rx_result;
+    }
+
+    const esp_err_t tx_result = stop_i2s_tx();
+    if ((first_error == ESP_OK) && (tx_result != ESP_OK))
+    {
+        first_error = tx_result;
+    }
+
+    const esp_err_t gpio_result = hold_amplifier_data_low();
+    if ((first_error == ESP_OK) && (gpio_result != ESP_OK))
+    {
+        first_error = gpio_result;
+    }
+
+    set_state(AUDIO_MANAGER_STATE_IDLE);
+    return first_error;
+}
+
+static esp_err_t run_cycle(audio_cycle_metrics_t *metrics)
+{
+    if (metrics == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    memset(metrics, 0, sizeof(*metrics));
+
+    size_t samples_recorded = 0U;
+    esp_err_t result = record_once(&samples_recorded);
+
+    if ((result == ESP_OK) &&
+        (samples_recorded != s_runtime.sample_capacity))
+    {
+        ESP_LOGE(
+            TAG,
+            "Recording incomplete: got=%u expected=%u",
+            (unsigned)samples_recorded,
+            (unsigned)s_runtime.sample_capacity);
+        result = ESP_FAIL;
+    }
+
+    if (result == ESP_OK)
+    {
+        result = process_once(samples_recorded, metrics);
+    }
+
+    if (result == ESP_OK)
+    {
+        vTaskDelay(pdMS_TO_TICKS(AUDIO_MANAGER_PRE_PLAYBACK_DELAY_MS));
+        result = playback_once(samples_recorded, metrics);
+    }
+
+    metrics->samples_recorded = samples_recorded;
+
+    const esp_err_t cleanup_result = force_cycle_cleanup();
+    if ((result == ESP_OK) && (cleanup_result != ESP_OK))
+    {
+        result = cleanup_result;
+    }
+
+    return result;
+}
+
+static void log_cycle_diagnostics(
+    uint32_t cycle,
+    uint32_t rx_overflow_before,
+    uint32_t rx_timeout_before,
+    uint32_t tx_overflow_before,
+    uint32_t tx_timeout_before,
+    uint32_t tx_partial_before)
+{
+    const uint32_t rx_overflow_delta =
+        s_rx_overflow_isr_count - rx_overflow_before;
+    const uint32_t rx_timeout_delta =
+        s_rx_timeout_count - rx_timeout_before;
+    const uint32_t tx_overflow_delta =
+        s_tx_overflow_isr_count - tx_overflow_before;
+    const uint32_t tx_timeout_delta =
+        s_tx_timeout_count - tx_timeout_before;
+    const uint32_t tx_partial_delta =
+        s_tx_partial_write_count - tx_partial_before;
+
+    ESP_LOGI(
+        TAG,
+        "CYCLE_DIAG #%u rx_ovf=%u rx_timeout=%u tx_q_ovf=%u tx_timeout=%u tx_partial=%u max_rx_us=%u max_tx_us=%u stack_hwm=%u_bytes",
+        (unsigned)cycle,
+        (unsigned)rx_overflow_delta,
+        (unsigned)rx_timeout_delta,
+        (unsigned)tx_overflow_delta,
+        (unsigned)tx_timeout_delta,
+        (unsigned)tx_partial_delta,
+        (unsigned)s_max_rx_read_duration_us,
+        (unsigned)s_max_tx_write_duration_us,
+        (unsigned)uxTaskGetStackHighWaterMark(NULL));
+}
+
+static void audio_manager_test_task(void *argument)
+{
+    (void)argument;
+
+    status_lock();
+    s_runtime.status.test_running = true;
+    status_unlock();
+
+    ESP_LOGI(
+        TAG,
+        "Infinite audio stability task started: record=%us volume=%u/100",
+        (unsigned)s_runtime.config.record_duration_seconds,
+        (unsigned)s_runtime.config.playback_volume_percent);
+
+    while (true)
+    {
+        status_lock();
+        const uint32_t cycle = ++s_runtime.status.cycles_started;
+        status_unlock();
+
+        const uint32_t rx_overflow_before = s_rx_overflow_isr_count;
+        const uint32_t rx_timeout_before = s_rx_timeout_count;
+        const uint32_t tx_overflow_before = s_tx_overflow_isr_count;
+        const uint32_t tx_timeout_before = s_tx_timeout_count;
+        const uint32_t tx_partial_before = s_tx_partial_write_count;
+
+        ESP_LOGI(TAG, "========== AUDIO MANAGER CYCLE #%u ==========" ,
+                 (unsigned)cycle);
+
+        audio_cycle_metrics_t metrics;
+        const esp_err_t result = run_cycle(&metrics);
+
+        status_lock();
+        s_runtime.status.last_samples_recorded = metrics.samples_recorded;
+        s_runtime.status.last_error = result;
+        refresh_diagnostics_locked();
+
+        if (result == ESP_OK)
+        {
+            ++s_runtime.status.cycles_completed;
+            s_runtime.status.state = AUDIO_MANAGER_STATE_IDLE;
+        }
+        else
+        {
+            ++s_runtime.status.cycles_failed;
+            s_runtime.status.state = AUDIO_MANAGER_STATE_ERROR;
+        }
+        status_unlock();
+
+        if (result == ESP_OK)
+        {
+            ESP_LOGI(
+                TAG,
+                "CYCLE #%u PASS samples=%u",
+                (unsigned)cycle,
+                (unsigned)metrics.samples_recorded);
+        }
+        else
+        {
+            ESP_LOGE(
+                TAG,
+                "CYCLE #%u FAIL: %s",
+                (unsigned)cycle,
+                esp_err_to_name(result));
+
+            /* Keep soak useful after transient faults: cleanup, report, retry. */
+            const esp_err_t cleanup_result = force_cycle_cleanup();
+            if (cleanup_result != ESP_OK)
+            {
+                ESP_LOGE(
+                    TAG,
+                    "Cycle cleanup failed: %s",
+                    esp_err_to_name(cleanup_result));
+            }
+        }
+
+        log_cycle_diagnostics(
+            cycle,
+            rx_overflow_before,
+            rx_timeout_before,
+            tx_overflow_before,
+            tx_timeout_before,
+            tx_partial_before);
+        log_heap_state("cycle_end");
+
+        status_lock();
+        if (s_runtime.status.state == AUDIO_MANAGER_STATE_ERROR)
+        {
+            /* Preserve last_error/counters but recover state for the next soak cycle. */
+            s_runtime.status.state = AUDIO_MANAGER_STATE_IDLE;
+        }
+        refresh_diagnostics_locked();
+        status_unlock();
+
+        vTaskDelay(pdMS_TO_TICKS(s_runtime.config.inter_cycle_delay_ms));
+    }
+}
+
+audio_manager_config_t audio_manager_default_config(void)
+{
+    return (audio_manager_config_t) {
+        .record_duration_seconds = AUDIO_MANAGER_DEFAULT_RECORD_SECONDS,
+        .playback_volume_percent = AUDIO_MANAGER_DEFAULT_VOLUME_PERCENT,
+        .test_task_stack_size = AUDIO_MANAGER_DEFAULT_TEST_TASK_STACK_SIZE,
+        .test_task_priority = AUDIO_MANAGER_DEFAULT_TEST_TASK_PRIORITY,
+        .inter_cycle_delay_ms = AUDIO_MANAGER_DEFAULT_INTER_CYCLE_DELAY_MS,
+    };
+}
+
+esp_err_t audio_manager_init(const audio_manager_config_t *config)
+{
+    if (config == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_runtime.initialized)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if ((config->record_duration_seconds == 0U) ||
+        (config->playback_volume_percent > AUDIO_DSP_VOLUME_PERCENT_MAX) ||
+        (config->test_task_stack_size < 4096U) ||
+        (config->test_task_priority >= configMAX_PRIORITIES))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const size_t sample_capacity =
+        (size_t)AUDIO_MANAGER_SAMPLE_RATE_HZ *
+        (size_t)config->record_duration_seconds;
+
+    if ((sample_capacity / AUDIO_MANAGER_SAMPLE_RATE_HZ) !=
+        config->record_duration_seconds)
+    {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    if (sample_capacity > (SIZE_MAX / sizeof(int32_t)))
+    {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    memset(&s_runtime, 0, sizeof(s_runtime));
+    s_runtime.config = *config;
+    s_runtime.sample_capacity = sample_capacity;
+    s_runtime.recording_bytes = sample_capacity * sizeof(int32_t);
+
+    s_runtime.status_mutex = xSemaphoreCreateMutex();
+    if (s_runtime.status_mutex == NULL)
+    {
+        return ESP_ERR_NO_MEM;
+    }
+
+    esp_err_t result = hold_amplifier_data_low();
+    if (result != ESP_OK)
+    {
+        vSemaphoreDelete(s_runtime.status_mutex);
+        s_runtime.status_mutex = NULL;
+        return result;
+    }
+
+    log_heap_state("before_audio_alloc");
+
+    s_runtime.recording_pcm24 = (int32_t *)heap_caps_malloc(
+        s_runtime.recording_bytes,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    s_runtime.dsp_workspace = (audio_dsp_workspace_t *)heap_caps_malloc(
+        sizeof(audio_dsp_workspace_t),
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+    if ((s_runtime.recording_pcm24 == NULL) ||
+        (s_runtime.dsp_workspace == NULL) ||
+        !esp_ptr_external_ram(s_runtime.recording_pcm24) ||
+        !esp_ptr_external_ram(s_runtime.dsp_workspace))
+    {
+        heap_caps_free(s_runtime.recording_pcm24);
+        heap_caps_free(s_runtime.dsp_workspace);
+        s_runtime.recording_pcm24 = NULL;
+        s_runtime.dsp_workspace = NULL;
+        vSemaphoreDelete(s_runtime.status_mutex);
+        s_runtime.status_mutex = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+
+    memset(s_runtime.recording_pcm24, 0, s_runtime.recording_bytes);
+    audio_dsp_workspace_init(s_runtime.dsp_workspace);
+
+    s_rx_overflow_isr_count = 0U;
+    s_tx_overflow_isr_count = 0U;
+    s_rx_timeout_count = 0U;
+    s_tx_timeout_count = 0U;
+    s_tx_partial_write_count = 0U;
+    s_max_rx_read_duration_us = 0U;
+    s_max_tx_write_duration_us = 0U;
+
+    s_runtime.initialized = true;
+    s_runtime.status = (audio_manager_status_t) {
+        .state = AUDIO_MANAGER_STATE_IDLE,
+        .initialized = true,
+        .test_running = false,
+        .last_error = ESP_OK,
+    };
+
+    ESP_LOGI(TAG, "================================================");
+    ESP_LOGI(TAG, "NewSolution audio manager initialized");
+    ESP_LOGI(
+        TAG,
+        "Pins BCLK=GPIO%d WS=GPIO%d MIC_DIN=GPIO%d SPK_DOUT=GPIO%d",
+        AUDIO_GPIO_BCLK,
+        AUDIO_GPIO_WS,
+        AUDIO_GPIO_MIC_DIN,
+        AUDIO_GPIO_SPK_DOUT);
+    ESP_LOGI(
+        TAG,
+        "Config sample_rate=%u record=%us samples=%u PCM24_PSRAM=%uB volume=%u/100 DMA=%ux%u",
+        (unsigned)AUDIO_MANAGER_SAMPLE_RATE_HZ,
+        (unsigned)config->record_duration_seconds,
+        (unsigned)s_runtime.sample_capacity,
+        (unsigned)s_runtime.recording_bytes,
+        (unsigned)config->playback_volume_percent,
+        (unsigned)AUDIO_MANAGER_DMA_DESC_NUM,
+        (unsigned)AUDIO_MANAGER_FRAMES_PER_BLOCK);
+    ESP_LOGI(
+        TAG,
+        "DSP HPF80x2 + LPF6kx2 + adaptive NS + 16x speaker conditioning + limiter");
+    ESP_LOGI(TAG, "================================================");
+
+    log_heap_state("after_audio_alloc");
+    return ESP_OK;
+}
+
+esp_err_t audio_manager_test_start(void)
+{
+    if (!s_runtime.initialized)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (s_runtime.test_task != NULL)
+    {
+        return ESP_OK;
+    }
+
+    const BaseType_t result = xTaskCreate(
+        audio_manager_test_task,
+        "audio_manager_test",
+        s_runtime.config.test_task_stack_size,
+        NULL,
+        (UBaseType_t)s_runtime.config.test_task_priority,
+        &s_runtime.test_task);
+
+    if (result != pdPASS)
+    {
+        s_runtime.test_task = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t audio_manager_get_status(audio_manager_status_t *status)
+{
+    if (status == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!s_runtime.initialized || (s_runtime.status_mutex == NULL))
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    status_lock();
+    refresh_diagnostics_locked();
+    *status = s_runtime.status;
+    status_unlock();
+    return ESP_OK;
+}
+
+esp_err_t audio_manager_deinit(void)
+{
+    if (!s_runtime.initialized)
+    {
+        return ESP_OK;
+    }
+
+    if (s_runtime.test_task != NULL)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t result = force_cycle_cleanup();
+
+    heap_caps_free(s_runtime.recording_pcm24);
+    heap_caps_free(s_runtime.dsp_workspace);
+    s_runtime.recording_pcm24 = NULL;
+    s_runtime.dsp_workspace = NULL;
+
+    if (s_runtime.status_mutex != NULL)
+    {
+        vSemaphoreDelete(s_runtime.status_mutex);
+    }
+
+    memset(&s_runtime, 0, sizeof(s_runtime));
+    return result;
+}
+
+const char *audio_manager_state_to_string(audio_manager_state_t state)
+{
+    switch (state)
+    {
+        case AUDIO_MANAGER_STATE_UNINITIALIZED:
+            return "UNINITIALIZED";
+        case AUDIO_MANAGER_STATE_IDLE:
+            return "IDLE";
+        case AUDIO_MANAGER_STATE_RECORDING:
+            return "RECORDING";
+        case AUDIO_MANAGER_STATE_PROCESSING:
+            return "PROCESSING";
+        case AUDIO_MANAGER_STATE_PLAYBACK:
+            return "PLAYBACK";
+        case AUDIO_MANAGER_STATE_ERROR:
+            return "ERROR";
+        default:
+            return "UNKNOWN";
+    }
+}
