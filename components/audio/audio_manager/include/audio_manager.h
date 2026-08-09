@@ -31,7 +31,7 @@ typedef struct
     uint32_t record_duration_seconds;
     uint32_t playback_volume_percent;
     uint32_t test_task_stack_size;
-    UBaseType_t test_task_priority;
+    uint32_t test_task_priority;
     uint32_t inter_cycle_delay_ms;
 } audio_manager_config_t;
 
@@ -58,31 +58,11 @@ typedef struct
     uint32_t test_task_stack_high_water_bytes;
 } audio_manager_status_t;
 
-/** Return the fixed NewSolution defaults used by the stability harness. */
 audio_manager_config_t audio_manager_default_config(void);
-
-/**
- * Initialize the NewSolution audio pipeline and its PSRAM-owned recording/DSP
- * buffers. This does not start the infinite stability task.
- */
 esp_err_t audio_manager_init(const audio_manager_config_t *config);
-
-/**
- * Start one manager-owned task that repeatedly executes:
- * record -> DSP -> playback -> cleanup -> repeat.
- * Calling this again while already running is idempotent.
- */
 esp_err_t audio_manager_test_start(void);
-
-/** Copy a diagnostic snapshot. */
 esp_err_t audio_manager_get_status(audio_manager_status_t *status);
-
-/**
- * Deinitialize the manager only when the stability task is not running.
- * The current NewSolution intentionally runs the soak task for firmware life.
- */
 esp_err_t audio_manager_deinit(void);
-
 const char *audio_manager_state_to_string(audio_manager_state_t state);
 
 #ifdef __cplusplus
