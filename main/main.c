@@ -55,8 +55,12 @@
 /* Button manager ----------------------------------------------------------- */
 #include "button_manager.h"
 
+#include "audio_test.h"
+
 /* Macros ------------------------------------------------------------------- */
 #define PERFORMANCE_MONITOR 1
+/* Test-only repeated RX/TX count; hardware acceptance requires >= 20 cycles. */
+#define AUDIO_TEST_CYCLE_COUNT 100U
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "MAIN_APP";
@@ -90,6 +94,7 @@ static const button_manager_config_t BUTTON_MANAGER_CONFIG =
         FACTORY_RESET_BUTTON_LONG_PRESS_MS,
 };
 
+/* Coordinator owns provisioning lifecycle; Wi-Fi reconnect remains separate. */
 static const app_network_coordinator_config_t
     APP_NETWORK_COORDINATOR_CONFIG =
 {
@@ -138,6 +143,11 @@ static const firebase_auth_config_t FIREBASE_AUTH_CONFIG =
  */
 static esp_err_t network_platform_init(void);
 
+/**
+ * @brief Forward one button-manager event to the reset coordinator queue.
+ *
+ * Runs in button task context and must not directly access storage or LVGL.
+ */
 static void app_button_event_callback(
     const button_manager_event_data_t *event_data,
     void *user_context);
@@ -194,6 +204,12 @@ static bool app_map_wifi_status_to_network_event(
 static bool app_network_state_allows_cloud_start(
     app_network_coordinator_state_t state);
 
+/**
+ * @brief Run bounded RX/TX coexistence cycles, release audio resources, and exit.
+ *
+ * @param[in] arg Unused task argument.
+ */
+static void audio_test_task(void *arg);
 /* Application -------------------------------------------------------------- */
 /** @brief Initialize the current application services and run diagnostics. */
 void app_main(void)
@@ -383,7 +399,6 @@ void app_main(void)
             }
         }
     }
-
     esp_err_t wifi_ret =
         wifi_manager_init();
 
@@ -536,6 +551,36 @@ void app_main(void)
     }
 
     bool cloud_started = false;
+
+    esp_err_t audio_ret = audio_test_init();
+
+    if (audio_ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to initialize audio test: %s",
+            esp_err_to_name(audio_ret));
+    }
+    else
+    {
+        BaseType_t task_ret =
+            xTaskCreate(
+                audio_test_task,
+                "audio_test",
+                4096,
+                NULL,
+                5,
+                NULL);
+
+        if (task_ret != pdPASS)
+        {
+            ESP_LOGE(
+                TAG,
+                "Failed to create audio test task");
+
+            (void)audio_test_deinit();
+        }
+    }
 
     while (1)
     {
@@ -755,7 +800,6 @@ static void app_wifi_status_callback(
             esp_err_to_name(ret)
         );
     }
-
     const esp_err_t cloud_network_error =
         cloud_manager_notify_network_state(
             status->has_ipv4_address);
@@ -1072,4 +1116,117 @@ static void app_button_event_callback(
             "Failed to forward button event to reset coordinator: %s",
             esp_err_to_name(post_ret));
     }
+}
+
+static void audio_test_task(void *arg)
+{
+    (void)arg;
+
+    uint32_t completed_cycles = 0U;
+    uint32_t rx_failures = 0U;
+    uint32_t tx_failures = 0U;
+
+    ESP_LOGI(
+        TAG,
+        "Starting audio coexistence stress test: cycles=%u",
+        AUDIO_TEST_CYCLE_COUNT);
+
+    for (uint32_t cycle = 1U;
+         cycle <= AUDIO_TEST_CYCLE_COUNT;
+         ++cycle)
+    {
+        ESP_LOGI(
+            TAG,
+            "========== AUDIO CYCLE %lu/%u ==========",
+            (unsigned long)cycle,
+            AUDIO_TEST_CYCLE_COUNT);
+
+        size_t samples_recorded = 0U;
+
+        esp_err_t ret =
+            audio_test_record_once(
+                &samples_recorded);
+
+        if (ret != ESP_OK)
+        {
+            rx_failures++;
+
+            ESP_LOGE(
+                TAG,
+                "Cycle %lu RX failed: %s",
+                (unsigned long)cycle,
+                esp_err_to_name(ret));
+
+            break;
+        }
+
+        ESP_LOGI(
+            TAG,
+            "Cycle %lu RX passed: samples=%lu",
+            (unsigned long)cycle,
+            (unsigned long)samples_recorded);
+
+        ret =
+            audio_test_play_recording_once(
+                samples_recorded);
+
+        if (ret != ESP_OK)
+        {
+            tx_failures++;
+
+            ESP_LOGE(
+                TAG,
+                "Cycle %lu TX failed: %s",
+                (unsigned long)cycle,
+                esp_err_to_name(ret));
+
+            break;
+        }
+
+        completed_cycles++;
+
+        ESP_LOGI(
+            TAG,
+            "Cycle %lu playback passed",
+            (unsigned long)cycle);
+
+        ESP_LOGI(
+            TAG,
+            "Cycle %lu stack remaining=%u bytes",
+            (unsigned long)cycle,
+            (unsigned)uxTaskGetStackHighWaterMark(NULL));
+    }
+
+    ESP_LOGI(
+        TAG,
+        "========== AUDIO STRESS SUMMARY ==========");
+
+    ESP_LOGI(
+        TAG,
+        "Completed cycles: %lu/%u",
+        (unsigned long)completed_cycles,
+        AUDIO_TEST_CYCLE_COUNT);
+
+    ESP_LOGI(
+        TAG,
+        "RX failures: %lu",
+        (unsigned long)rx_failures);
+
+    ESP_LOGI(
+        TAG,
+        "TX failures: %lu",
+        (unsigned long)tx_failures);
+
+    const esp_err_t deinit_ret =
+        audio_test_deinit();
+
+    if (deinit_ret != ESP_OK)
+    {
+        ESP_LOGW(
+            TAG,
+            "Audio test deinit failed: %s",
+            esp_err_to_name(deinit_ret));
+    }
+
+    vTaskDelete(NULL);
 }
