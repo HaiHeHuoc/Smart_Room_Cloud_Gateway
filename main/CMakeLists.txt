@@ -1,7 +1,6 @@
 idf_component_register(
     SRCS
         "main.c"
-        "audio_test.c"
     INCLUDE_DIRS
         "."
     REQUIRES
@@ -22,10 +21,10 @@ idf_component_register(
         app_network_coordinator
         button_manager
         app_reset_coordinator
+        audio_manager
 
     PRIV_REQUIRES
         nvs_flash
         esp_netif
         esp_event
-        esp_driver_i2s
 )
