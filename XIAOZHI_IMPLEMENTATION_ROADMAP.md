@@ -182,10 +182,27 @@ components/audio/audio_manager/
 - [ ] Define ownership, overflow/drop policy, underrun recovery, and shutdown.
 - [ ] Measure task priorities, core affinity, and stack placement.
 
-### 11.3 Diagnostics
+### 11.3 Diagnostics — Partial / Blocked
 
-Track state, capture/playback activity, overflow/underrun counts, byte counts,
-queue occupancy, and last error.
+Implemented in the current direct-DMA stability path:
+
+- [x] Copied lifecycle state, latest error, cycle counters, and explicit
+      RX/TX I2S-active flags.
+- [x] RX/TX requested and returned byte totals, RX/TX queue-overflow callbacks,
+      timeout/partial-write counts, maximum blocking duration, and task stack
+      high-water mark.
+- [x] Thread-safe diagnostic snapshots across ISR, audio-task, and public
+      status-reader contexts.
+
+Still required before this phase can be marked complete:
+
+- [ ] Runtime PCM queue occupancy and a true playback underrun counter.
+
+The ESP-IDF 6.0.1 standard I2S API exposes queue-overflow callbacks but no
+safe public runtime fill level or hardware underrun event. The current
+direct-DMA stability flow has no manager-owned PCM ring, so it must not infer
+either metric from a timeout or queue-overflow callback. These metrics require
+the bounded playback/capture ring and explicit consumer policy in Phase 11.2.
 
 ### 11.4 SD/WAV Streaming Playback
 

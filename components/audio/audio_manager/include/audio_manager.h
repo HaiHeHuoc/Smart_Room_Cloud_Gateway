@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -47,11 +48,17 @@ typedef struct
     uint32_t playback_volume_percent;
 } audio_manager_config_t;
 
-/** @brief Thread-safe snapshot suitable for diagnostics and future GUI use. */
+/** @brief Thread-safe snapshot suitable for diagnostics and GUI use. */
 typedef struct
 {
     /** Current lifecycle or active audio pipeline state. */
     audio_manager_state_t state;
+
+    /** True while the manager has successfully enabled the I2S RX channel. */
+    bool capture_i2s_active;
+
+    /** True while the manager has successfully enabled the I2S TX channel. */
+    bool playback_i2s_active;
 
     /** Result of the most recently completed stability cycle. */
     esp_err_t last_error;
@@ -67,6 +74,18 @@ typedef struct
 
     /** Number of PCM24 samples captured by the most recent cycle. */
     size_t last_samples_recorded;
+
+    /** Lifetime RX bytes requested from the I2S driver since initialization. */
+    uint64_t rx_bytes_requested;
+
+    /** Lifetime RX bytes returned by the I2S driver since initialization. */
+    uint64_t rx_bytes_read;
+
+    /** Lifetime TX bytes submitted to the I2S driver since initialization. */
+    uint64_t tx_bytes_requested;
+
+    /** Lifetime TX bytes accepted by the I2S driver since initialization. */
+    uint64_t tx_bytes_written;
 
     /** RX DMA queue overflow callbacks observed since initialization. */
     uint32_t rx_overflow_count;
@@ -101,7 +120,7 @@ typedef struct
  * runtime state changes it executes in the audio manager task. It is never
  * invoked from the I2S ISR callbacks. Keep it non-blocking. The status pointer
  * is temporary and must not be retained after the callback returns. This
- * contract is intended to support a future app_gui queue adapter without
+ * contract supports the application-owned app_gui queue adapter without
  * allowing audio_manager to depend directly on LVGL or app_gui.
  */
 typedef void (*audio_manager_status_callback_t)(
@@ -129,7 +148,10 @@ esp_err_t audio_manager_init(
  *
  * Passing NULL unregisters the callback. Registration is available after
  * audio_manager_init(). The callback is invoked only from task context and
- * never while the manager status mutex is held.
+ * never while the manager status mutex is held. Unregistration prevents new
+ * callback selection, but does not wait for a callback snapshot that was
+ * already selected before the call; its user context must remain valid until
+ * the caller has externally synchronized with in-flight callbacks.
  */
 esp_err_t audio_manager_register_status_callback(
     audio_manager_status_callback_t callback,
@@ -164,8 +186,8 @@ const char *audio_manager_state_to_string(
 /**
  * @brief Compatibility alias for the pre-refactor NewSolution composition.
  *
- * New code should call audio_manager_start(). This alias preserves the current
- * app_main integration without changing audio behavior in this refactor.
+ * New code and app_main call audio_manager_start(). This alias remains only
+ * for legacy callers without changing audio behavior.
  */
 esp_err_t audio_manager_test_start(void);
 

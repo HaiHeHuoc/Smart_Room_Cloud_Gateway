@@ -56,6 +56,22 @@ renamed directly. No compatibility aliases are retained.
 If any allocation fails, every queue created by that attempt is deleted, all
 handles return to `NULL`, and `app_gui_init()` returns `ESP_ERR_NO_MEM`.
 
+### Sensor dashboard audio status
+
+The audio status queue is consumed only by the GUI task. The dashboard's right
+status column maps copied manager state as follows; a non-OK `last_error` while
+the manager is otherwise `IDLE` is rendered as `Audio: ERR`.
+
+| Audio UI state | Dashboard text | Color |
+|---|---|---|
+| `UNAVAILABLE` | `Audio: --` | Gray |
+| `READY` | `Audio: Ready` | Blue |
+| `IDLE` | `Audio: Idle` | Gray |
+| `RECORDING` | `Audio: REC` | Red |
+| `PROCESSING` | `Audio: DSP` | Yellow |
+| `PLAYBACK` | `Audio: PLAY` | Green |
+| `ERROR` | `Audio: ERR` | Red |
+
 | API | Responsibility |
 |---|---|
 | `app_gui_init()` | Create command and status queues. |
