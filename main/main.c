@@ -556,9 +556,8 @@ void app_main(void)
     bool cloud_started = false;
 
     /*
-     * NewSolution audio integration: app_main only initializes the component
-     * and requests its private infinite soak task. Record/DSP/playback logic
-     * and task ownership remain completely inside audio_manager.
+     * app_main only composes the audio component. Its production task reaches
+     * IDLE and privately owns commands, WAV streams, and all I2S operations.
      */
     const audio_manager_config_t audio_config =
         audio_manager_default_config();
@@ -594,15 +593,14 @@ void app_main(void)
         {
             ESP_LOGE(
                 TAG,
-                "Failed to start audio manager stability task: %s",
+                "Failed to start audio manager task: %s",
                 esp_err_to_name(audio_ret));
         }
         else
         {
             ESP_LOGI(
                 TAG,
-                "Audio manager stability task started: record=%us",
-                (unsigned)audio_config.record_duration_seconds);
+                "Audio manager task started; mode is reported by audio_manager");
         }
     }
 

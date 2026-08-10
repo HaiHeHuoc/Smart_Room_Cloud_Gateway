@@ -1377,10 +1377,12 @@ adding a production audio component or Xiaozhi dependency.
 production microphone, speaker, I2S, buffering, and audio status behavior.
 
 **Current checkpoint:** The NewSolution stability foundation, copied GUI state
-adapter, direct-DMA Phase 11.3 diagnostics, and Phase 11.4.2 direct bounded WAV
-playback are implemented and build/host-test verified. Sprint 11 remains gated
-by Sprint 10 hardware acceptance plus target-hardware WAV and production
-lifecycle validation; a PCM ring is not mandatory without measured need.
+adapter, direct-DMA Phase 11.3 diagnostics, Phase 11.4.2 direct bounded WAV
+playback, and Phase 11.4.3 production play/cancel/stop lifecycle are implemented.
+The ESP-IDF 6.0.1 build and 23-case parser host suite pass; those checks do not
+prove real I2S/SD/speaker behavior. Sprint 11 remains gated by Sprint 10 hardware
+acceptance plus target-hardware WAV, cancellation/lifecycle, and golden MIC
+regression validation. A PCM ring is not mandatory without measured need.
 
 ### Placement And Dependencies
 
@@ -2013,7 +2015,7 @@ Use this section to track daily/weekly progress.
 | 8 | Reconnect + retry | Done |  | 2026-08-02 | User-confirmed target-hardware reconnect, cloud retry/recovery, UI-state, logging, and stability acceptance. |
 | 9 | Portfolio polish | In progress | 2026-08-02 |  | Documentation and secret cleanup implemented; real photos/screenshots and demo video pending. |
 | 10 | Audio hardware validation | In progress; 10.4 complete |  |  | Hardware and GPIO gate remains; only RX/TX coexistence stress checkpoint is complete. |
-| 11 | Production audio manager | In progress; 11.4.2 build-verified |  |  | Direct bounded WAV playback and parser fixtures are implemented; target hardware and Phase 11.4.3 production lifecycle acceptance remain. |
+| 11 | Production audio manager | In progress; 11.4.3 software implemented |  |  | Production IDLE task, copied WAV request, cooperative cancel/stop/restart, direct bounded streaming, and parser fixtures are build-verified; target-hardware Phase 11.4.4 acceptance remains. |
 | 12 | Xiaozhi build + transport | Proposed / Not started |  |  | Re-verify and exactly pin the reviewed dependency before implementation. |
 | 13 | Voice assistant adapter | Proposed / Not started |  |  | Only adapter may depend directly on `esp_xiaozhi`. |
 | 14 | Push-to-talk voice MVP | Proposed / Not started |  |  | Wake word intentionally deferred. |

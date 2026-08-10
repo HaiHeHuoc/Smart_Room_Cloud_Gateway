@@ -1,15 +1,15 @@
 menu "Audio manager"
 
     config AUDIO_MANAGER_WAV_VALIDATION_ONCE
-        bool "Play one WAV at audio-task startup (Phase 11.4.2 validation)"
+        bool "Submit one WAV through production API at task startup"
         default n
+        depends on !AUDIO_MANAGER_GOLDEN_STABILITY_MODE
         help
-            Enable the bounded Phase 11.4.2 WAV playback proof once when the
-            audio manager task starts. After success or failure, the original
-            record, DSP, and recorded-playback stability loop continues.
-
-            This is a temporary validation mechanism, not the Phase 11.4.3
-            production playback-control API.
+            Default-off hardware regression hook. After the production task
+            reaches IDLE, it submits the configured file through
+            audio_manager_play_wav(), so validation uses the same bounded
+            command, cancellation, streaming, and cleanup path as application
+            requests. Normal production startup remains command-idle.
 
     config AUDIO_MANAGER_WAV_VALIDATION_PATH
         string "Absolute WAV validation path"
@@ -18,5 +18,37 @@ menu "Audio manager"
         help
             Absolute path below the sd_card_manager VFS mount. The file must
             be canonical PCM16 mono at 16000 Hz.
+
+    config AUDIO_MANAGER_GOLDEN_STABILITY_MODE
+        bool "Run the golden record/DSP/playback stability loop"
+        default n
+        help
+            Default-off regression facility that repeats the proven Phase 11.3
+            record -> DSP -> recorded-playback cycle. This mode monopolizes the
+            manager operation slot, so production WAV commands are rejected.
+            Cooperative shutdown is observed between complete golden cycles.
+
+    config AUDIO_MANAGER_GOLDEN_STABILITY_RECORD_SECONDS
+        int "Golden stability recording duration (seconds)"
+        range 1 120
+        default 60
+        depends on AUDIO_MANAGER_GOLDEN_STABILITY_MODE
+        help
+            Number of 16 kHz PCM24 samples retained before each golden DSP and
+            recorded-playback cycle. The current audio stress configuration uses
+            60 seconds, which reserves about 3.66 MiB of PSRAM for recording.
+            Allocation still fails safely if the target does not have enough
+            free PSRAM.
+
+    config AUDIO_MANAGER_GOLDEN_STABILITY_TASK_PRIORITY
+        int "Golden stability task priority"
+        range 6 7
+        default 6
+        depends on AUDIO_MANAGER_GOLDEN_STABILITY_MODE
+        help
+            FreeRTOS priority for a golden audio stress run. The default is 6,
+            above the normal priority-5 GUI task, while I2S operations remain
+            bounded and DSP retains its cooperative yields. Use 7 only after
+            measuring GUI/network responsiveness on the target.
 
 endmenu
