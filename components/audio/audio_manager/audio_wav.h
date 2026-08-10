@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -60,6 +61,14 @@ typedef struct
  * The caller must close an open stream before resetting it.
  */
 void audio_wav_stream_reset(audio_wav_stream_t *stream);
+
+/**
+ * @brief Validate that a path names a file below the SD VFS mount.
+ *
+ * This performs no filesystem access and is safe for manager command
+ * validation before the path is copied. The caller still owns path.
+ */
+bool audio_wav_path_is_valid(const char *path);
 
 /**
  * @brief Parse a RIFF/WAVE file and leave its position at the data payload.

@@ -1,11 +1,12 @@
 /**
  * @file audio_manager.c
- * @brief Stability-first INMP441 -> DSP -> MAX98357A audio manager.
+ * @brief Production-controlled INMP441/WAV -> MAX98357A audio manager.
  *
- * The proven NewSolution audio path is intentionally preserved. This refactor
- * aligns lifecycle, status, callback, and state handling with the other
- * manager components in Smart Room Cloud Gateway so the same status model can
- * feed app_gui without coupling audio_manager to LVGL.
+ * The proven NewSolution record/DSP/playback path remains a default-off golden
+ * regression mode. Normal startup reaches IDLE and the single manager task
+ * owns bounded commands, sources, cancellation cleanup, and I2S lifecycle so
+ * the same status model can feed app_gui without coupling audio_manager to
+ * LVGL.
  */
 
 /* Includes ----------------------------------------------------------------- */
@@ -28,18 +29,36 @@
 #include "esp_memory_utils.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/event_groups.h"
+#include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
 /* Macros ------------------------------------------------------------------- */
-#define AUDIO_MANAGER_DEFAULT_RECORD_SECONDS          5U
 #define AUDIO_MANAGER_DEFAULT_VOLUME_PERCENT          100U
 
 #define AUDIO_MANAGER_TASK_NAME                       "audio_manager"
 #define AUDIO_MANAGER_TASK_STACK_SIZE                 8192U
-#define AUDIO_MANAGER_TASK_PRIORITY                   5U
 #define AUDIO_MANAGER_INTER_CYCLE_DELAY_MS            250U
 #define AUDIO_MANAGER_MUTEX_TIMEOUT_MS                100U
+#define AUDIO_MANAGER_COMMAND_QUEUE_LENGTH               2U
+#define AUDIO_MANAGER_COMMAND_POLL_MS                   100U
+#define AUDIO_MANAGER_TASK_START_TIMEOUT_MS            2000U
+#define AUDIO_MANAGER_TASK_STOP_TIMEOUT_MS             5000U
+
+#define AUDIO_MANAGER_TASK_READY_BIT  ((EventBits_t)(1U << 0U))
+#define AUDIO_MANAGER_TASK_STOPPED_BIT ((EventBits_t)(1U << 1U))
+
+/* Production remains lightweight; golden mode is configured for stress runs. */
+#ifdef CONFIG_AUDIO_MANAGER_GOLDEN_STABILITY_MODE
+#define AUDIO_MANAGER_DEFAULT_RECORD_SECONDS \
+    CONFIG_AUDIO_MANAGER_GOLDEN_STABILITY_RECORD_SECONDS
+#define AUDIO_MANAGER_TASK_PRIORITY \
+    CONFIG_AUDIO_MANAGER_GOLDEN_STABILITY_TASK_PRIORITY
+#else
+#define AUDIO_MANAGER_DEFAULT_RECORD_SECONDS          5U
+#define AUDIO_MANAGER_TASK_PRIORITY                   5U
+#endif
 
 /* Proven transport baseline. Do not change during structural refactor. */
 #define AUDIO_MANAGER_SAMPLE_RATE_HZ                  AUDIO_DSP_SAMPLE_RATE_HZ
@@ -90,7 +109,7 @@ typedef struct
     uint32_t expected_duration_ms;
     uint32_t read_count;
     uint32_t read_failure_count;
-    uint32_t max_fread_duration_us;
+    uint32_t max_wav_read_duration_us;
     uint32_t playback_elapsed_ms;
 } audio_wav_playback_metrics_t;
 
@@ -144,6 +163,33 @@ typedef struct
     audio_wav_stream_t wav_stream;
 } audio_playback_source_t;
 
+typedef enum
+{
+    AUDIO_MANAGER_COMMAND_PLAY_WAV = 0,
+    AUDIO_MANAGER_COMMAND_SHUTDOWN,
+} audio_manager_command_kind_t;
+
+typedef struct
+{
+    audio_manager_command_kind_t kind;
+    char wav_path[AUDIO_MANAGER_WAV_PATH_MAX_BYTES];
+} audio_manager_command_t;
+
+typedef enum
+{
+    AUDIO_MANAGER_OPERATION_NONE = 0,
+    AUDIO_MANAGER_OPERATION_WAV,
+    AUDIO_MANAGER_OPERATION_STABILITY,
+} audio_manager_operation_t;
+
+typedef struct
+{
+    bool task_running;
+    bool shutdown_requested;
+    bool cancel_requested;
+    audio_manager_operation_t operation;
+} audio_manager_control_t;
+
 typedef struct
 {
     bool initialized;
@@ -165,6 +211,9 @@ typedef struct
 
     TaskHandle_t task_handle;
     SemaphoreHandle_t status_mutex;
+    QueueHandle_t command_queue;
+    EventGroupHandle_t lifecycle_events;
+    esp_err_t task_exit_result;
 
     audio_manager_status_t status;
     audio_manager_status_callback_t status_callback;
@@ -187,6 +236,10 @@ DRAM_ATTR static portMUX_TYPE s_diagnostics_lock =
     portMUX_INITIALIZER_UNLOCKED;
 DRAM_ATTR static audio_manager_diagnostics_t s_diagnostics = {0};
 
+/* Short task/public API control handoff; no blocking work occurs under it. */
+DRAM_ATTR static portMUX_TYPE s_control_lock = portMUX_INITIALIZER_UNLOCKED;
+DRAM_ATTR static audio_manager_control_t s_control = {0};
+
 /* Function Prototypes ------------------------------------------------------ */
 static bool audio_manager_rx_overflow_callback(
     i2s_chan_handle_t handle,
@@ -203,6 +256,10 @@ static void audio_manager_snapshot_diagnostics(
     audio_manager_diagnostics_t *diagnostics);
 static void audio_manager_set_capture_i2s_active(bool active);
 static void audio_manager_set_playback_i2s_active(bool active);
+static void audio_manager_reset_control(void);
+static bool audio_manager_cancel_is_requested(void);
+static bool audio_manager_shutdown_is_requested(void);
+static void audio_manager_finish_operation(void);
 static void audio_manager_record_rx_io(
     esp_err_t result,
     size_t bytes_read,
@@ -232,7 +289,9 @@ static esp_err_t record_audio(
 static esp_err_t start_i2s_tx(void);
 static esp_err_t stop_i2s_tx(void);
 static esp_err_t write_tx_frames(size_t frame_count);
-static esp_err_t write_silence_blocks(uint32_t block_count);
+static esp_err_t write_silence_blocks(
+    uint32_t block_count,
+    bool *cancelled);
 static int32_t apply_playback_volume_percent(int32_t sample_pcm24);
 static int16_t decode_wav_pcm16_le(const uint8_t *sample_bytes);
 static int16_t apply_wav_volume_percent(int16_t sample_pcm16);
@@ -241,7 +300,8 @@ static esp_err_t play_recording(
     audio_dsp_playback_stats_t *stats);
 static esp_err_t play_wav_stream(
     audio_wav_stream_t *stream,
-    audio_wav_playback_metrics_t *metrics);
+    audio_wav_playback_metrics_t *metrics,
+    bool *cancelled);
 
 static void dsp_cooperative_yield(void *context);
 static void log_ns_metrics(const audio_dsp_ns_metrics_t *metrics);
@@ -253,15 +313,18 @@ static esp_err_t process_once(
     audio_cycle_metrics_t *metrics);
 static esp_err_t playback_once(
     audio_playback_source_t *source,
-    audio_cycle_metrics_t *metrics);
+    audio_cycle_metrics_t *metrics,
+    bool *cancelled);
 static esp_err_t audio_manager_select_recording_playback_source(
     size_t sample_count);
 static esp_err_t audio_manager_select_wav_playback_source(const char *path);
 static esp_err_t audio_manager_release_playback_source(void);
 static esp_err_t force_cycle_cleanup(void);
 static esp_err_t run_cycle(audio_cycle_metrics_t *metrics);
-static const char *audio_manager_wav_validation_path(void);
-static esp_err_t run_wav_validation_once(const char *path);
+static void audio_manager_handle_wav_command(const char *path);
+static void audio_manager_run_stability_iteration(void);
+static bool audio_manager_stability_mode_enabled(void);
+static const char *audio_manager_wav_regression_path(void);
 static void log_cycle_diagnostics(
     uint32_t cycle,
     const audio_manager_diagnostics_t *before);
@@ -321,6 +384,43 @@ static void audio_manager_set_playback_i2s_active(bool active)
     portENTER_CRITICAL(&s_diagnostics_lock);
     s_diagnostics.playback_i2s_active = active;
     portEXIT_CRITICAL(&s_diagnostics_lock);
+}
+
+static void audio_manager_reset_control(void)
+{
+    portENTER_CRITICAL(&s_control_lock);
+    s_control = (audio_manager_control_t) {0};
+    portEXIT_CRITICAL(&s_control_lock);
+}
+
+static bool audio_manager_cancel_is_requested(void)
+{
+    bool cancel_requested;
+
+    portENTER_CRITICAL(&s_control_lock);
+    cancel_requested = s_control.cancel_requested;
+    portEXIT_CRITICAL(&s_control_lock);
+
+    return cancel_requested;
+}
+
+static bool audio_manager_shutdown_is_requested(void)
+{
+    bool shutdown_requested;
+
+    portENTER_CRITICAL(&s_control_lock);
+    shutdown_requested = s_control.shutdown_requested;
+    portEXIT_CRITICAL(&s_control_lock);
+
+    return shutdown_requested;
+}
+
+static void audio_manager_finish_operation(void)
+{
+    portENTER_CRITICAL(&s_control_lock);
+    s_control.operation = AUDIO_MANAGER_OPERATION_NONE;
+    s_control.cancel_requested = false;
+    portEXIT_CRITICAL(&s_control_lock);
 }
 
 static void audio_manager_record_rx_io(
@@ -1036,12 +1136,20 @@ static esp_err_t write_tx_frames(size_t frame_count)
     return (bytes_written == bytes_to_write) ? ESP_OK : ESP_FAIL;
 }
 
-static esp_err_t write_silence_blocks(uint32_t block_count)
+static esp_err_t write_silence_blocks(
+    uint32_t block_count,
+    bool *cancelled)
 {
     memset(s_tx_block, 0, sizeof(s_tx_block));
 
     for (uint32_t block = 0U; block < block_count; ++block)
     {
+        if ((cancelled != NULL) && audio_manager_cancel_is_requested())
+        {
+            *cancelled = true;
+            break;
+        }
+
         const esp_err_t result =
             write_tx_frames(AUDIO_MANAGER_FRAMES_PER_BLOCK);
         if (result != ESP_OK)
@@ -1167,17 +1275,20 @@ static esp_err_t play_recording(
 
 static esp_err_t play_wav_stream(
     audio_wav_stream_t *stream,
-    audio_wav_playback_metrics_t *metrics)
+    audio_wav_playback_metrics_t *metrics,
+    bool *cancelled)
 {
     if ((stream == NULL) ||
         (stream->file == NULL) ||
         (stream->buffer == NULL) ||
-        (metrics == NULL))
+        (metrics == NULL) ||
+        (cancelled == NULL))
     {
         return ESP_ERR_INVALID_ARG;
     }
 
     memset(metrics, 0, sizeof(*metrics));
+    *cancelled = false;
     metrics->expected_data_bytes = stream->info.data_size_bytes;
     metrics->expected_duration_ms = stream->info.duration_ms;
 
@@ -1186,6 +1297,12 @@ static esp_err_t play_wav_stream(
 
     while (stream->data_bytes_remaining > 0U)
     {
+        if (audio_manager_cancel_is_requested())
+        {
+            *cancelled = true;
+            break;
+        }
+
         const uint8_t *pcm_bytes = NULL;
         size_t bytes_read = 0U;
         const int64_t read_start_us = esp_timer_get_time();
@@ -1202,17 +1319,17 @@ static esp_err_t play_wav_stream(
                     ? UINT32_MAX
                     : (uint32_t)read_duration_us;
 
-        ++metrics->read_count;
-        if (bounded_read_duration_us > metrics->max_fread_duration_us)
-        {
-            metrics->max_fread_duration_us = bounded_read_duration_us;
-        }
-
         if (read_result != ESP_OK)
         {
             ++metrics->read_failure_count;
             result = read_result;
             break;
+        }
+
+        ++metrics->read_count;
+        if (bounded_read_duration_us > metrics->max_wav_read_duration_us)
+        {
+            metrics->max_wav_read_duration_us = bounded_read_duration_us;
         }
 
         if ((pcm_bytes == NULL) || (bytes_read == 0U))
@@ -1235,6 +1352,12 @@ static esp_err_t play_wav_stream(
 
         while (sample_offset < sample_count)
         {
+            if (audio_manager_cancel_is_requested())
+            {
+                *cancelled = true;
+                break;
+            }
+
             size_t frames = sample_count - sample_offset;
             if (frames > AUDIO_MANAGER_FRAMES_PER_BLOCK)
             {
@@ -1262,7 +1385,7 @@ static esp_err_t play_wav_stream(
             sample_offset += frames;
         }
 
-        if (result != ESP_OK)
+        if ((result != ESP_OK) || *cancelled)
         {
             break;
         }
@@ -1276,7 +1399,7 @@ static esp_err_t play_wav_stream(
                 ? UINT32_MAX
                 : (uint32_t)((uint64_t)elapsed_us / 1000U);
 
-    if ((result == ESP_OK) &&
+    if ((result == ESP_OK) && !*cancelled &&
         ((metrics->data_bytes_read != metrics->expected_data_bytes) ||
          (metrics->data_bytes_streamed != metrics->expected_data_bytes)))
     {
@@ -1516,12 +1639,15 @@ static esp_err_t process_once(
 
 static esp_err_t playback_once(
     audio_playback_source_t *source,
-    audio_cycle_metrics_t *metrics)
+    audio_cycle_metrics_t *metrics,
+    bool *cancelled)
 {
-    if ((source == NULL) || (metrics == NULL))
+    if ((source == NULL) || (metrics == NULL) || (cancelled == NULL))
     {
         return ESP_ERR_INVALID_ARG;
     }
+
+    *cancelled = false;
 
     switch (source->kind)
     {
@@ -1545,6 +1671,13 @@ static esp_err_t playback_once(
             return ESP_ERR_INVALID_ARG;
     }
 
+    if ((source->kind == AUDIO_PLAYBACK_SOURCE_WAV_PCM16) &&
+        audio_manager_cancel_is_requested())
+    {
+        *cancelled = true;
+        return ESP_OK;
+    }
+
     esp_err_t result = start_i2s_tx();
     if (result != ESP_OK)
     {
@@ -1552,9 +1685,19 @@ static esp_err_t playback_once(
     }
 
     result = write_silence_blocks(
-        AUDIO_MANAGER_PRE_PLAYBACK_SILENCE_BLOCKS);
+        AUDIO_MANAGER_PRE_PLAYBACK_SILENCE_BLOCKS,
+        (source->kind == AUDIO_PLAYBACK_SOURCE_WAV_PCM16)
+            ? cancelled
+            : NULL);
 
-    if (result == ESP_OK)
+    if ((result == ESP_OK) &&
+        (source->kind == AUDIO_PLAYBACK_SOURCE_WAV_PCM16) &&
+        audio_manager_cancel_is_requested())
+    {
+        *cancelled = true;
+    }
+
+    if ((result == ESP_OK) && !*cancelled)
     {
         audio_manager_set_state(AUDIO_MANAGER_STATE_PLAYBACK);
 
@@ -1584,14 +1727,18 @@ static esp_err_t playback_once(
                 (unsigned)s_runtime.config.playback_volume_percent);
             result = play_wav_stream(
                 &source->wav_stream,
-                &metrics->wav);
+                &metrics->wav,
+                cancelled);
         }
     }
 
-    if (result == ESP_OK)
+    if ((result == ESP_OK) && !*cancelled)
     {
         result = write_silence_blocks(
-            AUDIO_MANAGER_POST_PLAYBACK_SILENCE_BLOCKS);
+            AUDIO_MANAGER_POST_PLAYBACK_SILENCE_BLOCKS,
+            (source->kind == AUDIO_PLAYBACK_SOURCE_WAV_PCM16)
+                ? cancelled
+                : NULL);
     }
 
     const esp_err_t stop_result = stop_i2s_tx();
@@ -1702,7 +1849,6 @@ static esp_err_t force_cycle_cleanup(void)
         first_error = gpio_result;
     }
 
-    audio_manager_set_state(AUDIO_MANAGER_STATE_IDLE);
     return first_error;
 }
 
@@ -1742,8 +1888,12 @@ static esp_err_t run_cycle(audio_cycle_metrics_t *metrics)
 
     if (result == ESP_OK)
     {
+        bool cancelled = false;
         vTaskDelay(pdMS_TO_TICKS(AUDIO_MANAGER_PRE_PLAYBACK_DELAY_MS));
-        result = playback_once(&s_runtime.playback_source, metrics);
+        result = playback_once(
+            &s_runtime.playback_source,
+            metrics,
+            &cancelled);
     }
 
     metrics->samples_recorded = samples_recorded;
@@ -1757,7 +1907,16 @@ static esp_err_t run_cycle(audio_cycle_metrics_t *metrics)
     return result;
 }
 
-static const char *audio_manager_wav_validation_path(void)
+static bool audio_manager_stability_mode_enabled(void)
+{
+#ifdef CONFIG_AUDIO_MANAGER_GOLDEN_STABILITY_MODE
+    return true;
+#else
+    return false;
+#endif
+}
+
+static const char *audio_manager_wav_regression_path(void)
 {
 #ifdef CONFIG_AUDIO_MANAGER_WAV_VALIDATION_ONCE
     return CONFIG_AUDIO_MANAGER_WAV_VALIDATION_PATH;
@@ -1766,15 +1925,16 @@ static const char *audio_manager_wav_validation_path(void)
 #endif
 }
 
-static esp_err_t run_wav_validation_once(const char *path)
+static void audio_manager_handle_wav_command(const char *path)
 {
-    if ((path == NULL) || (path[0] == '\0'))
-    {
-        return ESP_ERR_INVALID_ARG;
-    }
+    ESP_LOGI(TAG, "========== WAV PLAYBACK ==========");
+    ESP_LOGI(TAG, "WAV path=%s", path);
 
-    ESP_LOGI(TAG, "========== WAV VALIDATION ONCE ==========");
-    ESP_LOGI(TAG, "WAV validation path=%s", path);
+    if (audio_manager_take_status_mutex("starting WAV playback"))
+    {
+        ++s_runtime.status.wav_playback_started;
+        xSemaphoreGive(s_runtime.status_mutex);
+    }
 
     audio_manager_diagnostics_t diagnostics_before = {0};
     audio_manager_snapshot_diagnostics(&diagnostics_before);
@@ -1782,21 +1942,31 @@ static esp_err_t run_wav_validation_once(const char *path)
     audio_cycle_metrics_t metrics = {0};
     uint32_t expected_data_bytes = 0U;
     uint32_t expected_duration_ms = 0U;
+    bool cancelled = audio_manager_cancel_is_requested();
+    esp_err_t result = ESP_OK;
 
-    esp_err_t result = audio_manager_select_wav_playback_source(path);
-    if (result == ESP_OK)
+    if (!cancelled)
+    {
+        result = audio_manager_select_wav_playback_source(path);
+    }
+
+    if (result == ESP_OK && !cancelled)
     {
         expected_data_bytes =
             s_runtime.playback_source.wav_stream.info.data_size_bytes;
         expected_duration_ms =
             s_runtime.playback_source.wav_stream.info.duration_ms;
-        result = playback_once(&s_runtime.playback_source, &metrics);
+        result = playback_once(
+            &s_runtime.playback_source,
+            &metrics,
+            &cancelled);
     }
 
     const esp_err_t cleanup_result = force_cycle_cleanup();
     if ((result == ESP_OK) && (cleanup_result != ESP_OK))
     {
         result = cleanup_result;
+        cancelled = false;
     }
     else if ((result != ESP_OK) && (cleanup_result != ESP_OK))
     {
@@ -1811,15 +1981,16 @@ static esp_err_t run_wav_validation_once(const char *path)
 
     ESP_LOGI(
         TAG,
-        "WAV_DIAG result=%s expected_bytes=%u duration=%ums read_bytes=%llu streamed_bytes=%llu reads=%u read_fail=%u max_fread_us=%u elapsed=%ums tx_requested=%llu tx_written=%llu tx_q_ovf=%u tx_timeout=%u tx_partial=%u max_tx_us=%u",
+        "WAV_DIAG result=%s cancelled=%s expected_bytes=%u duration=%ums read_bytes=%llu streamed_bytes=%llu reads=%u read_fail=%u max_wav_read_us=%u elapsed=%ums tx_requested=%llu tx_written=%llu tx_q_ovf=%u tx_timeout=%u tx_partial=%u max_tx_us=%u",
         esp_err_to_name(result),
+        cancelled ? "yes" : "no",
         (unsigned)expected_data_bytes,
         (unsigned)expected_duration_ms,
         (unsigned long long)metrics.wav.data_bytes_read,
         (unsigned long long)metrics.wav.data_bytes_streamed,
         (unsigned)metrics.wav.read_count,
         (unsigned)metrics.wav.read_failure_count,
-        (unsigned)metrics.wav.max_fread_duration_us,
+        (unsigned)metrics.wav.max_wav_read_duration_us,
         (unsigned)metrics.wav.playback_elapsed_ms,
         (unsigned long long)(diagnostics_after.tx_bytes_requested -
                              diagnostics_before.tx_bytes_requested),
@@ -1833,32 +2004,57 @@ static esp_err_t run_wav_validation_once(const char *path)
                    diagnostics_before.tx_partial_write_count),
         (unsigned)diagnostics_after.max_tx_write_duration_us);
 
-    if (audio_manager_take_status_mutex("storing WAV validation result"))
+    bool status_updated = false;
+    if (audio_manager_take_status_mutex("storing WAV playback result"))
     {
         s_runtime.status.last_error = result;
-        audio_manager_refresh_diagnostics_locked();
-        xSemaphoreGive(s_runtime.status_mutex);
-    }
+        if (result != ESP_OK)
+        {
+            ++s_runtime.status.wav_playback_failed;
+            s_runtime.status.state = AUDIO_MANAGER_STATE_ERROR;
+        }
+        else if (cancelled)
+        {
+            ++s_runtime.status.wav_playback_cancelled;
+            s_runtime.status.state = AUDIO_MANAGER_STATE_IDLE;
+        }
+        else
+        {
+            ++s_runtime.status.wav_playback_completed;
+            s_runtime.status.state = AUDIO_MANAGER_STATE_IDLE;
+        }
 
-    if (result == ESP_OK)
-    {
-        audio_manager_notify_status_changed();
-        ESP_LOGI(TAG, "WAV validation PASS");
+        audio_manager_refresh_diagnostics_locked();
+        audio_manager_finish_operation();
+        status_updated = true;
+        xSemaphoreGive(s_runtime.status_mutex);
     }
     else
     {
-        audio_manager_set_state(AUDIO_MANAGER_STATE_ERROR);
-        ESP_LOGE(
-            TAG,
-            "WAV validation FAIL: %s",
-            esp_err_to_name(result));
-        audio_manager_set_state(AUDIO_MANAGER_STATE_IDLE);
+        audio_manager_finish_operation();
     }
 
-    return result;
+    if (status_updated)
+    {
+        audio_manager_notify_status_changed();
+    }
+
+    if (result != ESP_OK)
+    {
+        ESP_LOGE(TAG, "WAV playback failed: %s", esp_err_to_name(result));
+        audio_manager_set_state(AUDIO_MANAGER_STATE_IDLE);
+    }
+    else if (cancelled)
+    {
+        ESP_LOGI(TAG, "WAV playback cancelled");
+    }
+    else
+    {
+        ESP_LOGI(TAG, "WAV playback completed");
+    }
 }
 
-/* Static Functions: Stability Task ---------------------------------------- */
+/* Static Functions: Manager Task / Regression ----------------------------- */
 static void log_cycle_diagnostics(
     uint32_t cycle,
     const audio_manager_diagnostics_t *before)
@@ -1902,108 +2098,235 @@ static void log_cycle_diagnostics(
         (unsigned)uxTaskGetStackHighWaterMark(NULL));
 }
 
+static void audio_manager_run_stability_iteration(void)
+{
+    uint32_t cycle = 0U;
+
+    if (audio_manager_take_status_mutex("starting cycle"))
+    {
+        cycle = ++s_runtime.status.cycles_started;
+        xSemaphoreGive(s_runtime.status_mutex);
+    }
+
+    audio_manager_diagnostics_t diagnostics_before = {0};
+    audio_manager_snapshot_diagnostics(&diagnostics_before);
+
+    ESP_LOGI(
+        TAG,
+        "========== AUDIO MANAGER CYCLE #%u ==========",
+        (unsigned)cycle);
+
+    audio_cycle_metrics_t metrics;
+    const esp_err_t result = run_cycle(&metrics);
+
+    if (audio_manager_take_status_mutex("storing cycle diagnostics"))
+    {
+        s_runtime.status.last_samples_recorded = metrics.samples_recorded;
+        s_runtime.status.last_error = result;
+        audio_manager_refresh_diagnostics_locked();
+
+        if (result == ESP_OK)
+        {
+            ++s_runtime.status.cycles_completed;
+            s_runtime.status.state = AUDIO_MANAGER_STATE_IDLE;
+        }
+        else
+        {
+            ++s_runtime.status.cycles_failed;
+            s_runtime.status.state = AUDIO_MANAGER_STATE_ERROR;
+        }
+
+        xSemaphoreGive(s_runtime.status_mutex);
+    }
+
+    /* Publish result/counters even when state remains IDLE after success. */
+    audio_manager_notify_status_changed();
+
+    if (result == ESP_OK)
+    {
+        ESP_LOGI(
+            TAG,
+            "CYCLE #%u PASS samples=%u",
+            (unsigned)cycle,
+            (unsigned)metrics.samples_recorded);
+    }
+    else
+    {
+        ESP_LOGE(
+            TAG,
+            "CYCLE #%u FAIL: %s",
+            (unsigned)cycle,
+            esp_err_to_name(result));
+
+        /* Keep soak useful after transient faults: cleanup, report, retry. */
+        const esp_err_t cleanup_result = force_cycle_cleanup();
+        if (cleanup_result != ESP_OK)
+        {
+            ESP_LOGE(
+                TAG,
+                "Cycle cleanup failed: %s",
+                esp_err_to_name(cleanup_result));
+        }
+    }
+
+    log_cycle_diagnostics(cycle, &diagnostics_before);
+    log_heap_state("cycle_end");
+
+    if (result != ESP_OK)
+    {
+        /* Preserve last_error/counters but recover lifecycle for next cycle. */
+        audio_manager_set_state(AUDIO_MANAGER_STATE_IDLE);
+    }
+}
+
 static void audio_manager_task(void *argument)
 {
     (void)argument;
 
+    const bool stability_mode = audio_manager_stability_mode_enabled();
     ESP_LOGI(
         TAG,
-        "Audio manager task started: record=%us volume=%u/100",
-        (unsigned)s_runtime.config.record_duration_seconds,
+        "Audio manager task started: mode=%s priority=%u volume=%u/100",
+        stability_mode ? "golden_stability" : "production_idle",
+        (unsigned)AUDIO_MANAGER_TASK_PRIORITY,
         (unsigned)s_runtime.config.playback_volume_percent);
 
-    const char *const wav_validation_path =
-        audio_manager_wav_validation_path();
-    if (wav_validation_path != NULL)
+    audio_manager_set_state(AUDIO_MANAGER_STATE_IDLE);
+    xEventGroupSetBits(
+        s_runtime.lifecycle_events,
+        AUDIO_MANAGER_TASK_READY_BIT);
+
+    const char *const wav_regression_path =
+        audio_manager_wav_regression_path();
+    if (wav_regression_path != NULL)
     {
-        (void)run_wav_validation_once(wav_validation_path);
-        log_heap_state("wav_validation_end");
-    }
-
-    while (true)
-    {
-        uint32_t cycle = 0U;
-
-        if (audio_manager_take_status_mutex("starting cycle"))
-        {
-            cycle = ++s_runtime.status.cycles_started;
-            xSemaphoreGive(s_runtime.status_mutex);
-        }
-
-        audio_manager_diagnostics_t diagnostics_before = {0};
-        audio_manager_snapshot_diagnostics(&diagnostics_before);
-
-        ESP_LOGI(
-            TAG,
-            "========== AUDIO MANAGER CYCLE #%u ==========",
-            (unsigned)cycle);
-
-        audio_cycle_metrics_t metrics;
-        const esp_err_t result = run_cycle(&metrics);
-
-        if (audio_manager_take_status_mutex("storing cycle diagnostics"))
-        {
-            s_runtime.status.last_samples_recorded = metrics.samples_recorded;
-            s_runtime.status.last_error = result;
-            audio_manager_refresh_diagnostics_locked();
-
-            if (result == ESP_OK)
-            {
-                ++s_runtime.status.cycles_completed;
-                s_runtime.status.state = AUDIO_MANAGER_STATE_IDLE;
-            }
-            else
-            {
-                ++s_runtime.status.cycles_failed;
-                s_runtime.status.state = AUDIO_MANAGER_STATE_ERROR;
-            }
-
-            xSemaphoreGive(s_runtime.status_mutex);
-        }
-
-        /* Publish result/counters even when state remains IDLE after success. */
-        audio_manager_notify_status_changed();
-
-        if (result == ESP_OK)
-        {
-            ESP_LOGI(
-                TAG,
-                "CYCLE #%u PASS samples=%u",
-                (unsigned)cycle,
-                (unsigned)metrics.samples_recorded);
-        }
-        else
+        const esp_err_t regression_result =
+            audio_manager_play_wav(wav_regression_path);
+        if (regression_result != ESP_OK)
         {
             ESP_LOGE(
                 TAG,
-                "CYCLE #%u FAIL: %s",
-                (unsigned)cycle,
-                esp_err_to_name(result));
+                "WAV startup regression command rejected: %s",
+                esp_err_to_name(regression_result));
+        }
+    }
 
-            /* Keep soak useful after transient faults: cleanup, report, retry. */
-            const esp_err_t cleanup_result = force_cycle_cleanup();
-            if (cleanup_result != ESP_OK)
+    bool task_done = false;
+    while (!task_done)
+    {
+        if (stability_mode)
+        {
+            if (audio_manager_shutdown_is_requested())
             {
-                ESP_LOGE(
-                    TAG,
-                    "Cycle cleanup failed: %s",
-                    esp_err_to_name(cleanup_result));
+                break;
+            }
+
+            audio_manager_run_stability_iteration();
+
+            audio_manager_command_t command = {0};
+            if (xQueueReceive(
+                    s_runtime.command_queue,
+                    &command,
+                    pdMS_TO_TICKS(AUDIO_MANAGER_INTER_CYCLE_DELAY_MS)) ==
+                pdTRUE)
+            {
+                task_done =
+                    (command.kind == AUDIO_MANAGER_COMMAND_SHUTDOWN);
+            }
+            continue;
+        }
+
+        audio_manager_command_t command = {0};
+        if (xQueueReceive(
+                s_runtime.command_queue,
+                &command,
+                pdMS_TO_TICKS(AUDIO_MANAGER_COMMAND_POLL_MS)) == pdTRUE)
+        {
+            switch (command.kind)
+            {
+                case AUDIO_MANAGER_COMMAND_PLAY_WAV:
+                    audio_manager_handle_wav_command(command.wav_path);
+                    break;
+
+                case AUDIO_MANAGER_COMMAND_SHUTDOWN:
+                    task_done = true;
+                    break;
+
+                default:
+                    ESP_LOGE(
+                        TAG,
+                        "Unknown audio command: %d",
+                        (int)command.kind);
+                    break;
             }
         }
-
-        log_cycle_diagnostics(
-            cycle,
-            &diagnostics_before);
-        log_heap_state("cycle_end");
-
-        if (result != ESP_OK)
+        else if (audio_manager_shutdown_is_requested())
         {
-            /* Preserve last_error/counters but recover lifecycle for next cycle. */
-            audio_manager_set_state(AUDIO_MANAGER_STATE_IDLE);
+            /* Shutdown flag is the fallback when its queue send was full. */
+            task_done = true;
         }
-
-        vTaskDelay(pdMS_TO_TICKS(AUDIO_MANAGER_INTER_CYCLE_DELAY_MS));
     }
+
+    const esp_err_t cleanup_result = force_cycle_cleanup();
+    esp_err_t task_result = cleanup_result;
+    bool final_status_updated = false;
+
+    if (audio_manager_take_status_mutex("storing task shutdown result"))
+    {
+        if (cleanup_result != ESP_OK)
+        {
+            s_runtime.status.last_error = cleanup_result;
+        }
+        s_runtime.status.state = AUDIO_MANAGER_STATE_INITIALIZED;
+        audio_manager_refresh_diagnostics_locked();
+        s_runtime.task_exit_result = task_result;
+        final_status_updated = true;
+        xSemaphoreGive(s_runtime.status_mutex);
+    }
+    else
+    {
+        if (task_result == ESP_OK)
+        {
+            task_result = ESP_ERR_TIMEOUT;
+        }
+        s_runtime.task_exit_result = task_result;
+    }
+
+    if (final_status_updated)
+    {
+        audio_manager_notify_status_changed();
+    }
+
+    if (audio_manager_take_status_mutex("finishing task shutdown"))
+    {
+        s_runtime.task_handle = NULL;
+        portENTER_CRITICAL(&s_control_lock);
+        s_control = (audio_manager_control_t) {0};
+        portEXIT_CRITICAL(&s_control_lock);
+        xEventGroupSetBits(
+            s_runtime.lifecycle_events,
+            AUDIO_MANAGER_TASK_STOPPED_BIT);
+        xSemaphoreGive(s_runtime.status_mutex);
+    }
+    else
+    {
+        if (task_result == ESP_OK)
+        {
+            task_result = ESP_ERR_TIMEOUT;
+            s_runtime.task_exit_result = task_result;
+        }
+        s_runtime.task_handle = NULL;
+        audio_manager_reset_control();
+        xEventGroupSetBits(
+            s_runtime.lifecycle_events,
+            AUDIO_MANAGER_TASK_STOPPED_BIT);
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Audio manager task stopped: %s",
+        esp_err_to_name(task_result));
+    vTaskDelete(NULL);
 }
 
 /* Public API --------------------------------------------------------------- */
@@ -2059,10 +2382,34 @@ esp_err_t audio_manager_init(const audio_manager_config_t *config)
         return ESP_ERR_NO_MEM;
     }
 
+    s_runtime.command_queue = xQueueCreate(
+        AUDIO_MANAGER_COMMAND_QUEUE_LENGTH,
+        sizeof(audio_manager_command_t));
+    if (s_runtime.command_queue == NULL)
+    {
+        vSemaphoreDelete(s_runtime.status_mutex);
+        s_runtime.status_mutex = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+
+    s_runtime.lifecycle_events = xEventGroupCreate();
+    if (s_runtime.lifecycle_events == NULL)
+    {
+        vQueueDelete(s_runtime.command_queue);
+        vSemaphoreDelete(s_runtime.status_mutex);
+        s_runtime.command_queue = NULL;
+        s_runtime.status_mutex = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+
     esp_err_t result = hold_amplifier_data_low();
     if (result != ESP_OK)
     {
+        vEventGroupDelete(s_runtime.lifecycle_events);
+        vQueueDelete(s_runtime.command_queue);
         vSemaphoreDelete(s_runtime.status_mutex);
+        s_runtime.lifecycle_events = NULL;
+        s_runtime.command_queue = NULL;
         s_runtime.status_mutex = NULL;
         return result;
     }
@@ -2085,7 +2432,11 @@ esp_err_t audio_manager_init(const audio_manager_config_t *config)
         heap_caps_free(s_runtime.dsp_workspace);
         s_runtime.recording_pcm24 = NULL;
         s_runtime.dsp_workspace = NULL;
+        vEventGroupDelete(s_runtime.lifecycle_events);
+        vQueueDelete(s_runtime.command_queue);
         vSemaphoreDelete(s_runtime.status_mutex);
+        s_runtime.lifecycle_events = NULL;
+        s_runtime.command_queue = NULL;
         s_runtime.status_mutex = NULL;
         return ESP_ERR_NO_MEM;
     }
@@ -2094,8 +2445,10 @@ esp_err_t audio_manager_init(const audio_manager_config_t *config)
     audio_dsp_workspace_init(s_runtime.dsp_workspace);
 
     audio_manager_reset_diagnostics();
+    audio_manager_reset_control();
 
     s_runtime.initialized = true;
+    s_runtime.task_exit_result = ESP_OK;
     s_runtime.status = (audio_manager_status_t) {
         .state = AUDIO_MANAGER_STATE_INITIALIZED,
         .last_error = ESP_OK,
@@ -2163,17 +2516,44 @@ esp_err_t audio_manager_register_status_callback(
 
 esp_err_t audio_manager_start(void)
 {
-    if (!s_runtime.initialized || (s_runtime.status_mutex == NULL))
+    if (!s_runtime.initialized ||
+        (s_runtime.status_mutex == NULL) ||
+        (s_runtime.command_queue == NULL) ||
+        (s_runtime.lifecycle_events == NULL))
     {
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (s_runtime.task_handle != NULL)
+    if (!audio_manager_take_status_mutex("starting manager task"))
     {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    bool already_running;
+    portENTER_CRITICAL(&s_control_lock);
+    already_running = s_control.task_running;
+    if (!already_running && (s_runtime.task_handle == NULL))
+    {
+        s_control.task_running = true;
+        s_control.shutdown_requested = false;
+        s_control.cancel_requested = false;
+        s_control.operation = audio_manager_stability_mode_enabled()
+            ? AUDIO_MANAGER_OPERATION_STABILITY
+            : AUDIO_MANAGER_OPERATION_NONE;
+    }
+    portEXIT_CRITICAL(&s_control_lock);
+
+    if (already_running || (s_runtime.task_handle != NULL))
+    {
+        xSemaphoreGive(s_runtime.status_mutex);
         return ESP_ERR_INVALID_STATE;
     }
 
-    audio_manager_set_state(AUDIO_MANAGER_STATE_IDLE);
+    (void)xQueueReset(s_runtime.command_queue);
+    (void)xEventGroupClearBits(
+        s_runtime.lifecycle_events,
+        AUDIO_MANAGER_TASK_READY_BIT | AUDIO_MANAGER_TASK_STOPPED_BIT);
+    s_runtime.task_exit_result = ESP_OK;
 
     const BaseType_t result = xTaskCreate(
         audio_manager_task,
@@ -2186,12 +2566,189 @@ esp_err_t audio_manager_start(void)
     if (result != pdPASS)
     {
         s_runtime.task_handle = NULL;
-        audio_manager_set_state(AUDIO_MANAGER_STATE_INITIALIZED);
+        audio_manager_reset_control();
+        s_runtime.status.state = AUDIO_MANAGER_STATE_INITIALIZED;
+        xSemaphoreGive(s_runtime.status_mutex);
         return ESP_ERR_NO_MEM;
     }
 
-    ESP_LOGI(TAG, "Started");
+    xSemaphoreGive(s_runtime.status_mutex);
+
+    const EventBits_t ready_bits = xEventGroupWaitBits(
+        s_runtime.lifecycle_events,
+        AUDIO_MANAGER_TASK_READY_BIT,
+        pdFALSE,
+        pdTRUE,
+        pdMS_TO_TICKS(AUDIO_MANAGER_TASK_START_TIMEOUT_MS));
+    if ((ready_bits & AUDIO_MANAGER_TASK_READY_BIT) == 0U)
+    {
+        ESP_LOGE(TAG, "Manager task did not reach IDLE before timeout");
+        (void)audio_manager_stop();
+        return ESP_ERR_TIMEOUT;
+    }
+
+    ESP_LOGI(TAG, "Started and ready for commands");
     return ESP_OK;
+}
+
+esp_err_t audio_manager_play_wav(const char *path)
+{
+    if (path == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const size_t path_length = strnlen(
+        path,
+        AUDIO_MANAGER_WAV_PATH_MAX_BYTES);
+    if ((path_length == 0U) ||
+        (path_length >= AUDIO_MANAGER_WAV_PATH_MAX_BYTES) ||
+        !audio_wav_path_is_valid(path))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!s_runtime.initialized ||
+        (s_runtime.status_mutex == NULL) ||
+        (s_runtime.command_queue == NULL))
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    audio_manager_command_t command = {
+        .kind = AUDIO_MANAGER_COMMAND_PLAY_WAV,
+    };
+    memcpy(command.wav_path, path, path_length + 1U);
+
+    if (!audio_manager_take_status_mutex("queueing WAV playback"))
+    {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    bool accepted = false;
+    portENTER_CRITICAL(&s_control_lock);
+    if (s_control.task_running &&
+        !s_control.shutdown_requested &&
+        (s_control.operation == AUDIO_MANAGER_OPERATION_NONE) &&
+        (s_runtime.status.state == AUDIO_MANAGER_STATE_IDLE))
+    {
+        s_control.operation = AUDIO_MANAGER_OPERATION_WAV;
+        s_control.cancel_requested = false;
+        accepted = true;
+    }
+    portEXIT_CRITICAL(&s_control_lock);
+
+    if (!accepted)
+    {
+        xSemaphoreGive(s_runtime.status_mutex);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (xQueueSend(s_runtime.command_queue, &command, 0U) != pdTRUE)
+    {
+        audio_manager_finish_operation();
+        xSemaphoreGive(s_runtime.status_mutex);
+        return ESP_ERR_TIMEOUT;
+    }
+
+    xSemaphoreGive(s_runtime.status_mutex);
+    return ESP_OK;
+}
+
+esp_err_t audio_manager_stop_playback(void)
+{
+    if (!s_runtime.initialized || (s_runtime.status_mutex == NULL))
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!audio_manager_take_status_mutex("cancelling WAV playback"))
+    {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    bool requested = false;
+    portENTER_CRITICAL(&s_control_lock);
+    if (s_control.task_running &&
+        (s_control.operation == AUDIO_MANAGER_OPERATION_WAV))
+    {
+        s_control.cancel_requested = true;
+        requested = true;
+    }
+    portEXIT_CRITICAL(&s_control_lock);
+
+    xSemaphoreGive(s_runtime.status_mutex);
+    return requested ? ESP_OK : ESP_ERR_INVALID_STATE;
+}
+
+esp_err_t audio_manager_stop(void)
+{
+    if (!s_runtime.initialized ||
+        (s_runtime.status_mutex == NULL) ||
+        (s_runtime.command_queue == NULL) ||
+        (s_runtime.lifecycle_events == NULL))
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if ((s_runtime.task_handle != NULL) &&
+        (xTaskGetCurrentTaskHandle() == s_runtime.task_handle))
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!audio_manager_take_status_mutex("stopping manager task"))
+    {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    bool task_running;
+    bool first_request = false;
+    portENTER_CRITICAL(&s_control_lock);
+    task_running = s_control.task_running;
+    if (task_running)
+    {
+        first_request = !s_control.shutdown_requested;
+        s_control.shutdown_requested = true;
+        s_control.cancel_requested = true;
+    }
+    portEXIT_CRITICAL(&s_control_lock);
+
+    if (!task_running)
+    {
+        const esp_err_t result = s_runtime.task_exit_result;
+        xSemaphoreGive(s_runtime.status_mutex);
+        return result;
+    }
+
+    if (first_request)
+    {
+        const audio_manager_command_t command = {
+            .kind = AUDIO_MANAGER_COMMAND_SHUTDOWN,
+        };
+        if (xQueueSend(s_runtime.command_queue, &command, 0U) != pdTRUE)
+        {
+            ESP_LOGW(
+                TAG,
+                "Shutdown command queue full; polling fallback active");
+        }
+    }
+
+    xSemaphoreGive(s_runtime.status_mutex);
+
+    const EventBits_t stopped_bits = xEventGroupWaitBits(
+        s_runtime.lifecycle_events,
+        AUDIO_MANAGER_TASK_STOPPED_BIT,
+        pdFALSE,
+        pdTRUE,
+        pdMS_TO_TICKS(AUDIO_MANAGER_TASK_STOP_TIMEOUT_MS));
+    if ((stopped_bits & AUDIO_MANAGER_TASK_STOPPED_BIT) == 0U)
+    {
+        ESP_LOGE(TAG, "Manager task stop timed out; shutdown remains pending");
+        return ESP_ERR_TIMEOUT;
+    }
+
+    return s_runtime.task_exit_result;
 }
 
 esp_err_t audio_manager_get_status(audio_manager_status_t *status)
@@ -2227,7 +2784,12 @@ esp_err_t audio_manager_deinit(void)
         return ESP_OK;
     }
 
-    if (s_runtime.task_handle != NULL)
+    bool task_running;
+    portENTER_CRITICAL(&s_control_lock);
+    task_running = s_control.task_running;
+    portEXIT_CRITICAL(&s_control_lock);
+
+    if (task_running || (s_runtime.task_handle != NULL))
     {
         return ESP_ERR_INVALID_STATE;
     }
@@ -2239,11 +2801,25 @@ esp_err_t audio_manager_deinit(void)
     s_runtime.recording_pcm24 = NULL;
     s_runtime.dsp_workspace = NULL;
 
+    if (s_runtime.command_queue != NULL)
+    {
+        vQueueDelete(s_runtime.command_queue);
+        s_runtime.command_queue = NULL;
+    }
+
+    if (s_runtime.lifecycle_events != NULL)
+    {
+        vEventGroupDelete(s_runtime.lifecycle_events);
+        s_runtime.lifecycle_events = NULL;
+    }
+
     if (s_runtime.status_mutex != NULL)
     {
         vSemaphoreDelete(s_runtime.status_mutex);
+        s_runtime.status_mutex = NULL;
     }
 
+    audio_manager_reset_control();
     memset(&s_runtime, 0, sizeof(s_runtime));
     return result;
 }
@@ -2276,9 +2852,4 @@ const char *audio_manager_state_to_string(audio_manager_state_t state)
         default:
             return "UNKNOWN";
     }
-}
-
-esp_err_t audio_manager_test_start(void)
-{
-    return audio_manager_start();
 }

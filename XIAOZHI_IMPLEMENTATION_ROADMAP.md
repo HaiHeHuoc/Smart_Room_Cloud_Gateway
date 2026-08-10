@@ -223,13 +223,13 @@ production playback path without coupling filesystem ownership into
 - [x] One reusable 4 KiB PCM buffer is allocated once per private stream; no
       whole WAV is loaded and no allocation occurs per read chunk.
 - [x] `audio_manager` owns a private playback-source slot and central source
-      cleanup while its current stability task continues to select the proven
-      recorded-PCM path.
+      cleanup; the same single owner now selects either production WAV or the
+      default-off golden recorded-PCM regression path.
 - [x] Phase 11.4.2 connects this reader directly to the existing manager-owned
       TX path with bounded reads; no ring/task split is required without
       runtime evidence.
 
-#### Phase 11.4.2 — Direct Bounded WAV Playback — Implemented / Build And Host-Test Verified
+#### Phase 11.4.2 — Direct Bounded WAV Playback — Implemented / Build And Parser Host-Test Verified / Hardware Pending
 
 - [x] Native fixtures exercise the private parser without SD hardware,
       including chunk ordering/padding, missing chunks, unsupported formats,
@@ -245,14 +245,47 @@ production playback path without coupling filesystem ownership into
 - [x] Existing TX silence preload, pre/post silence, I2S lifecycle,
       diagnostics, `PLAYBACK` state/callback, source cleanup, and MAX98357A
       safe-LOW policy are reused.
-- [x] Aggregate logs expose WAV bytes read/streamed, maximum `fread()` latency,
-      elapsed time, failures, and per-validation TX deltas without per-read
-      INFO spam.
-- [x] A default-off Kconfig proof plays one configured `/sdcard/...` WAV at
-      task startup, then returns to the unchanged record/DSP/playback soak.
+- [x] Aggregate logs expose WAV bytes read/streamed, successful bounded-reader
+      latency, elapsed time, failures, and per-operation TX deltas without
+      per-read INFO spam. Phase 11.4.3 excludes failed reads from the maximum.
+- [x] A default-off Kconfig regression submits one configured `/sdcard/...`
+      WAV through the Phase 11.4.3 production request path.
 - [ ] Validate 5/30/60-second WAVs, invalid/removal cases, SD latency under
       Gateway load, clean EOF, sound quality, and golden-path regression on
       target hardware.
+
+The 23-case host suite validates the private RIFF/WAV parser and bounded reader
+fixtures only. The ESP-IDF firmware build validates compilation/linking. Neither
+is evidence for real SD latency, I2S TX, MAX98357A output, audible continuity,
+or hardware cancellation.
+
+#### Phase 11.4.3 — Production Playback Control And Manager Lifecycle — Implemented / Build Verified / Hardware Pending
+
+- [x] Normal `audio_manager_start()` creates the single manager task, waits for
+      `IDLE`, and no longer starts the infinite golden soak by default.
+- [x] `audio_manager_play_wav()` validates and copies one bounded path into a
+      two-entry command queue. Conflicting operations are rejected rather than
+      queued as a playlist; only the manager task opens/plays/closes the WAV.
+- [x] `audio_manager_stop_playback()` sets a protected cancellation request.
+      WAV streaming polls it before reads and between PCM and silence TX blocks,
+      then performs manager-owned cleanup and reports controlled cancel as
+      `IDLE` with `ESP_OK` rather than a false error.
+- [x] `audio_manager_stop()` requests cancel/shutdown, waits a finite five
+      seconds, never force-deletes the owning task, and returns successful stop
+      to `INITIALIZED`. A stopped manager can start again and deinit releases
+      the queue, event group, mutex, PSRAM, source, and audio resources.
+- [x] WAV started/completed/failed/cancelled counters supplement the unchanged
+      public GUI state enum; no LVGL dependency or direct GUI call was added.
+- [x] Golden `run_cycle()` remains available through a default-off Kconfig
+      stability mode and preserves the accepted I2S/DMA/DSP/capture constants.
+- [x] Direct 4 KiB streaming, linear WAV volume (`100%` equals source PCM16),
+      existing TX staging, and first-error cleanup remain unchanged; no PCM ring,
+      whole-file allocation, per-chunk allocation, or second task was added.
+- [x] ESP-IDF 6.0.1 `reconfigure` and firmware build pass; the unchanged parser
+      fixture suite passes 23/23.
+- [ ] Validate production play/cancel/stop/restart/deinit, 5/30/60-second WAVs,
+      failure recovery, latency, sound quality, and golden MIC regression on
+      target hardware in Phase 11.4.4.
 
 Reference flow:
 
@@ -284,7 +317,7 @@ SD card
 - [x] Handle normal EOF, missing/unsupported/corrupt/truncated input, short
       reads, SD-unavailable state, TX errors, close errors, and defensive
       cleanup in the bounded proof path.
-- [ ] Add user stop/cancel and production source arbitration in Phase 11.4.3.
+- [x] Add user stop/cancel and production source arbitration in Phase 11.4.3.
 - [ ] Measure SD-read latency, TX errors, CPU, memory, and task stack while the
       rest of the Gateway is active on target hardware.
 - [ ] Keep compressed codecs such as MP3/AAC/FLAC outside this baseline phase

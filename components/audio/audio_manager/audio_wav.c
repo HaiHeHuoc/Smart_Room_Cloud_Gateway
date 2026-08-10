@@ -44,7 +44,6 @@ static esp_err_t audio_wav_seek_absolute(
 static esp_err_t audio_wav_get_file_size(
     FILE *file,
     uint64_t *file_size);
-static bool audio_wav_path_is_on_sd(const char *path);
 static esp_err_t audio_wav_validate_format(audio_wav_info_t *info);
 static esp_err_t audio_wav_open_error_from_errno(int error_number);
 
@@ -133,7 +132,7 @@ static esp_err_t audio_wav_get_file_size(
     return ESP_OK;
 }
 
-static bool audio_wav_path_is_on_sd(const char *path)
+bool audio_wav_path_is_valid(const char *path)
 {
     if ((path == NULL) || (path[0] == '\0'))
     {
@@ -365,7 +364,7 @@ esp_err_t audio_wav_stream_open(
     audio_wav_stream_t *stream,
     const char *path)
 {
-    if ((stream == NULL) || !audio_wav_path_is_on_sd(path))
+    if ((stream == NULL) || !audio_wav_path_is_valid(path))
     {
         return ESP_ERR_INVALID_ARG;
     }

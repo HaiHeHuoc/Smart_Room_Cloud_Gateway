@@ -88,7 +88,7 @@
 
 #define SD_MOUNT_POINT           "/sdcard"
 
-#define SD_CLOCK_KHZ (2 * 1000) // 2 MHz //By defaut unit, it is KHz
+#define SD_CLOCK_KHZ (1 * 1000) // 2 MHz //By defaut unit, it is KHz
 
 /*
 * Maximum number of files that can be opened at the same time.

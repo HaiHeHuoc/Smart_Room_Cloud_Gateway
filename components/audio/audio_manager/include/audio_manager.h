@@ -13,6 +13,9 @@ extern "C"
 
 /* Type Definitions --------------------------------------------------------- */
 
+/** Maximum copied WAV path size, including the terminating null byte. */
+#define AUDIO_MANAGER_WAV_PATH_MAX_BYTES  256U
+
 /** @brief Audio manager lifecycle and active pipeline state. */
 typedef enum
 {
@@ -31,10 +34,10 @@ typedef enum
     /** The recorded PCM24 buffer is being processed. */
     AUDIO_MANAGER_STATE_PROCESSING,
 
-    /** The processed recording is being played through MAX98357A. */
+    /** A manager-owned recorded or WAV source is playing through MAX98357A. */
     AUDIO_MANAGER_STATE_PLAYBACK,
 
-    /** The latest stability cycle failed. The manager may recover to IDLE. */
+    /** The latest manager audio operation failed and will recover to IDLE. */
     AUDIO_MANAGER_STATE_ERROR
 } audio_manager_state_t;
 
@@ -44,7 +47,10 @@ typedef struct
     /** Recording duration used by the current stability pipeline, in seconds. */
     uint32_t record_duration_seconds;
 
-    /** Playback volume percentage in range 0..100 before fixed conditioning. */
+    /**
+     * Playback volume in range 0..100. Recorded audio then uses its existing
+     * conditioning; WAV audio uses this as a linear PCM16 scale only.
+     */
     uint32_t playback_volume_percent;
 } audio_manager_config_t;
 
@@ -60,7 +66,7 @@ typedef struct
     /** True while the manager has successfully enabled the I2S TX channel. */
     bool playback_i2s_active;
 
-    /** Result of the most recently completed stability cycle. */
+    /** Result of the most recently completed manager audio operation. */
     esp_err_t last_error;
 
     /** Number of stability cycles that have started. */
@@ -71,6 +77,18 @@ typedef struct
 
     /** Number of stability cycles that returned an error. */
     uint32_t cycles_failed;
+
+    /** Number of WAV commands the manager task began handling. */
+    uint32_t wav_playback_started;
+
+    /** Number of WAV commands that reached normal EOF successfully. */
+    uint32_t wav_playback_completed;
+
+    /** Number of WAV commands that failed before or during playback. */
+    uint32_t wav_playback_failed;
+
+    /** Number of WAV commands cancelled by playback stop or manager stop. */
+    uint32_t wav_playback_cancelled;
 
     /** Number of PCM24 samples captured by the most recent cycle. */
     size_t last_samples_recorded;
@@ -129,16 +147,24 @@ typedef void (*audio_manager_status_callback_t)(
 
 /* Public API --------------------------------------------------------------- */
 
-/** @brief Return the current known-good NewSolution defaults. */
+/**
+ * @brief Return compile-selected NewSolution defaults.
+ *
+ * Production uses a five-second retained recording. When the default-off
+ * golden stability Kconfig mode is selected, this function returns its
+ * configured stress duration; the manager selects that mode's task priority
+ * internally.
+ */
 audio_manager_config_t audio_manager_default_config(void);
 
 /**
  * @brief Initialize audio ownership without starting the manager task.
  *
  * The function copies configuration, allocates the whole-recording PCM24 and
- * DSP workspace buffers in PSRAM, creates the status mutex, and places the
- * MAX98357A data pin in its safe LOW state. No I2S channel remains active when
- * initialization returns.
+ * DSP workspace buffers in PSRAM, creates the bounded command queue/lifecycle
+ * synchronization, and places the MAX98357A data pin in its safe LOW state.
+ * No task or I2S channel remains active when initialization returns. Task
+ * context only; do not call from an ISR.
  */
 esp_err_t audio_manager_init(
     const audio_manager_config_t *config);
@@ -158,38 +184,76 @@ esp_err_t audio_manager_register_status_callback(
     void *user_context);
 
 /**
- * @brief Start the single manager-owned audio task.
+ * @brief Start the single manager-owned production audio task.
  *
- * The current Phase 11 NewSolution task continuously executes the proven
- * record -> DSP -> playback -> cleanup stability cycle. Task ownership and all
- * I2S operations remain private to audio_manager.
+ * On success the task reaches IDLE and waits for bounded commands. Normal
+ * production start does not begin capture, DSP, or playback. All source and
+ * I2S ownership remains private to the manager task. A default-off Kconfig
+ * regression mode may run the existing golden stability cycle instead. The
+ * call waits at most two seconds for task readiness. Serialize start/stop/
+ * deinit lifecycle calls in application code; task context only.
  */
 esp_err_t audio_manager_start(void);
+
+/**
+ * @brief Queue one canonical WAV file for asynchronous playback.
+ *
+ * The manager must be started and IDLE. path must be a null-terminated
+ * absolute path below the SD mount and fit in
+ * AUDIO_MANAGER_WAV_PATH_MAX_BYTES. The path is copied into bounded
+ * manager-owned command storage before return; the caller may immediately
+ * reuse its buffer. This function never opens the file or touches I2S and does
+ * not block for playback duration. A pending/active operation or shutdown
+ * returns ESP_ERR_INVALID_STATE; a full command queue or status-mutex timeout
+ * returns ESP_ERR_TIMEOUT. Task context only; safe for the caller path buffer
+ * to expire immediately after a successful return.
+ */
+esp_err_t audio_manager_play_wav(const char *path);
+
+/**
+ * @brief Request cancellation of the pending or active WAV playback.
+ *
+ * The caller only sets a bounded cancellation request. The manager task owns
+ * stream/TX cleanup. Cancellation is observed after the current synchronous
+ * filesystem or I2S operation returns, so it is not immediate or preemptive.
+ * Returns ESP_ERR_INVALID_STATE when no WAV command is pending/active. A
+ * controlled cancellation completes with IDLE and ESP_OK in status. Task
+ * context only.
+ */
+esp_err_t audio_manager_stop_playback(void);
+
+/**
+ * @brief Stop the manager task with a finite cooperative shutdown wait.
+ *
+ * Active WAV playback is cancelled by the manager task, which closes the
+ * source and stops I2S before exiting. On success the state becomes
+ * INITIALIZED and audio_manager_start() may be called again. The function
+ * returns ESP_ERR_TIMEOUT if the task cannot finish its current bounded
+ * blocking operation and cleanup before the shutdown deadline; it never
+ * force-deletes the owning task. The shutdown wait is five seconds. Do not
+ * call this function from the audio manager callback/task itself; serialize it
+ * with other lifecycle calls.
+ */
+esp_err_t audio_manager_stop(void);
 
 /** @brief Copy the current manager status under a bounded mutex wait. */
 esp_err_t audio_manager_get_status(
     audio_manager_status_t *status);
 
 /**
- * @brief Deinitialize the manager when its task has not been started.
+ * @brief Deinitialize a stopped manager and release all owned resources.
  *
- * Runtime stop/deinit is intentionally not implemented for the infinite soak
- * task yet. Calling this after audio_manager_start() returns
- * ESP_ERR_INVALID_STATE.
+ * Call audio_manager_stop() first when the manager task is running. This
+ * releases the command queue, lifecycle synchronization, PSRAM recording
+ * buffer, DSP workspace, and status mutex after defensive audio cleanup. Task
+ * context only; application code must ensure no concurrent lifecycle/status
+ * call is using the manager when deinit begins.
  */
 esp_err_t audio_manager_deinit(void);
 
 /** @brief Convert one audio manager state into a stable log/UI string. */
 const char *audio_manager_state_to_string(
     audio_manager_state_t state);
-
-/**
- * @brief Compatibility alias for the pre-refactor NewSolution composition.
- *
- * New code and app_main call audio_manager_start(). This alias remains only
- * for legacy callers without changing audio behavior.
- */
-esp_err_t audio_manager_test_start(void);
 
 #ifdef __cplusplus
 }
