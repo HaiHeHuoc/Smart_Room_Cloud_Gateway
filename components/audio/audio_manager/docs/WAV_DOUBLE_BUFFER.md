@@ -3,160 +3,169 @@
 ## Goal
 
 Prevent nominal SD/FATFS latency from directly starving I2S playback while
-keeping the existing `audio_manager` TX path unchanged.
+keeping the proven `audio_manager` TX path unchanged.
 
-The target implementation uses two 10-second PCM16 mono buffers in PSRAM. A
-private lower-priority prefetch task reads SD data through one reusable 4 KiB
-Internal/DMA staging buffer and copies it into the currently free PSRAM buffer.
-The `audio_manager` task remains the sole I2S owner and consumes only completed
-PSRAM buffers.
-
-## Data Flow
+The production path is deliberately split into three ownership layers:
 
 ```text
 SD / FATFS
     |
-    | fread <= 4 KiB
     v
-4 KiB Internal/DMA staging
+audio_wav
+  - one FILE
+  - one sd_card_manager VFS lease
+  - synchronous raw reads capped at 4 KiB
     |
-    | memcpy
     v
-+-------------------+      +-------------------+
-| PSRAM Buffer A    |      | PSRAM Buffer B    |
-| 320,000 bytes     |      | 320,000 bytes     |
-| ~10 s PCM16 mono  |      | ~10 s PCM16 mono  |
-+-------------------+      +-------------------+
-          |                         |
-          +------ ping-pong --------+
-                    |
-                    v
-           audio_manager task
-                    |
-           mono -> stereo staging
-                    |
-                    v
-              existing I2S TX
-                    |
-                    v
-                MAX98357A
+audio_wav_prefetch
+  - one lower-priority reader task
+  - two PSRAM READY/FREE slots
+  - recovery/reopen/seek policy
+    |
+    v
+audio_manager
+  - sole I2S owner
+  - PCM16 mono -> stereo staging
+  - existing TX lifecycle/diagnostics
+    |
+    v
+MAX98357A
 ```
 
-The producer starts filling the alternate buffer as soon as possible. It does
-not wait for a fixed 70-percent playback threshold. This gives the producer up
-to approximately one full buffer duration to prepare the next block.
+`audio_wav` must not create a FreeRTOS task or allocate the large PSRAM cache.
+Keeping the raw reader synchronous avoids nested prefetch ownership and lets the
+separate prefetch worker recover by closing/reopening one bounded stream.
 
-## Memory Model
+## Ping-Pong Policy
 
-Canonical WAV format remains:
-
-- PCM integer
-- mono
-- 16 kHz
-- 16 bit
-- 32,000 bytes/s
-
-Target runtime allocations per open WAV stream:
+`CONFIG_AUDIO_MANAGER_WAV_PREFETCH_SECONDS` controls each logical PSRAM slot.
+The default is 10 seconds. For canonical PCM16 mono 16-kHz input:
 
 ```text
-PSRAM Buffer A        320,000 bytes
-PSRAM Buffer B        320,000 bytes
-Internal/DMA staging    4,096 bytes
-prefetch context          small Internal allocation
-prefetch task stack       4,096 bytes (FreeRTOS task stack allocation)
+32,000 bytes/s x 10 s = 320,000 bytes/slot
+2 slots                         = 640,000 bytes (~625 KiB PSRAM)
 ```
 
-Bulk audio remains in PSRAM. I2S TX staging remains the existing static
-Internal/DMA block owned by `audio_manager`.
+The producer fills whichever slot is FREE as soon as possible. It does not wait
+for a fixed 70-percent playback threshold. While the manager consumes slot A,
+the reader can fill slot B; releasing A returns it to the FREE queue for the
+next fill.
 
-## Ownership
+The low-level stream still reads at most 4 KiB per `fread()`. Each successful
+raw chunk is copied into the current PSRAM slot until that slot is full or the
+WAV reaches its final partial block.
 
-- `audio_manager` task owns I2S TX and playback state.
-- `audio_wav` prefetch task owns `FILE`/`fread` while active.
-- The producer only writes the FREE PSRAM buffer.
-- The consumer only reads the READY/BORROWED PSRAM buffer.
-- `audio_wav_stream_close()` requests producer stop and waits for the producer
-  to leave `fread` before closing `FILE` or freeing buffers.
-- No task may free a buffer that the other task can still access.
+## Ownership Invariants
 
-## Cancellation
+- `sd_card_manager` owns mount/unmount/recovery and rejects new VFS leases while
+  recovering.
+- `audio_wav` owns exactly one SD lease, FILE, and 4 KiB Internal-RAM read
+  buffer for one open low-level stream.
+- `audio_wav_prefetch` owns the low-level stream, two PSRAM slots, queues,
+  worker task, and reopen/seek recovery state.
+- `audio_manager` owns I2S TX, playback state, and the static DMA TX staging
+  block.
+- The prefetch worker writes only a FREE slot.
+- The manager reads only a READY slot and returns it to the FREE queue after the
+  complete block has been consumed.
+- No caller closes a FILE, frees PSRAM, or deletes the worker while the reader
+  can still access those resources.
 
-`audio_manager_stop_playback()` remains cooperative.
+## SD Recovery
 
-The audio manager checks cancellation between existing 256-frame TX blocks.
-When playback exits, stream cleanup sets the prefetch STOP event. The producer
-checks STOP between each 4 KiB storage read, so cancellation does not need to
-wait for an entire 10-second prefetch operation.
+On a confirmed low-level media/VFS read failure:
 
-A pathological storage transaction that never returns can still cause the
-bounded close/manager-stop timeout. Resources are deliberately retained rather
-than force-freed in that case to avoid use-after-free.
+1. `audio_wav` reports the failure to `sd_card_manager`, closes the stale FILE,
+   and releases its lease.
+2. `audio_wav_prefetch` waits for the manager to become READY again.
+3. It opens a fresh low-level stream, verifies the WAV metadata did not change,
+   seeks to the last successfully copied data offset, and resumes filling the
+   current PSRAM slot.
+4. The current policy permits one recovery attempt per playback operation.
+
+A missing file or malformed/unsupported WAV is not treated as physical SD media
+failure.
+
+## Cancellation And Cleanup
+
+`audio_manager_stop_playback()` remains cooperative. The manager checks cancel
+between existing 256-frame TX writes. The prefetch worker checks its own stop
+request between bounded raw reads and while waiting for a FREE slot.
+
+Cleanup uses a join/acknowledgement handshake:
+
+```text
+manager requests reader STOP
+        |
+reader closes audio_wav stream / releases SD lease
+        |
+reader publishes terminal state + STOPPED
+        |
+manager acknowledges worker may leave its last EventGroup access
+        |
+reader notifies owner and deletes itself
+        |
+manager frees queues/events/PSRAM
+```
+
+A pathological VFS transaction that never returns is still a known limitation:
+resources are retained rather than force-freed while the worker may be inside
+`fread()`. Target-hardware fault testing remains required.
 
 ## Diagnostics
 
-At stream cleanup, `AUDIO_WAV` emits:
+The final `WAV_DIAG` line from `audio_manager` aggregates both playback and
+prefetch metrics, including:
 
 ```text
-WAV_PREFETCH_DIAG
-storage_reads=<count>
-max_fread_us=<maximum successful/attempted 4KiB fread duration>
-consumer_waits=<times playback reached the next buffer before it was ready>
-max_wait_us=<maximum next-buffer wait>
+read_bytes / streamed_bytes
+raw_reads / raw_read_fail / max_raw_read_us
+prefetch_block
+prefetch_fills / prefetch_fill_fail / max_prefetch_fill_us
+sd_resume_offset / sd_resume_attempt / sd_resume_ok / sd_resume_wait
+initial_wait / boundary_wait / prefetch_starve
+reader_hwm
+tx_requested / tx_written / tx_q_ovf / tx_timeout / tx_partial
 ```
 
-For nominal glitch-free playback, the strongest software-side signal is:
+For nominal playback, the strongest software-side prefetch signal is:
 
 ```text
-consumer_waits = 0
+prefetch_starve = 0
 ```
 
-`consumer_waits > 0` means the audio consumer reached a ping-pong boundary
-before the producer had the next buffer ready. This is a real prefetch
-starvation event and should be correlated with audible output and I2S metrics.
+A non-zero value means the manager reached a ping-pong boundary before another
+READY slot arrived within the bounded boundary wait. Correlate that event with
+audible output and TX diagnostics on hardware.
 
 ## Phase 11.4.4 Hardware Acceptance
 
-Test at least canonical 5 s, 30 s, and 60 s WAV files with the full Gateway
-services active.
+Hardware is still required before calling the path glitch-free or stable.
+Validate at least canonical 5 s, 10 s, 11 s, 30 s, and 60 s WAV files with the
+full Gateway services active.
 
 Expected nominal results:
 
 ```text
 WAV playback completes to EOF
-consumer_waits = 0
+read_bytes == streamed_bytes == WAV data bytes
+prefetch_starve = 0
 tx_timeout = 0
 tx_partial = 0
 tx_q_ovf = 0
-no audible gap at 10-second boundaries
+no audible gap at ping-pong boundaries
 no WDT/crash
 PLAYBACK -> IDLE
 speaker DIN returns LOW
 ```
 
-Also test cancellation:
-
-```text
-cancel near 1 s
-cancel near a 10 s buffer boundary
-cancel in the middle of a 60 s WAV
-manager stop during WAV playback
-```
-
-Expected:
-
-```text
-no stale FILE
-no leaked PSRAM buffer
-no leaked prefetch task
-no live I2S TX after cleanup
-controlled cancel returns to IDLE
-```
-
-Finally run the golden MIC regression after WAV testing:
+Also validate cancellation near a buffer boundary, manager stop/restart, SD
+removal/recovery, and the golden microphone regression:
 
 ```text
 INMP441 record -> DSP -> recorded playback
 ```
 
-The WAV prefetch change must not modify the proven microphone DSP, I2S format,
-DMA geometry, slot detection, startup discard, or recorded-audio conditioning.
+The WAV prefetch/recovery work must not modify the proven microphone DSP, I2S
+format, DMA geometry, startup discard, slot detection, or recorded-audio
+conditioning.
