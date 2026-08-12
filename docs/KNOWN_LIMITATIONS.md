@@ -30,9 +30,14 @@
 
 ### Storage
 
-- SD card removal is not detected dynamically.
-- `sd_card_manager` has no public unmount/deinit API.
-- Startup treats SD mount failure as fatal for the remaining application flow.
+- The board has no card-detect or SD power-enable GPIO. Idle physical card
+  removal and firmware power-cycling cannot be guaranteed; recovery uses a
+  best-effort idle status probe plus managed VFS I/O failures.
+- `sd_card_manager` has no public stop/deinit API; its recovery task is
+  designed for the firmware lifetime.
+- Startup no longer treats SD mount failure as fatal. The manager retries in
+  the background, but every SD VFS consumer must use its lease contract or a
+  runtime unmount would be unsafe.
 - Automatic formatting is disabled to protect card data.
 - Storage does not own offline telemetry history.
 
@@ -102,7 +107,8 @@ including:
 3. NVS encryption, flash encryption, and secure boot.
 4. Signed OTA with validation, rollback, and version policy.
 5. Runtime service stop/deinit/restart APIs.
-6. Card-detect, unmount, and storage-error recovery.
+6. Hardware card-detect and SD power control for deterministic hot-plug
+   recovery.
 7. Watchdog and health policy beyond passive diagnostics.
 8. Hardware-in-the-loop regression where practical.
 9. App Check or a project-owned authenticated backend for abuse control.
