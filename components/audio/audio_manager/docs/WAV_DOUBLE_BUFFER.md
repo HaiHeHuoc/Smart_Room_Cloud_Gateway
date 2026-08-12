@@ -3,7 +3,9 @@
 ## Goal
 
 Prevent nominal SD/FATFS latency from directly starving I2S playback while
-keeping the proven `audio_manager` TX path unchanged.
+keeping the proven `audio_manager` TX path unchanged. WAV output uses a
+stateless full-scale PCM16 map to the shared output ceiling; it does not need a
+whole-file peak scan.
 
 The production path is deliberately split into three ownership layers:
 
@@ -25,7 +27,7 @@ audio_wav_prefetch
     v
 audio_manager
   - sole I2S owner
-  - PCM16 mono -> stereo staging
+  - fixed PCM16 full-scale map -> stereo staging
   - existing TX lifecycle/diagnostics
     |
     v
@@ -53,7 +55,9 @@ next fill.
 
 The low-level stream still reads at most 4 KiB per `fread()`. Each successful
 raw chunk is copied into the current PSRAM slot until that slot is full or the
-WAV reaches its final partial block.
+WAV reaches its final partial block. There is no pre-playback scan or rewind:
+once the first slot is READY, `audio_manager` maps each PCM16 sample with
+`round(sample * 9000 / 32768)`, then applies user volume and writes I2S.
 
 ## Ownership Invariants
 
@@ -64,7 +68,7 @@ WAV reaches its final partial block.
 - `audio_wav_prefetch` owns the low-level stream, two PSRAM slots, queues,
   worker task, and reopen/seek recovery state.
 - `audio_manager` owns I2S TX, playback state, and the static DMA TX staging
-  block.
+  block. It also owns the fixed WAV full-scale-to-ceiling PCM16 map.
 - The prefetch worker writes only a FREE slot.
 - The manager reads only a READY slot and returns it to the FREE queue after the
   complete block has been consumed.
@@ -118,6 +122,7 @@ The final `WAV_DIAG` line from `audio_manager` aggregates both playback and
 prefetch metrics, including:
 
 ```text
+fixed_gain_q16 / output_peak
 read_bytes / streamed_bytes
 raw_reads / raw_read_fail / max_raw_read_us
 prefetch_block
@@ -148,6 +153,8 @@ Expected nominal results:
 
 ```text
 WAV playback completes to EOF
+fixed_gain_q16 = 18000
+output_peak <= 9000
 read_bytes == streamed_bytes == WAV data bytes
 prefetch_starve = 0
 tx_timeout = 0
@@ -166,6 +173,8 @@ removal/recovery, and the golden microphone regression:
 INMP441 record -> DSP -> recorded playback
 ```
 
-The WAV prefetch/recovery work must not modify the proven microphone DSP, I2S
-format, DMA geometry, startup discard, slot detection, or recorded-audio
-conditioning.
+The WAV prefetch/recovery work does not modify microphone DSP algorithms, I2S
+format, DMA geometry, startup discard, or slot detection. The intentional shared
+`AUDIO_DSP_OUTPUT_PEAK_CEILING_PCM16` define changes the common recorded/WAV
+output ceiling to 9000. WAV receives a fixed scalar, not per-file loudness
+normalization or a dynamic limiter.

@@ -1,4 +1,5 @@
 #include <stdbool.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -198,6 +199,37 @@ static bool test_recovery_state_closes_and_releases(void)
            !stream.sd_lease_held;
 }
 
+static bool test_fixed_full_scale_pcm16_mapping(void)
+{
+    const uint32_t target_peak_pcm16 = 9000U;
+
+    return
+        (AUDIO_WAV_PCM16_FULL_SCALE_GAIN_Q16(target_peak_pcm16) ==
+         18000U) &&
+        (audio_wav_pcm16_scale_full_range_to_peak(
+             INT16_MIN,
+             target_peak_pcm16) == -9000) &&
+        (audio_wav_pcm16_scale_full_range_to_peak(
+             INT16_MAX,
+             target_peak_pcm16) == 9000) &&
+        (audio_wav_pcm16_scale_full_range_to_peak(
+             27752,
+             target_peak_pcm16) == 7622) &&
+        (audio_wav_pcm16_scale_full_range_to_peak(
+             -27752,
+             target_peak_pcm16) == -7622) &&
+        (audio_wav_pcm16_scale_full_range_to_peak(
+             3000,
+             target_peak_pcm16) == 824) &&
+        (audio_wav_pcm16_scale_full_range_to_peak(
+             -3000,
+             target_peak_pcm16) == -824) &&
+        (audio_wav_pcm16_scale_full_range_to_peak(1000, 0U) == 0) &&
+        (audio_wav_pcm16_scale_full_range_to_peak(
+             1000,
+             AUDIO_WAV_PCM16_ABSOLUTE_MAX) == 0);
+}
+
 int main(void)
 {
     const bool bounded_ok = test_bounded_read_seek_and_close();
@@ -208,5 +240,9 @@ int main(void)
     printf("[%s] recovery-state cleanup contract\n",
            recovery_ok ? "PASS" : "FAIL");
 
-    return (bounded_ok && recovery_ok) ? 0 : 1;
+    const bool fixed_scale_ok = test_fixed_full_scale_pcm16_mapping();
+    printf("[%s] fixed full-scale PCM16 mapping\n",
+           fixed_scale_ok ? "PASS" : "FAIL");
+
+    return (bounded_ok && recovery_ok && fixed_scale_ok) ? 0 : 1;
 }
