@@ -18,8 +18,10 @@
 /**
  * @brief Small physical SD read quantum used by the target prefetch producer.
  *
- * Four KiB matches the current SDSPI transfer ceiling. The target firmware
- * repeatedly reads this amount into one of two larger PSRAM playback buffers.
+ * Four KiB matches the current SDSPI transfer ceiling. Target firmware reads
+ * through one reusable Internal/DMA staging buffer, then copies the payload
+ * into the currently free PSRAM ping-pong buffer. This avoids relying on the
+ * storage path to DMA directly into external RAM.
  */
 #define AUDIO_WAV_STORAGE_READ_BYTES  (4U * 1024U)
 
@@ -65,9 +67,10 @@ typedef struct
  * @brief One private, caller-owned bounded WAV stream.
  *
  * On ESP-IDF targets, successful open creates a private producer context with
- * two PSRAM buffers. A dedicated low-priority reader task owns FILE/fread while
- * the audio-manager task consumes one completed buffer at a time. The opaque
- * context keeps FreeRTOS implementation types out of this private interface.
+ * two PSRAM buffers plus one 4 KiB Internal/DMA storage staging buffer. A
+ * dedicated lower-priority reader task owns FILE/fread while the audio-manager
+ * task consumes one completed PSRAM buffer at a time. The opaque context keeps
+ * FreeRTOS implementation types out of this private interface.
  *
  * `file` remains non-NULL while the stream is open and `buffer` is a non-NULL
  * compatibility/validity marker used by audio_manager. Callers must not read or
@@ -121,10 +124,11 @@ esp_err_t audio_wav_parse_file(
  * @brief Open and validate one WAV source on the mounted SD VFS path.
  *
  * path must be a non-empty absolute path rooted at SD_MOUNT_POINT. On target,
- * the helper allocates two 10-second PCM16 mono buffers in PSRAM, starts one
- * private SD prefetch task, and waits for the first buffer to become ready.
- * The producer immediately fills the alternate buffer while playback consumes
- * the first one; no fixed 70-percent trigger is required.
+ * the helper allocates two 10-second PCM16 mono buffers in PSRAM, one reusable
+ * 4 KiB Internal/DMA SD staging buffer, starts one private SD prefetch task,
+ * and waits for the first PSRAM buffer to become ready. The producer
+ * immediately fills the alternate buffer while playback consumes the first
+ * one; no fixed 70-percent trigger is required.
  *
  * @return ESP_ERR_NOT_FOUND only when the path cannot be found;
  *         audio_wav_parse_file() semantics apply after fopen succeeds.
