@@ -89,7 +89,7 @@
 #define SD_MOUNT_POINT           "/sdcard"
 
 /* ESP-IDF SDSPI uses kHz; keep 1 MHz until cold-start hardware tests pass. */
-#define SD_CLOCK_KHZ (1 * 1000)
+#define SD_CLOCK_KHZ (10 * 1000)
 
 /*
 * Maximum number of files that can be opened at the same time.
