@@ -16,38 +16,16 @@
 #include "esp_err.h"
 
 /**
- * @brief Small physical SD read quantum used by the target prefetch producer.
+ * @brief Reusable raw PCM read-buffer size for one WAV stream.
  *
- * Four KiB matches the current SDSPI transfer ceiling. Target firmware reads
- * through one reusable Internal/DMA staging buffer, then copies the payload
- * into the currently free PSRAM ping-pong buffer. This avoids relying on the
- * storage path to DMA directly into external RAM.
+ * Four KiB matches the current SDSPI transfer ceiling. The low-level WAV reader
+ * remains synchronous and bounded; the separate audio_wav_prefetch layer owns
+ * the two large PSRAM playback slots and its worker task.
  */
-#define AUDIO_WAV_STORAGE_READ_BYTES  (4U * 1024U)
-
-/** @brief Duration cached by each target-side ping-pong buffer. */
-#define AUDIO_WAV_PREFETCH_SECONDS  10U
+#define AUDIO_WAV_STREAM_BUFFER_BYTES  (4U * 1024U)
 
 /** @brief Canonical PCM16 mono source byte rate: 16 kHz * 2 bytes. */
 #define AUDIO_WAV_CANONICAL_BYTE_RATE  32000U
-
-/**
- * @brief Capacity of each PSRAM ping-pong buffer.
- *
- * Each buffer stores ten seconds of canonical PCM16 mono audio. Two buffers
- * therefore reserve about 625 KiB of PSRAM while one WAV stream is open.
- */
-#define AUDIO_WAV_PREFETCH_BUFFER_BYTES  \
-    (AUDIO_WAV_CANONICAL_BYTE_RATE * AUDIO_WAV_PREFETCH_SECONDS)
-
-/**
- * @brief Host-test compatibility buffer size.
- *
- * Native parser tests do not create the ESP-IDF prefetch task. They keep the
- * original small synchronous reader so the real RIFF parser remains testable
- * without FreeRTOS/PSRAM.
- */
-#define AUDIO_WAV_STREAM_BUFFER_BYTES  AUDIO_WAV_STORAGE_READ_BYTES
 
 /** @brief Metadata retained after validating the canonical WAV format. */
 typedef struct
@@ -64,20 +42,15 @@ typedef struct
 } audio_wav_info_t;
 
 /**
- * @brief One private, caller-owned bounded WAV stream.
+ * @brief One private bounded WAV stream.
  *
- * On ESP-IDF targets, successful open creates a private producer context with
- * two PSRAM buffers plus one 4 KiB Internal/DMA storage staging buffer. A
- * dedicated lower-priority reader task owns FILE/fread while the audio-manager
- * task consumes one completed PSRAM buffer at a time. The opaque context keeps
- * FreeRTOS implementation types out of this private interface.
+ * The stream owns one FILE handle, one fixed 4 KiB Internal-RAM read buffer,
+ * and one sd_card_manager VFS lease between successful open and close. It is
+ * intentionally not thread-safe; its caller must serialize open/read/seek/close.
  *
- * `file` remains non-NULL while the stream is open and `buffer` is a non-NULL
- * compatibility/validity marker used by audio_manager. Callers must not read or
- * free either field directly.
- *
- * Native host tests use the original synchronous 4 KiB reader path so the real
- * RIFF parser can be compiled without ESP-IDF runtime headers.
+ * The higher-level audio_wav_prefetch worker is the sole runtime caller for
+ * production WAV streaming. Keeping prefetch outside this type avoids nested
+ * producer tasks and keeps SD/FATFS ownership explicit.
  */
 typedef struct
 {
@@ -86,81 +59,73 @@ typedef struct
     audio_wav_info_t info;
     uint32_t data_bytes_remaining;
     uint64_t data_bytes_read;
-    void *prefetch_context;
+    bool sd_lease_held;
 } audio_wav_stream_t;
 
-/**
- * @brief Reset a closed stream before first use or reuse.
- *
- * The caller must close an open stream before resetting it.
- */
+/** Reset a closed stream before first use or reuse. */
 void audio_wav_stream_reset(audio_wav_stream_t *stream);
 
 /**
  * @brief Validate that a path names a file below the SD VFS mount.
  *
- * This performs no filesystem access and is safe for manager command
- * validation before the path is copied. The caller still owns path.
+ * This performs no filesystem access. The caller retains ownership of path.
  */
 bool audio_wav_path_is_valid(const char *path);
 
 /**
  * @brief Parse a RIFF/WAVE file and leave its position at the data payload.
  *
- * This parser is separate from opening so fixture tests can supply a normal
- * FILE without requiring SD mount state. The caller retains ownership of file.
  * Only PCM integer, mono, 16-kHz, 16-bit little-endian WAV data is accepted.
- *
- * @return ESP_OK for a valid canonical WAV, ESP_ERR_NOT_SUPPORTED for a valid
- *         but unsupported audio format, ESP_ERR_INVALID_RESPONSE when the
- *         existing file is not RIFF/WAVE or lacks fmt/data, or a deterministic
- *         argument, size, seek, or read error.
+ * The caller retains ownership of file.
  */
 esp_err_t audio_wav_parse_file(
     FILE *file,
     audio_wav_info_t *info);
 
 /**
- * @brief Open and validate one WAV source on the mounted SD VFS path.
+ * @brief Acquire one SD VFS lease, open/validate a WAV, and allocate 4 KiB.
  *
- * path must be a non-empty absolute path rooted at SD_MOUNT_POINT. On target,
- * the helper allocates two 10-second PCM16 mono buffers in PSRAM, one reusable
- * 4 KiB Internal/DMA SD staging buffer, starts one private SD prefetch task,
- * and waits for the first PSRAM buffer to become ready. The producer
- * immediately fills the alternate buffer while playback consumes the first
- * one; no fixed 70-percent trigger is required.
- *
- * @return ESP_ERR_NOT_FOUND only when the path cannot be found;
- *         audio_wav_parse_file() semantics apply after fopen succeeds.
+ * On success the stream owns the lease until audio_wav_stream_close(). No task
+ * or PSRAM playback slot is created by this function.
  */
 esp_err_t audio_wav_stream_open(
     audio_wav_stream_t *stream,
     const char *path);
 
-/**
- * @brief Borrow the next completed PCM payload buffer.
- *
- * On target, the returned pointer refers to one complete ping-pong buffer (up
- * to ten seconds) that remains owned by the stream until the next read/close.
- * The alternate buffer is filled concurrently by the SD reader task. If the
- * consumer reaches the next buffer before it is ready, this call waits only for
- * a bounded interval and the event is recorded as a prefetch starvation.
- *
- * On ESP_OK, zero bytes_read means normal end of payload. On an I/O/prefetch
- * error, buffer and bytes_read are reset to NULL/zero.
- */
+/** Read the next payload chunk, bounded by AUDIO_WAV_STREAM_BUFFER_BYTES. */
 esp_err_t audio_wav_stream_read(
     audio_wav_stream_t *stream,
     const uint8_t **buffer,
     size_t *bytes_read);
 
 /**
- * @brief Stop prefetch, close the stream, and release all playback buffers.
+ * @brief Read at most max_bytes from the WAV data payload.
  *
- * Target cleanup cooperatively stops the producer and waits for it to leave
- * fread before closing FILE/freeing PSRAM, preventing use-after-free. This is
- * idempotent for a reset/closed stream. If the producer cannot stop within the
- * finite timeout, resources remain owned by the stream and ESP_ERR_TIMEOUT is
- * returned so the caller may retry cleanup safely.
+ * The actual physical read remains capped at AUDIO_WAV_STREAM_BUFFER_BYTES.
+ * On a confirmed media/VFS failure the helper reports recovery, closes the
+ * stale FILE, releases its SD lease, and returns the original read error so a
+ * higher-level owner can reopen a fresh stream safely.
+ */
+esp_err_t audio_wav_stream_read_limited(
+    audio_wav_stream_t *stream,
+    size_t max_bytes,
+    const uint8_t **buffer,
+    size_t *bytes_read);
+
+/**
+ * @brief Seek to one block-aligned byte offset within the WAV data payload.
+ *
+ * Used by the prefetch recovery path after reopening a fresh FILE. The offset
+ * is relative to the beginning of the data chunk, not to the RIFF file.
+ */
+esp_err_t audio_wav_stream_seek_data(
+    audio_wav_stream_t *stream,
+    uint64_t data_offset_bytes);
+
+/**
+ * @brief Close the FILE, free the bounded buffer, and release the SD lease.
+ *
+ * Idempotent for a reset/closed stream. Local ownership is released even when
+ * fclose reports an error; the close failure is also reported to SD recovery.
  */
 esp_err_t audio_wav_stream_close(audio_wav_stream_t *stream);
