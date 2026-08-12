@@ -1,6 +1,9 @@
 /**
  * @file audio_wav.c
  * @brief Private bounded RIFF/WAVE reader for the mounted SD filesystem.
+ *
+ * This file intentionally owns only the low-level synchronous WAV reader.
+ * Two-slot PSRAM prefetch belongs exclusively to audio_wav_prefetch.c.
  */
 
 /* Includes ----------------------------------------------------------------- */
@@ -9,7 +12,6 @@
 #include <errno.h>
 #include <limits.h>
 #include <stdbool.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "board_config.h"
@@ -18,72 +20,19 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 
-#ifdef ESP_PLATFORM
-#include "esp_memory_utils.h"
-#include "esp_timer.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/event_groups.h"
-#include "freertos/task.h"
-#endif
-
 /* Macros ------------------------------------------------------------------- */
 #define AUDIO_WAV_RIFF_HEADER_BYTES       12U
 #define AUDIO_WAV_CHUNK_HEADER_BYTES       8U
-#define AUDIO_WAV_FMT_MIN_BYTES            16U
-#define AUDIO_WAV_PCM_FORMAT                1U
-#define AUDIO_WAV_MONO_CHANNELS             1U
+#define AUDIO_WAV_FMT_MIN_BYTES           16U
+#define AUDIO_WAV_PCM_FORMAT               1U
+#define AUDIO_WAV_MONO_CHANNELS            1U
 #define AUDIO_WAV_SAMPLE_RATE_HZ        16000U
-#define AUDIO_WAV_BITS_PER_SAMPLE          16U
-#define AUDIO_WAV_BLOCK_ALIGN_BYTES         2U
+#define AUDIO_WAV_BITS_PER_SAMPLE         16U
+#define AUDIO_WAV_BLOCK_ALIGN_BYTES        2U
 #define AUDIO_WAV_BYTE_RATE             AUDIO_WAV_CANONICAL_BYTE_RATE
-
-#ifdef ESP_PLATFORM
-#define AUDIO_WAV_PREFETCH_BUFFER_COUNT        2U
-#define AUDIO_WAV_PREFETCH_TASK_NAME          "wav_prefetch"
-#define AUDIO_WAV_PREFETCH_TASK_STACK_SIZE    4096U
-#define AUDIO_WAV_PREFETCH_TASK_PRIORITY         4U
-#define AUDIO_WAV_PREFETCH_START_TIMEOUT_MS   5000U
-#define AUDIO_WAV_PREFETCH_WAIT_TIMEOUT_MS    5000U
-#define AUDIO_WAV_PREFETCH_STOP_TIMEOUT_MS    5000U
-#define AUDIO_WAV_PREFETCH_STALL_WARN_US      2000U
-
-#define AUDIO_WAV_EVENT_BUFFER0_FREE  ((EventBits_t)(1U << 0U))
-#define AUDIO_WAV_EVENT_BUFFER1_FREE  ((EventBits_t)(1U << 1U))
-#define AUDIO_WAV_EVENT_BUFFER0_READY ((EventBits_t)(1U << 2U))
-#define AUDIO_WAV_EVENT_BUFFER1_READY ((EventBits_t)(1U << 3U))
-#define AUDIO_WAV_EVENT_STOP          ((EventBits_t)(1U << 4U))
-#define AUDIO_WAV_EVENT_DONE          ((EventBits_t)(1U << 5U))
-
-#define AUDIO_WAV_EVENT_ALL_FREE \
-    (AUDIO_WAV_EVENT_BUFFER0_FREE | AUDIO_WAV_EVENT_BUFFER1_FREE)
-#endif
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "AUDIO_WAV";
-
-#ifdef ESP_PLATFORM
-/* Type Definitions --------------------------------------------------------- */
-typedef struct
-{
-    FILE *file;
-    uint8_t *buffers[AUDIO_WAV_PREFETCH_BUFFER_COUNT];
-    uint8_t *storage_staging;
-    size_t filled_bytes[AUDIO_WAV_PREFETCH_BUFFER_COUNT];
-    EventGroupHandle_t events;
-    TaskHandle_t producer_task;
-
-    uint32_t producer_bytes_remaining;
-    uint8_t producer_index;
-    uint8_t consumer_index;
-    int8_t borrowed_index;
-    esp_err_t producer_result;
-
-    uint32_t storage_read_count;
-    uint32_t max_storage_read_duration_us;
-    uint32_t consumer_wait_count;
-    uint32_t max_consumer_wait_duration_us;
-} audio_wav_prefetch_context_t;
-#endif
 
 /* Function Prototypes ------------------------------------------------------ */
 static uint16_t audio_wav_read_le16(const uint8_t *bytes);
@@ -100,35 +49,9 @@ static esp_err_t audio_wav_get_file_size(
     uint64_t *file_size);
 static esp_err_t audio_wav_validate_format(audio_wav_info_t *info);
 static esp_err_t audio_wav_open_error_from_errno(int error_number);
-
-#ifdef ESP_PLATFORM
-static EventBits_t audio_wav_free_bit(uint8_t index);
-static EventBits_t audio_wav_ready_bit(uint8_t index);
-static uint32_t audio_wav_bound_duration_us(int64_t duration_us);
-static bool audio_wav_prefetch_stop_requested(
-    const audio_wav_prefetch_context_t *context);
-static esp_err_t audio_wav_prefetch_fill_buffer(
-    audio_wav_prefetch_context_t *context,
-    uint8_t index,
-    size_t target_bytes);
-static void audio_wav_prefetch_task(void *argument);
-static void audio_wav_prefetch_free_context(
-    audio_wav_prefetch_context_t *context);
-static esp_err_t audio_wav_prefetch_wait_first_buffer(
-    audio_wav_stream_t *stream);
-static void audio_wav_prefetch_release_borrowed(
-    audio_wav_prefetch_context_t *context);
-static esp_err_t audio_wav_stream_open_target(
-    audio_wav_stream_t *stream,
-    FILE *file,
-    const audio_wav_info_t *info,
-    const char *path);
-static esp_err_t audio_wav_stream_read_target(
-    audio_wav_stream_t *stream,
-    const uint8_t **buffer,
-    size_t *bytes_read);
-static esp_err_t audio_wav_stream_close_target(audio_wav_stream_t *stream);
-#endif
+static void audio_wav_report_media_error_if_needed(
+    esp_err_t result,
+    int error_number);
 
 /* Static Functions --------------------------------------------------------- */
 static uint16_t audio_wav_read_le16(const uint8_t *bytes)
@@ -178,12 +101,9 @@ static esp_err_t audio_wav_seek_absolute(
         return ESP_ERR_NOT_SUPPORTED;
     }
 
-    if (fseek(file, (long)offset, SEEK_SET) != 0)
-    {
-        return ESP_FAIL;
-    }
-
-    return ESP_OK;
+    return (fseek(file, (long)offset, SEEK_SET) == 0)
+               ? ESP_OK
+               : ESP_FAIL;
 }
 
 static esp_err_t audio_wav_get_file_size(
@@ -213,22 +133,6 @@ static esp_err_t audio_wav_get_file_size(
 
     *file_size = (uint64_t)end_offset;
     return ESP_OK;
-}
-
-bool audio_wav_path_is_valid(const char *path)
-{
-    if ((path == NULL) || (path[0] == '\0'))
-    {
-        return false;
-    }
-
-    const size_t mount_length = strlen(SD_MOUNT_POINT);
-    if (strncmp(path, SD_MOUNT_POINT, mount_length) != 0)
-    {
-        return false;
-    }
-
-    return (path[mount_length] == '/') && (path[mount_length + 1U] != '\0');
 }
 
 static esp_err_t audio_wav_validate_format(audio_wav_info_t *info)
@@ -265,526 +169,28 @@ static esp_err_t audio_wav_open_error_from_errno(int error_number)
     return ESP_FAIL;
 }
 
-#ifdef ESP_PLATFORM
-static EventBits_t audio_wav_free_bit(uint8_t index)
+static void audio_wav_report_media_error_if_needed(
+    esp_err_t result,
+    int error_number)
 {
-    return (index == 0U)
-        ? AUDIO_WAV_EVENT_BUFFER0_FREE
-        : AUDIO_WAV_EVENT_BUFFER1_FREE;
-}
-
-static EventBits_t audio_wav_ready_bit(uint8_t index)
-{
-    return (index == 0U)
-        ? AUDIO_WAV_EVENT_BUFFER0_READY
-        : AUDIO_WAV_EVENT_BUFFER1_READY;
-}
-
-static uint32_t audio_wav_bound_duration_us(int64_t duration_us)
-{
-    if (duration_us <= 0)
-    {
-        return 0U;
-    }
-
-    return ((uint64_t)duration_us > UINT32_MAX)
-        ? UINT32_MAX
-        : (uint32_t)duration_us;
-}
-
-static bool audio_wav_prefetch_stop_requested(
-    const audio_wav_prefetch_context_t *context)
-{
-    if ((context == NULL) || (context->events == NULL))
-    {
-        return true;
-    }
-
-    return (xEventGroupGetBits(context->events) & AUDIO_WAV_EVENT_STOP) != 0U;
-}
-
-static esp_err_t audio_wav_prefetch_fill_buffer(
-    audio_wav_prefetch_context_t *context,
-    uint8_t index,
-    size_t target_bytes)
-{
-    if ((context == NULL) ||
-        (context->file == NULL) ||
-        (index >= AUDIO_WAV_PREFETCH_BUFFER_COUNT) ||
-        (context->buffers[index] == NULL) ||
-        (context->storage_staging == NULL) ||
-        (target_bytes == 0U) ||
-        (target_bytes > AUDIO_WAV_PREFETCH_BUFFER_BYTES))
-    {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    size_t filled = 0U;
-    while (filled < target_bytes)
-    {
-        if (audio_wav_prefetch_stop_requested(context))
-        {
-            return ESP_ERR_INVALID_STATE;
-        }
-
-        if (!sd_card_manager_is_mounted())
-        {
-            return ESP_ERR_INVALID_STATE;
-        }
-
-        size_t read_bytes = target_bytes - filled;
-        if (read_bytes > AUDIO_WAV_STORAGE_READ_BYTES)
-        {
-            read_bytes = AUDIO_WAV_STORAGE_READ_BYTES;
-        }
-
-        const int64_t read_start_us = esp_timer_get_time();
-        const size_t received = fread(
-            context->storage_staging,
-            1U,
-            read_bytes,
-            context->file);
-        const uint32_t duration_us = audio_wav_bound_duration_us(
-            esp_timer_get_time() - read_start_us);
-
-        ++context->storage_read_count;
-        if (duration_us > context->max_storage_read_duration_us)
-        {
-            context->max_storage_read_duration_us = duration_us;
-        }
-
-        if (received != read_bytes)
-        {
-            return ferror(context->file) ? ESP_FAIL : ESP_ERR_INVALID_SIZE;
-        }
-
-        memcpy(
-            &context->buffers[index][filled],
-            context->storage_staging,
-            received);
-        filled += received;
-    }
-
-    context->filled_bytes[index] = filled;
-    return ESP_OK;
-}
-
-static void audio_wav_prefetch_task(void *argument)
-{
-    audio_wav_prefetch_context_t *const context =
-        (audio_wav_prefetch_context_t *)argument;
-
-    if ((context == NULL) || (context->events == NULL))
-    {
-        vTaskDelete(NULL);
-        return;
-    }
-
-    esp_err_t result = ESP_OK;
-
-    while ((context->producer_bytes_remaining > 0U) &&
-           !audio_wav_prefetch_stop_requested(context))
-    {
-        const uint8_t index = context->producer_index;
-        const EventBits_t free_bit = audio_wav_free_bit(index);
-
-        const EventBits_t bits = xEventGroupWaitBits(
-            context->events,
-            free_bit | AUDIO_WAV_EVENT_STOP,
-            pdFALSE,
-            pdFALSE,
-            portMAX_DELAY);
-
-        if ((bits & AUDIO_WAV_EVENT_STOP) != 0U)
-        {
-            break;
-        }
-
-        if ((bits & free_bit) == 0U)
-        {
-            result = ESP_FAIL;
-            break;
-        }
-
-        (void)xEventGroupClearBits(context->events, free_bit);
-
-        size_t target_bytes = context->producer_bytes_remaining;
-        if (target_bytes > AUDIO_WAV_PREFETCH_BUFFER_BYTES)
-        {
-            target_bytes = AUDIO_WAV_PREFETCH_BUFFER_BYTES;
-        }
-
-        result = audio_wav_prefetch_fill_buffer(context, index, target_bytes);
-        if (result != ESP_OK)
-        {
-            if (audio_wav_prefetch_stop_requested(context))
-            {
-                result = ESP_OK;
-            }
-            break;
-        }
-
-        context->producer_bytes_remaining -= (uint32_t)target_bytes;
-        (void)xEventGroupSetBits(context->events, audio_wav_ready_bit(index));
-        context->producer_index ^= 1U;
-    }
-
-    context->producer_result = result;
-    context->producer_task = NULL;
-    (void)xEventGroupSetBits(context->events, AUDIO_WAV_EVENT_DONE);
-    vTaskDelete(NULL);
-}
-
-static void audio_wav_prefetch_free_context(
-    audio_wav_prefetch_context_t *context)
-{
-    if (context == NULL)
+    if (result == ESP_OK)
     {
         return;
     }
 
-    if (context->events != NULL)
+    /*
+     * newlib/FatFs does not always preserve a useful errno after ferror().
+     * A generic ESP_FAIL with errno==0 is therefore still a confirmed stream
+     * I/O failure. Expected structural errors such as truncated data are not
+     * reported through this helper.
+     */
+    if ((result == ESP_FAIL) &&
+        ((error_number == 0) ||
+         sd_card_manager_is_vfs_media_error(error_number)))
     {
-        vEventGroupDelete(context->events);
-        context->events = NULL;
+        sd_card_manager_report_io_error(result);
     }
-
-    heap_caps_free(context->storage_staging);
-    context->storage_staging = NULL;
-
-    for (uint8_t index = 0U;
-         index < AUDIO_WAV_PREFETCH_BUFFER_COUNT;
-         ++index)
-    {
-        heap_caps_free(context->buffers[index]);
-        context->buffers[index] = NULL;
-    }
-
-    heap_caps_free(context);
 }
-
-static esp_err_t audio_wav_prefetch_wait_first_buffer(
-    audio_wav_stream_t *stream)
-{
-    if ((stream == NULL) || (stream->prefetch_context == NULL))
-    {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    audio_wav_prefetch_context_t *const context =
-        (audio_wav_prefetch_context_t *)stream->prefetch_context;
-
-    const EventBits_t bits = xEventGroupWaitBits(
-        context->events,
-        AUDIO_WAV_EVENT_BUFFER0_READY | AUDIO_WAV_EVENT_DONE,
-        pdFALSE,
-        pdFALSE,
-        pdMS_TO_TICKS(AUDIO_WAV_PREFETCH_START_TIMEOUT_MS));
-
-    if ((bits & AUDIO_WAV_EVENT_BUFFER0_READY) != 0U)
-    {
-        return ESP_OK;
-    }
-
-    if ((bits & AUDIO_WAV_EVENT_DONE) != 0U)
-    {
-        return (context->producer_result != ESP_OK)
-            ? context->producer_result
-            : ESP_ERR_INVALID_RESPONSE;
-    }
-
-    return ESP_ERR_TIMEOUT;
-}
-
-static void audio_wav_prefetch_release_borrowed(
-    audio_wav_prefetch_context_t *context)
-{
-    if ((context == NULL) ||
-        (context->events == NULL) ||
-        (context->borrowed_index < 0))
-    {
-        return;
-    }
-
-    const uint8_t index = (uint8_t)context->borrowed_index;
-    context->filled_bytes[index] = 0U;
-    context->borrowed_index = -1;
-    (void)xEventGroupSetBits(context->events, audio_wav_free_bit(index));
-}
-
-static esp_err_t audio_wav_stream_open_target(
-    audio_wav_stream_t *stream,
-    FILE *file,
-    const audio_wav_info_t *info,
-    const char *path)
-{
-    if ((stream == NULL) || (file == NULL) || (info == NULL) || (path == NULL))
-    {
-        if (file != NULL)
-        {
-            (void)fclose(file);
-        }
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    audio_wav_prefetch_context_t *const context =
-        (audio_wav_prefetch_context_t *)heap_caps_calloc(
-            1U,
-            sizeof(audio_wav_prefetch_context_t),
-            MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (context == NULL)
-    {
-        (void)fclose(file);
-        return ESP_ERR_NO_MEM;
-    }
-
-    context->file = file;
-    context->producer_bytes_remaining = info->data_size_bytes;
-    context->producer_result = ESP_OK;
-    context->borrowed_index = -1;
-
-    for (uint8_t index = 0U;
-         index < AUDIO_WAV_PREFETCH_BUFFER_COUNT;
-         ++index)
-    {
-        context->buffers[index] = (uint8_t *)heap_caps_malloc(
-            AUDIO_WAV_PREFETCH_BUFFER_BYTES,
-            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-
-        if ((context->buffers[index] == NULL) ||
-            !esp_ptr_external_ram(context->buffers[index]))
-        {
-            audio_wav_prefetch_free_context(context);
-            (void)fclose(file);
-            return ESP_ERR_NO_MEM;
-        }
-    }
-
-    context->storage_staging = (uint8_t *)heap_caps_malloc(
-        AUDIO_WAV_STORAGE_READ_BYTES,
-        MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
-    if (context->storage_staging == NULL)
-    {
-        audio_wav_prefetch_free_context(context);
-        (void)fclose(file);
-        return ESP_ERR_NO_MEM;
-    }
-
-    context->events = xEventGroupCreate();
-    if (context->events == NULL)
-    {
-        audio_wav_prefetch_free_context(context);
-        (void)fclose(file);
-        return ESP_ERR_NO_MEM;
-    }
-
-    (void)xEventGroupSetBits(context->events, AUDIO_WAV_EVENT_ALL_FREE);
-
-    audio_wav_stream_reset(stream);
-    stream->file = file;
-    stream->buffer = context->buffers[0];
-    stream->info = *info;
-    stream->data_bytes_remaining = info->data_size_bytes;
-    stream->prefetch_context = context;
-
-    const BaseType_t task_result = xTaskCreate(
-        audio_wav_prefetch_task,
-        AUDIO_WAV_PREFETCH_TASK_NAME,
-        AUDIO_WAV_PREFETCH_TASK_STACK_SIZE,
-        context,
-        AUDIO_WAV_PREFETCH_TASK_PRIORITY,
-        &context->producer_task);
-    if (task_result != pdPASS)
-    {
-        stream->file = NULL;
-        stream->buffer = NULL;
-        stream->prefetch_context = NULL;
-        audio_wav_prefetch_free_context(context);
-        (void)fclose(file);
-        return ESP_ERR_NO_MEM;
-    }
-
-    const esp_err_t ready_result = audio_wav_prefetch_wait_first_buffer(stream);
-    if (ready_result != ESP_OK)
-    {
-        ESP_LOGW(
-            TAG,
-            "Initial WAV prefetch failed path=%s error=%s",
-            path,
-            esp_err_to_name(ready_result));
-        const esp_err_t close_result = audio_wav_stream_close_target(stream);
-        if (close_result != ESP_OK)
-        {
-            ESP_LOGW(
-                TAG,
-                "Cleanup after initial prefetch failure: %s",
-                esp_err_to_name(close_result));
-        }
-        return ready_result;
-    }
-
-    ESP_LOGI(
-        TAG,
-        "WAV ping-pong prefetch ready: buffers=2 each=%uB (~%us) total_psram=%uB sd_stage=%uB path=%s",
-        (unsigned)AUDIO_WAV_PREFETCH_BUFFER_BYTES,
-        (unsigned)AUDIO_WAV_PREFETCH_SECONDS,
-        (unsigned)(AUDIO_WAV_PREFETCH_BUFFER_BYTES *
-                   AUDIO_WAV_PREFETCH_BUFFER_COUNT),
-        (unsigned)AUDIO_WAV_STORAGE_READ_BYTES,
-        path);
-
-    return ESP_OK;
-}
-
-static esp_err_t audio_wav_stream_read_target(
-    audio_wav_stream_t *stream,
-    const uint8_t **buffer,
-    size_t *bytes_read)
-{
-    audio_wav_prefetch_context_t *const context =
-        (audio_wav_prefetch_context_t *)stream->prefetch_context;
-    if ((context == NULL) || (context->events == NULL))
-    {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    audio_wav_prefetch_release_borrowed(context);
-
-    if (stream->data_bytes_remaining == 0U)
-    {
-        return ESP_OK;
-    }
-
-    const uint8_t index = context->consumer_index;
-    const EventBits_t ready_bit = audio_wav_ready_bit(index);
-    const EventBits_t before_bits = xEventGroupGetBits(context->events);
-    const bool was_ready = (before_bits & ready_bit) != 0U;
-    const int64_t wait_start_us = esp_timer_get_time();
-
-    const EventBits_t bits = xEventGroupWaitBits(
-        context->events,
-        ready_bit | AUDIO_WAV_EVENT_DONE,
-        pdFALSE,
-        pdFALSE,
-        pdMS_TO_TICKS(AUDIO_WAV_PREFETCH_WAIT_TIMEOUT_MS));
-
-    const uint32_t wait_duration_us = audio_wav_bound_duration_us(
-        esp_timer_get_time() - wait_start_us);
-
-    if (!was_ready)
-    {
-        ++context->consumer_wait_count;
-        if (wait_duration_us > context->max_consumer_wait_duration_us)
-        {
-            context->max_consumer_wait_duration_us = wait_duration_us;
-        }
-
-        if (wait_duration_us >= AUDIO_WAV_PREFETCH_STALL_WARN_US)
-        {
-            ESP_LOGW(
-                TAG,
-                "WAV prefetch starvation: buffer=%u wait=%uus",
-                (unsigned)index,
-                (unsigned)wait_duration_us);
-        }
-    }
-
-    if ((bits & ready_bit) == 0U)
-    {
-        if ((bits & AUDIO_WAV_EVENT_DONE) != 0U)
-        {
-            return (context->producer_result != ESP_OK)
-                ? context->producer_result
-                : ESP_ERR_INVALID_SIZE;
-        }
-
-        return ESP_ERR_TIMEOUT;
-    }
-
-    (void)xEventGroupClearBits(context->events, ready_bit);
-
-    const size_t available_bytes = context->filled_bytes[index];
-    if ((available_bytes == 0U) ||
-        (available_bytes > stream->data_bytes_remaining) ||
-        ((available_bytes % AUDIO_WAV_BLOCK_ALIGN_BYTES) != 0U))
-    {
-        return ESP_ERR_INVALID_SIZE;
-    }
-
-    context->borrowed_index = (int8_t)index;
-    context->consumer_index ^= 1U;
-
-    stream->data_bytes_remaining -= (uint32_t)available_bytes;
-    stream->data_bytes_read += available_bytes;
-    stream->buffer = context->buffers[index];
-    *buffer = context->buffers[index];
-    *bytes_read = available_bytes;
-    return ESP_OK;
-}
-
-static esp_err_t audio_wav_stream_close_target(audio_wav_stream_t *stream)
-{
-    audio_wav_prefetch_context_t *const context =
-        (audio_wav_prefetch_context_t *)stream->prefetch_context;
-
-    if (context == NULL)
-    {
-        esp_err_t result = ESP_OK;
-        if ((stream->file != NULL) && (fclose(stream->file) != 0))
-        {
-            result = ESP_FAIL;
-        }
-        audio_wav_stream_reset(stream);
-        return result;
-    }
-
-    (void)xEventGroupSetBits(context->events, AUDIO_WAV_EVENT_STOP);
-
-    const EventBits_t bits = xEventGroupWaitBits(
-        context->events,
-        AUDIO_WAV_EVENT_DONE,
-        pdFALSE,
-        pdTRUE,
-        pdMS_TO_TICKS(AUDIO_WAV_PREFETCH_STOP_TIMEOUT_MS));
-
-    if ((bits & AUDIO_WAV_EVENT_DONE) == 0U)
-    {
-        ESP_LOGE(
-            TAG,
-            "WAV prefetch task did not stop within %ums; resources retained",
-            (unsigned)AUDIO_WAV_PREFETCH_STOP_TIMEOUT_MS);
-        return ESP_ERR_TIMEOUT;
-    }
-
-    ESP_LOGI(
-        TAG,
-        "WAV_PREFETCH_DIAG storage_reads=%u max_fread_us=%u consumer_waits=%u max_wait_us=%u",
-        (unsigned)context->storage_read_count,
-        (unsigned)context->max_storage_read_duration_us,
-        (unsigned)context->consumer_wait_count,
-        (unsigned)context->max_consumer_wait_duration_us);
-
-    esp_err_t result = context->producer_result;
-    if ((result == ESP_ERR_INVALID_STATE) &&
-        ((xEventGroupGetBits(context->events) & AUDIO_WAV_EVENT_STOP) != 0U))
-    {
-        result = ESP_OK;
-    }
-
-    if ((stream->file != NULL) && (fclose(stream->file) != 0))
-    {
-        ESP_LOGW(TAG, "Failed to close WAV file: errno=%d", errno);
-        if (result == ESP_OK)
-        {
-            result = ESP_FAIL;
-        }
-    }
-
-    audio_wav_prefetch_free_context(context);
-    audio_wav_stream_reset(stream);
-    return result;
-}
-#endif
 
 /* Functions ---------------------------------------------------------------- */
 void audio_wav_stream_reset(audio_wav_stream_t *stream)
@@ -793,6 +199,23 @@ void audio_wav_stream_reset(audio_wav_stream_t *stream)
     {
         memset(stream, 0, sizeof(*stream));
     }
+}
+
+bool audio_wav_path_is_valid(const char *path)
+{
+    if ((path == NULL) || (path[0] == '\0'))
+    {
+        return false;
+    }
+
+    const size_t mount_length = strlen(SD_MOUNT_POINT);
+    if (strncmp(path, SD_MOUNT_POINT, mount_length) != 0)
+    {
+        return false;
+    }
+
+    return (path[mount_length] == '/') &&
+           (path[mount_length + 1U] != '\0');
 }
 
 esp_err_t audio_wav_parse_file(
@@ -942,6 +365,7 @@ esp_err_t audio_wav_parse_file(
 
     if (!found_format || !found_data)
     {
+        /* Existing file, malformed RIFF/WAVE structure. */
         return ESP_ERR_INVALID_RESPONSE;
     }
 
@@ -968,7 +392,7 @@ esp_err_t audio_wav_stream_open(
 
     if ((stream->file != NULL) ||
         (stream->buffer != NULL) ||
-        (stream->prefetch_context != NULL))
+        stream->sd_lease_held)
     {
         return ESP_ERR_INVALID_STATE;
     }
@@ -1002,12 +426,10 @@ esp_err_t audio_wav_stream_open(
     if (setvbuf(file, NULL, _IONBF, 0) != 0)
     {
         ESP_LOGW(TAG, "Failed to configure unbuffered WAV I/O: %s", path);
-
         if (fclose(file) != 0)
         {
             sd_card_manager_report_io_error(ESP_FAIL);
         }
-
         sd_card_manager_release();
         return ESP_FAIL;
     }
@@ -1016,34 +438,28 @@ esp_err_t audio_wav_stream_open(
     esp_err_t result = audio_wav_parse_file(file, &info);
     if (result != ESP_OK)
     {
+        const int parse_errno = errno;
+        const bool parse_io_error = ferror(file) || (result == ESP_FAIL);
+
         ESP_LOGW(
             TAG,
             "Rejected WAV %s: %s",
             path,
             esp_err_to_name(result));
 
-        const bool parse_io_error = ferror(file) || (result == ESP_FAIL);
+        if (parse_io_error)
+        {
+            audio_wav_report_media_error_if_needed(ESP_FAIL, parse_errno);
+        }
+
         if (fclose(file) != 0)
         {
             sd_card_manager_report_io_error(ESP_FAIL);
         }
-        else if (parse_io_error)
-        {
-            sd_card_manager_report_io_error(ESP_FAIL);
-        }
-
         sd_card_manager_release();
         return result;
     }
 
-#ifdef ESP_PLATFORM
-    /* Target helper takes ownership of FILE on entry, including every failure. */
-    result = audio_wav_stream_open_target(stream, file, &info, path);
-    if (result != ESP_OK)
-    {
-        return result;
-    }
-#else
     uint8_t *const buffer = (uint8_t *)heap_caps_malloc(
         AUDIO_WAV_STREAM_BUFFER_BYTES,
         MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
@@ -1053,7 +469,6 @@ esp_err_t audio_wav_stream_open(
         {
             sd_card_manager_report_io_error(ESP_FAIL);
         }
-
         sd_card_manager_release();
         return ESP_ERR_NO_MEM;
     }
@@ -1063,11 +478,12 @@ esp_err_t audio_wav_stream_open(
     stream->buffer = buffer;
     stream->info = info;
     stream->data_bytes_remaining = info.data_size_bytes;
-#endif
+    stream->data_bytes_read = 0U;
+    stream->sd_lease_held = true;
 
     ESP_LOGI(
         TAG,
-        "WAV opened path=%s fmt=%u ch=%u rate=%u bits=%u data_offset=%ld data_bytes=%u duration=%ums",
+        "WAV opened path=%s fmt=%u ch=%u rate=%u bits=%u data_offset=%ld data_bytes=%u duration=%ums raw_buffer=%uB",
         path,
         (unsigned)info.audio_format,
         (unsigned)info.channels,
@@ -1075,7 +491,8 @@ esp_err_t audio_wav_stream_open(
         (unsigned)info.bits_per_sample,
         info.data_offset,
         (unsigned)info.data_size_bytes,
-        (unsigned)info.duration_ms);
+        (unsigned)info.duration_ms,
+        (unsigned)AUDIO_WAV_STREAM_BUFFER_BYTES);
 
     return ESP_OK;
 }
@@ -1098,8 +515,8 @@ esp_err_t audio_wav_stream_read_limited(
     const uint8_t **buffer,
     size_t *bytes_read)
 {
-    if ((stream == NULL) || (max_bytes == 0U) || (buffer == NULL) ||
-        (bytes_read == NULL))
+    if ((stream == NULL) || (max_bytes == 0U) ||
+        (buffer == NULL) || (bytes_read == NULL))
     {
         return ESP_ERR_INVALID_ARG;
     }
@@ -1107,37 +524,28 @@ esp_err_t audio_wav_stream_read_limited(
     *buffer = NULL;
     *bytes_read = 0U;
 
-    if ((stream->file == NULL) || (stream->buffer == NULL))
+    if ((stream->file == NULL) ||
+        (stream->buffer == NULL) ||
+        !stream->sd_lease_held)
     {
         return ESP_ERR_INVALID_STATE;
     }
 
-#ifdef ESP_PLATFORM
-    const esp_err_t target_result = audio_wav_stream_read_target(
-        stream,
-        buffer,
-        bytes_read);
-    if (target_result != ESP_OK)
+    /*
+     * READY is the only state that accepts/keeps normal managed I/O. If another
+     * consumer has already reported a media failure, recovery will have moved
+     * away from READY and is waiting for this lease to drain.
+     */
+    if (!sd_card_manager_is_mounted())
     {
-        ESP_LOGW(
-            TAG,
-            "WAV prefetch read failed: %s",
-            esp_err_to_name(target_result));
         const esp_err_t close_result = audio_wav_stream_close(stream);
         if (close_result != ESP_OK)
         {
             ESP_LOGW(
                 TAG,
-                "WAV cleanup after prefetch read failure failed: %s",
+                "WAV close while SD recovery was pending failed: %s",
                 esp_err_to_name(close_result));
         }
-    }
-    return target_result;
-#else
-    if (!sd_card_manager_is_mounted())
-    {
-        const esp_err_t close_result = audio_wav_stream_close(stream);
-        (void)close_result;
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -1156,25 +564,45 @@ esp_err_t audio_wav_stream_read_limited(
         requested_bytes = AUDIO_WAV_STREAM_BUFFER_BYTES;
     }
 
-    const uint64_t committed_data_offset = stream->data_bytes_read;
-    const uint64_t absolute_file_offset =
-        (uint64_t)stream->info.data_offset + committed_data_offset;
     errno = 0;
     const size_t received_bytes = fread(
         stream->buffer,
         1U,
         requested_bytes,
         stream->file);
+
     if (received_bytes != requested_bytes)
     {
         const int read_errno = errno;
         const bool io_error = ferror(stream->file);
-        const bool end_of_file = feof(stream->file);
-        const esp_err_t result = io_error
-                                     ? ESP_FAIL
-                                     : ESP_ERR_INVALID_SIZE;
+        const esp_err_t result = io_error ? ESP_FAIL : ESP_ERR_INVALID_SIZE;
+
+        ESP_LOGW(
+            TAG,
+            "WAV read failed: requested=%u received=%u errno=%d error=%s",
+            (unsigned)requested_bytes,
+            (unsigned)received_bytes,
+            read_errno,
+            esp_err_to_name(result));
+
+        if (io_error)
+        {
+            audio_wav_report_media_error_if_needed(result, read_errno);
+        }
+
+        /*
+         * Close the sticky FILE and release the VFS lease before returning.
+         * The higher-level prefetch worker may then wait for remount, reopen a
+         * fresh FILE, verify metadata, and seek to data_bytes_read.
+         */
         const esp_err_t close_result = audio_wav_stream_close(stream);
-        (void)close_result;
+        if (close_result != ESP_OK)
+        {
+            ESP_LOGW(
+                TAG,
+                "WAV cleanup after read failure failed: %s",
+                esp_err_to_name(close_result));
+        }
         return result;
     }
 
@@ -1183,7 +611,6 @@ esp_err_t audio_wav_stream_read_limited(
     *buffer = stream->buffer;
     *bytes_read = received_bytes;
     return ESP_OK;
-#endif
 }
 
 esp_err_t audio_wav_stream_seek_data(
@@ -1204,6 +631,7 @@ esp_err_t audio_wav_stream_seek_data(
 
     const uint64_t absolute_offset =
         (uint64_t)stream->info.data_offset + data_offset_bytes;
+
     errno = 0;
     const esp_err_t result = audio_wav_seek_absolute(
         stream->file,
@@ -1219,12 +647,7 @@ esp_err_t audio_wav_stream_seek_data(
             seek_errno,
             esp_err_to_name(result));
 
-        if ((result == ESP_FAIL) &&
-            ((seek_errno == 0) ||
-             sd_card_manager_is_vfs_media_error(seek_errno)))
-        {
-            sd_card_manager_report_io_error(result);
-        }
+        audio_wav_report_media_error_if_needed(result, seek_errno);
         return result;
     }
 
@@ -1241,22 +664,21 @@ esp_err_t audio_wav_stream_close(audio_wav_stream_t *stream)
         return ESP_ERR_INVALID_ARG;
     }
 
-#ifdef ESP_PLATFORM
-    if (stream->prefetch_context != NULL)
-    {
-        return audio_wav_stream_close_target(stream);
-    }
-#endif
-
     esp_err_t result = ESP_OK;
-    if ((stream->file != NULL) && (fclose(stream->file) != 0))
+    const bool lease_held = stream->sd_lease_held;
+
+    if (stream->file != NULL)
     {
-        ESP_LOGW(TAG, "Failed to close WAV file: errno=%d", errno);
-        result = ESP_FAIL;
-        sd_card_manager_report_io_error(result);
+        errno = 0;
+        if (fclose(stream->file) != 0)
+        {
+            const int close_errno = errno;
+            ESP_LOGW(TAG, "Failed to close WAV file: errno=%d", close_errno);
+            result = ESP_FAIL;
+            audio_wav_report_media_error_if_needed(result, close_errno);
+        }
     }
 
-    const bool lease_held = stream->sd_lease_held;
     heap_caps_free(stream->buffer);
     audio_wav_stream_reset(stream);
 
