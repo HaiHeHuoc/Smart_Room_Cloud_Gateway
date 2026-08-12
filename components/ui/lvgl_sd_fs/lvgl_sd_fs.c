@@ -4,9 +4,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
+#include <stdlib.h>
 
 #include "esp_log.h"
-#include "esp_check.h"
 #include "esp_err.h"
 
 #include "board_config.h"
@@ -24,6 +24,16 @@ static const char *const TAG = "LVGL_SD_FS";
 /* Static Variables --------------------------------------------------------- */
 static lv_fs_drv_t s_lvgl_sd_fs_drv;
 static bool s_lvgl_sd_fs_registered = false;
+
+/*
+ * LVGL sees this as an opaque file pointer. Keeping the lease beside FILE
+ * prevents SD recovery from unmounting VFS while LVGL still owns an asset.
+ */
+typedef struct
+{
+    FILE *file;
+    bool sd_lease_held;
+} lvgl_sd_fs_file_t;
 
 /* Function Prototypes ------------------------------------------------------ */
 static bool lvgl_sd_fs_build_full_path(
@@ -109,11 +119,12 @@ static bool lvgl_sd_fs_build_full_path(const char *lvgl_path,
 /**
  * @brief Tell LVGL whether this filesystem is currently available.
  *
- * LVGL may call this before file operations. The SD card manager owns the real
- * mount state, so this callback simply reflects that state.
+ * LVGL may call this before file operations. The SD card manager owns mount
+ * state and VFS leases, so this callback reports whether it currently accepts
+ * a new LVGL file operation.
  *
  * @param drv LVGL filesystem driver pointer.
- * @return true if the SD card is mounted, false otherwise.
+ * @return true if the manager currently accepts a new VFS lease, false otherwise.
  */
 static bool lvgl_sd_fs_ready_cb(lv_fs_drv_t *drv)
 {
@@ -128,25 +139,20 @@ static bool lvgl_sd_fs_ready_cb(lv_fs_drv_t *drv)
  * LVGL passes paths without the "S:" drive prefix. This callback converts that
  * path to the ESP-IDF VFS path under SD_MOUNT_POINT and opens it using stdio.
  *
- * The returned FILE pointer becomes LVGL's opaque file handle and is passed
- * back to close/read/seek/tell callbacks.
+ * The returned wrapper becomes LVGL's opaque file handle and is passed back to
+ * close/read/seek/tell callbacks. Its SD lease stays held until close_cb has
+ * closed the FILE, allowing sd_card_manager to drain safely before unmount.
  *
  * @param drv LVGL filesystem driver pointer.
  * @param path LVGL path after removing the drive prefix.
  * @param mode LVGL read/write mode flags.
- * @return FILE pointer on success, NULL on failure.
+ * @return Opaque wrapper pointer on success, NULL on failure.
  */
 static void *lvgl_sd_fs_open_cb(lv_fs_drv_t *drv,
                                 const char *path,
                                 lv_fs_mode_t mode)
 {
     (void)drv;
-
-    if (!sd_card_manager_is_mounted())
-    {
-        ESP_LOGE(TAG, "SD card is not mounted");
-        return NULL;
-    }
 
     char full_path[LVGL_SD_FS_PATH_MAX_LEN] = {0};
 
@@ -183,19 +189,55 @@ static void *lvgl_sd_fs_open_cb(lv_fs_drv_t *drv,
         return NULL;
     }
 
-    FILE *file = fopen(full_path, mode_str);
-    if (file == NULL)
+    const esp_err_t lease_result = sd_card_manager_acquire();
+    if (lease_result != ESP_OK)
     {
-        ESP_LOGE(TAG,
-                 "Failed to open file: %s, errno: %d",
-                 full_path,
-                 errno);
+        ESP_LOGD(
+            TAG,
+            "SD filesystem is unavailable for %s: %s",
+            full_path,
+            esp_err_to_name(lease_result));
         return NULL;
     }
 
+    FILE *file = fopen(full_path, mode_str);
+    if (file == NULL)
+    {
+        const int open_errno = errno;
+        ESP_LOGE(TAG,
+                 "Failed to open file: %s, errno: %d",
+                 full_path,
+                 open_errno);
+
+        if (sd_card_manager_is_vfs_media_error(open_errno))
+        {
+            sd_card_manager_report_io_error(ESP_FAIL);
+        }
+
+        sd_card_manager_release();
+        return NULL;
+    }
+
+    lvgl_sd_fs_file_t *const handle = calloc(1U, sizeof(*handle));
+    if (handle == NULL)
+    {
+        ESP_LOGE(TAG, "Failed to allocate LVGL SD file handle");
+
+        if (fclose(file) != 0)
+        {
+            sd_card_manager_report_io_error(ESP_FAIL);
+        }
+
+        sd_card_manager_release();
+        return NULL;
+    }
+
+    handle->file = file;
+    handle->sd_lease_held = true;
+
     ESP_LOGD(TAG, "Opened file: %s", full_path);
 
-    return file;
+    return handle;
 }
 
 /**
@@ -209,16 +251,27 @@ static lv_fs_res_t lvgl_sd_fs_close_cb(lv_fs_drv_t *drv, void *file_p)
 {
     (void)drv;
 
-    FILE *file = (FILE *)file_p;
+    lvgl_sd_fs_file_t *const handle = (lvgl_sd_fs_file_t *)file_p;
 
-    if (file == NULL)
+    if ((handle == NULL) || (handle->file == NULL))
     {
         return LV_FS_RES_FS_ERR;
     }
 
-    int ret = fclose(file);
+    const int result = fclose(handle->file);
+    if (result != 0)
+    {
+        sd_card_manager_report_io_error(ESP_FAIL);
+    }
 
-    return (ret == 0) ? LV_FS_RES_OK : LV_FS_RES_FS_ERR;
+    if (handle->sd_lease_held)
+    {
+        sd_card_manager_release();
+    }
+
+    free(handle);
+
+    return (result == 0) ? LV_FS_RES_OK : LV_FS_RES_FS_ERR;
 }
 
 /**
@@ -242,12 +295,19 @@ static lv_fs_res_t lvgl_sd_fs_read_cb(lv_fs_drv_t *drv,
 {
     (void)drv;
 
-    FILE *file = (FILE *)file_p;
+    lvgl_sd_fs_file_t *const handle = (lvgl_sd_fs_file_t *)file_p;
 
-    if (file == NULL || buf == NULL)
+    if ((handle == NULL) || (handle->file == NULL) || (buf == NULL))
     {
         return LV_FS_RES_FS_ERR;
     }
+
+    if (!sd_card_manager_is_mounted())
+    {
+        return LV_FS_RES_FS_ERR;
+    }
+
+    FILE *const file = handle->file;
 
     size_t read_count = fread(buf, 1, btr, file);
 
@@ -266,6 +326,7 @@ static lv_fs_res_t lvgl_sd_fs_read_cb(lv_fs_drv_t *drv,
      */
     if (read_count < btr && ferror(file))
     {
+        sd_card_manager_report_io_error(ESP_FAIL);
         clearerr(file);
         return LV_FS_RES_FS_ERR;
     }
@@ -291,12 +352,19 @@ static lv_fs_res_t lvgl_sd_fs_seek_cb(lv_fs_drv_t *drv,
 {
     (void)drv;
 
-    FILE *file = (FILE *)file_p;
+    lvgl_sd_fs_file_t *const handle = (lvgl_sd_fs_file_t *)file_p;
 
-    if (file == NULL)
+    if ((handle == NULL) || (handle->file == NULL))
     {
         return LV_FS_RES_FS_ERR;
     }
+
+    if (!sd_card_manager_is_mounted())
+    {
+        return LV_FS_RES_FS_ERR;
+    }
+
+    FILE *const file = handle->file;
 
     int origin = SEEK_SET;
 
@@ -318,9 +386,14 @@ static lv_fs_res_t lvgl_sd_fs_seek_cb(lv_fs_drv_t *drv,
         return LV_FS_RES_FS_ERR;
     }
 
-    int ret = fseek(file, (long)pos, origin);
+    const int result = fseek(file, (long)pos, origin);
 
-    return (ret == 0) ? LV_FS_RES_OK : LV_FS_RES_FS_ERR;
+    if (result != 0)
+    {
+        sd_card_manager_report_io_error(ESP_FAIL);
+    }
+
+    return (result == 0) ? LV_FS_RES_OK : LV_FS_RES_FS_ERR;
 }
 
 /**
@@ -339,17 +412,25 @@ static lv_fs_res_t lvgl_sd_fs_tell_cb(lv_fs_drv_t *drv,
 {
     (void)drv;
 
-    FILE *file = (FILE *)file_p;
+    lvgl_sd_fs_file_t *const handle = (lvgl_sd_fs_file_t *)file_p;
 
-    if (file == NULL || pos_p == NULL)
+    if ((handle == NULL) || (handle->file == NULL) || (pos_p == NULL))
     {
         return LV_FS_RES_FS_ERR;
     }
+
+    if (!sd_card_manager_is_mounted())
+    {
+        return LV_FS_RES_FS_ERR;
+    }
+
+    FILE *const file = handle->file;
 
     long pos = ftell(file);
 
     if (pos < 0)
     {
+        sd_card_manager_report_io_error(ESP_FAIL);
         return LV_FS_RES_FS_ERR;
     }
 
@@ -365,7 +446,9 @@ static lv_fs_res_t lvgl_sd_fs_tell_cb(lv_fs_drv_t *drv,
  * Must be called after:
  *
  *      1. lv_init()
- *      2. sd_card_manager_init()
+ *
+ * The driver may be registered while SD recovery is still offline. ready_cb
+ * then keeps LVGL from opening S: paths until sd_card_manager becomes READY.
  *
  * After this function, LVGL can access SD card files using:
  *
@@ -380,11 +463,6 @@ esp_err_t lvgl_sd_fs_register(void)
     }
 
     ESP_LOGD(TAG, "Registering SD card filesystem driver with LVGL");
-
-    ESP_RETURN_ON_FALSE(sd_card_manager_is_mounted(),
-                        ESP_ERR_INVALID_STATE,
-                        TAG,
-                        "SD card must be mounted before registering LVGL FS driver");
 
     lv_fs_drv_init(&s_lvgl_sd_fs_drv);
 

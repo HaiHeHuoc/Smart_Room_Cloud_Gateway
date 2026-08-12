@@ -33,6 +33,7 @@ ESP_ERROR_CHECK(sd_card_manager_init());
 ESP_ERROR_CHECK(lvgl_sd_fs_register());
 ESP_ERROR_CHECK(app_gui_init());
 ESP_ERROR_CHECK(app_gui_start_ui_task());
+ESP_ERROR_CHECK(sd_card_manager_start());
 ```
 
 Image paths use the LVGL SD drive, for example `S:/images/photo.jpg`.
@@ -64,8 +65,9 @@ ui_manager_lvgl_release_mutex();
 
 - Public APIs create, modify, delete, or inspect shared LVGL image state. Call
   them from the LVGL task or while holding the `ui_manager_lvgl` mutex.
-- The SD manager must be mounted and `lvgl_sd_fs` must be registered; otherwise
-  show calls return `ESP_ERR_INVALID_STATE`.
+- `lvgl_sd_fs` may already be registered while SD is recovering. Show calls
+  require the SD manager to be READY; otherwise they return
+  `ESP_ERR_INVALID_STATE` and can be retried after recovery.
 - Format is selected by the JPG/PNG/GIF API, not inferred from the filename
   extension.
 - The initial decoded frame is already sized to fit the active screen.
@@ -73,6 +75,10 @@ ui_manager_lvgl_release_mutex();
   internal implementation details rather than public component APIs.
 - GIF playback loops internally. A caller that clears or replaces the image
   before the animation duration ends will naturally stop it.
+- A GIF decode failure, including an SD read failure, closes its decoder before
+  pausing the timer. The last frame remains visible, but the LVGL file handle
+  and its managed SD lease are released so background recovery can unmount and
+  retry safely.
 - Large images still need enough memory for the fitted RGB565 output frame.
   GIF additionally needs a second output frame and decoder working memory.
 - The GIF decoder rejects source canvases above 3840 x 2160 pixels and source

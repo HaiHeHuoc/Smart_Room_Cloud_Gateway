@@ -973,10 +973,15 @@ esp_err_t audio_wav_stream_open(
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (!sd_card_manager_is_mounted())
+    const esp_err_t lease_result = sd_card_manager_acquire();
+    if (lease_result != ESP_OK)
     {
-        ESP_LOGW(TAG, "SD filesystem is not mounted for WAV path: %s", path);
-        return ESP_ERR_INVALID_STATE;
+        ESP_LOGW(
+            TAG,
+            "SD filesystem is unavailable for WAV path %s: %s",
+            path,
+            esp_err_to_name(lease_result));
+        return lease_result;
     }
 
     FILE *file = fopen(path, "rb");
@@ -984,13 +989,26 @@ esp_err_t audio_wav_stream_open(
     {
         const int open_errno = errno;
         ESP_LOGW(TAG, "Failed to open WAV %s: errno=%d", path, open_errno);
+
+        if (sd_card_manager_is_vfs_media_error(open_errno))
+        {
+            sd_card_manager_report_io_error(ESP_FAIL);
+        }
+
+        sd_card_manager_release();
         return audio_wav_open_error_from_errno(open_errno);
     }
 
     if (setvbuf(file, NULL, _IONBF, 0) != 0)
     {
         ESP_LOGW(TAG, "Failed to configure unbuffered WAV I/O: %s", path);
-        (void)fclose(file);
+
+        if (fclose(file) != 0)
+        {
+            sd_card_manager_report_io_error(ESP_FAIL);
+        }
+
+        sd_card_manager_release();
         return ESP_FAIL;
     }
 
@@ -1003,7 +1021,18 @@ esp_err_t audio_wav_stream_open(
             "Rejected WAV %s: %s",
             path,
             esp_err_to_name(result));
-        (void)fclose(file);
+
+        const bool parse_io_error = ferror(file) || (result == ESP_FAIL);
+        if (fclose(file) != 0)
+        {
+            sd_card_manager_report_io_error(ESP_FAIL);
+        }
+        else if (parse_io_error)
+        {
+            sd_card_manager_report_io_error(ESP_FAIL);
+        }
+
+        sd_card_manager_release();
         return result;
     }
 
@@ -1020,7 +1049,12 @@ esp_err_t audio_wav_stream_open(
         MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (buffer == NULL)
     {
-        (void)fclose(file);
+        if (fclose(file) != 0)
+        {
+            sd_card_manager_report_io_error(ESP_FAIL);
+        }
+
+        sd_card_manager_release();
         return ESP_ERR_NO_MEM;
     }
 
@@ -1051,7 +1085,21 @@ esp_err_t audio_wav_stream_read(
     const uint8_t **buffer,
     size_t *bytes_read)
 {
-    if ((stream == NULL) || (buffer == NULL) || (bytes_read == NULL))
+    return audio_wav_stream_read_limited(
+        stream,
+        AUDIO_WAV_STREAM_BUFFER_BYTES,
+        buffer,
+        bytes_read);
+}
+
+esp_err_t audio_wav_stream_read_limited(
+    audio_wav_stream_t *stream,
+    size_t max_bytes,
+    const uint8_t **buffer,
+    size_t *bytes_read)
+{
+    if ((stream == NULL) || (max_bytes == 0U) || (buffer == NULL) ||
+        (bytes_read == NULL))
     {
         return ESP_ERR_INVALID_ARG;
     }
@@ -1099,11 +1147,19 @@ esp_err_t audio_wav_stream_read(
     }
 
     size_t requested_bytes = stream->data_bytes_remaining;
+    if (requested_bytes > max_bytes)
+    {
+        requested_bytes = max_bytes;
+    }
     if (requested_bytes > AUDIO_WAV_STREAM_BUFFER_BYTES)
     {
         requested_bytes = AUDIO_WAV_STREAM_BUFFER_BYTES;
     }
 
+    const uint64_t committed_data_offset = stream->data_bytes_read;
+    const uint64_t absolute_file_offset =
+        (uint64_t)stream->info.data_offset + committed_data_offset;
+    errno = 0;
     const size_t received_bytes = fread(
         stream->buffer,
         1U,
@@ -1111,7 +1167,10 @@ esp_err_t audio_wav_stream_read(
         stream->file);
     if (received_bytes != requested_bytes)
     {
-        const esp_err_t result = ferror(stream->file)
+        const int read_errno = errno;
+        const bool io_error = ferror(stream->file);
+        const bool end_of_file = feof(stream->file);
+        const esp_err_t result = io_error
                                      ? ESP_FAIL
                                      : ESP_ERR_INVALID_SIZE;
         const esp_err_t close_result = audio_wav_stream_close(stream);
@@ -1125,6 +1184,54 @@ esp_err_t audio_wav_stream_read(
     *bytes_read = received_bytes;
     return ESP_OK;
 #endif
+}
+
+esp_err_t audio_wav_stream_seek_data(
+    audio_wav_stream_t *stream,
+    uint64_t data_offset_bytes)
+{
+    if ((stream == NULL) || (stream->file == NULL) ||
+        (stream->info.block_align == 0U))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if ((data_offset_bytes > stream->info.data_size_bytes) ||
+        ((data_offset_bytes % stream->info.block_align) != 0U))
+    {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    const uint64_t absolute_offset =
+        (uint64_t)stream->info.data_offset + data_offset_bytes;
+    errno = 0;
+    const esp_err_t result = audio_wav_seek_absolute(
+        stream->file,
+        absolute_offset);
+    if (result != ESP_OK)
+    {
+        const int seek_errno = errno;
+        ESP_LOGW(
+            TAG,
+            "WAV resume seek failed: data_offset=%llu file_offset=%llu errno=%d error=%s",
+            (unsigned long long)data_offset_bytes,
+            (unsigned long long)absolute_offset,
+            seek_errno,
+            esp_err_to_name(result));
+
+        if ((result == ESP_FAIL) &&
+            ((seek_errno == 0) ||
+             sd_card_manager_is_vfs_media_error(seek_errno)))
+        {
+            sd_card_manager_report_io_error(result);
+        }
+        return result;
+    }
+
+    stream->data_bytes_read = data_offset_bytes;
+    stream->data_bytes_remaining =
+        stream->info.data_size_bytes - (uint32_t)data_offset_bytes;
+    return ESP_OK;
 }
 
 esp_err_t audio_wav_stream_close(audio_wav_stream_t *stream)
@@ -1146,9 +1253,17 @@ esp_err_t audio_wav_stream_close(audio_wav_stream_t *stream)
     {
         ESP_LOGW(TAG, "Failed to close WAV file: errno=%d", errno);
         result = ESP_FAIL;
+        sd_card_manager_report_io_error(result);
     }
 
+    const bool lease_held = stream->sd_lease_held;
     heap_caps_free(stream->buffer);
     audio_wav_stream_reset(stream);
+
+    if (lease_held)
+    {
+        sd_card_manager_release();
+    }
+
     return result;
 }

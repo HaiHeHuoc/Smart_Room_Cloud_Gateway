@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
 
 #include "audio_wav.h"
 #include "esp_err.h"
@@ -30,10 +31,47 @@ typedef struct
 
 static unsigned s_tests_run = 0U;
 static unsigned s_tests_failed = 0U;
+static esp_err_t s_sd_acquire_result = ESP_OK;
+static unsigned s_sd_acquire_calls = 0U;
+static unsigned s_sd_release_calls = 0U;
+static unsigned s_sd_report_io_error_calls = 0U;
+
+static void reset_sd_card_manager_stub(void)
+{
+    s_sd_acquire_result = ESP_OK;
+    s_sd_acquire_calls = 0U;
+    s_sd_release_calls = 0U;
+    s_sd_report_io_error_calls = 0U;
+}
 
 bool sd_card_manager_is_mounted(void)
 {
     return true;
+}
+
+esp_err_t sd_card_manager_acquire(void)
+{
+    s_sd_acquire_calls++;
+    return s_sd_acquire_result;
+}
+
+void sd_card_manager_release(void)
+{
+    s_sd_release_calls++;
+}
+
+void sd_card_manager_report_io_error(esp_err_t error)
+{
+    (void)error;
+    s_sd_report_io_error_calls++;
+}
+
+bool sd_card_manager_is_vfs_media_error(int error_number)
+{
+    return (error_number == EIO) ||
+           (error_number == ENODEV) ||
+           (error_number == ENXIO) ||
+           (error_number == ETIMEDOUT);
 }
 
 static wav_fixture_t canonical_fixture(void)
@@ -303,8 +341,82 @@ static void run_raw_file_test(
         expected_result);
 }
 
+static void run_stream_seek_tests(void)
+{
+    wav_fixture_t fixture = canonical_fixture();
+    fixture.data_declared_bytes = 8192U;
+    fixture.data_actual_bytes = fixture.data_declared_bytes;
+
+    FILE *file = tmpfile();
+    audio_wav_info_t info = {0};
+    const bool fixture_ready =
+        (file != NULL) &&
+        build_fixture(file, &fixture) &&
+        (audio_wav_parse_file(file, &info) == ESP_OK);
+    if (!fixture_ready)
+    {
+        if (file != NULL)
+        {
+            (void)fclose(file);
+        }
+        record_result(
+            "seek fixture setup",
+            false,
+            ESP_FAIL,
+            ESP_OK);
+        return;
+    }
+
+    audio_wav_stream_t stream = {
+        .file = file,
+        .info = info,
+        .data_bytes_remaining = info.data_size_bytes,
+    };
+
+    esp_err_t result = audio_wav_stream_seek_data(&stream, 4096U);
+    record_result(
+        "seek to aligned committed data offset",
+        (result == ESP_OK) &&
+            (ftell(file) == (info.data_offset + 4096L)) &&
+            (stream.data_bytes_read == 4096U) &&
+            (stream.data_bytes_remaining == 4096U),
+        result,
+        ESP_OK);
+
+    result = audio_wav_stream_seek_data(&stream, info.data_size_bytes);
+    record_result(
+        "seek to exact WAV data EOF",
+        (result == ESP_OK) &&
+            (ftell(file) ==
+             (info.data_offset + (long)info.data_size_bytes)) &&
+            (stream.data_bytes_read == info.data_size_bytes) &&
+            (stream.data_bytes_remaining == 0U),
+        result,
+        ESP_OK);
+
+    result = audio_wav_stream_seek_data(&stream, 1U);
+    record_result(
+        "reject misaligned committed data offset",
+        result == ESP_ERR_INVALID_SIZE,
+        result,
+        ESP_ERR_INVALID_SIZE);
+
+    result = audio_wav_stream_seek_data(
+        &stream,
+        (uint64_t)info.data_size_bytes + info.block_align);
+    record_result(
+        "reject committed offset beyond WAV data",
+        result == ESP_ERR_INVALID_SIZE,
+        result,
+        ESP_ERR_INVALID_SIZE);
+
+    (void)fclose(file);
+}
+
 int main(void)
 {
+    reset_sd_card_manager_stub();
+
     audio_wav_stream_t missing_stream = {0};
     const esp_err_t missing_file_result = audio_wav_stream_open(
         &missing_stream,
@@ -314,6 +426,40 @@ int main(void)
         missing_file_result == ESP_ERR_NOT_FOUND,
         missing_file_result,
         ESP_ERR_NOT_FOUND);
+    record_result(
+        "missing path acquires one SD lease",
+        s_sd_acquire_calls == 1U,
+        (esp_err_t)s_sd_acquire_calls,
+        ESP_OK);
+    record_result(
+        "missing path releases its SD lease",
+        s_sd_release_calls == 1U,
+        (esp_err_t)s_sd_release_calls,
+        ESP_OK);
+    record_result(
+        "missing path does not request SD recovery",
+        s_sd_report_io_error_calls == 0U,
+        (esp_err_t)s_sd_report_io_error_calls,
+        ESP_OK);
+
+    reset_sd_card_manager_stub();
+    s_sd_acquire_result = ESP_ERR_INVALID_STATE;
+    audio_wav_stream_t unavailable_stream = {0};
+    const esp_err_t unavailable_result = audio_wav_stream_open(
+        &unavailable_stream,
+        "/sdcard/__audio_wav_fixture_file_does_not_exist__.wav");
+    record_result(
+        "unavailable SD rejects WAV open before VFS access",
+        unavailable_result == ESP_ERR_INVALID_STATE,
+        unavailable_result,
+        ESP_ERR_INVALID_STATE);
+    record_result(
+        "unavailable SD does not release an unacquired lease",
+        (s_sd_acquire_calls == 1U) &&
+            (s_sd_release_calls == 0U) &&
+            (s_sd_report_io_error_calls == 0U),
+        (esp_err_t)s_sd_release_calls,
+        ESP_OK);
 
     wav_fixture_t fixture = canonical_fixture();
     run_fixture_test("canonical PCM16 mono 16 kHz", &fixture, ESP_OK);
@@ -342,6 +488,8 @@ int main(void)
     fixture.data_declared_bytes = 1024U * 1024U;
     fixture.data_actual_bytes = fixture.data_declared_bytes;
     run_fixture_test("large canonical metadata", &fixture, ESP_OK);
+
+    run_stream_seek_tests();
 
     static const uint8_t random_file[16] = {
         0xdeU, 0xadU, 0xbeU, 0xefU, 0x01U, 0x02U, 0x03U, 0x04U,

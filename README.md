@@ -8,6 +8,7 @@ runtime resource diagnostics.
 ```text
 Release: v1.0.0
 Status: Hardware accepted / Version 1 complete
+SD recovery extension: target-hardware acceptance pending
 Target: ESP32-S3 N16R8
 Framework: ESP-IDF 6.0.1 + FreeRTOS
 ```
@@ -170,7 +171,8 @@ hold GPIO9 for five seconds
 
 - ESP-IDF 6.0.1.
 - ESP32-S3 N16R8 and the hardware listed above.
-- FAT-formatted microSD card inserted before boot.
+- FAT-formatted microSD card for SD-backed assets/WAV playback; boot and core
+  services continue while the card is unavailable.
 - Firebase project with Email/Password Authentication and Realtime Database.
 - Espressif-compatible BLE Security 1 provisioning client.
 
@@ -274,7 +276,9 @@ Test/                    host and component test utilities
   included in Version 1.
 - Provisioning uses a development Proof of Possession rather than a
   manufacturing-time per-device secret.
-- SD card removal and runtime service deinitialization are not implemented.
+- SD recovery handles managed VFS I/O failures, but the board has no physical
+  card-detect/power-control GPIO and the firmware has no coordinated runtime
+  shutdown API.
 
 See [Known limitations and future work](docs/KNOWN_LIMITATIONS.md) for details.
 

@@ -188,10 +188,17 @@ esp_err_t audio_manager_register_status_callback(
  *
  * On success the task reaches IDLE and waits for bounded commands. Normal
  * production start does not begin capture, DSP, or playback. All source and
- * I2S ownership remains private to the manager task. A default-off Kconfig
- * regression mode may run the existing golden stability cycle instead. The
- * call waits at most two seconds for task readiness. Serialize start/stop/
- * deinit lifecycle calls in application code; task context only.
+ * I2S ownership remains private to the component: the manager task owns I2S,
+ * while an active private reader owns its WAV file and SD lease. A default-off
+ * Kconfig
+ * regression mode may run the existing golden stability cycle instead. Its
+ * optional continuous WAV-stress coordinator is a separate test task that
+ * only polls status and submits commands; it never owns I2S, a WAV stream, or
+ * SD access. Active WAV playback uses a private bounded SD-to-PSRAM prefetch
+ * worker; the manager remains the only I2S owner and joins that worker before
+ * releasing the source. The call waits at most two seconds for manager-task
+ * readiness. Serialize start/stop/deinit lifecycle calls in application code;
+ * task context only.
  */
 esp_err_t audio_manager_start(void);
 
@@ -214,8 +221,10 @@ esp_err_t audio_manager_play_wav(const char *path);
  * @brief Request cancellation of the pending or active WAV playback.
  *
  * The caller only sets a bounded cancellation request. The manager task owns
- * stream/TX cleanup. Cancellation is observed after the current synchronous
- * filesystem or I2S operation returns, so it is not immediate or preemptive.
+ * source/TX cleanup; its private reader owns the file and checks cancellation
+ * between bounded raw reads. Cancellation is observed after the current
+ * synchronous filesystem or I2S operation returns, so it is not immediate or
+ * preemptive.
  * Returns ESP_ERR_INVALID_STATE when no WAV command is pending/active. A
  * controlled cancellation completes with IDLE and ESP_OK in status. Task
  * context only.
@@ -225,14 +234,16 @@ esp_err_t audio_manager_stop_playback(void);
 /**
  * @brief Stop the manager task with a finite cooperative shutdown wait.
  *
- * Active WAV playback is cancelled by the manager task, which closes the
- * source and stops I2S before exiting. On success the state becomes
- * INITIALIZED and audio_manager_start() may be called again. The function
- * returns ESP_ERR_TIMEOUT if the task cannot finish its current bounded
- * blocking operation and cleanup before the shutdown deadline; it never
- * force-deletes the owning task. The shutdown wait is five seconds. Do not
- * call this function from the audio manager callback/task itself; serialize it
- * with other lifecycle calls.
+ * Active WAV playback is cancelled by the manager task, which stops I2S then
+ * joins the private reader before its source is released. When the default-off continuous WAV
+ * stress test is selected, this also wakes and joins its non-I2S coordinator
+ * task.
+ * On success the state becomes INITIALIZED and audio_manager_start() may be
+ * called again. The function returns ESP_ERR_TIMEOUT if a task cannot finish
+ * its current bounded blocking operation and cleanup before the shutdown
+ * deadline; it never force-deletes an owning task. The shutdown wait is five
+ * seconds. Do not call this function from the audio manager callback/task
+ * itself; serialize it with other lifecycle calls.
  */
 esp_err_t audio_manager_stop(void);
 

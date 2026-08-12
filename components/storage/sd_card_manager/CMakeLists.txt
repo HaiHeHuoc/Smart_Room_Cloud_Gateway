@@ -7,4 +7,6 @@ idf_component_register(
         sdmmc
         esp_driver_gpio
         esp_driver_spi
+    PRIV_REQUIRES
+        freertos
 )

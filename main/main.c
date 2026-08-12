@@ -262,16 +262,19 @@ void app_main(void)
         return;
     }
 
-    ret = sd_card_manager_init();
+    /*
+     * SD initialization is intentionally split from the recovery task. This
+     * lets LVGL register S: while offline, then lets the BOOT screen appear
+     * before a cold or slow SD card begins its retry sequence.
+     */
+    const esp_err_t sd_init_ret = sd_card_manager_init();
 
-    if (ret != ESP_OK)
+    if (sd_init_ret != ESP_OK)
     {
         ESP_LOGE(
             TAG,
-            "Failed to initialize SD card driver: %s",
-            esp_err_to_name(ret));
-
-        return;
+            "Failed to initialize SD recovery service: %s; continuing without SD",
+            esp_err_to_name(sd_init_ret));
     }
 
     ret = lvgl_sd_fs_register();
@@ -313,6 +316,37 @@ void app_main(void)
     }
 
     ESP_LOGI(TAG, "LVGL display initialized successfully");
+
+    ret = app_gui_request_screen(APP_GUI_SCREEN_BOOT);
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to request BOOT screen before SD recovery: %s",
+            esp_err_to_name(ret));
+
+        return;
+    }
+
+    /*
+     * Give the UI task one scheduled frame to draw its built-in, SD-free boot
+     * screen. No LVGL API is called from app_main after the task has started.
+     */
+    vTaskDelay(pdMS_TO_TICKS(50U));
+
+    if (sd_init_ret == ESP_OK)
+    {
+        const esp_err_t sd_start_ret = sd_card_manager_start();
+
+        if (sd_start_ret != ESP_OK)
+        {
+            ESP_LOGE(
+                TAG,
+                "Failed to start SD recovery task: %s; continuing without SD",
+                esp_err_to_name(sd_start_ret));
+        }
+    }
 
 #if PERFORMANCE_MONITOR
     esp_err_t monitor_ret =
