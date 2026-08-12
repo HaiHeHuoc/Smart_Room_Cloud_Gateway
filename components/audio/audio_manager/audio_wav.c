@@ -408,10 +408,7 @@ static void audio_wav_prefetch_task(void *argument)
             target_bytes = AUDIO_WAV_PREFETCH_BUFFER_BYTES;
         }
 
-        result = audio_wav_prefetch_fill_buffer(
-            context,
-            index,
-            target_bytes);
+        result = audio_wav_prefetch_fill_buffer(context, index, target_bytes);
         if (result != ESP_OK)
         {
             if (audio_wav_prefetch_stop_requested(context))
@@ -422,10 +419,7 @@ static void audio_wav_prefetch_task(void *argument)
         }
 
         context->producer_bytes_remaining -= (uint32_t)target_bytes;
-        (void)xEventGroupSetBits(
-            context->events,
-            audio_wav_ready_bit(index));
-
+        (void)xEventGroupSetBits(context->events, audio_wav_ready_bit(index));
         context->producer_index ^= 1U;
     }
 
@@ -517,6 +511,10 @@ static esp_err_t audio_wav_stream_open_target(
 {
     if ((stream == NULL) || (file == NULL) || (info == NULL) || (path == NULL))
     {
+        if (file != NULL)
+        {
+            (void)fclose(file);
+        }
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -527,6 +525,7 @@ static esp_err_t audio_wav_stream_open_target(
             MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (context == NULL)
     {
+        (void)fclose(file);
         return ESP_ERR_NO_MEM;
     }
 
@@ -547,6 +546,7 @@ static esp_err_t audio_wav_stream_open_target(
             !esp_ptr_external_ram(context->buffers[index]))
         {
             audio_wav_prefetch_free_context(context);
+            (void)fclose(file);
             return ESP_ERR_NO_MEM;
         }
     }
@@ -555,6 +555,7 @@ static esp_err_t audio_wav_stream_open_target(
     if (context->events == NULL)
     {
         audio_wav_prefetch_free_context(context);
+        (void)fclose(file);
         return ESP_ERR_NO_MEM;
     }
 
@@ -580,6 +581,7 @@ static esp_err_t audio_wav_stream_open_target(
         stream->buffer = NULL;
         stream->prefetch_context = NULL;
         audio_wav_prefetch_free_context(context);
+        (void)fclose(file);
         return ESP_ERR_NO_MEM;
     }
 
@@ -986,13 +988,10 @@ esp_err_t audio_wav_stream_open(
     }
 
 #ifdef ESP_PLATFORM
+    /* Target helper takes ownership of FILE on entry, including every failure. */
     result = audio_wav_stream_open_target(stream, file, &info, path);
     if (result != ESP_OK)
     {
-        if ((stream->file == NULL) && (file != NULL))
-        {
-            (void)fclose(file);
-        }
         return result;
     }
 #else
