@@ -67,6 +67,7 @@ typedef struct
 {
     FILE *file;
     uint8_t *buffers[AUDIO_WAV_PREFETCH_BUFFER_COUNT];
+    uint8_t *storage_staging;
     size_t filled_bytes[AUDIO_WAV_PREFETCH_BUFFER_COUNT];
     EventGroupHandle_t events;
     TaskHandle_t producer_task;
@@ -311,6 +312,7 @@ static esp_err_t audio_wav_prefetch_fill_buffer(
         (context->file == NULL) ||
         (index >= AUDIO_WAV_PREFETCH_BUFFER_COUNT) ||
         (context->buffers[index] == NULL) ||
+        (context->storage_staging == NULL) ||
         (target_bytes == 0U) ||
         (target_bytes > AUDIO_WAV_PREFETCH_BUFFER_BYTES))
     {
@@ -338,7 +340,7 @@ static esp_err_t audio_wav_prefetch_fill_buffer(
 
         const int64_t read_start_us = esp_timer_get_time();
         const size_t received = fread(
-            &context->buffers[index][filled],
+            context->storage_staging,
             1U,
             read_bytes,
             context->file);
@@ -356,6 +358,10 @@ static esp_err_t audio_wav_prefetch_fill_buffer(
             return ferror(context->file) ? ESP_FAIL : ESP_ERR_INVALID_SIZE;
         }
 
+        memcpy(
+            &context->buffers[index][filled],
+            context->storage_staging,
+            received);
         filled += received;
     }
 
@@ -442,6 +448,9 @@ static void audio_wav_prefetch_free_context(
         vEventGroupDelete(context->events);
         context->events = NULL;
     }
+
+    heap_caps_free(context->storage_staging);
+    context->storage_staging = NULL;
 
     for (uint8_t index = 0U;
          index < AUDIO_WAV_PREFETCH_BUFFER_COUNT;
@@ -551,6 +560,16 @@ static esp_err_t audio_wav_stream_open_target(
         }
     }
 
+    context->storage_staging = (uint8_t *)heap_caps_malloc(
+        AUDIO_WAV_STORAGE_READ_BYTES,
+        MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+    if (context->storage_staging == NULL)
+    {
+        audio_wav_prefetch_free_context(context);
+        (void)fclose(file);
+        return ESP_ERR_NO_MEM;
+    }
+
     context->events = xEventGroupCreate();
     if (context->events == NULL)
     {
@@ -606,11 +625,12 @@ static esp_err_t audio_wav_stream_open_target(
 
     ESP_LOGI(
         TAG,
-        "WAV ping-pong prefetch ready: buffers=2 each=%uB (~%us) total_psram=%uB path=%s",
+        "WAV ping-pong prefetch ready: buffers=2 each=%uB (~%us) total_psram=%uB sd_stage=%uB path=%s",
         (unsigned)AUDIO_WAV_PREFETCH_BUFFER_BYTES,
         (unsigned)AUDIO_WAV_PREFETCH_SECONDS,
         (unsigned)(AUDIO_WAV_PREFETCH_BUFFER_BYTES *
                    AUDIO_WAV_PREFETCH_BUFFER_COUNT),
+        (unsigned)AUDIO_WAV_STORAGE_READ_BYTES,
         path);
 
     return ESP_OK;
