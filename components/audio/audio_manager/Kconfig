@@ -1,15 +1,16 @@
 menu "Audio manager"
 
     config AUDIO_MANAGER_WAV_VALIDATION_ONCE
-        bool "Submit one WAV through production API at task startup"
+        bool "Submit one WAV through production API after SD is ready"
         default n
-        depends on !AUDIO_MANAGER_GOLDEN_STABILITY_MODE
+        depends on !AUDIO_MANAGER_GOLDEN_STABILITY_MODE && !AUDIO_MANAGER_WAV_STRESS_TESTAPP
         help
             Default-off hardware regression hook. After the production task
-            reaches IDLE, it submits the configured file through
-            audio_manager_play_wav(), so validation uses the same bounded
-            command, cancellation, streaming, and cleanup path as application
-            requests. Normal production startup remains command-idle.
+            reaches IDLE and sd_card_manager reports VFS availability, it
+            submits the configured file through audio_manager_play_wav(), so
+            validation uses the same bounded command, cancellation, streaming,
+            and cleanup path as application requests. Normal production startup
+            remains command-idle.
 
     config AUDIO_MANAGER_WAV_VALIDATION_PATH
         string "Absolute WAV validation path"
@@ -18,6 +19,17 @@ menu "Audio manager"
         help
             Absolute path below the sd_card_manager VFS mount. The file must
             be canonical PCM16 mono at 16000 Hz.
+
+    config AUDIO_MANAGER_WAV_PREFETCH_SECONDS
+        int "WAV prefetch block duration (seconds)"
+        range 1 30
+        default 10
+        help
+            Each logical WAV prefetch block holds this many seconds of the
+            accepted PCM16 mono 16-kHz source. At the default, one block is
+            320000 bytes and the two PSRAM ping-pong blocks use 640000 bytes
+            only while a WAV is active. The SD reader still uses bounded 4 KiB
+            raw reads; the I2S-owning manager consumes only a READY block.
 
     config AUDIO_MANAGER_GOLDEN_STABILITY_MODE
         bool "Run the golden record/DSP/playback stability loop"
@@ -50,5 +62,47 @@ menu "Audio manager"
             above the normal priority-5 GUI task, while I2S operations remain
             bounded and DSP retains its cooperative yields. Use 7 only after
             measuring GUI/network responsiveness on the target.
+
+    config AUDIO_MANAGER_WAV_STRESS_TESTAPP
+        bool "Run a continuous WAV playback stress coordinator"
+        default n
+        help
+            Test-only WAV stress mode. A coordinator task never opens the WAV
+            file or touches I2S; it submits the configured WAV through the
+            production audio_manager API. With golden stability disabled, each
+            full WAV plays from the normal command-idle manager. With golden
+            stability enabled, the manager serializes the WAV between complete
+            microphone record/DSP/recorded-playback cycles. Neither form is
+            normal product behavior.
+
+    config AUDIO_MANAGER_WAV_STRESS_PATH
+        string "Absolute WAV path for continuous stress"
+        default "/sdcard/audio/input.wav"
+        depends on AUDIO_MANAGER_WAV_STRESS_TESTAPP
+        help
+            Absolute path below the SD VFS mount. The file must be canonical
+            RIFF/WAVE PCM16 little-endian, mono, and 16000 Hz.
+
+    config AUDIO_MANAGER_WAV_STRESS_POST_COMPLETION_DELAY_SECONDS
+        int "Continuous-WAV delay after each completion (seconds)"
+        range 1 3600
+        default 60
+        depends on AUDIO_MANAGER_WAV_STRESS_TESTAPP
+        help
+            The coordinator waits this long after a WAV reaches EOF, fails,
+            or is cancelled before submitting the next iteration. With golden
+            stability enabled, waiting for the next inter-cycle command window
+            is additional and does not stop the golden loop.
+
+    config AUDIO_MANAGER_WAV_STRESS_TASK_PRIORITY
+        int "Continuous-WAV coordinator task priority"
+        range 6 7
+        default 6
+        depends on AUDIO_MANAGER_WAV_STRESS_TESTAPP
+        help
+            FreeRTOS priority for the test-only coordinator. It only polls
+            manager status and queues commands; audio_manager remains the only
+            I2S owner. Use priority 7 only after measuring whole-system
+            responsiveness on target hardware.
 
 endmenu

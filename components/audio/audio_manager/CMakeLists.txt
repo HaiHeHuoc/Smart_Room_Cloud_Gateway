@@ -4,6 +4,7 @@ idf_component_register(
         "audio_dsp.c"
         "audio_dsp_cooperative.c"
         "audio_wav.c"
+        "audio_wav_prefetch.c"
     INCLUDE_DIRS
         "include"
     PRIV_INCLUDE_DIRS

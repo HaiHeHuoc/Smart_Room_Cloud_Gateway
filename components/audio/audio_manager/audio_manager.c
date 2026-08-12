@@ -13,6 +13,8 @@
 #include "audio_manager.h"
 #include "audio_dsp.h"
 #include "audio_wav.h"
+#include "audio_wav_prefetch.h"
+#include "sd_card_manager.h"
 #include "sdkconfig.h"
 
 #include <stdbool.h>
@@ -45,16 +47,39 @@
 #define AUDIO_MANAGER_COMMAND_POLL_MS                   100U
 #define AUDIO_MANAGER_TASK_START_TIMEOUT_MS            2000U
 #define AUDIO_MANAGER_TASK_STOP_TIMEOUT_MS             5000U
+#define AUDIO_MANAGER_WAV_PREFETCH_WAIT_POLL_MS          100U
+#define AUDIO_MANAGER_WAV_PREFETCH_READER_PRIORITY         5U
+#define AUDIO_MANAGER_WAV_PREFETCH_BYTES_PER_SECOND \
+    (AUDIO_MANAGER_SAMPLE_RATE_HZ * sizeof(int16_t))
+#define AUDIO_MANAGER_WAV_PREFETCH_SLOT_BYTES \
+    (AUDIO_MANAGER_WAV_PREFETCH_BYTES_PER_SECOND * \
+     CONFIG_AUDIO_MANAGER_WAV_PREFETCH_SECONDS)
+
+#ifdef CONFIG_AUDIO_MANAGER_WAV_STRESS_TESTAPP
+#define AUDIO_MANAGER_WAV_STRESS_TASK_NAME             "wav_stress"
+#define AUDIO_MANAGER_WAV_STRESS_TASK_STACK_SIZE       3072U
+#define AUDIO_MANAGER_WAV_STRESS_RETRY_DELAY_MS         100U
+#define AUDIO_MANAGER_WAV_STRESS_POST_COMPLETION_DELAY_MS \
+    (CONFIG_AUDIO_MANAGER_WAV_STRESS_POST_COMPLETION_DELAY_SECONDS * 1000U)
+#define AUDIO_MANAGER_WAV_STRESS_TASK_PRIORITY \
+    CONFIG_AUDIO_MANAGER_WAV_STRESS_TASK_PRIORITY
+#endif
 
 #define AUDIO_MANAGER_TASK_READY_BIT  ((EventBits_t)(1U << 0U))
 #define AUDIO_MANAGER_TASK_STOPPED_BIT ((EventBits_t)(1U << 1U))
+#define AUDIO_MANAGER_WAV_STRESS_TASK_STOPPED_BIT ((EventBits_t)(1U << 2U))
+#define AUDIO_MANAGER_WAV_STRESS_TASK_SHUTDOWN_BIT ((EventBits_t)(1U << 3U))
 
-/* Production remains lightweight; golden mode is configured for stress runs. */
+/* Production remains lightweight; test modes can raise the I2S owner to 6/7. */
 #ifdef CONFIG_AUDIO_MANAGER_GOLDEN_STABILITY_MODE
 #define AUDIO_MANAGER_DEFAULT_RECORD_SECONDS \
     CONFIG_AUDIO_MANAGER_GOLDEN_STABILITY_RECORD_SECONDS
 #define AUDIO_MANAGER_TASK_PRIORITY \
     CONFIG_AUDIO_MANAGER_GOLDEN_STABILITY_TASK_PRIORITY
+#elif defined(CONFIG_AUDIO_MANAGER_WAV_STRESS_TESTAPP)
+#define AUDIO_MANAGER_DEFAULT_RECORD_SECONDS          5U
+#define AUDIO_MANAGER_TASK_PRIORITY \
+    CONFIG_AUDIO_MANAGER_WAV_STRESS_TASK_PRIORITY
 #else
 #define AUDIO_MANAGER_DEFAULT_RECORD_SECONDS          5U
 #define AUDIO_MANAGER_TASK_PRIORITY                   5U
@@ -78,6 +103,8 @@ _Static_assert(AUDIO_MANAGER_SLOT_COUNT == 2U,
                "Standard I2S transport requires two slots");
 _Static_assert(AUDIO_MANAGER_SAMPLE_RATE_HZ == AUDIO_SAMPLE_RATE_HZ,
                "DSP and board sample rates must match");
+_Static_assert((AUDIO_MANAGER_WAV_PREFETCH_SLOT_BYTES % sizeof(int16_t)) == 0U,
+               "WAV prefetch slots must contain complete PCM16 samples");
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "AUDIO_MANAGER";
@@ -110,6 +137,18 @@ typedef struct
     uint32_t read_count;
     uint32_t read_failure_count;
     uint32_t max_wav_read_duration_us;
+    uint32_t prefetch_block_bytes;
+    uint32_t prefetch_blocks_filled;
+    uint32_t prefetch_fill_failure_count;
+    uint32_t max_prefetch_fill_duration_us;
+    uint64_t prefetch_recovery_data_offset;
+    uint32_t prefetch_recovery_attempt_count;
+    uint32_t prefetch_recovery_success_count;
+    uint32_t prefetch_recovery_wait_ms;
+    uint32_t initial_prefetch_wait_ms;
+    uint32_t prefetch_wait_ms;
+    uint32_t prefetch_starvation_count;
+    uint32_t prefetch_task_stack_high_water;
     uint32_t playback_elapsed_ms;
 } audio_wav_playback_metrics_t;
 
@@ -160,7 +199,7 @@ typedef struct
 {
     audio_playback_source_kind_t kind;
     size_t recorded_sample_count;
-    audio_wav_stream_t wav_stream;
+    audio_wav_prefetch_t wav_prefetch;
 } audio_playback_source_t;
 
 typedef enum
@@ -182,12 +221,21 @@ typedef enum
     AUDIO_MANAGER_OPERATION_STABILITY,
 } audio_manager_operation_t;
 
+/** @brief Completion record used only by the continuous WAV-stress coordinator. */
+typedef struct
+{
+    uint32_t sequence;
+    esp_err_t result;
+    bool cancelled;
+} audio_manager_wav_completion_t;
+
 typedef struct
 {
     bool task_running;
     bool shutdown_requested;
     bool cancel_requested;
     audio_manager_operation_t operation;
+    audio_manager_wav_completion_t wav_completion;
 } audio_manager_control_t;
 
 typedef struct
@@ -210,6 +258,7 @@ typedef struct
     i2s_chan_handle_t tx_channel;
 
     TaskHandle_t task_handle;
+    TaskHandle_t wav_stress_task_handle;
     SemaphoreHandle_t status_mutex;
     QueueHandle_t command_queue;
     EventGroupHandle_t lifecycle_events;
@@ -218,6 +267,9 @@ typedef struct
     audio_manager_status_t status;
     audio_manager_status_callback_t status_callback;
     void *status_callback_context;
+
+    /* Set by stop() so the optional coordinator can leave its 60-second wait. */
+    bool wav_stress_shutdown_requested;
 } audio_manager_runtime_t;
 
 /* Static Variables --------------------------------------------------------- */
@@ -260,6 +312,14 @@ static void audio_manager_reset_control(void);
 static bool audio_manager_cancel_is_requested(void);
 static bool audio_manager_shutdown_is_requested(void);
 static void audio_manager_finish_operation(void);
+#ifdef CONFIG_AUDIO_MANAGER_WAV_STRESS_TESTAPP
+static audio_manager_wav_completion_t
+audio_manager_snapshot_wav_completion(void);
+#endif
+static void audio_manager_finish_wav_operation(
+    esp_err_t result,
+    bool cancelled);
+static bool audio_manager_try_begin_stability_operation(void);
 static void audio_manager_record_rx_io(
     esp_err_t result,
     size_t bytes_read,
@@ -299,9 +359,12 @@ static esp_err_t play_recording(
     size_t sample_count,
     audio_dsp_playback_stats_t *stats);
 static esp_err_t play_wav_stream(
-    audio_wav_stream_t *stream,
+    audio_wav_prefetch_t *prefetch,
     audio_wav_playback_metrics_t *metrics,
     bool *cancelled);
+static esp_err_t audio_manager_copy_prefetch_metrics(
+    audio_wav_prefetch_t *prefetch,
+    audio_wav_playback_metrics_t *metrics);
 
 static void dsp_cooperative_yield(void *context);
 static void log_ns_metrics(const audio_dsp_ns_metrics_t *metrics);
@@ -324,11 +387,18 @@ static esp_err_t run_cycle(audio_cycle_metrics_t *metrics);
 static void audio_manager_handle_wav_command(const char *path);
 static void audio_manager_run_stability_iteration(void);
 static bool audio_manager_stability_mode_enabled(void);
+static bool audio_manager_mixed_stress_mode_enabled(void);
 static const char *audio_manager_wav_regression_path(void);
 static void log_cycle_diagnostics(
     uint32_t cycle,
     const audio_manager_diagnostics_t *before);
 static void audio_manager_task(void *argument);
+
+#ifdef CONFIG_AUDIO_MANAGER_WAV_STRESS_TESTAPP
+static bool audio_manager_wav_stress_shutdown_is_requested(void);
+static void audio_manager_wav_stress_wait(uint32_t delay_ms);
+static void audio_manager_wav_stress_task(void *argument);
+#endif
 
 /* Static Functions: Status / Callback ------------------------------------- */
 static bool audio_manager_take_status_mutex(const char *operation)
@@ -421,6 +491,63 @@ static void audio_manager_finish_operation(void)
     s_control.operation = AUDIO_MANAGER_OPERATION_NONE;
     s_control.cancel_requested = false;
     portEXIT_CRITICAL(&s_control_lock);
+}
+
+#ifdef CONFIG_AUDIO_MANAGER_WAV_STRESS_TESTAPP
+static audio_manager_wav_completion_t
+audio_manager_snapshot_wav_completion(void)
+{
+    audio_manager_wav_completion_t completion;
+
+    portENTER_CRITICAL(&s_control_lock);
+    completion = s_control.wav_completion;
+    portEXIT_CRITICAL(&s_control_lock);
+
+    return completion;
+}
+#endif
+
+/**
+ * @brief Publish one terminal WAV result even when GUI-status storage timed out.
+ *
+ * The coordinator uses this private sequence instead of status counters so a
+ * bounded status-mutex timeout cannot stall an otherwise completed stress run.
+ */
+static void audio_manager_finish_wav_operation(
+    esp_err_t result,
+    bool cancelled)
+{
+    portENTER_CRITICAL(&s_control_lock);
+    s_control.operation = AUDIO_MANAGER_OPERATION_NONE;
+    s_control.cancel_requested = false;
+    ++s_control.wav_completion.sequence;
+    s_control.wav_completion.result = result;
+    s_control.wav_completion.cancelled = cancelled;
+    portEXIT_CRITICAL(&s_control_lock);
+}
+
+/**
+ * @brief Reserve the manager slot for exactly one golden cycle.
+ *
+ * Mixed stress uses this only after its coordinator has had a chance to queue
+ * a WAV command. The manager task remains the sole I2S and source owner.
+ */
+static bool audio_manager_try_begin_stability_operation(void)
+{
+    bool started = false;
+
+    portENTER_CRITICAL(&s_control_lock);
+    if (s_control.task_running &&
+        !s_control.shutdown_requested &&
+        (s_control.operation == AUDIO_MANAGER_OPERATION_NONE))
+    {
+        s_control.operation = AUDIO_MANAGER_OPERATION_STABILITY;
+        s_control.cancel_requested = false;
+        started = true;
+    }
+    portEXIT_CRITICAL(&s_control_lock);
+
+    return started;
 }
 
 static void audio_manager_record_rx_io(
@@ -1273,140 +1400,382 @@ static esp_err_t play_recording(
     return ESP_OK;
 }
 
-static esp_err_t play_wav_stream(
-    audio_wav_stream_t *stream,
+/**
+ * @brief Wait for the next producer-ready WAV block without touching I2S.
+ *
+ * The initial wait is intentionally completed before TX starts.  A later
+ * wait means the consumer reached a 10-second boundary before the reader had
+ * another cache block ready; it is diagnosed as software prefetch starvation,
+ * not as a hardware I2S-underrun measurement.
+ */
+static esp_err_t audio_manager_take_prefetched_wav_item(
+    audio_wav_prefetch_t *prefetch,
+    audio_wav_prefetch_item_t *item,
+    audio_wav_playback_metrics_t *metrics,
+    bool initial_wait,
+    bool *cancelled)
+{
+    if ((prefetch == NULL) || (item == NULL) || (metrics == NULL) ||
+        (cancelled == NULL))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const int64_t wait_start_us = esp_timer_get_time();
+    while (true)
+    {
+        if (audio_manager_cancel_is_requested())
+        {
+            *cancelled = true;
+            return ESP_OK;
+        }
+
+        if (audio_wav_prefetch_take_ready(
+                prefetch,
+                item,
+                pdMS_TO_TICKS(AUDIO_MANAGER_WAV_PREFETCH_WAIT_POLL_MS)) ==
+            pdTRUE)
+        {
+            const int64_t wait_us = esp_timer_get_time() - wait_start_us;
+            const uint32_t wait_ms =
+                (wait_us <= 0)
+                    ? 0U
+                    : ((uint64_t)wait_us / 1000U > UINT32_MAX)
+                        ? UINT32_MAX
+                        : (uint32_t)((uint64_t)wait_us / 1000U);
+
+            if (initial_wait)
+            {
+                metrics->initial_prefetch_wait_ms = wait_ms;
+            }
+            else
+            {
+                metrics->prefetch_wait_ms += wait_ms;
+            }
+
+            if (item->result != ESP_OK)
+            {
+                return item->result;
+            }
+
+            if ((item->slot_index >= AUDIO_WAV_PREFETCH_SLOT_COUNT) ||
+                (item->valid_bytes == 0U) ||
+                ((item->valid_bytes % sizeof(int16_t)) != 0U) ||
+                (audio_wav_prefetch_slot_data(prefetch, item->slot_index) ==
+                 NULL))
+            {
+                return ESP_ERR_INVALID_RESPONSE;
+            }
+
+            return ESP_OK;
+        }
+
+        if (!initial_wait)
+        {
+            ++metrics->prefetch_starvation_count;
+            metrics->prefetch_wait_ms +=
+                AUDIO_MANAGER_WAV_PREFETCH_WAIT_POLL_MS;
+            ESP_LOGE(
+                TAG,
+                "WAV prefetch starvation: no READY block after %ums",
+                (unsigned)AUDIO_MANAGER_WAV_PREFETCH_WAIT_POLL_MS);
+            return ESP_ERR_TIMEOUT;
+        }
+
+        if (audio_wav_prefetch_wait_stopped(prefetch, 0U) == ESP_OK)
+        {
+            const esp_err_t worker_result =
+                audio_wav_prefetch_get_worker_result(prefetch);
+            return (worker_result == ESP_OK)
+                       ? ESP_ERR_INVALID_SIZE
+                       : worker_result;
+        }
+    }
+}
+
+/** @brief Convert one immutable READY PCM16 block into proven TX frames. */
+static esp_err_t audio_manager_play_prefetched_wav_item(
+    const audio_wav_prefetch_t *prefetch,
+    const audio_wav_prefetch_item_t *item,
     audio_wav_playback_metrics_t *metrics,
     bool *cancelled)
 {
-    if ((stream == NULL) ||
-        (stream->file == NULL) ||
-        (stream->buffer == NULL) ||
-        (metrics == NULL) ||
+    if ((prefetch == NULL) || (item == NULL) || (metrics == NULL) ||
         (cancelled == NULL))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const uint8_t *const pcm_bytes = audio_wav_prefetch_slot_data(
+        prefetch,
+        item->slot_index);
+    if ((pcm_bytes == NULL) || (item->valid_bytes == 0U) ||
+        ((item->valid_bytes % sizeof(int16_t)) != 0U))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const size_t sample_count = item->valid_bytes / sizeof(int16_t);
+    size_t sample_offset = 0U;
+
+    while (sample_offset < sample_count)
+    {
+        if (audio_manager_cancel_is_requested())
+        {
+            *cancelled = true;
+            return ESP_OK;
+        }
+
+        size_t frames = sample_count - sample_offset;
+        if (frames > AUDIO_MANAGER_FRAMES_PER_BLOCK)
+        {
+            frames = AUDIO_MANAGER_FRAMES_PER_BLOCK;
+        }
+
+        for (size_t frame = 0U; frame < frames; ++frame)
+        {
+            const size_t sample_byte_offset =
+                (sample_offset + frame) * sizeof(int16_t);
+            const int16_t mono_sample = apply_wav_volume_percent(
+                decode_wav_pcm16_le(&pcm_bytes[sample_byte_offset]));
+            const size_t slot = frame * AUDIO_MANAGER_SLOT_COUNT;
+            s_tx_block[slot] = mono_sample;
+            s_tx_block[slot + 1U] = mono_sample;
+        }
+
+        const esp_err_t result = write_tx_frames(frames);
+        if (result != ESP_OK)
+        {
+            return result;
+        }
+
+        metrics->data_bytes_streamed += frames * sizeof(int16_t);
+        sample_offset += frames;
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t play_wav_stream(
+    audio_wav_prefetch_t *prefetch,
+    audio_wav_playback_metrics_t *metrics,
+    bool *cancelled)
+{
+    if ((prefetch == NULL) || (metrics == NULL) || (cancelled == NULL) ||
+        !audio_wav_prefetch_is_active(prefetch))
     {
         return ESP_ERR_INVALID_ARG;
     }
 
     memset(metrics, 0, sizeof(*metrics));
     *cancelled = false;
-    metrics->expected_data_bytes = stream->info.data_size_bytes;
-    metrics->expected_duration_ms = stream->info.duration_ms;
+    metrics->prefetch_block_bytes = AUDIO_MANAGER_WAV_PREFETCH_SLOT_BYTES;
 
-    esp_err_t result = ESP_OK;
-    const int64_t playback_start_us = esp_timer_get_time();
-
-    while (stream->data_bytes_remaining > 0U)
+    audio_wav_prefetch_item_t item = {0};
+    bool item_held = false;
+    esp_err_t result = audio_manager_take_prefetched_wav_item(
+        prefetch,
+        &item,
+        metrics,
+        true,
+        cancelled);
+    if ((result != ESP_OK) || *cancelled)
     {
-        if (audio_manager_cancel_is_requested())
+        return result;
+    }
+    item_held = true;
+
+    audio_wav_info_t info = {0};
+    result = audio_wav_prefetch_get_info(prefetch, &info);
+    if (result == ESP_OK)
+    {
+        metrics->expected_data_bytes = info.data_size_bytes;
+        metrics->expected_duration_ms = info.duration_ms;
+    }
+
+    if ((result == ESP_OK) && audio_manager_cancel_is_requested())
+    {
+        *cancelled = true;
+    }
+
+    bool tx_started = false;
+    if ((result == ESP_OK) && !*cancelled)
+    {
+        result = start_i2s_tx();
+        tx_started = (result == ESP_OK);
+    }
+
+    if ((result == ESP_OK) && !*cancelled)
+    {
+        result = write_silence_blocks(
+            AUDIO_MANAGER_PRE_PLAYBACK_SILENCE_BLOCKS,
+            cancelled);
+    }
+
+    int64_t playback_start_us = 0;
+    if ((result == ESP_OK) && !*cancelled)
+    {
+        playback_start_us = esp_timer_get_time();
+        audio_manager_set_state(AUDIO_MANAGER_STATE_PLAYBACK);
+    }
+
+    while ((result == ESP_OK) && !*cancelled && item_held)
+    {
+        result = audio_manager_play_prefetched_wav_item(
+            prefetch,
+            &item,
+            metrics,
+            cancelled);
+
+        const bool final_block = item.final_block;
+        const esp_err_t release_result = audio_wav_prefetch_release_slot(
+            prefetch,
+            item.slot_index);
+        item_held = false;
+        if ((result == ESP_OK) && (release_result != ESP_OK))
         {
-            *cancelled = true;
-            break;
-        }
-
-        const uint8_t *pcm_bytes = NULL;
-        size_t bytes_read = 0U;
-        const int64_t read_start_us = esp_timer_get_time();
-        const esp_err_t read_result = audio_wav_stream_read(
-            stream,
-            &pcm_bytes,
-            &bytes_read);
-        const int64_t read_duration_us =
-            esp_timer_get_time() - read_start_us;
-        const uint32_t bounded_read_duration_us =
-            (read_duration_us <= 0)
-                ? 0U
-                : ((uint64_t)read_duration_us > UINT32_MAX)
-                    ? UINT32_MAX
-                    : (uint32_t)read_duration_us;
-
-        if (read_result != ESP_OK)
-        {
-            ++metrics->read_failure_count;
-            result = read_result;
-            break;
-        }
-
-        ++metrics->read_count;
-        if (bounded_read_duration_us > metrics->max_wav_read_duration_us)
-        {
-            metrics->max_wav_read_duration_us = bounded_read_duration_us;
-        }
-
-        if ((pcm_bytes == NULL) || (bytes_read == 0U))
-        {
-            ++metrics->read_failure_count;
-            result = ESP_ERR_INVALID_RESPONSE;
-            break;
-        }
-
-        if ((bytes_read % sizeof(int16_t)) != 0U)
-        {
-            ++metrics->read_failure_count;
-            result = ESP_ERR_INVALID_SIZE;
-            break;
-        }
-
-        metrics->data_bytes_read += bytes_read;
-        const size_t sample_count = bytes_read / sizeof(int16_t);
-        size_t sample_offset = 0U;
-
-        while (sample_offset < sample_count)
-        {
-            if (audio_manager_cancel_is_requested())
-            {
-                *cancelled = true;
-                break;
-            }
-
-            size_t frames = sample_count - sample_offset;
-            if (frames > AUDIO_MANAGER_FRAMES_PER_BLOCK)
-            {
-                frames = AUDIO_MANAGER_FRAMES_PER_BLOCK;
-            }
-
-            for (size_t frame = 0U; frame < frames; ++frame)
-            {
-                const size_t sample_byte_offset =
-                    (sample_offset + frame) * sizeof(int16_t);
-                const int16_t mono_sample = apply_wav_volume_percent(
-                    decode_wav_pcm16_le(&pcm_bytes[sample_byte_offset]));
-                const size_t slot = frame * AUDIO_MANAGER_SLOT_COUNT;
-                s_tx_block[slot] = mono_sample;
-                s_tx_block[slot + 1U] = mono_sample;
-            }
-
-            result = write_tx_frames(frames);
-            if (result != ESP_OK)
-            {
-                break;
-            }
-
-            metrics->data_bytes_streamed += frames * sizeof(int16_t);
-            sample_offset += frames;
+            result = release_result;
         }
 
         if ((result != ESP_OK) || *cancelled)
         {
             break;
         }
+
+        if (metrics->data_bytes_streamed == metrics->expected_data_bytes)
+        {
+            if (!final_block)
+            {
+                result = ESP_ERR_INVALID_SIZE;
+            }
+            break;
+        }
+
+        if (final_block ||
+            (metrics->data_bytes_streamed > metrics->expected_data_bytes))
+        {
+            result = ESP_ERR_INVALID_SIZE;
+            break;
+        }
+
+        result = audio_manager_take_prefetched_wav_item(
+            prefetch,
+            &item,
+            metrics,
+            false,
+            cancelled);
+        item_held = (result == ESP_OK) && !*cancelled;
     }
 
-    const int64_t elapsed_us = esp_timer_get_time() - playback_start_us;
-    metrics->playback_elapsed_ms =
-        (elapsed_us <= 0)
-            ? 0U
-            : ((uint64_t)elapsed_us / 1000U > UINT32_MAX)
-                ? UINT32_MAX
-                : (uint32_t)((uint64_t)elapsed_us / 1000U);
+    if (item_held)
+    {
+        const esp_err_t release_result = audio_wav_prefetch_release_slot(
+            prefetch,
+            item.slot_index);
+        if ((result == ESP_OK) && (release_result != ESP_OK))
+        {
+            result = release_result;
+        }
+    }
 
     if ((result == ESP_OK) && !*cancelled &&
-        ((metrics->data_bytes_read != metrics->expected_data_bytes) ||
-         (metrics->data_bytes_streamed != metrics->expected_data_bytes)))
+        (metrics->data_bytes_streamed != metrics->expected_data_bytes))
     {
         result = ESP_ERR_INVALID_SIZE;
     }
 
+    if ((result == ESP_OK) && !*cancelled)
+    {
+        result = write_silence_blocks(
+            AUDIO_MANAGER_POST_PLAYBACK_SILENCE_BLOCKS,
+            cancelled);
+    }
+
+    if (playback_start_us > 0)
+    {
+        const int64_t elapsed_us = esp_timer_get_time() - playback_start_us;
+        metrics->playback_elapsed_ms =
+            (elapsed_us <= 0)
+                ? 0U
+                : ((uint64_t)elapsed_us / 1000U > UINT32_MAX)
+                    ? UINT32_MAX
+                    : (uint32_t)((uint64_t)elapsed_us / 1000U);
+    }
+
+    if (tx_started)
+    {
+        const esp_err_t stop_result = stop_i2s_tx();
+        if ((result == ESP_OK) && (stop_result != ESP_OK))
+        {
+            result = stop_result;
+        }
+    }
+
     return result;
+}
+
+/**
+ * @brief Join the reader, then copy its final metrics before source teardown.
+ *
+ * Retrying a bounded join is deliberate: freeing PSRAM or closing a FILE
+ * while a VFS read is still running would be unsafe.  The public stop call
+ * retains its own finite timeout and reports that a wedged VFS read is still
+ * draining.
+ */
+static esp_err_t audio_manager_copy_prefetch_metrics(
+    audio_wav_prefetch_t *prefetch,
+    audio_wav_playback_metrics_t *metrics)
+{
+    if ((prefetch == NULL) || (metrics == NULL))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    audio_wav_prefetch_request_stop(prefetch);
+    uint32_t wait_rounds = 0U;
+    while (audio_wav_prefetch_wait_stopped(
+               prefetch,
+               pdMS_TO_TICKS(AUDIO_MANAGER_WAV_PREFETCH_WAIT_POLL_MS)) ==
+           ESP_ERR_TIMEOUT)
+    {
+        if ((wait_rounds == 0U) || ((wait_rounds % 10U) == 9U))
+        {
+            ESP_LOGW(TAG, "Waiting for WAV prefetch reader to drain");
+        }
+        ++wait_rounds;
+    }
+
+    audio_wav_prefetch_metrics_t prefetch_metrics = {0};
+    const esp_err_t metrics_result = audio_wav_prefetch_get_metrics(
+        prefetch,
+        &prefetch_metrics);
+    if (metrics_result != ESP_OK)
+    {
+        return metrics_result;
+    }
+
+    metrics->data_bytes_read = prefetch_metrics.data_bytes_read;
+    metrics->read_count = prefetch_metrics.io_read_count;
+    metrics->read_failure_count = prefetch_metrics.io_read_failure_count;
+    metrics->max_wav_read_duration_us =
+        prefetch_metrics.max_io_read_duration_us;
+    metrics->prefetch_blocks_filled = prefetch_metrics.blocks_filled;
+    metrics->prefetch_fill_failure_count =
+        prefetch_metrics.fill_failure_count;
+    metrics->max_prefetch_fill_duration_us =
+        prefetch_metrics.max_fill_duration_us;
+    metrics->prefetch_recovery_data_offset =
+        prefetch_metrics.last_recovery_data_offset;
+    metrics->prefetch_recovery_attempt_count =
+        prefetch_metrics.recovery_attempt_count;
+    metrics->prefetch_recovery_success_count =
+        prefetch_metrics.recovery_success_count;
+    metrics->prefetch_recovery_wait_ms =
+        prefetch_metrics.recovery_wait_ms;
+    metrics->prefetch_task_stack_high_water =
+        prefetch_metrics.task_stack_high_water;
+
+    return audio_wav_prefetch_get_worker_result(prefetch);
 }
 
 /* Static Functions: DSP / Pipeline ---------------------------------------- */
@@ -1660,22 +2029,24 @@ static esp_err_t playback_once(
             break;
 
         case AUDIO_PLAYBACK_SOURCE_WAV_PCM16:
-            if ((source->wav_stream.file == NULL) ||
-                (source->wav_stream.buffer == NULL))
+            if (!audio_wav_prefetch_is_active(&source->wav_prefetch))
             {
                 return ESP_ERR_INVALID_STATE;
             }
-            break;
+            ESP_LOGI(
+                TAG,
+                "WAV prefetch playback block=%uB cache=%us x%u volume=%u/100 policy=linear_pcm16",
+                (unsigned)AUDIO_MANAGER_WAV_PREFETCH_SLOT_BYTES,
+                (unsigned)CONFIG_AUDIO_MANAGER_WAV_PREFETCH_SECONDS,
+                (unsigned)AUDIO_WAV_PREFETCH_SLOT_COUNT,
+                (unsigned)s_runtime.config.playback_volume_percent);
+            return play_wav_stream(
+                &source->wav_prefetch,
+                &metrics->wav,
+                cancelled);
 
         default:
             return ESP_ERR_INVALID_ARG;
-    }
-
-    if ((source->kind == AUDIO_PLAYBACK_SOURCE_WAV_PCM16) &&
-        audio_manager_cancel_is_requested())
-    {
-        *cancelled = true;
-        return ESP_OK;
     }
 
     esp_err_t result = start_i2s_tx();
@@ -1686,59 +2057,32 @@ static esp_err_t playback_once(
 
     result = write_silence_blocks(
         AUDIO_MANAGER_PRE_PLAYBACK_SILENCE_BLOCKS,
-        (source->kind == AUDIO_PLAYBACK_SOURCE_WAV_PCM16)
-            ? cancelled
-            : NULL);
-
-    if ((result == ESP_OK) &&
-        (source->kind == AUDIO_PLAYBACK_SOURCE_WAV_PCM16) &&
-        audio_manager_cancel_is_requested())
-    {
-        *cancelled = true;
-    }
+        NULL);
 
     if ((result == ESP_OK) && !*cancelled)
     {
         audio_manager_set_state(AUDIO_MANAGER_STATE_PLAYBACK);
 
-        if (source->kind == AUDIO_PLAYBACK_SOURCE_RECORDED_PCM24)
-        {
-            ESP_LOGI(
-                TAG,
-                "PLAYBACK samples=%u volume=%u/100 gain=%u.%02ux limiter=+/-%d",
-                (unsigned)source->recorded_sample_count,
-                (unsigned)s_runtime.config.playback_volume_percent,
-                (unsigned)(AUDIO_DSP_PLAYBACK_GAIN_Q8 / AUDIO_DSP_Q8_ONE),
-                (unsigned)(((AUDIO_DSP_PLAYBACK_GAIN_Q8 %
-                              AUDIO_DSP_Q8_ONE) * 100U) /
-                            AUDIO_DSP_Q8_ONE),
-                AUDIO_DSP_PLAYBACK_PEAK_LIMIT_PCM16);
-            result = play_recording(
-                source->recorded_sample_count,
-                &metrics->playback);
-        }
-        else
-        {
-            ESP_LOGI(
-                TAG,
-                "WAV PLAYBACK data_bytes=%u duration=%ums volume=%u/100 policy=linear_pcm16",
-                (unsigned)source->wav_stream.info.data_size_bytes,
-                (unsigned)source->wav_stream.info.duration_ms,
-                (unsigned)s_runtime.config.playback_volume_percent);
-            result = play_wav_stream(
-                &source->wav_stream,
-                &metrics->wav,
-                cancelled);
-        }
+        ESP_LOGI(
+            TAG,
+            "PLAYBACK samples=%u volume=%u/100 gain=%u.%02ux limiter=+/-%d",
+            (unsigned)source->recorded_sample_count,
+            (unsigned)s_runtime.config.playback_volume_percent,
+            (unsigned)(AUDIO_DSP_PLAYBACK_GAIN_Q8 / AUDIO_DSP_Q8_ONE),
+            (unsigned)(((AUDIO_DSP_PLAYBACK_GAIN_Q8 %
+                          AUDIO_DSP_Q8_ONE) * 100U) /
+                        AUDIO_DSP_Q8_ONE),
+            AUDIO_DSP_PLAYBACK_PEAK_LIMIT_PCM16);
+        result = play_recording(
+            source->recorded_sample_count,
+            &metrics->playback);
     }
 
     if ((result == ESP_OK) && !*cancelled)
     {
         result = write_silence_blocks(
             AUDIO_MANAGER_POST_PLAYBACK_SILENCE_BLOCKS,
-            (source->kind == AUDIO_PLAYBACK_SOURCE_WAV_PCM16)
-                ? cancelled
-                : NULL);
+            NULL);
     }
 
     const esp_err_t stop_result = stop_i2s_tx();
@@ -1787,15 +2131,17 @@ static esp_err_t audio_manager_select_wav_playback_source(const char *path)
         return ESP_ERR_INVALID_STATE;
     }
 
-    if ((s_runtime.playback_source.wav_stream.file != NULL) ||
-        (s_runtime.playback_source.wav_stream.buffer != NULL))
+    if (audio_wav_prefetch_is_active(
+            &s_runtime.playback_source.wav_prefetch))
     {
         return ESP_ERR_INVALID_STATE;
     }
 
-    const esp_err_t result = audio_wav_stream_open(
-        &s_runtime.playback_source.wav_stream,
-        path);
+    const esp_err_t result = audio_wav_prefetch_start(
+        &s_runtime.playback_source.wav_prefetch,
+        path,
+        AUDIO_MANAGER_WAV_PREFETCH_SLOT_BYTES,
+        AUDIO_MANAGER_WAV_PREFETCH_READER_PRIORITY);
     if (result != ESP_OK)
     {
         return result;
@@ -1810,10 +2156,30 @@ static esp_err_t audio_manager_release_playback_source(void)
     esp_err_t result = ESP_OK;
 
     if ((s_runtime.playback_source.kind == AUDIO_PLAYBACK_SOURCE_WAV_PCM16) ||
-        (s_runtime.playback_source.wav_stream.file != NULL) ||
-        (s_runtime.playback_source.wav_stream.buffer != NULL))
+        audio_wav_prefetch_is_active(
+            &s_runtime.playback_source.wav_prefetch))
     {
-        result = audio_wav_stream_close(&s_runtime.playback_source.wav_stream);
+        uint32_t wait_rounds = 0U;
+        do
+        {
+            result = audio_wav_prefetch_stop_and_destroy(
+                &s_runtime.playback_source.wav_prefetch,
+                pdMS_TO_TICKS(AUDIO_MANAGER_WAV_PREFETCH_WAIT_POLL_MS));
+            if (result == ESP_ERR_TIMEOUT)
+            {
+                if ((wait_rounds == 0U) || ((wait_rounds % 10U) == 9U))
+                {
+                    ESP_LOGW(TAG, "Waiting to release WAV prefetch reader");
+                }
+                ++wait_rounds;
+            }
+        } while (result == ESP_ERR_TIMEOUT);
+
+        if (audio_wav_prefetch_is_active(
+                &s_runtime.playback_source.wav_prefetch))
+        {
+            return result;
+        }
     }
 
     s_runtime.playback_source.kind = AUDIO_PLAYBACK_SOURCE_NONE;
@@ -1916,6 +2282,25 @@ static bool audio_manager_stability_mode_enabled(void)
 #endif
 }
 
+static bool audio_manager_mixed_stress_mode_enabled(void)
+{
+#if defined(CONFIG_AUDIO_MANAGER_GOLDEN_STABILITY_MODE) && \
+    defined(CONFIG_AUDIO_MANAGER_WAV_STRESS_TESTAPP)
+    return true;
+#else
+    return false;
+#endif
+}
+
+static bool audio_manager_wav_stress_mode_enabled(void)
+{
+#ifdef CONFIG_AUDIO_MANAGER_WAV_STRESS_TESTAPP
+    return true;
+#else
+    return false;
+#endif
+}
+
 static const char *audio_manager_wav_regression_path(void)
 {
 #ifdef CONFIG_AUDIO_MANAGER_WAV_VALIDATION_ONCE
@@ -1924,6 +2309,180 @@ static const char *audio_manager_wav_regression_path(void)
     return NULL;
 #endif
 }
+
+#ifdef CONFIG_AUDIO_MANAGER_WAV_STRESS_TESTAPP
+static bool audio_manager_wav_stress_shutdown_is_requested(void)
+{
+    bool shutdown_requested;
+
+    portENTER_CRITICAL(&s_control_lock);
+    shutdown_requested = s_runtime.wav_stress_shutdown_requested;
+    portEXIT_CRITICAL(&s_control_lock);
+
+    return shutdown_requested;
+}
+
+/**
+ * @brief Wait without delaying lifecycle shutdown for the optional test task.
+ *
+ * audio_manager_stop() sets a lifecycle event bit so this task can leave
+ * either its short retry wait or configured post-completion sleep immediately.
+ */
+static void audio_manager_wav_stress_wait(uint32_t delay_ms)
+{
+    if (s_runtime.lifecycle_events != NULL)
+    {
+        (void)xEventGroupWaitBits(
+            s_runtime.lifecycle_events,
+            AUDIO_MANAGER_WAV_STRESS_TASK_SHUTDOWN_BIT,
+            pdFALSE,
+            pdFALSE,
+            pdMS_TO_TICKS(delay_ms));
+    }
+    else
+    {
+        vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    }
+}
+
+/**
+ * @brief Submit the configured WAV only through the manager command API.
+ *
+ * This is a test coordinator, not a second I2S or SD/VFS owner. It submits
+ * through the normal command-idle path, or through the bounded window between
+ * complete golden record/DSP/recorded-playback cycles when golden is enabled.
+ */
+static void audio_manager_wav_stress_task(void *argument)
+{
+    (void)argument;
+
+    const char *const path = CONFIG_AUDIO_MANAGER_WAV_STRESS_PATH;
+    bool waiting_for_sd = false;
+    uint32_t iteration = 0U;
+
+    ESP_LOGI(
+        TAG,
+        "WAV stress coordinator started: path=%s priority=%u delay=%us",
+        path,
+        (unsigned)AUDIO_MANAGER_WAV_STRESS_TASK_PRIORITY,
+        (unsigned)CONFIG_AUDIO_MANAGER_WAV_STRESS_POST_COMPLETION_DELAY_SECONDS);
+
+    while (!audio_manager_wav_stress_shutdown_is_requested())
+    {
+        if (!sd_card_manager_is_mounted())
+        {
+            if (!waiting_for_sd)
+            {
+                ESP_LOGI(TAG, "WAV stress waiting for SD VFS readiness");
+                waiting_for_sd = true;
+            }
+
+            audio_manager_wav_stress_wait(
+                AUDIO_MANAGER_WAV_STRESS_RETRY_DELAY_MS);
+            continue;
+        }
+
+        if (waiting_for_sd)
+        {
+            ESP_LOGI(TAG, "WAV stress detected SD VFS readiness");
+            waiting_for_sd = false;
+        }
+
+        audio_manager_status_t before = {0};
+        const esp_err_t status_result = audio_manager_get_status(&before);
+        if (status_result != ESP_OK)
+        {
+            audio_manager_wav_stress_wait(
+                AUDIO_MANAGER_WAV_STRESS_RETRY_DELAY_MS);
+            continue;
+        }
+
+        if ((before.state == AUDIO_MANAGER_STATE_INITIALIZED) ||
+            (before.state == AUDIO_MANAGER_STATE_UNINITIALIZED))
+        {
+            audio_manager_wav_stress_wait(
+                AUDIO_MANAGER_WAV_STRESS_RETRY_DELAY_MS);
+            continue;
+        }
+
+        const audio_manager_wav_completion_t completion_before =
+            audio_manager_snapshot_wav_completion();
+        const esp_err_t request_result = audio_manager_play_wav(path);
+        if (request_result == ESP_OK)
+        {
+            ++iteration;
+            ESP_LOGI(
+                TAG,
+                "WAV_STRESS #%u accepted; waiting for terminal result",
+                (unsigned)iteration);
+
+            audio_manager_wav_completion_t completion_after =
+                completion_before;
+            bool terminal = false;
+            while (!audio_manager_wav_stress_shutdown_is_requested() &&
+                   !terminal)
+            {
+                completion_after = audio_manager_snapshot_wav_completion();
+                terminal =
+                    (completion_after.sequence != completion_before.sequence);
+
+                if (!terminal)
+                {
+                    audio_manager_wav_stress_wait(
+                        AUDIO_MANAGER_WAV_STRESS_RETRY_DELAY_MS);
+                }
+            }
+
+            if (audio_manager_wav_stress_shutdown_is_requested())
+            {
+                break;
+            }
+
+            const char *const outcome =
+                completion_after.cancelled
+                    ? "cancelled"
+                    : (completion_after.result == ESP_OK) ? "completed" : "failed";
+            ESP_LOGI(
+                TAG,
+                "WAV_STRESS #%u %s: %s; sleeping %us",
+                (unsigned)iteration,
+                outcome,
+                esp_err_to_name(completion_after.result),
+                (unsigned)CONFIG_AUDIO_MANAGER_WAV_STRESS_POST_COMPLETION_DELAY_SECONDS);
+
+            audio_manager_wav_stress_wait(
+                AUDIO_MANAGER_WAV_STRESS_POST_COMPLETION_DELAY_MS);
+            continue;
+        }
+
+        if ((request_result != ESP_ERR_INVALID_STATE) &&
+            (request_result != ESP_ERR_TIMEOUT))
+        {
+            ESP_LOGE(
+                TAG,
+                "WAV stress request rejected: %s; retrying after %us",
+                esp_err_to_name(request_result),
+                (unsigned)CONFIG_AUDIO_MANAGER_WAV_STRESS_POST_COMPLETION_DELAY_SECONDS);
+            audio_manager_wav_stress_wait(
+                AUDIO_MANAGER_WAV_STRESS_POST_COMPLETION_DELAY_MS);
+        }
+        else
+        {
+            /* The manager owns I2S; retry when its command slot becomes free. */
+            audio_manager_wav_stress_wait(
+                AUDIO_MANAGER_WAV_STRESS_RETRY_DELAY_MS);
+        }
+    }
+
+    /* stop() clears the handle only after it has observed this terminal bit. */
+    xEventGroupSetBits(
+        s_runtime.lifecycle_events,
+        AUDIO_MANAGER_WAV_STRESS_TASK_STOPPED_BIT);
+
+    ESP_LOGI(TAG, "WAV stress coordinator stopped");
+    vTaskDelete(NULL);
+}
+#endif
 
 static void audio_manager_handle_wav_command(const char *path)
 {
@@ -1952,15 +2511,35 @@ static void audio_manager_handle_wav_command(const char *path)
 
     if (result == ESP_OK && !cancelled)
     {
-        expected_data_bytes =
-            s_runtime.playback_source.wav_stream.info.data_size_bytes;
-        expected_duration_ms =
-            s_runtime.playback_source.wav_stream.info.duration_ms;
         result = playback_once(
             &s_runtime.playback_source,
             &metrics,
             &cancelled);
     }
+
+    if (audio_wav_prefetch_is_active(
+            &s_runtime.playback_source.wav_prefetch))
+    {
+        const esp_err_t prefetch_result = audio_manager_copy_prefetch_metrics(
+            &s_runtime.playback_source.wav_prefetch,
+            &metrics.wav);
+        if ((result == ESP_OK) && !cancelled &&
+            (prefetch_result != ESP_OK))
+        {
+            result = prefetch_result;
+        }
+        else if ((result != ESP_OK) && (prefetch_result != ESP_OK) &&
+                 (prefetch_result != result))
+        {
+            ESP_LOGE(
+                TAG,
+                "WAV prefetch reader also failed: %s",
+                esp_err_to_name(prefetch_result));
+        }
+    }
+
+    expected_data_bytes = metrics.wav.expected_data_bytes;
+    expected_duration_ms = metrics.wav.expected_duration_ms;
 
     const esp_err_t cleanup_result = force_cycle_cleanup();
     if ((result == ESP_OK) && (cleanup_result != ESP_OK))
@@ -1981,7 +2560,7 @@ static void audio_manager_handle_wav_command(const char *path)
 
     ESP_LOGI(
         TAG,
-        "WAV_DIAG result=%s cancelled=%s expected_bytes=%u duration=%ums read_bytes=%llu streamed_bytes=%llu reads=%u read_fail=%u max_wav_read_us=%u elapsed=%ums tx_requested=%llu tx_written=%llu tx_q_ovf=%u tx_timeout=%u tx_partial=%u max_tx_us=%u",
+        "WAV_DIAG result=%s cancelled=%s expected_bytes=%u duration=%ums read_bytes=%llu streamed_bytes=%llu raw_reads=%u raw_read_fail=%u max_raw_read_us=%u prefetch_block=%u prefetch_fills=%u prefetch_fill_fail=%u max_prefetch_fill_us=%u sd_resume_offset=%llu sd_resume_attempt=%u sd_resume_ok=%u sd_resume_wait=%ums initial_wait=%ums boundary_wait=%ums prefetch_starve=%u reader_hwm=%u elapsed=%ums tx_requested=%llu tx_written=%llu tx_q_ovf=%u tx_timeout=%u tx_partial=%u max_tx_us=%u",
         esp_err_to_name(result),
         cancelled ? "yes" : "no",
         (unsigned)expected_data_bytes,
@@ -1991,6 +2570,18 @@ static void audio_manager_handle_wav_command(const char *path)
         (unsigned)metrics.wav.read_count,
         (unsigned)metrics.wav.read_failure_count,
         (unsigned)metrics.wav.max_wav_read_duration_us,
+        (unsigned)metrics.wav.prefetch_block_bytes,
+        (unsigned)metrics.wav.prefetch_blocks_filled,
+        (unsigned)metrics.wav.prefetch_fill_failure_count,
+        (unsigned)metrics.wav.max_prefetch_fill_duration_us,
+        (unsigned long long)metrics.wav.prefetch_recovery_data_offset,
+        (unsigned)metrics.wav.prefetch_recovery_attempt_count,
+        (unsigned)metrics.wav.prefetch_recovery_success_count,
+        (unsigned)metrics.wav.prefetch_recovery_wait_ms,
+        (unsigned)metrics.wav.initial_prefetch_wait_ms,
+        (unsigned)metrics.wav.prefetch_wait_ms,
+        (unsigned)metrics.wav.prefetch_starvation_count,
+        (unsigned)metrics.wav.prefetch_task_stack_high_water,
         (unsigned)metrics.wav.playback_elapsed_ms,
         (unsigned long long)(diagnostics_after.tx_bytes_requested -
                              diagnostics_before.tx_bytes_requested),
@@ -2025,14 +2616,17 @@ static void audio_manager_handle_wav_command(const char *path)
         }
 
         audio_manager_refresh_diagnostics_locked();
-        audio_manager_finish_operation();
         status_updated = true;
         xSemaphoreGive(s_runtime.status_mutex);
     }
-    else
+
+    if (!status_updated)
     {
-        audio_manager_finish_operation();
+        /* Best-effort recovery for a failed terminal-status store. */
+        audio_manager_set_state(AUDIO_MANAGER_STATE_IDLE);
     }
+
+    audio_manager_finish_wav_operation(result, cancelled);
 
     if (status_updated)
     {
@@ -2042,7 +2636,10 @@ static void audio_manager_handle_wav_command(const char *path)
     if (result != ESP_OK)
     {
         ESP_LOGE(TAG, "WAV playback failed: %s", esp_err_to_name(result));
-        audio_manager_set_state(AUDIO_MANAGER_STATE_IDLE);
+        if (status_updated)
+        {
+            audio_manager_set_state(AUDIO_MANAGER_STATE_IDLE);
+        }
     }
     else if (cancelled)
     {
@@ -2184,10 +2781,14 @@ static void audio_manager_task(void *argument)
     (void)argument;
 
     const bool stability_mode = audio_manager_stability_mode_enabled();
+    const bool mixed_stress_mode = audio_manager_mixed_stress_mode_enabled();
+    const bool wav_stress_mode = audio_manager_wav_stress_mode_enabled();
     ESP_LOGI(
         TAG,
         "Audio manager task started: mode=%s priority=%u volume=%u/100",
-        stability_mode ? "golden_stability" : "production_idle",
+        stability_mode
+            ? (mixed_stress_mode ? "golden_wav_stress" : "golden_stability")
+            : (wav_stress_mode ? "wav_stress" : "production_idle"),
         (unsigned)AUDIO_MANAGER_TASK_PRIORITY,
         (unsigned)s_runtime.config.playback_volume_percent);
 
@@ -2198,17 +2799,13 @@ static void audio_manager_task(void *argument)
 
     const char *const wav_regression_path =
         audio_manager_wav_regression_path();
-    if (wav_regression_path != NULL)
+    bool wav_regression_pending = (wav_regression_path != NULL);
+    if (wav_regression_pending)
     {
-        const esp_err_t regression_result =
-            audio_manager_play_wav(wav_regression_path);
-        if (regression_result != ESP_OK)
-        {
-            ESP_LOGE(
-                TAG,
-                "WAV startup regression command rejected: %s",
-                esp_err_to_name(regression_result));
-        }
+        ESP_LOGI(
+            TAG,
+            "WAV startup regression is waiting for SD VFS readiness: %s",
+            wav_regression_path);
     }
 
     bool task_done = false;
@@ -2221,19 +2818,104 @@ static void audio_manager_task(void *argument)
                 break;
             }
 
+            if (mixed_stress_mode)
+            {
+                /*
+                 * Drain a command accepted at the preceding inter-cycle
+                 * window before reserving I2S for the next golden cycle.
+                 */
+                audio_manager_command_t command = {0};
+                if (xQueueReceive(
+                        s_runtime.command_queue,
+                        &command,
+                        0U) == pdTRUE)
+                {
+                    if (command.kind == AUDIO_MANAGER_COMMAND_PLAY_WAV)
+                    {
+                        audio_manager_handle_wav_command(command.wav_path);
+                    }
+                    else if (command.kind == AUDIO_MANAGER_COMMAND_SHUTDOWN)
+                    {
+                        task_done = true;
+                    }
+                    else
+                    {
+                        ESP_LOGE(
+                            TAG,
+                            "Unknown audio command: %d",
+                            (int)command.kind);
+                    }
+                    continue;
+                }
+
+                if (!audio_manager_try_begin_stability_operation())
+                {
+                    /* A producer won the slot immediately after the poll. */
+                    vTaskDelay(1U);
+                    continue;
+                }
+            }
+
             audio_manager_run_stability_iteration();
+
+            if (mixed_stress_mode)
+            {
+                /* Only the completed cycle releases the command/I2S slot. */
+                audio_manager_finish_operation();
+            }
 
             audio_manager_command_t command = {0};
             if (xQueueReceive(
                     s_runtime.command_queue,
                     &command,
                     pdMS_TO_TICKS(AUDIO_MANAGER_INTER_CYCLE_DELAY_MS)) ==
-                pdTRUE)
+                    pdTRUE)
             {
-                task_done =
-                    (command.kind == AUDIO_MANAGER_COMMAND_SHUTDOWN);
+                if (mixed_stress_mode &&
+                    (command.kind == AUDIO_MANAGER_COMMAND_PLAY_WAV))
+                {
+                    audio_manager_handle_wav_command(command.wav_path);
+                }
+                else if (command.kind == AUDIO_MANAGER_COMMAND_SHUTDOWN)
+                {
+                    task_done = true;
+                }
+                else
+                {
+                    ESP_LOGE(
+                        TAG,
+                        "Unexpected audio command in golden mode: %d",
+                        (int)command.kind);
+                }
             }
             continue;
+        }
+
+        /*
+         * SD recovery is intentionally asynchronous at boot. Submit the
+         * default-off hardware regression once only after the manager reports
+         * VFS availability, rather than consuming its one command while the
+         * card is still in the cold-start retry window. The stream itself
+         * acquires the real lease immediately before fopen().
+         */
+        if (wav_regression_pending && sd_card_manager_is_mounted())
+        {
+            const esp_err_t regression_result =
+                audio_manager_play_wav(wav_regression_path);
+            if (regression_result == ESP_OK)
+            {
+                wav_regression_pending = false;
+                ESP_LOGI(TAG, "WAV startup regression command accepted");
+            }
+            else if ((regression_result != ESP_ERR_INVALID_STATE) &&
+                     (regression_result != ESP_ERR_TIMEOUT))
+            {
+                wav_regression_pending = false;
+                ESP_LOGE(
+                    TAG,
+                    "WAV startup regression command failed permanently: %s",
+                    esp_err_to_name(regression_result));
+            }
         }
 
         audio_manager_command_t command = {0};
@@ -2475,6 +3157,15 @@ esp_err_t audio_manager_init(const audio_manager_config_t *config)
         (unsigned)AUDIO_MANAGER_FRAMES_PER_BLOCK);
     ESP_LOGI(
         TAG,
+        "WAV prefetch=%us slot=%uB slots=%u PSRAM_total=%uB reader_priority=%u",
+        (unsigned)CONFIG_AUDIO_MANAGER_WAV_PREFETCH_SECONDS,
+        (unsigned)AUDIO_MANAGER_WAV_PREFETCH_SLOT_BYTES,
+        (unsigned)AUDIO_WAV_PREFETCH_SLOT_COUNT,
+        (unsigned)(AUDIO_MANAGER_WAV_PREFETCH_SLOT_BYTES *
+                   AUDIO_WAV_PREFETCH_SLOT_COUNT),
+        (unsigned)AUDIO_MANAGER_WAV_PREFETCH_READER_PRIORITY);
+    ESP_LOGI(
+        TAG,
         "DSP HPF80x2 + LPF6kx2 + adaptive NS + 16x speaker conditioning + limiter");
     ESP_LOGI(TAG, "================================================");
 
@@ -2532,18 +3223,25 @@ esp_err_t audio_manager_start(void)
     bool already_running;
     portENTER_CRITICAL(&s_control_lock);
     already_running = s_control.task_running;
-    if (!already_running && (s_runtime.task_handle == NULL))
+    if (!already_running &&
+        (s_runtime.task_handle == NULL) &&
+        (s_runtime.wav_stress_task_handle == NULL))
     {
         s_control.task_running = true;
         s_control.shutdown_requested = false;
         s_control.cancel_requested = false;
-        s_control.operation = audio_manager_stability_mode_enabled()
-            ? AUDIO_MANAGER_OPERATION_STABILITY
-            : AUDIO_MANAGER_OPERATION_NONE;
+        s_control.operation =
+            (audio_manager_stability_mode_enabled() &&
+             !audio_manager_mixed_stress_mode_enabled())
+                ? AUDIO_MANAGER_OPERATION_STABILITY
+                : AUDIO_MANAGER_OPERATION_NONE;
+        s_runtime.wav_stress_shutdown_requested = false;
     }
     portEXIT_CRITICAL(&s_control_lock);
 
-    if (already_running || (s_runtime.task_handle != NULL))
+    if (already_running ||
+        (s_runtime.task_handle != NULL) ||
+        (s_runtime.wav_stress_task_handle != NULL))
     {
         xSemaphoreGive(s_runtime.status_mutex);
         return ESP_ERR_INVALID_STATE;
@@ -2552,7 +3250,10 @@ esp_err_t audio_manager_start(void)
     (void)xQueueReset(s_runtime.command_queue);
     (void)xEventGroupClearBits(
         s_runtime.lifecycle_events,
-        AUDIO_MANAGER_TASK_READY_BIT | AUDIO_MANAGER_TASK_STOPPED_BIT);
+        AUDIO_MANAGER_TASK_READY_BIT |
+            AUDIO_MANAGER_TASK_STOPPED_BIT |
+            AUDIO_MANAGER_WAV_STRESS_TASK_STOPPED_BIT |
+            AUDIO_MANAGER_WAV_STRESS_TASK_SHUTDOWN_BIT);
     s_runtime.task_exit_result = ESP_OK;
 
     const BaseType_t result = xTaskCreate(
@@ -2588,6 +3289,24 @@ esp_err_t audio_manager_start(void)
     }
 
     ESP_LOGI(TAG, "Started and ready for commands");
+
+#ifdef CONFIG_AUDIO_MANAGER_WAV_STRESS_TESTAPP
+    const BaseType_t wav_stress_task_result = xTaskCreate(
+        audio_manager_wav_stress_task,
+        AUDIO_MANAGER_WAV_STRESS_TASK_NAME,
+        AUDIO_MANAGER_WAV_STRESS_TASK_STACK_SIZE,
+        NULL,
+        AUDIO_MANAGER_WAV_STRESS_TASK_PRIORITY,
+        &s_runtime.wav_stress_task_handle);
+    if (wav_stress_task_result != pdPASS)
+    {
+        s_runtime.wav_stress_task_handle = NULL;
+        ESP_LOGE(TAG, "Failed to create WAV stress coordinator task");
+        (void)audio_manager_stop();
+        return ESP_ERR_NO_MEM;
+    }
+#endif
+
     return ESP_OK;
 }
 
@@ -2691,8 +3410,9 @@ esp_err_t audio_manager_stop(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    if ((s_runtime.task_handle != NULL) &&
-        (xTaskGetCurrentTaskHandle() == s_runtime.task_handle))
+    const TaskHandle_t current_task = xTaskGetCurrentTaskHandle();
+    if ((current_task == s_runtime.task_handle) ||
+        (current_task == s_runtime.wav_stress_task_handle))
     {
         return ESP_ERR_INVALID_STATE;
     }
@@ -2704,17 +3424,21 @@ esp_err_t audio_manager_stop(void)
 
     bool task_running;
     bool first_request = false;
+    bool wav_stress_task_running;
     portENTER_CRITICAL(&s_control_lock);
     task_running = s_control.task_running;
+    wav_stress_task_running =
+        (s_runtime.wav_stress_task_handle != NULL);
     if (task_running)
     {
         first_request = !s_control.shutdown_requested;
         s_control.shutdown_requested = true;
         s_control.cancel_requested = true;
     }
+    s_runtime.wav_stress_shutdown_requested = true;
     portEXIT_CRITICAL(&s_control_lock);
 
-    if (!task_running)
+    if (!task_running && !wav_stress_task_running)
     {
         const esp_err_t result = s_runtime.task_exit_result;
         xSemaphoreGive(s_runtime.status_mutex);
@@ -2734,18 +3458,44 @@ esp_err_t audio_manager_stop(void)
         }
     }
 
+    if (wav_stress_task_running)
+    {
+        xEventGroupSetBits(
+            s_runtime.lifecycle_events,
+            AUDIO_MANAGER_WAV_STRESS_TASK_SHUTDOWN_BIT);
+    }
+
     xSemaphoreGive(s_runtime.status_mutex);
+
+    EventBits_t expected_stopped_bits = 0U;
+    if (task_running)
+    {
+        expected_stopped_bits |= AUDIO_MANAGER_TASK_STOPPED_BIT;
+    }
+    if (wav_stress_task_running)
+    {
+        expected_stopped_bits |= AUDIO_MANAGER_WAV_STRESS_TASK_STOPPED_BIT;
+    }
 
     const EventBits_t stopped_bits = xEventGroupWaitBits(
         s_runtime.lifecycle_events,
-        AUDIO_MANAGER_TASK_STOPPED_BIT,
+        expected_stopped_bits,
         pdFALSE,
         pdTRUE,
         pdMS_TO_TICKS(AUDIO_MANAGER_TASK_STOP_TIMEOUT_MS));
-    if ((stopped_bits & AUDIO_MANAGER_TASK_STOPPED_BIT) == 0U)
+    if ((stopped_bits & expected_stopped_bits) != expected_stopped_bits)
     {
-        ESP_LOGE(TAG, "Manager task stop timed out; shutdown remains pending");
+        ESP_LOGE(
+            TAG,
+            "Audio task stop timed out; shutdown remains pending");
         return ESP_ERR_TIMEOUT;
+    }
+
+    if (wav_stress_task_running)
+    {
+        portENTER_CRITICAL(&s_control_lock);
+        s_runtime.wav_stress_task_handle = NULL;
+        portEXIT_CRITICAL(&s_control_lock);
     }
 
     return s_runtime.task_exit_result;
@@ -2789,7 +3539,11 @@ esp_err_t audio_manager_deinit(void)
     task_running = s_control.task_running;
     portEXIT_CRITICAL(&s_control_lock);
 
-    if (task_running || (s_runtime.task_handle != NULL))
+    if (task_running ||
+        (s_runtime.task_handle != NULL) ||
+        (s_runtime.wav_stress_task_handle != NULL) ||
+        audio_wav_prefetch_is_active(
+            &s_runtime.playback_source.wav_prefetch))
     {
         return ESP_ERR_INVALID_STATE;
     }
