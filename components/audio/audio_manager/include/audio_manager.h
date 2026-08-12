@@ -49,7 +49,8 @@ typedef struct
 
     /**
      * Playback volume in range 0..100. Recorded audio then uses its existing
-     * conditioning; WAV audio uses this as a linear PCM16 scale only.
+     * conditioning. WAV audio first uses a fixed full-scale PCM16 mapping to
+     * the shared output ceiling, then this value applies its linear scale.
      */
     uint32_t playback_volume_percent;
 } audio_manager_config_t;
