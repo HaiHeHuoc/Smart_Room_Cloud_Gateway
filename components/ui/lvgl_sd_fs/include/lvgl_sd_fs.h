@@ -23,13 +23,16 @@
  *
  *      "/sdcard/Hinh.jpg"
  *
- * Requirements before calling this function:
- *      1. LVGL must already be initialized by lv_init().
- *      2. SD card must already be mounted by sd_card_manager_init().
+ * Requirement before calling this function:
+ *      - LVGL must already be initialized by lv_init().
+ *
+ * It is valid, and preferred during boot, to register before the SD VFS is
+ * ready. The registered driver's ready callback stays false until
+ * sd_card_manager reports a READY VFS, then becomes usable again after a safe
+ * recovery mount. Do not call this from the SD recovery task.
  *
  * @return
  *      - ESP_OK on success
- *      - ESP_ERR_INVALID_STATE if SD card is not mounted
  */
 esp_err_t lvgl_sd_fs_register(void);
 
@@ -48,7 +51,7 @@ bool lvgl_sd_fs_is_registered(void);
  *
  * Ready means:
  *      1. LVGL SD FS driver is registered
- *      2. SD card is currently mounted
+ *      2. SD card manager currently accepts new VFS leases
  *
  * @return true if ready, false otherwise
  */

@@ -3,11 +3,14 @@
 ## Purpose
 
 `audio_manager` owns the Phase 11 audio foundation for the INMP441 microphone
-and MAX98357A speaker path. The Phase 11.4.3 production task starts in `IDLE`,
+and MAX98357A speaker path. The Phase 11.4 production task starts in `IDLE`,
 accepts one copied WAV request at a time, and owns all WAV, source, and I2S
 lifecycle work. The default production path no longer starts the infinite
 record/DSP/playback soak. The hardware-proven NewSolution algorithms remain
-available through a default-off golden stability mode.
+available through a default-off golden stability mode. The optional continuous
+WAV stress hook can run standalone or with golden mode; its second, test-only
+coordinator task only polls status and submits commands, and does not own I2S,
+a file, or an SD lease.
 
 ## State Model
 
@@ -26,15 +29,18 @@ INITIALIZED -> audio_manager_deinit() -> UNINITIALIZED
 `audio_manager_state_to_string()` provides stable text for logs and the
 application GUI mapping. `RECORDING` begins as soon as the manager enables RX,
 so it includes microphone startup discard and slot detection as well as the
-five-second retained recording.
+configured retained recording (five seconds by default; 60 seconds when the
+optional golden stress profile is selected).
 
 ## Public API
 
 - `audio_manager_default_config()` returns the known-good Phase 11 defaults.
 - `audio_manager_init()` validates/copies configuration, creates synchronization, allocates PSRAM buffers, and establishes the safe speaker state.
 - `audio_manager_register_status_callback()` registers or removes one copied status callback for application integration.
-- `audio_manager_start()` starts the single manager-owned task and waits up to
-  two seconds for it to reach production `IDLE`.
+- `audio_manager_start()` starts the single I2S-owning manager task and waits
+  up to two seconds for it to reach production `IDLE`. The opt-in continuous
+  WAV stress hook also starts its non-I2S coordinator after that readiness
+  point.
 - `audio_manager_play_wav()` validates and copies one `/sdcard/...` path into
   bounded command storage; it never opens the file or waits for playback.
 - `audio_manager_stop_playback()` requests cancellation of the pending/active
@@ -59,28 +65,37 @@ public audio_manager_play_wav(path)
     -> validate and copy at most 255 path bytes
     -> bounded internal PLAY_WAV command
     -> single audio_manager task
-    -> select/open private WAV source
-    -> bounded 4 KiB reads and proven TX writes
+    -> start private WAV reader/prefetch worker
+    -> reader fills two bounded PSRAM PCM blocks from raw reads of at most 4 KiB
+    -> transient media error: close/release -> SD remount -> fresh reopen/seek
+    -> manager consumes READY blocks through proven TX writes
     -> manager-owned stop/close/free/speaker-LOW cleanup
     -> IDLE
 ```
 
 The queue holds two fixed-size commands. Only one audio operation slot may be
 reserved, so the second slot exists for cooperative `SHUTDOWN`, not a second
-WAV or a playlist. `RECORDING`, `PROCESSING`, `PLAYBACK`, active golden
+WAV or a playlist. `RECORDING`, `PROCESSING`, `PLAYBACK`, normal golden
 stability mode, and shutdown all reject a conflicting WAV request with
-`ESP_ERR_INVALID_STATE`. The copied path is 256 bytes including its null
-terminator, and callers may immediately reuse their path buffer after a
-successful return.
+`ESP_ERR_INVALID_STATE`. When continuous WAV stress is combined with golden
+mode, the scheduler releases the slot only after a complete golden cleanup and
+handles its coordinator's accepted WAV before the next golden cycle. The copied
+path is 256 bytes including its null terminator, and callers may immediately
+reuse their path buffer after a successful return.
 
-Exactly one task owns I2S RX/TX, `s_tx_block`, the playback-source slot, the
-`FILE *`, and the WAV reader buffer. Public callers only submit commands or set
-a short critical-section-protected cancel/shutdown request. They never close a
-file, delete an I2S channel, free a WAV buffer, or call LVGL.
+The audio-manager task is the sole owner of I2S RX/TX, `s_tx_block`, and the
+playback-source lifecycle. Its private `wav_prefetch` worker is the sole owner
+of the WAV `FILE *`, raw 4 KiB reader buffer, and SD VFS lease. The manager
+only consumes immutable READY PCM bytes from PSRAM and joins the worker before
+destroying those buffers. Public callers only submit commands or set a short
+critical-section-protected cancel/shutdown request. They never close a file,
+delete an I2S channel, free a WAV buffer, or call LVGL. The optional
+continuous-WAV coordinator is equivalent to a public caller: it has no direct
+I2S/VFS access and stops through the same component lifecycle.
 
-Cancellation is polled before each WAV read, before each bounded PCM TX block,
-and before each pre/post-silence TX block. The manager then exits through the
-same first-error-preserving cleanup path. A normal user cancellation increments
+Cancellation is polled before each 4 KiB worker read, before each bounded PCM
+TX block, and before each pre/post-silence TX block. The manager then exits
+through the same first-error-preserving cleanup path. A normal user cancellation increments
 `wav_playback_cancelled`, keeps `last_error == ESP_OK`, and returns to `IDLE`
 without publishing a false `ERROR`.
 
@@ -131,34 +146,47 @@ Suggested GUI meanings:
 The current dashboard renders these concise labels: `Audio: --`, `Audio: Ready`,
 `Audio: Idle`, `Audio: REC`, `Audio: DSP`, `Audio: PLAY`, and `Audio: ERR`.
 
-## Phase 11.4.1-11.4.3 Bounded SD/WAV Playback
+## Phase 11.4 Bounded SD/WAV Playback
 
 `audio_wav.c` and `audio_wav.h` are private implementation files, not public
-`audio_manager` API. The Phase 11.4.2 path is:
+`audio_manager` API. The Phase 11.4 WAV playback path is:
 
 ```text
 mounted SD VFS path
     -> private RIFF/WAVE parser
-    -> one bounded PCM16 reader buffer
+    -> private reader fills a pair of bounded PCM16 PSRAM blocks
+    -> single I2S owner consumes only READY blocks
     -> explicit little-endian PCM16 decode
     -> mono duplicated to the existing stereo TX staging block
     -> existing write_tx_frames() / I2S TX
 ```
 
 The manager owns one private playback-source slot for either retained PCM24 or
-a WAV PCM16 stream. The same audio-manager task selects, plays, and releases
-both source kinds. `audio_wav` never touches I2S. Phase 11.4.3 adds only the
-small fixed command queue described above; it adds no producer/consumer task,
-PCM ring, per-source queue, GUI state, or second I2S owner. A ring or task split
-is justified only if target-hardware measurements show that bounded direct SD
-reads cannot keep the existing TX path fed.
+a WAV PCM16 stream. Recorded PCM remains manager-task-only. For WAV, the
+private reader owns the stream/VFS lease and moves bytes through a two-slot
+`FREE -> FILLING -> READY -> CONSUMING -> FREE` handoff; the manager remains
+the only I2S owner. `audio_wav` never touches I2S, and the reader never touches
+I2S or LVGL. The split is bounded to two logical blocks and does not introduce
+a whole-file allocation, a public queue, GUI coupling, or a second I2S owner.
 
 ### SD ownership and paths
 
 - `sd_card_manager` remains the sole owner of SDSPI, FATFS mount/unmount, and
   card hardware lifecycle.
-- The reader checks `sd_card_manager_is_mounted()` then uses normal C stdio on
-  an absolute VFS file path under `SD_MOUNT_POINT` (currently `/sdcard`).
+- The reader atomically acquires an SD VFS lease before `fopen()` and releases
+  it only after `fclose()`, before it signals its terminal event. The manager
+  joins that event before freeing PSRAM or accepting the next source, which
+  prevents SD recovery from unmounting a VFS beneath a live WAV stream.
+- During recovery, new WAV opens return `ESP_ERR_INVALID_STATE`; the regular
+  record/DSP/playback stress cycle remains SD-independent.
+- A confirmed streaming media error is never retried on the failed `FILE *`.
+  The reader closes it and releases its lease before waiting up to five seconds
+  for `sd_card_manager` to remount. It may then open a fresh handle once, verify
+  that all WAV metadata is unchanged, seek to the last committed PCM byte, and
+  continue filling the same PSRAM slot. This order prevents a recovery deadlock
+  and avoids FatFS's sticky per-file error state.
+- The reader uses normal C stdio on an absolute VFS file path under
+  `SD_MOUNT_POINT` (currently `/sdcard`).
 - `S:/...` paths and `lvgl_sd_fs` are LVGL-only and are never used here.
 - The helper does not call `sd_card_manager_init()`, FATFS mount APIs, SPI APIs,
   or LVGL.
@@ -188,25 +216,40 @@ and `data` without assuming a 44-byte header, safely skips `LIST`, `JUNK`, and
 unknown chunks, and applies required even-byte chunk padding. All chunk end
 offsets are checked against both the RIFF-declared and actual file bounds.
 
-Each open stream owns exactly one `FILE *` and one 4 KiB Internal-RAM buffer.
-The buffer matches the current SDSPI 4 KiB transfer ceiling and holds 128 ms of
-canonical PCM16 mono. It is allocated once at open, reused by every `fread()`,
-and freed at close; it requires only Internal 8-bit RAM and is never passed to
-I2S directly. It is not a full-WAV/PSRAM allocation. Playback memory is
-therefore independent of WAV duration.
+Each open stream owns exactly one `FILE *` and one reusable 4 KiB Internal-RAM
+raw reader buffer. The worker reuses it for each bounded `fread()` and copies
+the result into the inactive logical PSRAM block. At the default
+`AUDIO_MANAGER_WAV_PREFETCH_SECONDS=10`, PCM16 mono 16 kHz needs 32,000 B/s,
+so each block is 320,000 B and the two-slot cache is 640,000 B. These buffers
+are allocated only for active WAV playback, checked as external PSRAM, and are
+never passed directly to I2S; the manager converts/copies into the existing
+DMA-capable `s_tx_block`. Playback memory remains bounded and independent of
+the total WAV-file duration.
 
-`audio_wav_stream_open()` closes the local file on every parse/allocation
-failure. `audio_wav_stream_read()` treats a short read before the declared data
-end as corruption or I/O failure and closes the stream before returning. Close
-always releases the buffer even if `fclose()` reports an error. The private
-reader is single-owner and not thread-safe; all calls remain serialized by the
-audio manager task/lifecycle owner.
+`audio_wav_stream_open()` closes the local file and releases its lease on every
+parse/allocation failure. `audio_wav_stream_read_limited()` lets the worker end
+a logical cache block exactly at its configured boundary, while retaining the
+4 KiB raw-read cap. A short read before the declared data end is corruption or
+I/O failure and closes the stream before returning. A confirmed VFS I/O error
+is reported to `sd_card_manager` before the lease is released. Close always
+releases the raw buffer even if `fclose()` reports an error, and releases the
+lease only after the FILE is closed. The private reader is single-owner and
+not thread-safe; the manager never calls its open/read/close APIs concurrently.
+
+The reader commits bytes only after a complete raw read. If a failed `fread()`
+returned partial bytes, those bytes are discarded; a successful fresh-file
+resume rereads from the last committed aligned offset, so PCM is neither lost
+nor duplicated. A second error, a five-second recovery timeout, changed WAV
+metadata, truncation, or an invalid resume offset ends that playback cleanly.
 
 `fopen()` returning `ENOENT`/`ENOTDIR` maps to `ESP_ERR_NOT_FOUND`. An existing
 RIFF file missing `fmt ` or `data` maps to `ESP_ERR_INVALID_RESPONSE` instead,
 so a missing path and malformed content are distinguishable. Unsupported audio
 formats map to `ESP_ERR_NOT_SUPPORTED`; bounds/truncation errors remain
 deterministic invalid-size failures.
+
+An `fopen()` errno classified by `sd_card_manager_is_vfs_media_error()` is
+reported to recovery; expected missing-path errors are not.
 
 `audio_wav_parse_file()` remains separately callable inside the component so a
 test harness can exercise valid PCM16 fixtures, metadata/odd-padding chunks,
@@ -217,7 +260,7 @@ lengths without requiring a mounted SD card.
 | --- | --- |
 | PCM16 mono 16-kHz, including `JUNK`/`LIST` chunks | Accepted; data offset and payload length reported |
 | Odd-sized unknown metadata chunk | Accepted after one-byte RIFF padding skip |
-| Large canonical WAV | Accepted with the same 4 KiB stream buffer |
+| Large canonical WAV | Accepted with the same 4 KiB raw reader and bounded two-slot PSRAM cache |
 | Random file, truncated RIFF, missing `fmt ` or `data` | Deterministic malformed/missing error |
 | Stereo, 44.1-kHz, 8/24/32-bit, float, ADPCM | Deterministic unsupported-format error |
 | Declared data/chunk length beyond file bounds | Deterministic invalid-size error |
@@ -233,20 +276,21 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 It covers canonical, `JUNK`, `LIST`, unknown, odd-padded, data-before-format,
 and large WAV fixtures plus random/truncated containers, missing chunks, zero
 data, oversized chunks, unsupported channels/rates/widths/float, invalid
-alignment/rate, and truncated payloads.
+alignment/rate, truncated payloads, and aligned/EOF/invalid resume offsets.
 
 Validation evidence is deliberately separated:
 
-| Check | Phase 11.4.3 result | What it proves |
+| Check | Current result | What it proves |
 | --- | --- | --- |
-| Native parser suite | 23/23 passed | Private RIFF/WAV parser and bounded reader fixture behavior |
-| ESP-IDF 6.0.1 firmware build | Passed | Firmware compiles and links with the production lifecycle APIs |
-| Target WAV playback | Pending | Real SD latency, I2S TX, MAX98357A sound, EOF, cancellation, and cleanup |
+| Native parser suite | 32/32 passed | Private RIFF/WAV parser, open/error SD-lease fixture behavior, and resume-seek bounds; it does not execute the FreeRTOS prefetch worker |
+| ESP-IDF 6.0.1 firmware build | Passed | Firmware compiles and links the private prefetch worker with the production lifecycle APIs |
+| Target WAV playback | Pending | Real SD latency, PSRAM cache handoff, I2S TX, MAX98357A sound, EOF, cancellation, and cleanup |
 | Golden MIC regression | Pending | Real INMP441 record, DSP, and recorded playback after the lifecycle refactor |
 
-The host suite does not emulate I2S TX, MAX98357A, target SD latency, audible
-continuity, or hardware cancellation. A firmware build also does not prove any
-of those runtime behaviors.
+The host suite does not emulate FreeRTOS queues/tasks, PSRAM cache handoff,
+I2S TX, MAX98357A, target SD latency, audible continuity, or hardware
+cancellation. A firmware build also does not prove any of those runtime
+behaviors.
 
 ### WAV output and TX lifecycle
 
@@ -263,38 +307,64 @@ existing `PLAYBACK` state, stream through `write_tx_frames()`, write the
 existing post-playback silence on normal completion, stop/delete TX, hold
 MAX98357A DIN LOW, release the source, and return to `IDLE`. Normal WAV EOF is
 success. The first stream/TX error is preserved while cleanup errors are still
-reported.
+reported. Reader outcome and lifecycle cleanup are separate: a successful
+join/ACK/free returns cleanup success even when the earlier read operation
+failed, so `WAV cleanup also failed` now denotes a real teardown failure only.
 
 ### Default-off hardware regression hooks
 
-Normal production startup reaches `IDLE` and waits for commands. Two mutually
-exclusive options remain under `idf.py menuconfig` -> `Audio manager`:
+Normal production startup reaches `IDLE` and waits for commands. The following
+test-only options remain under `idf.py menuconfig` -> `Audio manager`:
 
-- `Submit one WAV through production API at task startup` submits the configured
-  `/sdcard/...` file once through `audio_manager_play_wav()`. It uses the same
-  arbitration, command, cancellation, streaming, status, and cleanup path as an
-  application request; there is no private validation playback implementation.
+- `Submit one WAV through production API after SD is ready` is mutually
+  exclusive with golden mode and continuous WAV stress. It waits for the
+  configured `/sdcard/...` VFS to become ready, then submits that file once
+  through `audio_manager_play_wav()`. It uses the same arbitration, command,
+  cancellation, streaming, status, and cleanup path as an application request;
+  there is no private validation playback implementation.
 - `Run the golden record/DSP/playback stability loop` repeatedly calls the
-  unchanged `run_cycle()` regression path. It owns the operation slot and
-  observes cooperative manager shutdown between complete cycles.
+  unchanged `run_cycle()` regression path. Without continuous WAV stress, it
+  owns the operation slot and rejects production WAV requests.
+- `Run a continuous WAV playback stress coordinator` has no I2S or VFS
+  ownership. With golden mode disabled, it waits for SD readiness, repeatedly
+  plays its configured WAV to EOF/failure/cancellation, then sleeps for the
+  configured 60 seconds before its next submission. When combined with golden
+  mode, it uses the post-cycle command window instead.
 
-Both options default off. Golden mode intentionally rejects production WAV
-requests while active.
+All hooks default off. Standalone continuous WAV stress does not capture or
+run DSP. When combined with golden mode, it serializes full WAV playback
+between golden cycles; it never records and plays a WAV simultaneously.
 
-One aggregate `WAV_DIAG` log reports accepted data bytes/duration, bytes read,
-mono bytes submitted to TX, successful read count/failures, maximum successful
-`audio_wav_stream_read()` duration (`max_wav_read_us`),
-stream elapsed time, and TX requested/written/overflow/timeout/partial metrics.
-Failed wrapper calls do not inflate the maximum-read metric. It still measures
-the successful bounded wrapper, including its mount-state check, rather than a
-standalone raw `fread()` timer. No INFO log is emitted for every read.
+One aggregate `WAV_DIAG` log reports accepted data bytes/duration, raw bytes
+read, mono bytes submitted to TX, raw read (at most 4 KiB) count/failures and maximum
+read duration, logical prefetch block size/fills/failures/maximum-fill time,
+fresh-file SD resume offset/attempt/success/wait, initial preload latency, total
+boundary wait, software prefetch-starvation count, reader stack high-water mark,
+stream elapsed time, and TX
+requested/written/queue-overflow/timeout/partial metrics. `prefetch_starve`
+means the consumer had no READY block after a 100 ms boundary poll. The manager
+then fails that WAV operation and stops TX rather than waiting indefinitely
+with an empty cache. It is not a hardware I2S-underrun signal. No INFO log is
+emitted for every raw read.
 
 Suggested hardware files are valid 5-second, 30-second, and 60-second PCM16
 mono 16-kHz WAVs, followed by missing, bad-RIFF, stereo, 44.1-kHz, 24-bit, and
-truncated cases. Verify sound continuity, clean EOF to `IDLE`, zero nominal TX
-timeouts/partial writes/queue overflows, safe speaker inactivity afterward,
-and then confirm the original five-second record/DSP/playback cycle still
-works. These remain hardware checks until serial and listening evidence exists.
+truncated cases. For a 30/60-second file, listen carefully across every
+10-second boundary and confirm `expected_bytes == read_bytes == streamed_bytes`,
+`prefetch_fill_fail=0`, and `prefetch_starve=0`. Check that each successful
+`max_prefetch_fill_us` remains comfortably below the available 10-second cache
+margin. Also cancel during initial fill and active playback, then induce an SD
+read failure during refill and verify that the same WAV resumes from its
+committed offset through a fresh file handle. For one transient failure, expect
+`sd_resume_attempt=1`,
+`sd_resume_ok=1`, exact expected/read/streamed byte parity, and no false cleanup
+error; `max_prefetch_fill_us` includes the recovery wait. Without an injected
+fault, both resume counters remain zero. Separately force a recovery timeout or
+second read failure and verify clean terminal failure before the next stress
+iteration. Verify clean EOF to `IDLE`, zero nominal TX timeouts/partial writes,
+safe speaker inactivity afterward, and then confirm the configured golden
+record/DSP/playback cycle still works. These remain hardware checks until
+serial and listening evidence exists.
 
 ## Proven Audio Behavior Preserved
 
@@ -314,9 +384,9 @@ This structural refactor intentionally does not change the known-good audio path
 - TX DMA silence preload and pre/post playback silence remain unchanged.
 - MAX98357A data remains LOW while TX is inactive.
 - RX/TX remain half-duplex with defensive cleanup every cycle.
-- Phases 11.4.2/11.4.3 add the private WAV branch and production control around
-  the shared TX lifecycle; they do not modify recorded-audio DSP, conditioning,
-  I2S format/pins, DMA geometry, or golden capture policy.
+- The bounded WAV prefetch branch changes only the SD-to-PCM handoff. It does
+  not modify recorded-audio DSP, conditioning, I2S format/pins, DMA geometry,
+  or golden capture policy.
 
 ## Status And Diagnostics
 
@@ -344,7 +414,7 @@ metrics then.
 
 ## Production And Golden Modes
 
-The default Phase 11.4.3 task is command-idle:
+The default Phase 11.4 task is command-idle:
 
 ```text
 audio_manager_start()
@@ -356,7 +426,7 @@ audio_manager_start()
 The default-off golden Kconfig mode still repeats:
 
 ```text
-record 5 s
+record configured duration
   -> DSP
   -> play the same recording
   -> cleanup
@@ -367,29 +437,47 @@ record 5 s
 It calls the same preserved `run_cycle()` and remains the golden hardware-soak
 path. It is a regression facility, not normal product behavior.
 
-For the current target stress configuration,
-`CONFIG_AUDIO_MANAGER_GOLDEN_STABILITY_MODE=y` selects a 60-second capture
-(960000 samples / about 3.66 MiB PCM24 PSRAM) and task priority 6. Each cycle is
-therefore: 60-second capture -> DSP -> recorded playback -> cleanup -> 250 ms
-delay -> repeat. Priority 6 is intentionally one level above the priority-5 GUI
-task; the existing bounded I2S calls and cooperative DSP yields remain in use.
+For the current local WAV-only stress configuration,
+`CONFIG_AUDIO_MANAGER_GOLDEN_STABILITY_MODE` is disabled, so no 60-second
+capture, DSP, or recorded playback runs. `CONFIG_AUDIO_MANAGER_WAV_STRESS_TESTAPP=y`
+starts a priority-6 manager task and a priority-6 test coordinator for
+`/sdcard/audio/input.wav`. Its schedule is:
+
+```text
+WAV-only: full WAV playback -> EOF/error/cancellation -> cleanup
+      -> sleep 60 s
+      -> submit and play the full WAV again
+```
+
+The coordinator does not own I2S, and the manager plays the WAV exclusively
+until EOF/error/cancellation. A long file therefore plays in full before the
+60-second post-completion delay starts. Priority 6 is intentionally one level
+above the priority-5 GUI task; the existing bounded I2S calls remain in use.
 Priority 7 is available only as a measured follow-up if the board retains GUI,
 network, and watchdog responsiveness.
 
 ## Memory And Resource Budget
 
 - Task stack: 8192 bytes, unchanged from the existing manager task.
+- Continuous WAV stress only: one 3072-byte coordinator stack. It holds no WAV data,
+  I2S channel, source slot, or SD lease and is woken immediately by
+  `audio_manager_stop()` rather than waiting out its 60-second sleep.
 - Command queue: two fixed commands; each contains one enum plus a 256-byte
   copied path (520 bytes of payload total with the current 4-byte enum, plus
   FreeRTOS queue metadata/storage alignment).
-- Active WAV stream: one reusable 4096-byte Internal/8-bit buffer and one
-  `FILE *`; both are released after EOF, cancel, or error.
+- Active WAV stream: one reusable 4096-byte Internal/8-bit raw reader buffer,
+  one `FILE *`, and two configured-size PSRAM cache blocks. At the default
+  ten-second setting the blocks total 640000 bytes. All are released after the
+  reader has stopped at EOF, cancellation, or error.
+- WAV prefetch worker: one private 4096-byte stack at priority 5. It owns only
+  SD/VFS and cache fill; it never owns I2S or LVGL.
 - PSRAM: the whole-recording PCM24 buffer and DSP workspace remain allocated at
   init exactly as required by the preserved golden path. For the default
   five-second configuration, PCM24 history is 320000 bytes.
 - DMA/Internal staging: existing static RX/TX/silence blocks and I2S DMA
-  geometry are unchanged. No whole-WAV allocation, per-chunk allocation, PCM
-  ring, or second task was added.
+  geometry are unchanged. There is no whole-WAV allocation or second
+  I2S-owning task; cache blocks are allocated once per WAV and reused until
+  that source ends.
 
 ## Current Limitations
 
@@ -397,12 +485,19 @@ network, and watchdog responsiveness.
   observable through the current ESP-IDF direct-DMA API.
 - WAV support remains PCM16 mono at 16 kHz; there is no resampling, compressed
   codec, stereo-file support, playlist backlog, or network source.
-- Cancellation cannot preempt a synchronous SD/VFS read or I2S write. A wedged
-  media read has no component-level deadline; manager stop reports its finite
-  five-second timeout without force-deleting the task.
-- Golden stability shutdown is checked between complete `run_cycle()` calls,
-  so the configured stress capture/playback cycle (60 seconds in the current
-  local configuration) can outlast the public stop wait and require a later
-  stop-status check.
+- Cancellation cannot preempt one synchronous raw SD/VFS read or I2S write.
+  The worker checks cancellation between raw reads, but a wedged media read has
+  no component-level deadline; manager stop reports its finite five-second
+  timeout without force-deleting the task or freeing a live reader buffer.
+- Automatic in-operation SD recovery is intentionally bounded to one fresh-file
+  resume and a five-second READY wait. Persistent media errors, a damaged file
+  or sector, or a slower remount fail the current playback; continuous stress
+  may submit a new iteration after its configured delay.
+- Optional golden stability shutdown is checked between complete `run_cycle()`
+  calls, so a configured long capture/playback cycle can outlast the public
+  stop wait and require a later stop-status check. The optional WAV coordinator
+  leaves its retry/sleep wait immediately when `audio_manager_stop()` signals
+  it, but it cannot preempt an active worker-owned WAV read or manager-owned
+  TX write.
 - End-to-end WAV sound quality, SD latency under Gateway load, and golden-path
   MIC regression remain target-hardware validation work for Phase 11.4.4.

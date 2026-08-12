@@ -254,8 +254,9 @@ production playback path without coupling filesystem ownership into
       Gateway load, clean EOF, sound quality, and golden-path regression on
       target hardware.
 
-The 23-case host suite validates the private RIFF/WAV parser and bounded reader
-fixtures only. The ESP-IDF firmware build validates compilation/linking. Neither
+The 32-case host suite validates the private RIFF/WAV parser, bounded reader,
+and resume-seek bounds only. The ESP-IDF firmware build validates
+compilation/linking. Neither
 is evidence for real SD latency, I2S TX, MAX98357A output, audible continuity,
 or hardware cancellation.
 
@@ -265,7 +266,8 @@ or hardware cancellation.
       `IDLE`, and no longer starts the infinite golden soak by default.
 - [x] `audio_manager_play_wav()` validates and copies one bounded path into a
       two-entry command queue. Conflicting operations are rejected rather than
-      queued as a playlist; only the manager task opens/plays/closes the WAV.
+      queued as a playlist; the component retains source ownership while its
+      manager task remains the sole I2S owner.
 - [x] `audio_manager_stop_playback()` sets a protected cancellation request.
       WAV streaming polls it before reads and between PCM and silence TX blocks,
       then performs manager-owned cleanup and reports controlled cancel as
@@ -278,21 +280,50 @@ or hardware cancellation.
       public GUI state enum; no LVGL dependency or direct GUI call was added.
 - [x] Golden `run_cycle()` remains available through a default-off Kconfig
       stability mode and preserves the accepted I2S/DMA/DSP/capture constants.
-- [x] Direct 4 KiB streaming, linear WAV volume (`100%` equals source PCM16),
-      existing TX staging, and first-error cleanup remain unchanged; no PCM ring,
-      whole-file allocation, per-chunk allocation, or second task was added.
-- [x] ESP-IDF 6.0.1 `reconfigure` and firmware build pass; the unchanged parser
-      fixture suite passes 23/23.
+- [x] The original direct 4 KiB streaming proof remains the bounded raw-reader
+      layer. Phase 11.4.4 adds a private reader/prefetch worker and two bounded
+      PSRAM PCM blocks so the manager does not wait for SD/FATFS while feeding
+      TX. Linear WAV volume (`100%` equals source PCM16), existing TX staging,
+      and first-error cleanup remain unchanged; there is no whole-file or
+      per-chunk allocation and no second I2S owner.
+- [x] ESP-IDF 6.0.1 `reconfigure` and firmware build pass; the parser/resume-seek
+      fixture suite passes 32/32.
 - [ ] Validate production play/cancel/stop/restart/deinit, 5/30/60-second WAVs,
       failure recovery, latency, sound quality, and golden MIC regression on
       target hardware in Phase 11.4.4.
+
+#### Phase 11.4.4 — Bounded SD Prefetch Continuity — Implemented / Build And Parser Host-Test Verified / Hardware Pending
+
+- [x] A private reader worker is the sole owner of the WAV `FILE *`, 4 KiB
+      raw-reader buffer, and SD VFS lease. The audio-manager task remains the
+      sole I2S RX/TX and DMA-staging owner.
+- [x] Two bounded PSRAM slots hold 10 seconds each by default (320,000 bytes
+      per slot for PCM16 mono 16 kHz). The reader fills the inactive slot in
+      at-most-4-KiB raw reads while the manager plays a READY slot.
+- [x] TX starts only after the first READY slot. At a later cache boundary, a
+      missing READY slot is counted as software prefetch starvation and fails
+      the WAV cleanly rather than waiting indefinitely with an empty source.
+- [x] Cancellation and cleanup request reader stop, join it, then free the
+      slots; the SD lease is released before recovery may unmount the VFS.
+- [x] `WAV_DIAG` records raw-read/fill timing, initial/boundary wait, fill
+      failures, starvation count, bounded SD resume attempt/success/wait, and
+      reader stack high-water mark.
+- [x] On one confirmed media read failure, close the sticky failed `FILE *` and
+      release its VFS lease before a bounded wait for SD remount; reopen, verify
+      unchanged metadata, seek to the last committed PCM offset, and resume at
+      most once. Cleanup status is separate from the retained reader result.
+- [ ] Validate continuity at 5/10/30/60-second boundaries, cancellation during
+      initial fill/refill, SD error during refill, PSRAM margin, and full
+      Gateway load on target hardware.
 
 Reference flow:
 
 ```text
 SD card
     -> sd_card_manager / mounted filesystem
-    -> bounded WAV reader in the audio-manager task
+    -> private WAV reader/prefetch worker with SD VFS lease
+    -> two bounded PSRAM READY PCM16 blocks
+    -> audio-manager task (sole I2S owner)
     -> PCM16 mono decode / stereo staging
     -> existing write_tx_frames() / I2S TX DMA
     -> MAX98357A
@@ -311,9 +342,10 @@ SD card
       deterministically; do not resample or add formats in this phase.
 - [x] Read and submit bounded chunks instead of loading the entire audio file
       into RAM or PSRAM.
-- [x] Start with direct bounded read/decode/TX submission. Add a producer,
-      consumer, ring, or backpressure scheduler only after measured SD latency
-      and TX failure/gap evidence demonstrates a need.
+- [x] Use a bounded producer/consumer prefetch handoff after SD latency made
+      direct read/decode/TX submission a continuity risk. The worker performs
+      bounded raw reads; the manager consumes only READY PSRAM blocks and
+      remains the sole I2S owner.
 - [x] Handle normal EOF, missing/unsupported/corrupt/truncated input, short
       reads, SD-unavailable state, TX errors, close errors, and defensive
       cleanup in the bounded proof path.
