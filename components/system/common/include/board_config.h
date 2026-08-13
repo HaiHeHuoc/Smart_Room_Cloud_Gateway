@@ -88,7 +88,7 @@
 
 #define SD_MOUNT_POINT           "/sdcard"
 
-/* ESP-IDF SDSPI uses kHz; keep 1 MHz until cold-start hardware tests pass. */
+/* ESP-IDF SDSPI uses kHz; 10 MHz still requires cold-start hardware tests. */
 #define SD_CLOCK_KHZ (10 * 1000)
 
 /*
