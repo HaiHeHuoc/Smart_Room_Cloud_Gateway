@@ -613,6 +613,38 @@ esp_err_t audio_wav_stream_read_limited(
     return ESP_OK;
 }
 
+int16_t audio_wav_pcm16_scale_full_range_to_peak(
+    int16_t sample_pcm16,
+    uint32_t target_peak_pcm16)
+{
+    if ((target_peak_pcm16 == 0U) ||
+        (target_peak_pcm16 >= AUDIO_WAV_PCM16_ABSOLUTE_MAX))
+    {
+        return 0;
+    }
+
+    const int32_t sample = sample_pcm16;
+    const bool negative = sample < 0;
+    const uint32_t magnitude = negative
+                                   ? (uint32_t)(-sample)
+                                   : (uint32_t)sample;
+    const uint32_t gain_q16 =
+        AUDIO_WAV_PCM16_FULL_SCALE_GAIN_Q16(target_peak_pcm16);
+    /* Valid inputs keep this Q16 product below UINT32_MAX. */
+    uint32_t scaled_magnitude =
+        (magnitude * gain_q16 +
+         (AUDIO_WAV_PCM16_GAIN_Q16_ONE / 2U)) >>
+        16U;
+    if (scaled_magnitude > target_peak_pcm16)
+    {
+        scaled_magnitude = target_peak_pcm16;
+    }
+
+    const int32_t scaled_sample = (int32_t)scaled_magnitude;
+    return negative ? (int16_t)-scaled_sample
+                    : (int16_t)scaled_sample;
+}
+
 esp_err_t audio_wav_stream_seek_data(
     audio_wav_stream_t *stream,
     uint64_t data_offset_bytes)

@@ -27,6 +27,21 @@
 /** @brief Canonical PCM16 mono source byte rate: 16 kHz * 2 bytes. */
 #define AUDIO_WAV_CANONICAL_BYTE_RATE  32000U
 
+/** Maximum absolute magnitude representable by signed PCM16. */
+#define AUDIO_WAV_PCM16_ABSOLUTE_MAX   32768U
+
+/** Fixed-point unit used by the fixed full-scale WAV attenuation. */
+#define AUDIO_WAV_PCM16_GAIN_Q16_ONE   (1U << 16U)
+
+/**
+ * Q16 gain that maps the full signed PCM16 range to target_peak_pcm16.
+ *
+ * target_peak_pcm16 must be in 1..32767. For the shared target of 9000,
+ * this evaluates to 18000, exactly representing 9000 / 32768.
+ */
+#define AUDIO_WAV_PCM16_FULL_SCALE_GAIN_Q16(target_peak_pcm16) \
+    ((uint32_t)((target_peak_pcm16) * 2U))
+
 /** @brief Metadata retained after validating the canonical WAV format. */
 typedef struct
 {
@@ -111,6 +126,17 @@ esp_err_t audio_wav_stream_read_limited(
     size_t max_bytes,
     const uint8_t **buffer,
     size_t *bytes_read);
+
+/**
+ * @brief Apply one fixed PCM16 full-scale-to-target mapping with rounding.
+ *
+ * This is a stateless per-sample scale, not a file scan or dynamic limiter.
+ * It maps -32768 to -target_peak_pcm16 and never exceeds either target limit.
+ * Invalid targets return zero. The caller applies its user volume afterward.
+ */
+int16_t audio_wav_pcm16_scale_full_range_to_peak(
+    int16_t sample_pcm16,
+    uint32_t target_peak_pcm16);
 
 /**
  * @brief Seek to one block-aligned byte offset within the WAV data payload.

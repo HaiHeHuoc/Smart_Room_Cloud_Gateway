@@ -29,7 +29,9 @@ menu "Audio manager"
             accepted PCM16 mono 16-kHz source. At the default, one block is
             320000 bytes and the two PSRAM ping-pong blocks use 640000 bytes
             only while a WAV is active. The SD reader still uses bounded 4 KiB
-            raw reads; the I2S-owning manager consumes only a READY block.
+            raw reads. The I2S-owning manager consumes only a READY block and
+            applies its fixed PCM16 full-scale-to-output-ceiling map during TX;
+            no whole-file WAV scan or source-file modification is performed.
 
     config AUDIO_MANAGER_GOLDEN_STABILITY_MODE
         bool "Run the golden record/DSP/playback stability loop"

@@ -72,7 +72,8 @@ Use 3.3 V logic and a common ground. Confirm the source-of-truth definitions in
 - Insert it before boot when SD-backed assets or WAV playback are needed
   immediately. The application itself can boot without a card.
 - Automatic formatting is disabled.
-- The current SDSPI clock is intentionally conservative at 1 MHz.
+- The current SDSPI clock is configured at 10 MHz; retain it only after
+  confirming stable cold mounts and WAV playback on the target hardware.
 
 The card mounts at `/sdcard`; LVGL exposes it through the `S:` drive. Boot
 first shows the built-in `Starting...` screen, then the SD recovery task waits
@@ -109,6 +110,11 @@ full WAV to EOF/error, sleeps 60 seconds, then starts the file again. Expect
 `WAV_STRESS`, `AUDIO_WAV_PREFETCH`, and `WAV_DIAG` logs, but no `CYCLE_DIAG`.
 The deliberate first-cache fill is reported as `initial_wait`; sound starts
 only after that fill and it is expected startup latency, not a playback glitch.
+The manager does not scan the WAV before playback. Instead it maps every signed
+PCM16 sample from the full `[-32768, +32767]` range to the shared `[-9000,
++9000]` output range with fixed Q16 gain 18000, then applies configured volume.
+No SD file is created or modified. At volume 100, require `fixed_gain_q16=18000`
+and `output_peak <= 9000` in `WAV_DIAG`.
 For a 30/60-second file, check every 10-second boundary and require
 `prefetch_starve=0`, `prefetch_fill_fail=0`, and matching expected/read/streamed
 byte counts, with `max_prefetch_fill_us` comfortably below 10 seconds, before

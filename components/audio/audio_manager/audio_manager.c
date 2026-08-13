@@ -130,6 +130,8 @@ typedef struct
 
 typedef struct
 {
+    uint32_t fixed_scale_gain_q16;
+    uint32_t output_peak_pcm16;
     uint64_t data_bytes_read;
     uint64_t data_bytes_streamed;
     uint32_t expected_data_bytes;
@@ -1314,13 +1316,13 @@ static int16_t apply_wav_volume_percent(int16_t sample_pcm16)
          (int32_t)s_runtime.config.playback_volume_percent) /
         (int32_t)AUDIO_DSP_VOLUME_PERCENT_MAX;
 
-    if (scaled > INT16_MAX)
+    if (scaled > (int32_t)AUDIO_DSP_OUTPUT_PEAK_CEILING_PCM16)
     {
-        return INT16_MAX;
+        return (int16_t)AUDIO_DSP_OUTPUT_PEAK_CEILING_PCM16;
     }
-    if (scaled < INT16_MIN)
+    if (scaled < -(int32_t)AUDIO_DSP_OUTPUT_PEAK_CEILING_PCM16)
     {
-        return INT16_MIN;
+        return (int16_t)-(int32_t)AUDIO_DSP_OUTPUT_PEAK_CEILING_PCM16;
     }
 
     return (int16_t)scaled;
@@ -1536,8 +1538,20 @@ static esp_err_t audio_manager_play_prefetched_wav_item(
         {
             const size_t sample_byte_offset =
                 (sample_offset + frame) * sizeof(int16_t);
+            const int16_t fixed_scaled_sample =
+                audio_wav_pcm16_scale_full_range_to_peak(
+                    decode_wav_pcm16_le(&pcm_bytes[sample_byte_offset]),
+                    AUDIO_DSP_OUTPUT_PEAK_CEILING_PCM16);
             const int16_t mono_sample = apply_wav_volume_percent(
-                decode_wav_pcm16_le(&pcm_bytes[sample_byte_offset]));
+                fixed_scaled_sample);
+            const uint32_t magnitude =
+                (mono_sample < 0)
+                    ? (uint32_t)(-(int32_t)mono_sample)
+                    : (uint32_t)mono_sample;
+            if (magnitude > metrics->output_peak_pcm16)
+            {
+                metrics->output_peak_pcm16 = magnitude;
+            }
             const size_t slot = frame * AUDIO_MANAGER_SLOT_COUNT;
             s_tx_block[slot] = mono_sample;
             s_tx_block[slot + 1U] = mono_sample;
@@ -1568,6 +1582,9 @@ static esp_err_t play_wav_stream(
     }
 
     memset(metrics, 0, sizeof(*metrics));
+    metrics->fixed_scale_gain_q16 =
+        AUDIO_WAV_PCM16_FULL_SCALE_GAIN_Q16(
+            AUDIO_DSP_OUTPUT_PEAK_CEILING_PCM16);
     *cancelled = false;
     metrics->prefetch_block_bytes = AUDIO_MANAGER_WAV_PREFETCH_SLOT_BYTES;
 
@@ -2035,11 +2052,14 @@ static esp_err_t playback_once(
             }
             ESP_LOGI(
                 TAG,
-                "WAV prefetch playback block=%uB cache=%us x%u volume=%u/100 policy=linear_pcm16",
+                "WAV prefetch playback block=%uB cache=%us x%u volume=%u/100 policy=fixed_full_scale_pcm16 fixed_gain_q16=%u ceiling=+/-%u",
                 (unsigned)AUDIO_MANAGER_WAV_PREFETCH_SLOT_BYTES,
                 (unsigned)CONFIG_AUDIO_MANAGER_WAV_PREFETCH_SECONDS,
                 (unsigned)AUDIO_WAV_PREFETCH_SLOT_COUNT,
-                (unsigned)s_runtime.config.playback_volume_percent);
+                (unsigned)s_runtime.config.playback_volume_percent,
+                (unsigned)AUDIO_WAV_PCM16_FULL_SCALE_GAIN_Q16(
+                    AUDIO_DSP_OUTPUT_PEAK_CEILING_PCM16),
+                (unsigned)AUDIO_DSP_OUTPUT_PEAK_CEILING_PCM16);
             return play_wav_stream(
                 &source->wav_prefetch,
                 &metrics->wav,
@@ -2065,14 +2085,14 @@ static esp_err_t playback_once(
 
         ESP_LOGI(
             TAG,
-            "PLAYBACK samples=%u volume=%u/100 gain=%u.%02ux limiter=+/-%d",
+            "PLAYBACK samples=%u volume=%u/100 gain=%u.%02ux limiter=+/-%u",
             (unsigned)source->recorded_sample_count,
             (unsigned)s_runtime.config.playback_volume_percent,
             (unsigned)(AUDIO_DSP_PLAYBACK_GAIN_Q8 / AUDIO_DSP_Q8_ONE),
             (unsigned)(((AUDIO_DSP_PLAYBACK_GAIN_Q8 %
                           AUDIO_DSP_Q8_ONE) * 100U) /
                         AUDIO_DSP_Q8_ONE),
-            AUDIO_DSP_PLAYBACK_PEAK_LIMIT_PCM16);
+            (unsigned)AUDIO_DSP_OUTPUT_PEAK_CEILING_PCM16);
         result = play_recording(
             source->recorded_sample_count,
             &metrics->playback);
@@ -2356,7 +2376,8 @@ static void audio_manager_wav_stress_task(void *argument)
 {
     (void)argument;
 
-    const char *const path = CONFIG_AUDIO_MANAGER_WAV_STRESS_PATH;
+    // const char *const path = CONFIG_AUDIO_MANAGER_WAV_STRESS_PATH;
+    const char *const path = "/sdcard/audio/input_long.wav";
     bool waiting_for_sd = false;
     uint32_t iteration = 0U;
 
@@ -2560,11 +2581,13 @@ static void audio_manager_handle_wav_command(const char *path)
 
     ESP_LOGI(
         TAG,
-        "WAV_DIAG result=%s cancelled=%s expected_bytes=%u duration=%ums read_bytes=%llu streamed_bytes=%llu raw_reads=%u raw_read_fail=%u max_raw_read_us=%u prefetch_block=%u prefetch_fills=%u prefetch_fill_fail=%u max_prefetch_fill_us=%u sd_resume_offset=%llu sd_resume_attempt=%u sd_resume_ok=%u sd_resume_wait=%ums initial_wait=%ums boundary_wait=%ums prefetch_starve=%u reader_hwm=%u elapsed=%ums tx_requested=%llu tx_written=%llu tx_q_ovf=%u tx_timeout=%u tx_partial=%u max_tx_us=%u",
+        "WAV_DIAG result=%s cancelled=%s expected_bytes=%u duration=%ums fixed_gain_q16=%u output_peak=%u read_bytes=%llu streamed_bytes=%llu raw_reads=%u raw_read_fail=%u max_raw_read_us=%u prefetch_block=%u prefetch_fills=%u prefetch_fill_fail=%u max_prefetch_fill_us=%u sd_resume_offset=%llu sd_resume_attempt=%u sd_resume_ok=%u sd_resume_wait=%ums initial_wait=%ums boundary_wait=%ums prefetch_starve=%u reader_hwm=%u elapsed=%ums tx_requested=%llu tx_written=%llu tx_q_ovf=%u tx_timeout=%u tx_partial=%u max_tx_us=%u",
         esp_err_to_name(result),
         cancelled ? "yes" : "no",
         (unsigned)expected_data_bytes,
         (unsigned)expected_duration_ms,
+        (unsigned)metrics.wav.fixed_scale_gain_q16,
+        (unsigned)metrics.wav.output_peak_pcm16,
         (unsigned long long)metrics.wav.data_bytes_read,
         (unsigned long long)metrics.wav.data_bytes_streamed,
         (unsigned)metrics.wav.read_count,

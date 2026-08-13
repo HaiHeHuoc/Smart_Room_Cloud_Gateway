@@ -68,6 +68,7 @@ public audio_manager_play_wav(path)
     -> start private WAV reader/prefetch worker
     -> reader fills two bounded PSRAM PCM blocks from raw reads of at most 4 KiB
     -> transient media error: close/release -> SD remount -> fresh reopen/seek
+    -> manager maps PCM16 full scale to the shared +/-9000 output ceiling
     -> manager consumes READY blocks through proven TX writes
     -> manager-owned stop/close/free/speaker-LOW cleanup
     -> IDLE
@@ -83,15 +84,16 @@ handles its coordinator's accepted WAV before the next golden cycle. The copied
 path is 256 bytes including its null terminator, and callers may immediately
 reuse their path buffer after a successful return.
 
-The audio-manager task is the sole owner of I2S RX/TX, `s_tx_block`, and the
-playback-source lifecycle. Its private `wav_prefetch` worker is the sole owner
-of the WAV `FILE *`, raw 4 KiB reader buffer, and SD VFS lease. The manager
-only consumes immutable READY PCM bytes from PSRAM and joins the worker before
-destroying those buffers. Public callers only submit commands or set a short
-critical-section-protected cancel/shutdown request. They never close a file,
-delete an I2S channel, free a WAV buffer, or call LVGL. The optional
-continuous-WAV coordinator is equivalent to a public caller: it has no direct
-I2S/VFS access and stops through the same component lifecycle.
+The audio-manager task is the sole owner of I2S RX/TX, `s_tx_block`, fixed WAV
+PCM16 amplitude mapping, and the playback-source lifecycle. Its private
+`wav_prefetch` worker is the sole owner of the WAV `FILE *`, raw 4 KiB reader
+buffer, and SD VFS lease. The manager only consumes immutable READY PCM bytes
+from PSRAM and joins the worker before destroying those buffers. Public callers
+only submit commands or set a short critical-section-protected cancel/shutdown
+request. They never close a file, delete an I2S channel, free a WAV buffer, or
+call LVGL. The optional continuous-WAV coordinator is equivalent to a public
+caller: it has no direct I2S/VFS access and stops through the same component
+lifecycle.
 
 Cancellation is polled before each 4 KiB worker read, before each bounded PCM
 TX block, and before each pre/post-silence TX block. The manager then exits
@@ -157,6 +159,7 @@ mounted SD VFS path
     -> private reader fills a pair of bounded PCM16 PSRAM blocks
     -> single I2S owner consumes only READY blocks
     -> explicit little-endian PCM16 decode
+    -> fixed full-scale PCM16 map to the shared +/-9000 ceiling
     -> mono duplicated to the existing stereo TX staging block
     -> existing write_tx_frames() / I2S TX
 ```
@@ -282,8 +285,8 @@ Validation evidence is deliberately separated:
 
 | Check | Current result | What it proves |
 | --- | --- | --- |
-| Native parser suite | 32/32 passed | Private RIFF/WAV parser, open/error SD-lease fixture behavior, and resume-seek bounds; it does not execute the FreeRTOS prefetch worker |
-| ESP-IDF 6.0.1 firmware build | Passed | Firmware compiles and links the private prefetch worker with the production lifecycle APIs |
+| Native WAV suite | Parser 32/32 plus stream-contract/fixed-scale test passed | Parser, open/error SD-lease fixture behavior, resume-seek bounds, and fixed full-scale PCM16 endpoint/sample mapping; it does not execute the FreeRTOS prefetch worker |
+| ESP-IDF 6.0.1 firmware build | Passed | Firmware compiles and links the fixed full-scale WAV mapping with the production lifecycle APIs |
 | Target WAV playback | Pending | Real SD latency, PSRAM cache handoff, I2S TX, MAX98357A sound, EOF, cancellation, and cleanup |
 | Golden MIC regression | Pending | Real INMP441 record, DSP, and recorded playback after the lifecycle refactor |
 
@@ -296,10 +299,21 @@ behaviors.
 
 WAV samples bypass microphone DC removal, HPF, LPF, adaptive noise suppression,
 PCM24 conversion, 16x recorded-audio gain, fade, compression, and limiter. The
-only WAV amplitude policy is the configured linear `playback_volume_percent`;
-at 100 percent, each valid PCM16 sample is preserved. Each sample is decoded
-without an unaligned cast and duplicated into the existing static
-DMA-capable `s_tx_block`.
+manager instead applies one stateless fixed full-scale PCM16 map before the
+configured linear `playback_volume_percent`:
+
+```text
+output = round(input_pcm16 * 9000 / 32768)
+```
+
+The shared `AUDIO_DSP_OUTPUT_PEAK_CEILING_PCM16` define supplies 9000, and the
+equivalent Q16 gain is 18000. `-32768` maps to `-9000`; `+32767` maps to no
+more than `+9000`. The final volume path also clamps to the same ceiling. This
+does not scan, seek, cache, create, or modify a WAV file, and it introduces no
+per-block/dynamic limiter gain change. It preserves each source's waveform
+shape, but does not normalize loudness: quieter files remain quieter. Each
+sample is decoded without an unaligned cast and duplicated into the existing
+static DMA-capable `s_tx_block`.
 
 Both source kinds reuse the same TX lifecycle: create/configure I2S0, preload
 DMA silence, enable TX, write the existing pre-playback silence, publish the
@@ -335,29 +349,31 @@ All hooks default off. Standalone continuous WAV stress does not capture or
 run DSP. When combined with golden mode, it serializes full WAV playback
 between golden cycles; it never records and plays a WAV simultaneously.
 
-One aggregate `WAV_DIAG` log reports accepted data bytes/duration, raw bytes
-read, mono bytes submitted to TX, raw read (at most 4 KiB) count/failures and maximum
-read duration, logical prefetch block size/fills/failures/maximum-fill time,
-fresh-file SD resume offset/attempt/success/wait, initial preload latency, total
-boundary wait, software prefetch-starvation count, reader stack high-water mark,
-stream elapsed time, and TX
-requested/written/queue-overflow/timeout/partial metrics. `prefetch_starve`
-means the consumer had no READY block after a 100 ms boundary poll. The manager
-then fails that WAV operation and stops TX rather than waiting indefinitely
-with an empty cache. It is not a hardware I2S-underrun signal. No INFO log is
-emitted for every raw read.
+One aggregate `WAV_DIAG` log reports accepted data bytes/duration, fixed Q16
+gain, observed post-volume output peak, raw bytes read, mono bytes submitted to
+TX, raw read (at most 4 KiB) count/failures and maximum read duration, logical
+prefetch block size/fills/failures/maximum-fill time, fresh-file SD resume
+offset/attempt/success/wait, initial preload latency, total boundary wait,
+software prefetch-starvation count, reader stack high-water mark, stream elapsed
+time, and TX requested/written/queue-overflow/timeout/partial metrics.
+`prefetch_starve` means the consumer had no READY block after a 100 ms boundary
+poll. The manager then fails that WAV operation and stops TX rather than waiting
+indefinitely with an empty cache. It is not a hardware I2S-underrun signal. No
+INFO log is emitted for every raw read.
 
 Suggested hardware files are valid 5-second, 30-second, and 60-second PCM16
 mono 16-kHz WAVs, followed by missing, bad-RIFF, stereo, 44.1-kHz, 24-bit, and
-truncated cases. For a 30/60-second file, listen carefully across every
-10-second boundary and confirm `expected_bytes == read_bytes == streamed_bytes`,
+truncated cases. At volume 100, confirm `fixed_gain_q16=18000` and
+`output_peak <= 9000`; for a source with peak 27752, the expected output peak
+is about 7622. For a 30/60-second file, listen carefully across every 10-second
+boundary and confirm `expected_bytes == read_bytes == streamed_bytes`,
 `prefetch_fill_fail=0`, and `prefetch_starve=0`. Check that each successful
 `max_prefetch_fill_us` remains comfortably below the available 10-second cache
 margin. Also cancel during initial fill and active playback, then induce an SD
 read failure during refill and verify that the same WAV resumes from its
 committed offset through a fresh file handle. For one transient failure, expect
-`sd_resume_attempt=1`,
-`sd_resume_ok=1`, exact expected/read/streamed byte parity, and no false cleanup
+`sd_resume_attempt=1`, `sd_resume_ok=1`, exact expected/read/streamed byte
+parity, and no false cleanup
 error; `max_prefetch_fill_us` includes the recovery wait. Without an injected
 fault, both resume counters remain zero. Separately force a recovery timeout or
 second read failure and verify clean terminal failure before the next stress
@@ -368,7 +384,10 @@ serial and listening evidence exists.
 
 ## Proven Audio Behavior Preserved
 
-This structural refactor intentionally does not change the known-good audio path:
+This implementation preserves the known-good microphone DSP and audio transport.
+The intentional amplitude change is the shared
+`AUDIO_DSP_OUTPUT_PEAK_CEILING_PCM16` value of 9000 for recorded playback and
+fixed full-scale WAV mapping:
 
 - I2S0 master ownership remains private to `audio_manager`.
 - RX remains Philips standard I2S, 32-bit stereo, 16 kHz.
@@ -380,13 +399,15 @@ This structural refactor intentionally does not change the known-good audio path
 - Whole-recording PCM24 history and DSP workspace remain in PSRAM.
 - RX/TX staging remains static DMA-capable internal memory.
 - DSP remains DC removal, HPF80 x2, LPF6k x2, adaptive spectral NS, and cooperative task yielding.
-- Playback conditioning, fade, compression/limiting, and mono duplication remain unchanged.
+- Recorded playback conditioning, fade, compression/limiting, and mono
+  duplication remain unchanged apart from its hard ceiling now using the shared
+  9000 define.
 - TX DMA silence preload and pre/post playback silence remain unchanged.
 - MAX98357A data remains LOW while TX is inactive.
 - RX/TX remain half-duplex with defensive cleanup every cycle.
-- The bounded WAV prefetch branch changes only the SD-to-PCM handoff. It does
-  not modify recorded-audio DSP, conditioning, I2S format/pins, DMA geometry,
-  or golden capture policy.
+- The bounded WAV branch adds a fixed PCM16 amplitude map after SD-to-PCM
+  handoff. It does not modify recorded-audio DSP algorithms, I2S format/pins,
+  DMA geometry, or golden capture policy.
 
 ## Status And Diagnostics
 
@@ -485,6 +506,9 @@ network, and watchdog responsiveness.
   observable through the current ESP-IDF direct-DMA API.
 - WAV support remains PCM16 mono at 16 kHz; there is no resampling, compressed
   codec, stereo-file support, playlist backlog, or network source.
+- Fixed full-scale WAV mapping guarantees the shared output ceiling without a
+  source scan, but it is a safety scale rather than loudness normalization:
+  quieter WAV files remain quieter at the same configured volume.
 - Cancellation cannot preempt one synchronous raw SD/VFS read or I2S write.
   The worker checks cancellation between raw reads, but a wedged media read has
   no component-level deadline; manager stop reports its finite five-second
