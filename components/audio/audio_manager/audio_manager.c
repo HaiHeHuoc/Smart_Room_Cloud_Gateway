@@ -2377,7 +2377,8 @@ static void audio_manager_wav_stress_task(void *argument)
     (void)argument;
 
     // const char *const path = CONFIG_AUDIO_MANAGER_WAV_STRESS_PATH;
-    const char *const path = "/sdcard/audio/input_long.wav";
+    // const char *const path = "/sdcard/audio/input_long.wav";
+    const char *const path = "/sdcard/audio/input_2.wav";
     bool waiting_for_sd = false;
     uint32_t iteration = 0U;
 
