@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "main.c"
+        "audio_api_test_task.c"
     INCLUDE_DIRS
         "."
     REQUIRES
