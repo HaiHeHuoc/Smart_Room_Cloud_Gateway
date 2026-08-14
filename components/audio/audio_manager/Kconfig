@@ -1,5 +1,16 @@
 menu "Audio manager"
 
+    config AUDIO_MANAGER_MANUAL_RECORD_MAX_SECONDS
+        int "Maximum manual recording duration (seconds)"
+        range 1 120
+        default 30
+        help
+            Compile-time upper bound for audio_manager_start_recording().
+            Manual capture stops when the application requests stop or this
+            duration is reached, whichever happens first. The manager allocates
+            one shared retained-recording PSRAM buffer large enough for the
+            larger of this limit and the fixed record_duration_seconds value.
+
     config AUDIO_MANAGER_WAV_VALIDATION_ONCE
         bool "Submit one WAV through production API after SD is ready"
         default n
