@@ -152,6 +152,40 @@ typedef struct
     esp_err_t last_error;
 } ui_sensor_status_t;
 
+/* Audio UI Types ---------------------------------------------------------- */
+
+/** @brief Audio pipeline states rendered in the sensor dashboard status column. */
+typedef enum
+{
+    /** Audio status has not been received by the GUI yet. */
+    UI_AUDIO_STATE_UNAVAILABLE = 0,
+
+    /** Audio resources are initialized but the manager task is not active. */
+    UI_AUDIO_STATE_READY,
+
+    /** The audio manager task is between record/DSP/playback stages. */
+    UI_AUDIO_STATE_IDLE,
+
+    /** Microphone recording is active. */
+    UI_AUDIO_STATE_RECORDING,
+
+    /** The recorded PCM buffer is being processed. */
+    UI_AUDIO_STATE_PROCESSING,
+
+    /** Recorded PCM is being played through the speaker. */
+    UI_AUDIO_STATE_PLAYBACK,
+
+    /** The latest audio cycle failed. */
+    UI_AUDIO_STATE_ERROR
+} ui_audio_state_t;
+
+/** @brief Non-sensitive audio snapshot copied into the GUI latest-value queue. */
+typedef struct
+{
+    ui_audio_state_t state;
+    esp_err_t last_error;
+} ui_audio_status_t;
+
 /* Reset Result UI Types --------------------------------------------------- */
 
 /** @brief Result of one persistent Wi-Fi reset transaction. */
@@ -305,6 +339,22 @@ esp_err_t app_gui_post_wifi_status(
  */
 esp_err_t app_gui_post_sensor_status(
     const ui_sensor_status_t *status);
+
+/* Audio Status API -------------------------------------------------------- */
+/**
+ * @brief Replace the pending audio status without waiting or calling LVGL.
+ *
+ * The snapshot is copied into a dedicated length-one latest-value queue. This
+ * API is safe from normal task and task-context callback code, including the
+ * audio-manager status callback. It is not ISR-safe and never changes screens.
+ *
+ * @param[in] status Audio status snapshot to copy.
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG for NULL,
+ *         ESP_ERR_INVALID_STATE before app_gui_init(), or ESP_FAIL if the
+ *         queue update fails unexpectedly.
+ */
+esp_err_t app_gui_post_audio_status(
+    const ui_audio_status_t *status);
 
 /**
  * @brief Replace the pending cloud status without waiting.

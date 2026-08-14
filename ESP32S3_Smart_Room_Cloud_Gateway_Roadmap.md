@@ -1371,10 +1371,22 @@ adding a production audio component or Xiaozhi dependency.
 
 ---
 
-## Sprint 11 — Production Audio Manager — New / Not Started
+## Sprint 11 — Production Audio Manager — In Progress / Gated
 
 **Goal:** Introduce a project-owned `audio_manager` that safely owns all
 production microphone, speaker, I2S, buffering, and audio status behavior.
+
+**Current checkpoint:** The NewSolution stability foundation, copied GUI state
+adapter, direct-DMA Phase 11.3 diagnostics, Phase 11.4.3 production
+play/cancel/stop lifecycle, and Phase 11.4.4 bounded two-slot SD/WAV prefetch
+are implemented. The manager remains the sole I2S owner; a private reader owns
+the WAV file/SD lease and fills two PSRAM blocks. One bounded fresh-file resume
+can continue after a transient SD read/remount without reusing FatFS's failed
+handle. The ESP-IDF 6.0.1 build and 32-case parser/resume-seek host suite pass;
+those checks do not prove real I2S/SD/speaker
+behavior. Sprint 11 remains gated by Sprint 10 hardware acceptance plus
+target-hardware WAV, cancellation/lifecycle, and golden MIC regression
+validation.
 
 ### Placement And Dependencies
 
@@ -1409,9 +1421,10 @@ production microphone, speaker, I2S, buffering, and audio status behavior.
 ### RTOS And Resource Design
 
 - Dedicated capture/playback tasks only when measurements justify them.
-- Bounded RX/TX ring buffers or queues, a short status mutex, finite API
-  timeouts, DMA buffers in capable internal RAM, and bulk PCM in PSRAM only
-  after PSRAM validation.
+- Use bounded direct transfer first. Add bounded RX/TX rings or queues only
+  when measured producer/consumer decoupling requires them; keep the short
+  status mutex, finite I/O timeouts, DMA staging in capable Internal RAM, and
+  bulk PCM in PSRAM only after PSRAM validation.
 - Document task priority relative to LVGL, Wi-Fi, cloud, sensor, and button
   tasks; collect stack high-water marks.
 - Hardware remains the exact microphone/amplifier/speaker/pin map accepted in
@@ -2006,7 +2019,7 @@ Use this section to track daily/weekly progress.
 | 8 | Reconnect + retry | Done |  | 2026-08-02 | User-confirmed target-hardware reconnect, cloud retry/recovery, UI-state, logging, and stability acceptance. |
 | 9 | Portfolio polish | In progress | 2026-08-02 |  | Documentation and secret cleanup implemented; real photos/screenshots and demo video pending. |
 | 10 | Audio hardware validation | In progress; 10.4 complete |  |  | Hardware and GPIO gate remains; only RX/TX coexistence stress checkpoint is complete. |
-| 11 | Production audio manager | Proposed / Not started |  |  | Requires Sprint 10 hardware acceptance. |
+| 11 | Production audio manager | In progress; 11.4.4 software implemented |  |  | Production IDLE task, copied WAV request, cooperative cancel/stop/restart, bounded two-slot SD/WAV prefetch, one bounded fresh-file SD resume, and 32 parser/resume-seek fixtures are build-verified; target-hardware Phase 11.4.4 acceptance remains. |
 | 12 | Xiaozhi build + transport | Proposed / Not started |  |  | Re-verify and exactly pin the reviewed dependency before implementation. |
 | 13 | Voice assistant adapter | Proposed / Not started |  |  | Only adapter may depend directly on `esp_xiaozhi`. |
 | 14 | Push-to-talk voice MVP | Proposed / Not started |  |  | Wake word intentionally deferred. |

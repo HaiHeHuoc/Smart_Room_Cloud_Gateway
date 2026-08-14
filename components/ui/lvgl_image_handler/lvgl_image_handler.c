@@ -623,6 +623,19 @@ static void lvgl_image_handler_gif_timer_cb(lv_timer_t *timer)
         lvgl_image_handler_gif_decode_next_frame(state, &next_delay_ms);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Stop GIF animation after a decode error");
+
+        /*
+         * A GIF decode failure can originate in an SD VFS read. Closing the
+         * decoder invokes the LVGL filesystem close callback, which releases
+         * its managed SD lease before the recovery task attempts unmount.
+         * Keep the final decoded frame visible and leave state ownership to
+         * the normal image replacement/clear path.
+         */
+        if ((state != NULL) && state->decoder_open) {
+            GIF_close(&state->decoder);
+            state->decoder_open = false;
+        }
+
         lv_timer_pause(timer);
         return;
     }

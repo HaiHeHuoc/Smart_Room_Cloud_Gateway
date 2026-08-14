@@ -32,7 +32,7 @@ transaction-aware presentation acknowledgment for controlled restart timing.
 | `APP_GUI_SCREEN_BOOT` | Static `Smart Gateway` / `Starting...` placeholder. |
 | `APP_GUI_SCREEN_PROVISIONING` | Stable provisioning layout with a scannable QR code, instruction/status labels, and state indicator. |
 | `APP_GUI_SCREEN_WIFI_STATUS` | Existing Wi-Fi mode, SSID, and IPv4 screen. |
-| `APP_GUI_SCREEN_SENSOR_DASHBOARD` | Existing sensor dashboard with Wi-Fi and cloud summaries. |
+| `APP_GUI_SCREEN_SENSOR_DASHBOARD` | Sensor dashboard with temperature/humidity at left and Wi-Fi, cloud, sensor, and audio summaries in the right status column. |
 | `APP_GUI_SCREEN_RESET_RESULT` | Factory-reset success or failure result; entered only through `app_gui_show_reset_result()`. |
 
 The old `APP_GUI_SCREEN_WIFI` and `APP_GUI_SCREEN_SENSOR` identifiers were
@@ -50,10 +50,27 @@ renamed directly. No compatibility aliases are retained.
   overwrites the pending value.
 - Wi-Fi status queue: length 1, newest snapshot overwrites the pending value.
 - Sensor status queue: length 5, producers never wait.
+- Audio status queue: length 1, newest state snapshot overwrites the pending value.
 - Cloud status queue: length 1, newest snapshot overwrites the pending value.
 
 If any allocation fails, every queue created by that attempt is deleted, all
 handles return to `NULL`, and `app_gui_init()` returns `ESP_ERR_NO_MEM`.
+
+### Sensor dashboard audio status
+
+The audio status queue is consumed only by the GUI task. The dashboard's right
+status column maps copied manager state as follows; a non-OK `last_error` while
+the manager is otherwise `IDLE` is rendered as `Audio: ERR`.
+
+| Audio UI state | Dashboard text | Color |
+|---|---|---|
+| `UNAVAILABLE` | `Audio: --` | Gray |
+| `READY` | `Audio: Ready` | Blue |
+| `IDLE` | `Audio: Idle` | Gray |
+| `RECORDING` | `Audio: REC` | Red |
+| `PROCESSING` | `Audio: DSP` | Yellow |
+| `PLAYBACK` | `Audio: PLAY` | Green |
+| `ERROR` | `Audio: ERR` | Red |
 
 | API | Responsibility |
 |---|---|
@@ -66,6 +83,7 @@ handles return to `NULL`, and `app_gui_init()` returns `ESP_ERR_NO_MEM`.
 | `app_gui_clear_provisioning_qr_payload()` | Post explicit session invalidation; the GUI task clears its cache and hides the QR widget. |
 | `app_gui_post_wifi_status()` | Replace the pending Wi-Fi model without calling LVGL. |
 | `app_gui_post_sensor_status()` | Queue a sensor model without calling LVGL. |
+| `app_gui_post_audio_status()` | Replace the pending non-sensitive audio state without calling LVGL. |
 | `app_gui_post_cloud_status()` | Replace the pending cloud model without calling LVGL. |
 | `app_gui_show_reset_result()` | Validate, copy, and enqueue one reset result without calling LVGL. |
 | `app_gui_is_reset_result_presented()` | Non-blockingly inspect whether the exact transaction completed a GUI presentation cycle. |
@@ -357,6 +375,7 @@ It posts screen requests but never renders or calls LVGL.
 | Verified provisioning success | `SUCCESS` dwell for 1500 ms -> explicit `WIFI_STATUS` request |
 | Wi-Fi status update | Cache/render only; no implicit screen change |
 | Sensor status update | Cache/render only; no implicit screen change |
+| Audio status update | Cache/render only; no implicit screen change |
 | Cloud status update | Cache/render only; no implicit screen change |
 | Wi-Fi screen timeout | Explicit deferred `SENSOR_DASHBOARD` request |
 | Reset result | Dedicated copied command -> modal `RESET_RESULT`; ordinary routing remains blocked, while a newer reset result may replace the current one before verified success reboots |

@@ -1,0 +1,67 @@
+menu "Audio manager"
+
+    config AUDIO_MANAGER_MANUAL_RECORD_MAX_SECONDS
+        int "Maximum manual recording duration (seconds)"
+        range 1 120
+        default 30
+        help
+            Compile-time upper bound for audio_manager_start_recording().
+            Manual capture stops when the application requests stop or this
+            duration is reached, whichever happens first. The manager allocates
+            one shared retained-recording PSRAM buffer large enough for the
+            larger of this limit and the fixed record_duration_seconds value.
+
+    config AUDIO_MANAGER_WAV_PREFETCH_SECONDS
+        int "WAV prefetch block duration (seconds)"
+        range 1 30
+        default 10
+        help
+            Each logical WAV prefetch block holds this many seconds of the
+            accepted PCM16 mono 16-kHz source. At the default, one block is
+            320000 bytes and the two PSRAM ping-pong blocks use 640000 bytes
+            only while a WAV is active. The SD reader still uses bounded 4 KiB
+            raw reads. The I2S-owning manager consumes only a READY block and
+            applies its fixed PCM16 full-scale-to-output-ceiling map during TX;
+            no whole-file WAV scan or source-file modification is performed.
+
+    config AUDIO_MANAGER_GOLDEN_STABILITY_MODE
+        bool "Run the golden record/DSP/playback stability loop"
+        default n
+        help
+            Legacy default-off regression safety net for the proven Phase 11.3
+            record -> DSP -> recorded-playback engine. Keep this only when a
+            direct engine-level regression is intentionally required.
+
+            Normal hardware validation and soak should use the external/public-
+            API stress task instead, because that path also exercises command
+            arbitration, public state transitions, callbacks/status counters,
+            cancellation ownership, WAV streaming, and cleanup exactly as an
+            application would.
+
+            Golden mode monopolizes the manager operation slot, therefore
+            production record/playback/WAV public commands are rejected while
+            it is enabled.
+
+    config AUDIO_MANAGER_GOLDEN_STABILITY_RECORD_SECONDS
+        int "Golden stability recording duration (seconds)"
+        range 1 120
+        default 60
+        depends on AUDIO_MANAGER_GOLDEN_STABILITY_MODE
+        help
+            Number of 16 kHz PCM24 samples retained before each golden DSP and
+            recorded-playback cycle. The historical stress configuration uses
+            60 seconds, which reserves about 3.66 MiB of PSRAM for recording.
+            Allocation still fails safely if the target does not have enough
+            free PSRAM.
+
+    config AUDIO_MANAGER_GOLDEN_STABILITY_TASK_PRIORITY
+        int "Golden stability task priority"
+        range 6 7
+        default 6
+        depends on AUDIO_MANAGER_GOLDEN_STABILITY_MODE
+        help
+            FreeRTOS priority for the legacy golden engine-level regression.
+            The default is 6. Use 7 only after measuring GUI/network
+            responsiveness on the target.
+
+endmenu
