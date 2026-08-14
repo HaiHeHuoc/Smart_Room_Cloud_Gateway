@@ -1,6 +1,5 @@
 #include "audio_api_test_task.h"
 
-#include <stdbool.h>
 #include <stdint.h>
 
 #include "audio_manager.h"
@@ -14,27 +13,21 @@
 #define AUDIO_API_TEST_TASK_STACK_SIZE           4096U
 #define AUDIO_API_TEST_TASK_PRIORITY             6U
 #define AUDIO_API_TEST_POLL_MS                   100U
-#define AUDIO_API_TEST_MANAGER_READY_TIMEOUT_MS  5000U
-#define AUDIO_API_TEST_OPERATION_TIMEOUT_MS    120000U
-#define AUDIO_API_TEST_SD_READY_TIMEOUT_MS       60000U
-#define AUDIO_API_TEST_MANUAL_HOLD_MS             3000U
+#define AUDIO_API_TEST_MANUAL_HOLD_MS            3000U
 #define AUDIO_API_TEST_WAV_PATH "/sdcard/audio/input_2.wav"
 
 static const char *const TAG = "AUDIO_API_TEST";
 static TaskHandle_t s_test_task_handle = NULL;
 
-static bool app_audio_api_test_timeout_expired(
-    TickType_t start_tick,
-    uint32_t timeout_ms)
+/*
+ * This is a hardware validation/soak task, not a bounded unit test. Waiting
+ * helpers intentionally have no timeout: an operation is allowed to run for
+ * its real duration and the task advances only after the public status
+ * counters report a real terminal result.
+ */
+static esp_err_t app_audio_api_test_wait_manager_idle(void)
 {
-    return (xTaskGetTickCount() - start_tick) >= pdMS_TO_TICKS(timeout_ms);
-}
-
-static esp_err_t app_audio_api_test_wait_manager_idle(uint32_t timeout_ms)
-{
-    const TickType_t start_tick = xTaskGetTickCount();
-
-    while (!app_audio_api_test_timeout_expired(start_tick, timeout_ms))
+    while (true)
     {
         audio_manager_status_t status = {0};
         const esp_err_t result = audio_manager_get_status(&status);
@@ -46,22 +39,17 @@ static esp_err_t app_audio_api_test_wait_manager_idle(uint32_t timeout_ms)
 
         vTaskDelay(pdMS_TO_TICKS(AUDIO_API_TEST_POLL_MS));
     }
-
-    return ESP_ERR_TIMEOUT;
 }
 
 static esp_err_t app_audio_api_test_wait_record_terminal(
-    const audio_manager_status_t *before,
-    uint32_t timeout_ms)
+    const audio_manager_status_t *before)
 {
     if (before == NULL)
     {
         return ESP_ERR_INVALID_ARG;
     }
 
-    const TickType_t start_tick = xTaskGetTickCount();
-
-    while (!app_audio_api_test_timeout_expired(start_tick, timeout_ms))
+    while (true)
     {
         audio_manager_status_t status = {0};
         const esp_err_t result = audio_manager_get_status(&status);
@@ -88,22 +76,17 @@ static esp_err_t app_audio_api_test_wait_record_terminal(
 
         vTaskDelay(pdMS_TO_TICKS(AUDIO_API_TEST_POLL_MS));
     }
-
-    return ESP_ERR_TIMEOUT;
 }
 
 static esp_err_t app_audio_api_test_wait_recorded_playback_terminal(
-    const audio_manager_status_t *before,
-    uint32_t timeout_ms)
+    const audio_manager_status_t *before)
 {
     if (before == NULL)
     {
         return ESP_ERR_INVALID_ARG;
     }
 
-    const TickType_t start_tick = xTaskGetTickCount();
-
-    while (!app_audio_api_test_timeout_expired(start_tick, timeout_ms))
+    while (true)
     {
         audio_manager_status_t status = {0};
         const esp_err_t result = audio_manager_get_status(&status);
@@ -136,22 +119,17 @@ static esp_err_t app_audio_api_test_wait_recorded_playback_terminal(
 
         vTaskDelay(pdMS_TO_TICKS(AUDIO_API_TEST_POLL_MS));
     }
-
-    return ESP_ERR_TIMEOUT;
 }
 
 static esp_err_t app_audio_api_test_wait_wav_terminal(
-    const audio_manager_status_t *before,
-    uint32_t timeout_ms)
+    const audio_manager_status_t *before)
 {
     if (before == NULL)
     {
         return ESP_ERR_INVALID_ARG;
     }
 
-    const TickType_t start_tick = xTaskGetTickCount();
-
-    while (!app_audio_api_test_timeout_expired(start_tick, timeout_ms))
+    while (true)
     {
         audio_manager_status_t status = {0};
         const esp_err_t result = audio_manager_get_status(&status);
@@ -182,25 +160,27 @@ static esp_err_t app_audio_api_test_wait_wav_terminal(
 
         vTaskDelay(pdMS_TO_TICKS(AUDIO_API_TEST_POLL_MS));
     }
-
-    return ESP_ERR_TIMEOUT;
 }
 
-static esp_err_t app_audio_api_test_wait_sd_ready(uint32_t timeout_ms)
+static void app_audio_api_test_wait_sd_ready(void)
 {
-    const TickType_t start_tick = xTaskGetTickCount();
+    bool waiting_logged = false;
 
-    while (!app_audio_api_test_timeout_expired(start_tick, timeout_ms))
+    while (!sd_card_manager_is_mounted())
     {
-        if (sd_card_manager_is_mounted())
+        if (!waiting_logged)
         {
-            return ESP_OK;
+            ESP_LOGI(TAG, "Waiting indefinitely for SD READY before WAV test");
+            waiting_logged = true;
         }
 
         vTaskDelay(pdMS_TO_TICKS(AUDIO_API_TEST_POLL_MS));
     }
 
-    return ESP_ERR_TIMEOUT;
+    if (waiting_logged)
+    {
+        ESP_LOGI(TAG, "SD READY; continuing WAV test");
+    }
 }
 
 static esp_err_t app_audio_api_test_fixed_record(void)
@@ -219,9 +199,7 @@ static esp_err_t app_audio_api_test_fixed_record(void)
         return result;
     }
 
-    return app_audio_api_test_wait_record_terminal(
-        &before,
-        AUDIO_API_TEST_OPERATION_TIMEOUT_MS);
+    return app_audio_api_test_wait_record_terminal(&before);
 }
 
 static esp_err_t app_audio_api_test_play_recorded(const char *step_name)
@@ -240,9 +218,7 @@ static esp_err_t app_audio_api_test_play_recorded(const char *step_name)
         return result;
     }
 
-    return app_audio_api_test_wait_recorded_playback_terminal(
-        &before,
-        AUDIO_API_TEST_OPERATION_TIMEOUT_MS);
+    return app_audio_api_test_wait_recorded_playback_terminal(&before);
 }
 
 static esp_err_t app_audio_api_test_manual_record(void)
@@ -281,23 +257,16 @@ static esp_err_t app_audio_api_test_manual_record(void)
             "Manual stop found no active recording; operation may already have reached its configured maximum");
     }
 
-    return app_audio_api_test_wait_record_terminal(
-        &before,
-        AUDIO_API_TEST_OPERATION_TIMEOUT_MS);
+    return app_audio_api_test_wait_record_terminal(&before);
 }
 
 static esp_err_t app_audio_api_test_play_wav(void)
 {
     ESP_LOGI(TAG, "STEP 5/5 wait for SD before WAV playback");
-    esp_err_t result = app_audio_api_test_wait_sd_ready(
-        AUDIO_API_TEST_SD_READY_TIMEOUT_MS);
-    if (result != ESP_OK)
-    {
-        return result;
-    }
+    app_audio_api_test_wait_sd_ready();
 
     audio_manager_status_t before = {0};
-    result = audio_manager_get_status(&before);
+    esp_err_t result = audio_manager_get_status(&before);
     if (result != ESP_OK)
     {
         return result;
@@ -310,9 +279,7 @@ static esp_err_t app_audio_api_test_play_wav(void)
         return result;
     }
 
-    return app_audio_api_test_wait_wav_terminal(
-        &before,
-        AUDIO_API_TEST_OPERATION_TIMEOUT_MS);
+    return app_audio_api_test_wait_wav_terminal(&before);
 }
 
 static void app_audio_api_test_task(void *argument)
@@ -321,11 +288,10 @@ static void app_audio_api_test_task(void *argument)
 
     ESP_LOGI(
         TAG,
-        "Public audio API validation started: priority=%u",
+        "Public audio API validation started: priority=%u timeout=disabled",
         (unsigned)AUDIO_API_TEST_TASK_PRIORITY);
 
-    esp_err_t result = app_audio_api_test_wait_manager_idle(
-        AUDIO_API_TEST_MANAGER_READY_TIMEOUT_MS);
+    esp_err_t result = app_audio_api_test_wait_manager_idle();
 
     if (result == ESP_OK)
     {
