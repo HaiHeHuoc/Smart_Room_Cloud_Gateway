@@ -8,6 +8,7 @@ runtime resource diagnostics.
 ```text
 Release: v1.0.0
 Status: Hardware accepted / Version 1 complete
+Audio manager: Phase 11.5 stress closure passed
 SD recovery extension: target-hardware acceptance pending
 Target: ESP32-S3 N16R8
 Framework: ESP-IDF 6.0.1 + FreeRTOS
