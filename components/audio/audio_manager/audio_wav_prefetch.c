@@ -111,11 +111,14 @@ static bool audio_wav_prefetch_info_matches(
 }
 
 /**
- * @brief Reopen a fresh FILE after SD recovery and restore the committed offset.
+ * @brief Resume from the last committed offset with a fresh FILE.
  *
- * audio_wav_stream_read_limited() has already closed the failed FILE and
- * released its SD lease. Keeping that order is required: the SD recovery task
- * cannot unmount/remount while this worker still holds the old lease.
+ * The failed FILE is already closed and its SD lease is released. The first
+ * retry deliberately happens while the current mounted VFS is still READY, so
+ * one transient fread() error does not force an SD card reinitialization. If
+ * the fresh open/seek confirms a media fault and moves sd_card_manager into
+ * RECOVERING, this same bounded loop waits for remount and retries with another
+ * fresh FILE. The logical recovery-attempt budget remains exactly one.
  */
 static esp_err_t audio_wav_prefetch_resume_after_recovery(
     audio_wav_prefetch_t *prefetch,
@@ -134,7 +137,7 @@ static esp_err_t audio_wav_prefetch_resume_after_recovery(
 
     ESP_LOGW(
         TAG,
-        "waiting for SD recovery before WAV resume at data offset %llu",
+        "WAV retry at data offset %llu: fresh reopen first, SD remount fallback if required",
         (unsigned long long)committed_data_offset);
 
     while (!audio_wav_prefetch_stop_is_requested(prefetch))
@@ -172,6 +175,22 @@ static esp_err_t audio_wav_prefetch_resume_after_recovery(
             prefetch->metrics.recovery_wait_ms =
                 audio_wav_prefetch_bound_duration_ms(
                     esp_timer_get_time() - recovery_start_us);
+
+            /*
+             * audio_wav_stream_open() reports confirmed VFS/media failures to
+             * sd_card_manager. If that transitioned the card out of READY,
+             * wait for the existing remount recovery instead of terminating
+             * this logical retry immediately.
+             */
+            if ((result == ESP_FAIL) && !sd_card_manager_is_mounted())
+            {
+                ESP_LOGW(
+                    TAG,
+                    "Fresh WAV reopen confirmed media fault; waiting for SD remount");
+                vTaskDelay(pdMS_TO_TICKS(AUDIO_WAV_PREFETCH_WORKER_POLL_MS));
+                continue;
+            }
+
             return result;
         }
 
@@ -185,7 +204,7 @@ static esp_err_t audio_wav_prefetch_resume_after_recovery(
         {
             ESP_LOGE(
                 TAG,
-                "WAV changed while SD recovered; refusing unsafe resume");
+                "WAV changed while retrying; refusing unsafe resume");
             const esp_err_t close_result =
                 audio_wav_stream_close(&prefetch->stream);
             if (close_result != ESP_OK)
@@ -212,6 +231,16 @@ static esp_err_t audio_wav_prefetch_resume_after_recovery(
                     "WAV close after resume seek failed: %s",
                     esp_err_to_name(close_result));
             }
+
+            if ((result == ESP_FAIL) && !sd_card_manager_is_mounted())
+            {
+                ESP_LOGW(
+                    TAG,
+                    "Fresh WAV seek confirmed media fault; waiting for SD remount");
+                vTaskDelay(pdMS_TO_TICKS(AUDIO_WAV_PREFETCH_WORKER_POLL_MS));
+                continue;
+            }
+
             return result;
         }
 
