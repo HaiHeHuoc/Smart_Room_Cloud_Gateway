@@ -54,6 +54,8 @@
 #define AUDIO_MANAGER_WAV_PREFETCH_SLOT_BYTES \
     (AUDIO_MANAGER_WAV_PREFETCH_BYTES_PER_SECOND * \
      CONFIG_AUDIO_MANAGER_WAV_PREFETCH_SECONDS)
+#define AUDIO_MANAGER_MANUAL_RECORD_MAX_SECONDS \
+    CONFIG_AUDIO_MANAGER_MANUAL_RECORD_MAX_SECONDS
 
 #ifdef CONFIG_AUDIO_MANAGER_WAV_STRESS_TESTAPP
 #define AUDIO_MANAGER_WAV_STRESS_TASK_NAME             "wav_stress"
@@ -103,6 +105,8 @@ _Static_assert(AUDIO_MANAGER_SLOT_COUNT == 2U,
                "Standard I2S transport requires two slots");
 _Static_assert(AUDIO_MANAGER_SAMPLE_RATE_HZ == AUDIO_SAMPLE_RATE_HZ,
                "DSP and board sample rates must match");
+_Static_assert(AUDIO_MANAGER_MANUAL_RECORD_MAX_SECONDS > 0U,
+               "Manual recording duration must be positive");
 _Static_assert((AUDIO_MANAGER_WAV_PREFETCH_SLOT_BYTES % sizeof(int16_t)) == 0U,
                "WAV prefetch slots must contain complete PCM16 samples");
 
@@ -115,6 +119,20 @@ typedef enum
     MICROPHONE_SLOT_LEFT = 0,
     MICROPHONE_SLOT_RIGHT = 1,
 } microphone_slot_t;
+
+typedef enum
+{
+    AUDIO_RECORD_CONTROL_GOLDEN_FIXED = 0,
+    AUDIO_RECORD_CONTROL_PRODUCTION_FIXED,
+    AUDIO_RECORD_CONTROL_MANUAL,
+} audio_record_control_t;
+
+typedef enum
+{
+    AUDIO_RECORD_STOP_NONE = 0,
+    AUDIO_RECORD_STOP_MANUAL,
+    AUDIO_RECORD_STOP_ABORT,
+} audio_record_stop_reason_t;
 
 typedef struct
 {
@@ -206,7 +224,10 @@ typedef struct
 
 typedef enum
 {
-    AUDIO_MANAGER_COMMAND_PLAY_WAV = 0,
+    AUDIO_MANAGER_COMMAND_RECORD_FIXED = 0,
+    AUDIO_MANAGER_COMMAND_RECORD_MANUAL,
+    AUDIO_MANAGER_COMMAND_PLAY_RECORDED,
+    AUDIO_MANAGER_COMMAND_PLAY_WAV,
     AUDIO_MANAGER_COMMAND_SHUTDOWN,
 } audio_manager_command_kind_t;
 
@@ -219,6 +240,9 @@ typedef struct
 typedef enum
 {
     AUDIO_MANAGER_OPERATION_NONE = 0,
+    AUDIO_MANAGER_OPERATION_RECORD_FIXED,
+    AUDIO_MANAGER_OPERATION_RECORD_MANUAL,
+    AUDIO_MANAGER_OPERATION_RECORDED_PLAYBACK,
     AUDIO_MANAGER_OPERATION_WAV,
     AUDIO_MANAGER_OPERATION_STABILITY,
 } audio_manager_operation_t;
@@ -236,6 +260,7 @@ typedef struct
     bool task_running;
     bool shutdown_requested;
     bool cancel_requested;
+    bool record_stop_requested;
     audio_manager_operation_t operation;
     audio_manager_wav_completion_t wav_completion;
 } audio_manager_control_t;
@@ -252,9 +277,14 @@ typedef struct
     audio_playback_source_t playback_source;
 
     size_t sample_capacity;
+    size_t fixed_record_sample_count;
+    size_t manual_record_sample_limit;
     size_t recording_bytes;
     int32_t *recording_pcm24;
     audio_dsp_workspace_t *dsp_workspace;
+
+    bool recorded_audio_valid;
+    size_t recorded_sample_count;
 
     i2s_chan_handle_t rx_channel;
     i2s_chan_handle_t tx_channel;
@@ -313,6 +343,9 @@ static void audio_manager_set_playback_i2s_active(bool active);
 static void audio_manager_reset_control(void);
 static bool audio_manager_cancel_is_requested(void);
 static bool audio_manager_shutdown_is_requested(void);
+static audio_record_stop_reason_t audio_manager_record_stop_reason(
+    audio_record_control_t control);
+static bool audio_manager_recorded_playback_cancel_enabled(void);
 static void audio_manager_finish_operation(void);
 #ifdef CONFIG_AUDIO_MANAGER_WAV_STRESS_TESTAPP
 static audio_manager_wav_completion_t
@@ -341,12 +374,20 @@ static esp_err_t hold_amplifier_data_low(void);
 static esp_err_t start_i2s_rx(void);
 static esp_err_t stop_i2s_rx(void);
 static esp_err_t read_rx_block(size_t *frames_read);
-static esp_err_t discard_microphone_startup(void);
+static esp_err_t discard_microphone_startup(
+    audio_record_control_t control,
+    audio_record_stop_reason_t *stop_reason);
 static void update_slot_stats(slot_stats_t *stats, int32_t sample);
-static esp_err_t detect_microphone_slot(microphone_slot_t *selected_slot);
+static esp_err_t detect_microphone_slot(
+    microphone_slot_t *selected_slot,
+    audio_record_control_t control,
+    audio_record_stop_reason_t *stop_reason);
 static esp_err_t record_audio(
     microphone_slot_t selected_slot,
-    size_t *samples_recorded);
+    size_t target_sample_count,
+    audio_record_control_t control,
+    size_t *samples_recorded,
+    audio_record_stop_reason_t *stop_reason);
 
 static esp_err_t start_i2s_tx(void);
 static esp_err_t stop_i2s_tx(void);
@@ -359,7 +400,8 @@ static int16_t decode_wav_pcm16_le(const uint8_t *sample_bytes);
 static int16_t apply_wav_volume_percent(int16_t sample_pcm16);
 static esp_err_t play_recording(
     size_t sample_count,
-    audio_dsp_playback_stats_t *stats);
+    audio_dsp_playback_stats_t *stats,
+    bool *cancelled);
 static esp_err_t play_wav_stream(
     audio_wav_prefetch_t *prefetch,
     audio_wav_playback_metrics_t *metrics,
@@ -372,6 +414,11 @@ static void dsp_cooperative_yield(void *context);
 static void log_ns_metrics(const audio_dsp_ns_metrics_t *metrics);
 static void log_playback_result(const audio_dsp_playback_stats_t *playback);
 
+static esp_err_t record_once_controlled(
+    size_t target_sample_count,
+    audio_record_control_t control,
+    size_t *samples_recorded,
+    audio_record_stop_reason_t *stop_reason);
 static esp_err_t record_once(size_t *samples_recorded);
 static esp_err_t process_once(
     size_t sample_count,
@@ -386,11 +433,19 @@ static esp_err_t audio_manager_select_wav_playback_source(const char *path);
 static esp_err_t audio_manager_release_playback_source(void);
 static esp_err_t force_cycle_cleanup(void);
 static esp_err_t run_cycle(audio_cycle_metrics_t *metrics);
+static void audio_manager_handle_record_command(bool manual);
+static void audio_manager_handle_recorded_playback_command(void);
 static void audio_manager_handle_wav_command(const char *path);
 static void audio_manager_run_stability_iteration(void);
 static bool audio_manager_stability_mode_enabled(void);
 static bool audio_manager_mixed_stress_mode_enabled(void);
+static bool audio_manager_wav_stress_mode_enabled(void);
 static const char *audio_manager_wav_regression_path(void);
+static esp_err_t audio_manager_queue_simple_operation(
+    audio_manager_command_kind_t command_kind,
+    audio_manager_operation_t operation,
+    bool require_recorded_audio,
+    const char *description);
 static void log_cycle_diagnostics(
     uint32_t cycle,
     const audio_manager_diagnostics_t *before);
@@ -487,11 +542,55 @@ static bool audio_manager_shutdown_is_requested(void)
     return shutdown_requested;
 }
 
+static audio_record_stop_reason_t audio_manager_record_stop_reason(
+    audio_record_control_t control)
+{
+    if (control == AUDIO_RECORD_CONTROL_GOLDEN_FIXED)
+    {
+        return AUDIO_RECORD_STOP_NONE;
+    }
+
+    bool shutdown_requested;
+    bool cancel_requested;
+    bool record_stop_requested;
+
+    portENTER_CRITICAL(&s_control_lock);
+    shutdown_requested = s_control.shutdown_requested;
+    cancel_requested = s_control.cancel_requested;
+    record_stop_requested = s_control.record_stop_requested;
+    portEXIT_CRITICAL(&s_control_lock);
+
+    if (shutdown_requested || cancel_requested)
+    {
+        return AUDIO_RECORD_STOP_ABORT;
+    }
+
+    if ((control == AUDIO_RECORD_CONTROL_MANUAL) && record_stop_requested)
+    {
+        return AUDIO_RECORD_STOP_MANUAL;
+    }
+
+    return AUDIO_RECORD_STOP_NONE;
+}
+
+static bool audio_manager_recorded_playback_cancel_enabled(void)
+{
+    bool enabled;
+
+    portENTER_CRITICAL(&s_control_lock);
+    enabled =
+        (s_control.operation == AUDIO_MANAGER_OPERATION_RECORDED_PLAYBACK);
+    portEXIT_CRITICAL(&s_control_lock);
+
+    return enabled;
+}
+
 static void audio_manager_finish_operation(void)
 {
     portENTER_CRITICAL(&s_control_lock);
     s_control.operation = AUDIO_MANAGER_OPERATION_NONE;
     s_control.cancel_requested = false;
+    s_control.record_stop_requested = false;
     portEXIT_CRITICAL(&s_control_lock);
 }
 
@@ -522,6 +621,7 @@ static void audio_manager_finish_wav_operation(
     portENTER_CRITICAL(&s_control_lock);
     s_control.operation = AUDIO_MANAGER_OPERATION_NONE;
     s_control.cancel_requested = false;
+    s_control.record_stop_requested = false;
     ++s_control.wav_completion.sequence;
     s_control.wav_completion.result = result;
     s_control.wav_completion.cancelled = cancelled;
@@ -545,6 +645,7 @@ static bool audio_manager_try_begin_stability_operation(void)
     {
         s_control.operation = AUDIO_MANAGER_OPERATION_STABILITY;
         s_control.cancel_requested = false;
+        s_control.record_stop_requested = false;
         started = true;
     }
     portEXIT_CRITICAL(&s_control_lock);
@@ -623,6 +724,7 @@ static void audio_manager_refresh_diagnostics_locked(void)
 
     s_runtime.status.capture_i2s_active = diagnostics.capture_i2s_active;
     s_runtime.status.playback_i2s_active = diagnostics.playback_i2s_active;
+    s_runtime.status.recorded_audio_available = s_runtime.recorded_audio_valid;
     s_runtime.status.rx_bytes_requested = diagnostics.rx_bytes_requested;
     s_runtime.status.rx_bytes_read = diagnostics.rx_bytes_read;
     s_runtime.status.tx_bytes_requested = diagnostics.tx_bytes_requested;
@@ -939,12 +1041,26 @@ static esp_err_t read_rx_block(size_t *frames_read)
     return ESP_OK;
 }
 
-static esp_err_t discard_microphone_startup(void)
+static esp_err_t discard_microphone_startup(
+    audio_record_control_t control,
+    audio_record_stop_reason_t *stop_reason)
 {
+    if (stop_reason == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *stop_reason = AUDIO_RECORD_STOP_NONE;
     for (uint32_t block = 0U;
          block < AUDIO_MANAGER_STARTUP_DISCARD_BLOCKS;
          ++block)
     {
+        *stop_reason = audio_manager_record_stop_reason(control);
+        if (*stop_reason != AUDIO_RECORD_STOP_NONE)
+        {
+            return ESP_OK;
+        }
+
         size_t frames_read = 0U;
         const esp_err_t result = read_rx_block(&frames_read);
         if (result != ESP_OK)
@@ -974,20 +1090,30 @@ static void update_slot_stats(slot_stats_t *stats, int32_t sample)
     }
 }
 
-static esp_err_t detect_microphone_slot(microphone_slot_t *selected_slot)
+static esp_err_t detect_microphone_slot(
+    microphone_slot_t *selected_slot,
+    audio_record_control_t control,
+    audio_record_stop_reason_t *stop_reason)
 {
-    if (selected_slot == NULL)
+    if ((selected_slot == NULL) || (stop_reason == NULL))
     {
         return ESP_ERR_INVALID_ARG;
     }
 
     slot_stats_t left = {0};
     slot_stats_t right = {0};
+    *stop_reason = AUDIO_RECORD_STOP_NONE;
 
     for (uint32_t block = 0U;
          block < AUDIO_MANAGER_SLOT_DETECT_BLOCKS;
          ++block)
     {
+        *stop_reason = audio_manager_record_stop_reason(control);
+        if (*stop_reason != AUDIO_RECORD_STOP_NONE)
+        {
+            return ESP_OK;
+        }
+
         size_t frames_read = 0U;
         const esp_err_t result = read_rx_block(&frames_read);
         if (result != ESP_OK)
@@ -1031,11 +1157,16 @@ static esp_err_t detect_microphone_slot(microphone_slot_t *selected_slot)
 
 static esp_err_t record_audio(
     microphone_slot_t selected_slot,
-    size_t *samples_recorded)
+    size_t target_sample_count,
+    audio_record_control_t control,
+    size_t *samples_recorded,
+    audio_record_stop_reason_t *stop_reason)
 {
     if ((samples_recorded == NULL) ||
+        (stop_reason == NULL) ||
         (s_runtime.recording_pcm24 == NULL) ||
-        (s_runtime.sample_capacity == 0U))
+        (target_sample_count == 0U) ||
+        (target_sample_count > s_runtime.sample_capacity))
     {
         return ESP_ERR_INVALID_STATE;
     }
@@ -1045,9 +1176,16 @@ static esp_err_t record_audio(
 
     size_t captured = 0U;
     size_t next_progress = AUDIO_MANAGER_SAMPLE_RATE_HZ;
+    *stop_reason = AUDIO_RECORD_STOP_NONE;
 
-    while (captured < s_runtime.sample_capacity)
+    while (captured < target_sample_count)
     {
+        *stop_reason = audio_manager_record_stop_reason(control);
+        if (*stop_reason != AUDIO_RECORD_STOP_NONE)
+        {
+            break;
+        }
+
         size_t frames_read = 0U;
         const esp_err_t result = read_rx_block(&frames_read);
         if (result != ESP_OK)
@@ -1056,7 +1194,7 @@ static esp_err_t record_audio(
             return result;
         }
 
-        const size_t remaining = s_runtime.sample_capacity - captured;
+        const size_t remaining = target_sample_count - captured;
         if (frames_read > remaining)
         {
             frames_read = remaining;
@@ -1073,13 +1211,13 @@ static esp_err_t record_audio(
         captured += frames_read;
 
         while ((captured >= next_progress) &&
-               (next_progress <= s_runtime.sample_capacity))
+               (next_progress <= target_sample_count))
         {
             ESP_LOGI(
                 TAG,
                 "Recorded %u/%u seconds",
                 (unsigned)(next_progress / AUDIO_MANAGER_SAMPLE_RATE_HZ),
-                (unsigned)s_runtime.config.record_duration_seconds);
+                (unsigned)(target_sample_count / AUDIO_MANAGER_SAMPLE_RATE_HZ));
             next_progress += AUDIO_MANAGER_SAMPLE_RATE_HZ;
         }
     }
@@ -1330,7 +1468,8 @@ static int16_t apply_wav_volume_percent(int16_t sample_pcm16)
 
 static esp_err_t play_recording(
     size_t sample_count,
-    audio_dsp_playback_stats_t *stats)
+    audio_dsp_playback_stats_t *stats,
+    bool *cancelled)
 {
     if ((s_runtime.recording_pcm24 == NULL) ||
         (sample_count == 0U) ||
@@ -1344,6 +1483,12 @@ static esp_err_t play_recording(
 
     while (sample_index < sample_count)
     {
+        if ((cancelled != NULL) && audio_manager_cancel_is_requested())
+        {
+            *cancelled = true;
+            break;
+        }
+
         size_t frames = sample_count - sample_index;
         if (frames > AUDIO_MANAGER_FRAMES_PER_BLOCK)
         {
@@ -1872,14 +2017,22 @@ static void log_playback_result(const audio_dsp_playback_stats_t *playback)
         (unsigned)playback->sample_count);
 }
 
-static esp_err_t record_once(size_t *samples_recorded)
+static esp_err_t record_once_controlled(
+    size_t target_sample_count,
+    audio_record_control_t control,
+    size_t *samples_recorded,
+    audio_record_stop_reason_t *stop_reason)
 {
-    if (samples_recorded == NULL)
+    if ((samples_recorded == NULL) ||
+        (stop_reason == NULL) ||
+        (target_sample_count == 0U) ||
+        (target_sample_count > s_runtime.sample_capacity))
     {
         return ESP_ERR_INVALID_ARG;
     }
 
     *samples_recorded = 0U;
+    *stop_reason = AUDIO_RECORD_STOP_NONE;
     microphone_slot_t selected_slot = MICROPHONE_SLOT_LEFT;
 
     esp_err_t result = hold_amplifier_data_low();
@@ -1897,19 +2050,29 @@ static esp_err_t record_once(size_t *samples_recorded)
     /* RX is active during startup discard and slot detection too. */
     audio_manager_set_state(AUDIO_MANAGER_STATE_RECORDING);
 
-    result = discard_microphone_startup();
-    if (result == ESP_OK)
+    result = discard_microphone_startup(control, stop_reason);
+    if ((result == ESP_OK) && (*stop_reason == AUDIO_RECORD_STOP_NONE))
     {
-        result = detect_microphone_slot(&selected_slot);
+        result = detect_microphone_slot(
+            &selected_slot,
+            control,
+            stop_reason);
     }
 
-    if (result == ESP_OK)
+    if ((result == ESP_OK) && (*stop_reason == AUDIO_RECORD_STOP_NONE))
     {
         ESP_LOGI(
             TAG,
-            "RECORDING %u seconds",
-            (unsigned)s_runtime.config.record_duration_seconds);
-        result = record_audio(selected_slot, samples_recorded);
+            "RECORDING target=%u samples (%u seconds) mode=%s",
+            (unsigned)target_sample_count,
+            (unsigned)(target_sample_count / AUDIO_MANAGER_SAMPLE_RATE_HZ),
+            (control == AUDIO_RECORD_CONTROL_MANUAL) ? "manual" : "fixed");
+        result = record_audio(
+            selected_slot,
+            target_sample_count,
+            control,
+            samples_recorded,
+            stop_reason);
     }
 
     const esp_err_t stop_result = stop_i2s_rx();
@@ -1918,8 +2081,22 @@ static esp_err_t record_once(size_t *samples_recorded)
         result = stop_result;
     }
 
-    audio_manager_set_state(AUDIO_MANAGER_STATE_IDLE);
+    if (control == AUDIO_RECORD_CONTROL_GOLDEN_FIXED)
+    {
+        audio_manager_set_state(AUDIO_MANAGER_STATE_IDLE);
+    }
+
     return result;
+}
+
+static esp_err_t record_once(size_t *samples_recorded)
+{
+    audio_record_stop_reason_t stop_reason = AUDIO_RECORD_STOP_NONE;
+    return record_once_controlled(
+        s_runtime.fixed_record_sample_count,
+        AUDIO_RECORD_CONTROL_GOLDEN_FIXED,
+        samples_recorded,
+        &stop_reason);
 }
 
 static esp_err_t process_once(
@@ -2069,6 +2246,9 @@ static esp_err_t playback_once(
             return ESP_ERR_INVALID_ARG;
     }
 
+    const bool cancellable = audio_manager_recorded_playback_cancel_enabled();
+    bool *const cancellation = cancellable ? cancelled : NULL;
+
     esp_err_t result = start_i2s_tx();
     if (result != ESP_OK)
     {
@@ -2077,7 +2257,7 @@ static esp_err_t playback_once(
 
     result = write_silence_blocks(
         AUDIO_MANAGER_PRE_PLAYBACK_SILENCE_BLOCKS,
-        NULL);
+        cancellation);
 
     if ((result == ESP_OK) && !*cancelled)
     {
@@ -2095,14 +2275,15 @@ static esp_err_t playback_once(
             (unsigned)AUDIO_DSP_OUTPUT_PEAK_CEILING_PCM16);
         result = play_recording(
             source->recorded_sample_count,
-            &metrics->playback);
+            &metrics->playback,
+            cancellation);
     }
 
     if ((result == ESP_OK) && !*cancelled)
     {
         result = write_silence_blocks(
             AUDIO_MANAGER_POST_PLAYBACK_SILENCE_BLOCKS,
-            NULL);
+            cancellation);
     }
 
     const esp_err_t stop_result = stop_i2s_tx();
@@ -2112,6 +2293,7 @@ static esp_err_t playback_once(
     }
 
     if ((result == ESP_OK) &&
+        !*cancelled &&
         (source->kind == AUDIO_PLAYBACK_SOURCE_RECORDED_PCM24))
     {
         log_playback_result(&metrics->playback);
@@ -2251,13 +2433,13 @@ static esp_err_t run_cycle(audio_cycle_metrics_t *metrics)
     esp_err_t result = record_once(&samples_recorded);
 
     if ((result == ESP_OK) &&
-        (samples_recorded != s_runtime.sample_capacity))
+        (samples_recorded != s_runtime.fixed_record_sample_count))
     {
         ESP_LOGE(
             TAG,
             "Recording incomplete: got=%u expected=%u",
             (unsigned)samples_recorded,
-            (unsigned)s_runtime.sample_capacity);
+            (unsigned)s_runtime.fixed_record_sample_count);
         result = ESP_FAIL;
     }
 
@@ -2328,6 +2510,72 @@ static const char *audio_manager_wav_regression_path(void)
 #else
     return NULL;
 #endif
+}
+
+static esp_err_t audio_manager_queue_simple_operation(
+    audio_manager_command_kind_t command_kind,
+    audio_manager_operation_t operation,
+    bool require_recorded_audio,
+    const char *description)
+{
+    if (!s_runtime.initialized ||
+        (s_runtime.status_mutex == NULL) ||
+        (s_runtime.command_queue == NULL))
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Golden mode owns the record buffer/I2S cycle; production commands stay out. */
+    if (audio_manager_stability_mode_enabled())
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!audio_manager_take_status_mutex(description))
+    {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    if (require_recorded_audio &&
+        (!s_runtime.recorded_audio_valid ||
+         (s_runtime.recorded_sample_count == 0U)))
+    {
+        xSemaphoreGive(s_runtime.status_mutex);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    bool accepted = false;
+    portENTER_CRITICAL(&s_control_lock);
+    if (s_control.task_running &&
+        !s_control.shutdown_requested &&
+        (s_control.operation == AUDIO_MANAGER_OPERATION_NONE) &&
+        (s_runtime.status.state == AUDIO_MANAGER_STATE_IDLE))
+    {
+        s_control.operation = operation;
+        s_control.cancel_requested = false;
+        s_control.record_stop_requested = false;
+        accepted = true;
+    }
+    portEXIT_CRITICAL(&s_control_lock);
+
+    if (!accepted)
+    {
+        xSemaphoreGive(s_runtime.status_mutex);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const audio_manager_command_t command = {
+        .kind = command_kind,
+    };
+    if (xQueueSend(s_runtime.command_queue, &command, 0U) != pdTRUE)
+    {
+        audio_manager_finish_operation();
+        xSemaphoreGive(s_runtime.status_mutex);
+        return ESP_ERR_TIMEOUT;
+    }
+
+    xSemaphoreGive(s_runtime.status_mutex);
+    return ESP_OK;
 }
 
 #ifdef CONFIG_AUDIO_MANAGER_WAV_STRESS_TESTAPP
@@ -2505,6 +2753,272 @@ static void audio_manager_wav_stress_task(void *argument)
     vTaskDelete(NULL);
 }
 #endif
+
+static void audio_manager_handle_record_command(bool manual)
+{
+    ESP_LOGI(
+        TAG,
+        "========== %s RECORDING ==========" ,
+        manual ? "MANUAL" : "FIXED");
+
+    if (audio_manager_take_status_mutex("starting recording"))
+    {
+        ++s_runtime.status.recording_started;
+        s_runtime.recorded_audio_valid = false;
+        s_runtime.recorded_sample_count = 0U;
+        s_runtime.status.recorded_audio_available = false;
+        xSemaphoreGive(s_runtime.status_mutex);
+    }
+    else
+    {
+        s_runtime.recorded_audio_valid = false;
+        s_runtime.recorded_sample_count = 0U;
+    }
+
+    const size_t target_sample_count =
+        manual
+            ? s_runtime.manual_record_sample_limit
+            : s_runtime.fixed_record_sample_count;
+    const audio_record_control_t control =
+        manual
+            ? AUDIO_RECORD_CONTROL_MANUAL
+            : AUDIO_RECORD_CONTROL_PRODUCTION_FIXED;
+
+    size_t samples_recorded = 0U;
+    audio_record_stop_reason_t stop_reason = AUDIO_RECORD_STOP_NONE;
+    audio_cycle_metrics_t metrics = {0};
+    esp_err_t result = record_once_controlled(
+        target_sample_count,
+        control,
+        &samples_recorded,
+        &stop_reason);
+
+    const bool aborted = (stop_reason == AUDIO_RECORD_STOP_ABORT);
+    const bool manual_stopped = (stop_reason == AUDIO_RECORD_STOP_MANUAL);
+    bool processed = false;
+
+    if ((result == ESP_OK) && !aborted)
+    {
+        if (samples_recorded >= AUDIO_DSP_NS_FFT_SIZE)
+        {
+            result = process_once(samples_recorded, &metrics);
+            processed = (result == ESP_OK);
+        }
+        else if (manual && manual_stopped)
+        {
+            ESP_LOGW(
+                TAG,
+                "Manual recording stopped before DSP minimum: samples=%u minimum=%u; discarded",
+                (unsigned)samples_recorded,
+                (unsigned)AUDIO_DSP_NS_FFT_SIZE);
+        }
+        else
+        {
+            result = ESP_ERR_INVALID_SIZE;
+        }
+    }
+
+    if (processed)
+    {
+        s_runtime.recorded_audio_valid = true;
+        s_runtime.recorded_sample_count = samples_recorded;
+    }
+
+    const esp_err_t cleanup_result = force_cycle_cleanup();
+    if ((result == ESP_OK) && (cleanup_result != ESP_OK))
+    {
+        result = cleanup_result;
+        s_runtime.recorded_audio_valid = false;
+        s_runtime.recorded_sample_count = 0U;
+        processed = false;
+    }
+    else if ((result != ESP_OK) && (cleanup_result != ESP_OK))
+    {
+        ESP_LOGE(
+            TAG,
+            "Recording cleanup also failed: %s",
+            esp_err_to_name(cleanup_result));
+    }
+
+    bool status_updated = false;
+    if (audio_manager_take_status_mutex("storing recording result"))
+    {
+        s_runtime.status.last_samples_recorded = samples_recorded;
+        s_runtime.status.recorded_audio_available = s_runtime.recorded_audio_valid;
+
+        if (aborted)
+        {
+            s_runtime.status.last_error = ESP_OK;
+            s_runtime.status.state = AUDIO_MANAGER_STATE_IDLE;
+        }
+        else if (result != ESP_OK)
+        {
+            s_runtime.status.last_error = result;
+            ++s_runtime.status.recording_failed;
+            s_runtime.status.state = AUDIO_MANAGER_STATE_ERROR;
+        }
+        else
+        {
+            s_runtime.status.last_error = ESP_OK;
+            if (manual_stopped)
+            {
+                ++s_runtime.status.recording_manual_stopped;
+            }
+            if (processed)
+            {
+                ++s_runtime.status.recording_completed;
+            }
+            s_runtime.status.state = AUDIO_MANAGER_STATE_IDLE;
+        }
+
+        audio_manager_refresh_diagnostics_locked();
+        status_updated = true;
+        xSemaphoreGive(s_runtime.status_mutex);
+    }
+
+    audio_manager_finish_operation();
+
+    if (status_updated)
+    {
+        audio_manager_notify_status_changed();
+    }
+
+    if (aborted)
+    {
+        ESP_LOGI(
+            TAG,
+            "%s recording aborted by manager shutdown",
+            manual ? "Manual" : "Fixed");
+    }
+    else if (result != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "%s recording failed: %s",
+            manual ? "Manual" : "Fixed",
+            esp_err_to_name(result));
+        if (status_updated)
+        {
+            audio_manager_set_state(AUDIO_MANAGER_STATE_IDLE);
+        }
+    }
+    else if (processed)
+    {
+        ESP_LOGI(
+            TAG,
+            "%s recording completed: samples=%u manual_stop=%s",
+            manual ? "Manual" : "Fixed",
+            (unsigned)samples_recorded,
+            manual_stopped ? "yes" : "no");
+    }
+    else
+    {
+        ESP_LOGI(
+            TAG,
+            "Manual recording ended without retained audio: samples=%u",
+            (unsigned)samples_recorded);
+    }
+}
+
+static void audio_manager_handle_recorded_playback_command(void)
+{
+    ESP_LOGI(TAG, "========== RECORDED PLAYBACK ==========");
+
+    if (audio_manager_take_status_mutex("starting recorded playback"))
+    {
+        ++s_runtime.status.recorded_playback_started;
+        xSemaphoreGive(s_runtime.status_mutex);
+    }
+
+    const size_t sample_count = s_runtime.recorded_sample_count;
+    audio_cycle_metrics_t metrics = {0};
+    bool cancelled = audio_manager_cancel_is_requested();
+    esp_err_t result = ESP_OK;
+
+    if (!s_runtime.recorded_audio_valid || (sample_count == 0U))
+    {
+        result = ESP_ERR_INVALID_STATE;
+    }
+
+    if ((result == ESP_OK) && !cancelled)
+    {
+        result = audio_manager_select_recording_playback_source(sample_count);
+    }
+
+    if ((result == ESP_OK) && !cancelled)
+    {
+        result = playback_once(
+            &s_runtime.playback_source,
+            &metrics,
+            &cancelled);
+    }
+
+    const esp_err_t cleanup_result = force_cycle_cleanup();
+    if ((result == ESP_OK) && (cleanup_result != ESP_OK))
+    {
+        result = cleanup_result;
+        cancelled = false;
+    }
+    else if ((result != ESP_OK) && (cleanup_result != ESP_OK))
+    {
+        ESP_LOGE(
+            TAG,
+            "Recorded playback cleanup also failed: %s",
+            esp_err_to_name(cleanup_result));
+    }
+
+    bool status_updated = false;
+    if (audio_manager_take_status_mutex("storing recorded playback result"))
+    {
+        s_runtime.status.last_error = result;
+        if (result != ESP_OK)
+        {
+            ++s_runtime.status.recorded_playback_failed;
+            s_runtime.status.state = AUDIO_MANAGER_STATE_ERROR;
+        }
+        else if (cancelled)
+        {
+            ++s_runtime.status.recorded_playback_cancelled;
+            s_runtime.status.state = AUDIO_MANAGER_STATE_IDLE;
+        }
+        else
+        {
+            ++s_runtime.status.recorded_playback_completed;
+            s_runtime.status.state = AUDIO_MANAGER_STATE_IDLE;
+        }
+
+        audio_manager_refresh_diagnostics_locked();
+        status_updated = true;
+        xSemaphoreGive(s_runtime.status_mutex);
+    }
+
+    audio_manager_finish_operation();
+
+    if (status_updated)
+    {
+        audio_manager_notify_status_changed();
+    }
+
+    if (result != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Recorded playback failed: %s",
+            esp_err_to_name(result));
+        if (status_updated)
+        {
+            audio_manager_set_state(AUDIO_MANAGER_STATE_IDLE);
+        }
+    }
+    else if (cancelled)
+    {
+        ESP_LOGI(TAG, "Recorded playback cancelled");
+    }
+    else
+    {
+        ESP_LOGI(TAG, "Recorded playback completed");
+    }
+}
 
 static void audio_manager_handle_wav_command(const char *path)
 {
@@ -2950,6 +3464,18 @@ static void audio_manager_task(void *argument)
         {
             switch (command.kind)
             {
+                case AUDIO_MANAGER_COMMAND_RECORD_FIXED:
+                    audio_manager_handle_record_command(false);
+                    break;
+
+                case AUDIO_MANAGER_COMMAND_RECORD_MANUAL:
+                    audio_manager_handle_record_command(true);
+                    break;
+
+                case AUDIO_MANAGER_COMMAND_PLAY_RECORDED:
+                    audio_manager_handle_recorded_playback_command();
+                    break;
+
                 case AUDIO_MANAGER_COMMAND_PLAY_WAV:
                     audio_manager_handle_wav_command(command.wav_path);
                     break;
@@ -3062,15 +3588,25 @@ esp_err_t audio_manager_init(const audio_manager_config_t *config)
         return ESP_ERR_INVALID_ARG;
     }
 
-    const size_t sample_capacity =
+    const size_t fixed_record_sample_count =
         (size_t)AUDIO_MANAGER_SAMPLE_RATE_HZ *
         (size_t)config->record_duration_seconds;
+    const size_t manual_record_sample_limit =
+        (size_t)AUDIO_MANAGER_SAMPLE_RATE_HZ *
+        (size_t)AUDIO_MANAGER_MANUAL_RECORD_MAX_SECONDS;
 
-    if ((sample_capacity / AUDIO_MANAGER_SAMPLE_RATE_HZ) !=
-        config->record_duration_seconds)
+    if (((fixed_record_sample_count / AUDIO_MANAGER_SAMPLE_RATE_HZ) !=
+         config->record_duration_seconds) ||
+        ((manual_record_sample_limit / AUDIO_MANAGER_SAMPLE_RATE_HZ) !=
+         AUDIO_MANAGER_MANUAL_RECORD_MAX_SECONDS))
     {
         return ESP_ERR_INVALID_SIZE;
     }
+
+    const size_t sample_capacity =
+        (fixed_record_sample_count > manual_record_sample_limit)
+            ? fixed_record_sample_count
+            : manual_record_sample_limit;
 
     if (sample_capacity > (SIZE_MAX / sizeof(int32_t)))
     {
@@ -3080,6 +3616,8 @@ esp_err_t audio_manager_init(const audio_manager_config_t *config)
     memset(&s_runtime, 0, sizeof(s_runtime));
     s_runtime.config = *config;
     s_runtime.sample_capacity = sample_capacity;
+    s_runtime.fixed_record_sample_count = fixed_record_sample_count;
+    s_runtime.manual_record_sample_limit = manual_record_sample_limit;
     s_runtime.recording_bytes = sample_capacity * sizeof(int32_t);
 
     s_runtime.status_mutex = xSemaphoreCreateMutex();
@@ -3155,8 +3693,11 @@ esp_err_t audio_manager_init(const audio_manager_config_t *config)
 
     s_runtime.initialized = true;
     s_runtime.task_exit_result = ESP_OK;
+    s_runtime.recorded_audio_valid = false;
+    s_runtime.recorded_sample_count = 0U;
     s_runtime.status = (audio_manager_status_t) {
         .state = AUDIO_MANAGER_STATE_INITIALIZED,
+        .recorded_audio_available = false,
         .last_error = ESP_OK,
     };
 
@@ -3171,9 +3712,10 @@ esp_err_t audio_manager_init(const audio_manager_config_t *config)
         AUDIO_GPIO_SPK_DOUT);
     ESP_LOGI(
         TAG,
-        "Config sample_rate=%u record=%us samples=%u PCM24_PSRAM=%uB volume=%u/100 DMA=%ux%u",
+        "Config sample_rate=%u fixed_record=%us manual_max=%us capacity_samples=%u PCM24_PSRAM=%uB volume=%u/100 DMA=%ux%u",
         (unsigned)AUDIO_MANAGER_SAMPLE_RATE_HZ,
         (unsigned)config->record_duration_seconds,
+        (unsigned)AUDIO_MANAGER_MANUAL_RECORD_MAX_SECONDS,
         (unsigned)s_runtime.sample_capacity,
         (unsigned)s_runtime.recording_bytes,
         (unsigned)config->playback_volume_percent,
@@ -3254,6 +3796,7 @@ esp_err_t audio_manager_start(void)
         s_control.task_running = true;
         s_control.shutdown_requested = false;
         s_control.cancel_requested = false;
+        s_control.record_stop_requested = false;
         s_control.operation =
             (audio_manager_stability_mode_enabled() &&
              !audio_manager_mixed_stress_mode_enabled())
@@ -3334,6 +3877,60 @@ esp_err_t audio_manager_start(void)
     return ESP_OK;
 }
 
+esp_err_t audio_manager_record(void)
+{
+    return audio_manager_queue_simple_operation(
+        AUDIO_MANAGER_COMMAND_RECORD_FIXED,
+        AUDIO_MANAGER_OPERATION_RECORD_FIXED,
+        false,
+        "queueing fixed recording");
+}
+
+esp_err_t audio_manager_start_recording(void)
+{
+    return audio_manager_queue_simple_operation(
+        AUDIO_MANAGER_COMMAND_RECORD_MANUAL,
+        AUDIO_MANAGER_OPERATION_RECORD_MANUAL,
+        false,
+        "queueing manual recording");
+}
+
+esp_err_t audio_manager_stop_recording(void)
+{
+    if (!s_runtime.initialized || (s_runtime.status_mutex == NULL))
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!audio_manager_take_status_mutex("stopping manual recording"))
+    {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    bool requested = false;
+    portENTER_CRITICAL(&s_control_lock);
+    if (s_control.task_running &&
+        !s_control.shutdown_requested &&
+        (s_control.operation == AUDIO_MANAGER_OPERATION_RECORD_MANUAL))
+    {
+        s_control.record_stop_requested = true;
+        requested = true;
+    }
+    portEXIT_CRITICAL(&s_control_lock);
+
+    xSemaphoreGive(s_runtime.status_mutex);
+    return requested ? ESP_OK : ESP_ERR_INVALID_STATE;
+}
+
+esp_err_t audio_manager_play_recorded(void)
+{
+    return audio_manager_queue_simple_operation(
+        AUDIO_MANAGER_COMMAND_PLAY_RECORDED,
+        AUDIO_MANAGER_OPERATION_RECORDED_PLAYBACK,
+        true,
+        "queueing recorded playback");
+}
+
 esp_err_t audio_manager_play_wav(const char *path)
 {
     if (path == NULL)
@@ -3377,6 +3974,7 @@ esp_err_t audio_manager_play_wav(const char *path)
     {
         s_control.operation = AUDIO_MANAGER_OPERATION_WAV;
         s_control.cancel_requested = false;
+        s_control.record_stop_requested = false;
         accepted = true;
     }
     portEXIT_CRITICAL(&s_control_lock);
@@ -3405,7 +4003,7 @@ esp_err_t audio_manager_stop_playback(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (!audio_manager_take_status_mutex("cancelling WAV playback"))
+    if (!audio_manager_take_status_mutex("cancelling playback"))
     {
         return ESP_ERR_TIMEOUT;
     }
@@ -3413,7 +4011,8 @@ esp_err_t audio_manager_stop_playback(void)
     bool requested = false;
     portENTER_CRITICAL(&s_control_lock);
     if (s_control.task_running &&
-        (s_control.operation == AUDIO_MANAGER_OPERATION_WAV))
+        ((s_control.operation == AUDIO_MANAGER_OPERATION_WAV) ||
+         (s_control.operation == AUDIO_MANAGER_OPERATION_RECORDED_PLAYBACK)))
     {
         s_control.cancel_requested = true;
         requested = true;
@@ -3458,6 +4057,7 @@ esp_err_t audio_manager_stop(void)
         first_request = !s_control.shutdown_requested;
         s_control.shutdown_requested = true;
         s_control.cancel_requested = true;
+        s_control.record_stop_requested = true;
     }
     s_runtime.wav_stress_shutdown_requested = true;
     portEXIT_CRITICAL(&s_control_lock);
