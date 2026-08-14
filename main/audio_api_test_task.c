@@ -14,27 +14,25 @@
 #define AUDIO_API_TEST_TASK_PRIORITY             6U
 #define AUDIO_API_TEST_POLL_MS                   100U
 #define AUDIO_API_TEST_MANUAL_HOLD_MS            3000U
+#define AUDIO_API_TEST_INTER_CYCLE_DELAY_MS      1000U
 #define AUDIO_API_TEST_WAV_PATH "/sdcard/audio/input_2.wav"
 
 static const char *const TAG = "AUDIO_API_TEST";
 static TaskHandle_t s_test_task_handle = NULL;
 
 /*
- * This is a hardware validation/soak task, not a bounded unit test. Waiting
- * helpers intentionally have no timeout: an operation is allowed to run for
- * its real duration and the task advances only after the public status
- * counters report a real terminal result.
+ * Hardware stress waits are intentionally unbounded. The task advances only
+ * after public audio_manager status counters report a real terminal result.
  */
-static esp_err_t app_audio_api_test_wait_manager_idle(void)
+static void app_audio_api_test_wait_manager_idle(void)
 {
     while (true)
     {
         audio_manager_status_t status = {0};
-        const esp_err_t result = audio_manager_get_status(&status);
-        if ((result == ESP_OK) &&
+        if ((audio_manager_get_status(&status) == ESP_OK) &&
             (status.state == AUDIO_MANAGER_STATE_IDLE))
         {
-            return ESP_OK;
+            return;
         }
 
         vTaskDelay(pdMS_TO_TICKS(AUDIO_API_TEST_POLL_MS));
@@ -170,7 +168,7 @@ static void app_audio_api_test_wait_sd_ready(void)
     {
         if (!waiting_logged)
         {
-            ESP_LOGI(TAG, "Waiting indefinitely for SD READY before WAV test");
+            ESP_LOGI(TAG, "Waiting indefinitely for SD READY before WAV stress step");
             waiting_logged = true;
         }
 
@@ -179,7 +177,7 @@ static void app_audio_api_test_wait_sd_ready(void)
 
     if (waiting_logged)
     {
-        ESP_LOGI(TAG, "SD READY; continuing WAV test");
+        ESP_LOGI(TAG, "SD READY; continuing WAV stress step");
     }
 }
 
@@ -192,7 +190,6 @@ static esp_err_t app_audio_api_test_fixed_record(void)
         return result;
     }
 
-    ESP_LOGI(TAG, "STEP 1/5 fixed record: request");
     result = audio_manager_record();
     if (result != ESP_OK)
     {
@@ -202,7 +199,7 @@ static esp_err_t app_audio_api_test_fixed_record(void)
     return app_audio_api_test_wait_record_terminal(&before);
 }
 
-static esp_err_t app_audio_api_test_play_recorded(const char *step_name)
+static esp_err_t app_audio_api_test_play_recorded(void)
 {
     audio_manager_status_t before = {0};
     esp_err_t result = audio_manager_get_status(&before);
@@ -211,7 +208,6 @@ static esp_err_t app_audio_api_test_play_recorded(const char *step_name)
         return result;
     }
 
-    ESP_LOGI(TAG, "%s", step_name);
     result = audio_manager_play_recorded();
     if (result != ESP_OK)
     {
@@ -229,11 +225,6 @@ static esp_err_t app_audio_api_test_manual_record(void)
     {
         return result;
     }
-
-    ESP_LOGI(
-        TAG,
-        "STEP 3/5 manual record: start, hold %ums, stop",
-        (unsigned)AUDIO_API_TEST_MANUAL_HOLD_MS);
 
     result = audio_manager_start_recording();
     if (result != ESP_OK)
@@ -254,7 +245,7 @@ static esp_err_t app_audio_api_test_manual_record(void)
     {
         ESP_LOGW(
             TAG,
-            "Manual stop found no active recording; operation may already have reached its configured maximum");
+            "Manual stop found no active recording; configured maximum may already be complete");
     }
 
     return app_audio_api_test_wait_record_terminal(&before);
@@ -262,7 +253,6 @@ static esp_err_t app_audio_api_test_manual_record(void)
 
 static esp_err_t app_audio_api_test_play_wav(void)
 {
-    ESP_LOGI(TAG, "STEP 5/5 wait for SD before WAV playback");
     app_audio_api_test_wait_sd_ready();
 
     audio_manager_status_t before = {0};
@@ -272,7 +262,6 @@ static esp_err_t app_audio_api_test_play_wav(void)
         return result;
     }
 
-    ESP_LOGI(TAG, "STEP 5/5 WAV playback: %s", AUDIO_API_TEST_WAV_PATH);
     result = audio_manager_play_wav(AUDIO_API_TEST_WAV_PATH);
     if (result != ESP_OK)
     {
@@ -282,62 +271,112 @@ static esp_err_t app_audio_api_test_play_wav(void)
     return app_audio_api_test_wait_wav_terminal(&before);
 }
 
+static esp_err_t app_audio_api_test_run_cycle(uint32_t cycle)
+{
+    ESP_LOGI(TAG, "========== PUBLIC AUDIO STRESS CYCLE %u =========", (unsigned)cycle);
+
+    ESP_LOGI(TAG, "CYCLE %u STEP 1/5 fixed record", (unsigned)cycle);
+    esp_err_t result = app_audio_api_test_fixed_record();
+    if (result != ESP_OK)
+    {
+        return result;
+    }
+
+    ESP_LOGI(TAG, "CYCLE %u STEP 2/5 play fixed recording", (unsigned)cycle);
+    result = app_audio_api_test_play_recorded();
+    if (result != ESP_OK)
+    {
+        return result;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "CYCLE %u STEP 3/5 manual record hold=%ums",
+        (unsigned)cycle,
+        (unsigned)AUDIO_API_TEST_MANUAL_HOLD_MS);
+    result = app_audio_api_test_manual_record();
+    if (result != ESP_OK)
+    {
+        return result;
+    }
+
+    ESP_LOGI(TAG, "CYCLE %u STEP 4/5 play manual recording", (unsigned)cycle);
+    result = app_audio_api_test_play_recorded();
+    if (result != ESP_OK)
+    {
+        return result;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "CYCLE %u STEP 5/5 WAV playback: %s",
+        (unsigned)cycle,
+        AUDIO_API_TEST_WAV_PATH);
+    return app_audio_api_test_play_wav();
+}
+
 static void app_audio_api_test_task(void *argument)
 {
     (void)argument;
 
     ESP_LOGI(
         TAG,
-        "Public audio API validation started: priority=%u timeout=disabled",
+        "Public audio API stress test started: priority=%u timeout=disabled continuous=yes",
         (unsigned)AUDIO_API_TEST_TASK_PRIORITY);
 
-    esp_err_t result = app_audio_api_test_wait_manager_idle();
+    app_audio_api_test_wait_manager_idle();
 
-    if (result == ESP_OK)
-    {
-        result = app_audio_api_test_fixed_record();
-    }
-    if (result == ESP_OK)
-    {
-        ESP_LOGI(TAG, "STEP 1/5 PASS fixed record");
-        result = app_audio_api_test_play_recorded(
-            "STEP 2/5 play retained fixed recording");
-    }
-    if (result == ESP_OK)
-    {
-        ESP_LOGI(TAG, "STEP 2/5 PASS recorded playback");
-        result = app_audio_api_test_manual_record();
-    }
-    if (result == ESP_OK)
-    {
-        ESP_LOGI(TAG, "STEP 3/5 PASS manual record");
-        result = app_audio_api_test_play_recorded(
-            "STEP 4/5 play retained manual recording");
-    }
-    if (result == ESP_OK)
-    {
-        ESP_LOGI(TAG, "STEP 4/5 PASS recorded playback");
-        result = app_audio_api_test_play_wav();
-    }
-    if (result == ESP_OK)
-    {
-        ESP_LOGI(TAG, "STEP 5/5 PASS WAV playback");
-        ESP_LOGI(TAG, "PUBLIC AUDIO API TEST PASS");
-    }
-    else
-    {
-        audio_manager_status_t status = {0};
-        (void)audio_manager_get_status(&status);
-        ESP_LOGE(
-            TAG,
-            "PUBLIC AUDIO API TEST FAIL: %s state=%s last_error=%s",
-            esp_err_to_name(result),
-            audio_manager_state_to_string(status.state),
-            esp_err_to_name(status.last_error));
-    }
+    uint32_t cycle = 1U;
+    uint32_t passed = 0U;
+    uint32_t failed = 0U;
 
-    s_test_task_handle = NULL;
-    vTaskDelete(NULL);
+    while (true)
+    {
+        const esp_err_t result = app_audio_api_test_run_cycle(cycle);
+        if (result == ESP_OK)
+        {
+            ++passed;
+            ESP_LOGI(
+                TAG,
+                "PUBLIC AUDIO STRESS CYCLE %u PASS totals: pass=%u fail=%u",
+                (unsigned)cycle,
+                (unsigned)passed,
+                (unsigned)failed);
+        }
+        else
+        {
+            ++failed;
+            audio_manager_status_t status = {0};
+            (void)audio_manager_get_status(&status);
+            ESP_LOGE(
+                TAG,
+                "PUBLIC AUDIO STRESS CYCLE %u FAIL: %s state=%s last_error=%s totals: pass=%u fail=%u",
+                (unsigned)cycle,
+                esp_err_to_name(result),
+                audio_manager_state_to_string(status.state),
+                esp_err_to_name(status.last_error),
+                (unsigned)passed,
+                (unsigned)failed);
+        }
+
+        /*
+         * A failed operation is expected to clean itself back to IDLE. If it
+         * does not, waiting here intentionally exposes the stuck lifecycle on
+         * hardware instead of hiding it with task-local recovery shortcuts.
+         */
+        app_audio_api_test_wait_manager_idle();
+
+        ++cycle;
+        if (cycle == 0U)
+        {
+            cycle = 1U;
+        }
+
+        if (AUDIO_API_TEST_INTER_CYCLE_DELAY_MS > 0U)
+        {
+            vTaskDelay(pdMS_TO_TICKS(AUDIO_API_TEST_INTER_CYCLE_DELAY_MS));
+        }
+    }
 }
 
 esp_err_t app_audio_api_test_task_start(void)
