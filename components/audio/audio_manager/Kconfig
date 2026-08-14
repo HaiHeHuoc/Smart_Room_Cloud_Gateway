@@ -11,26 +11,6 @@ menu "Audio manager"
             one shared retained-recording PSRAM buffer large enough for the
             larger of this limit and the fixed record_duration_seconds value.
 
-    config AUDIO_MANAGER_WAV_VALIDATION_ONCE
-        bool "Submit one WAV through production API after SD is ready"
-        default n
-        depends on !AUDIO_MANAGER_GOLDEN_STABILITY_MODE && !AUDIO_MANAGER_WAV_STRESS_TESTAPP
-        help
-            Default-off hardware regression hook. After the production task
-            reaches IDLE and sd_card_manager reports VFS availability, it
-            submits the configured file through audio_manager_play_wav(), so
-            validation uses the same bounded command, cancellation, streaming,
-            and cleanup path as application requests. Normal production startup
-            remains command-idle.
-
-    config AUDIO_MANAGER_WAV_VALIDATION_PATH
-        string "Absolute WAV validation path"
-        default "/sdcard/audio/test.wav"
-        depends on AUDIO_MANAGER_WAV_VALIDATION_ONCE
-        help
-            Absolute path below the sd_card_manager VFS mount. The file must
-            be canonical PCM16 mono at 16000 Hz.
-
     config AUDIO_MANAGER_WAV_PREFETCH_SECONDS
         int "WAV prefetch block duration (seconds)"
         range 1 30
@@ -48,10 +28,19 @@ menu "Audio manager"
         bool "Run the golden record/DSP/playback stability loop"
         default n
         help
-            Default-off regression facility that repeats the proven Phase 11.3
-            record -> DSP -> recorded-playback cycle. This mode monopolizes the
-            manager operation slot, so production WAV commands are rejected.
-            Cooperative shutdown is observed between complete golden cycles.
+            Legacy default-off regression safety net for the proven Phase 11.3
+            record -> DSP -> recorded-playback engine. Keep this only when a
+            direct engine-level regression is intentionally required.
+
+            Normal hardware validation and soak should use the external/public-
+            API stress task instead, because that path also exercises command
+            arbitration, public state transitions, callbacks/status counters,
+            cancellation ownership, WAV streaming, and cleanup exactly as an
+            application would.
+
+            Golden mode monopolizes the manager operation slot, therefore
+            production record/playback/WAV public commands are rejected while
+            it is enabled.
 
     config AUDIO_MANAGER_GOLDEN_STABILITY_RECORD_SECONDS
         int "Golden stability recording duration (seconds)"
@@ -60,7 +49,7 @@ menu "Audio manager"
         depends on AUDIO_MANAGER_GOLDEN_STABILITY_MODE
         help
             Number of 16 kHz PCM24 samples retained before each golden DSP and
-            recorded-playback cycle. The current audio stress configuration uses
+            recorded-playback cycle. The historical stress configuration uses
             60 seconds, which reserves about 3.66 MiB of PSRAM for recording.
             Allocation still fails safely if the target does not have enough
             free PSRAM.
@@ -71,51 +60,8 @@ menu "Audio manager"
         default 6
         depends on AUDIO_MANAGER_GOLDEN_STABILITY_MODE
         help
-            FreeRTOS priority for a golden audio stress run. The default is 6,
-            above the normal priority-5 GUI task, while I2S operations remain
-            bounded and DSP retains its cooperative yields. Use 7 only after
-            measuring GUI/network responsiveness on the target.
-
-    config AUDIO_MANAGER_WAV_STRESS_TESTAPP
-        bool "Run a continuous WAV playback stress coordinator"
-        default n
-        help
-            Test-only WAV stress mode. A coordinator task never opens the WAV
-            file or touches I2S; it submits the configured WAV through the
-            production audio_manager API. With golden stability disabled, each
-            full WAV plays from the normal command-idle manager. With golden
-            stability enabled, the manager serializes the WAV between complete
-            microphone record/DSP/recorded-playback cycles. Neither form is
-            normal product behavior.
-
-    config AUDIO_MANAGER_WAV_STRESS_PATH
-        string "Absolute WAV path for continuous stress"
-        default "/sdcard/audio/input.wav"
-        depends on AUDIO_MANAGER_WAV_STRESS_TESTAPP
-        help
-            Absolute path below the SD VFS mount. The file must be canonical
-            RIFF/WAVE PCM16 little-endian, mono, and 16000 Hz.
-
-    config AUDIO_MANAGER_WAV_STRESS_POST_COMPLETION_DELAY_SECONDS
-        int "Continuous-WAV delay after each completion (seconds)"
-        range 1 3600
-        default 60
-        depends on AUDIO_MANAGER_WAV_STRESS_TESTAPP
-        help
-            The coordinator waits this long after a WAV reaches EOF, fails,
-            or is cancelled before submitting the next iteration. With golden
-            stability enabled, waiting for the next inter-cycle command window
-            is additional and does not stop the golden loop.
-
-    config AUDIO_MANAGER_WAV_STRESS_TASK_PRIORITY
-        int "Continuous-WAV coordinator task priority"
-        range 6 7
-        default 6
-        depends on AUDIO_MANAGER_WAV_STRESS_TESTAPP
-        help
-            FreeRTOS priority for the test-only coordinator. It only polls
-            manager status and queues commands; audio_manager remains the only
-            I2S owner. Use priority 7 only after measuring whole-system
-            responsiveness on target hardware.
+            FreeRTOS priority for the legacy golden engine-level regression.
+            The default is 6. Use 7 only after measuring GUI/network
+            responsiveness on the target.
 
 endmenu
