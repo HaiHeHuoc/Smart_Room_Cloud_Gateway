@@ -22,7 +22,7 @@ audio_wav
 audio_wav_prefetch
   - one lower-priority reader task
   - two PSRAM READY/FREE slots
-  - recovery/reopen/seek policy
+  - fresh-file retry + remount fallback + seek policy
     |
     v
 audio_manager
@@ -77,18 +77,36 @@ once the first slot is READY, `audio_manager` maps each PCM16 sample with
 
 ## SD Recovery
 
-On a confirmed low-level media/VFS read failure:
+The recovery policy deliberately distinguishes a single streaming read failure
+from a confirmed card/VFS failure.
 
-1. `audio_wav` reports the failure to `sd_card_manager`, closes the stale FILE,
-   and releases its lease.
-2. `audio_wav_prefetch` waits for the manager to become READY again.
-3. It opens a fresh low-level stream, verifies the WAV metadata did not change,
-   seeks to the last successfully copied data offset, and resumes filling the
-   current PSRAM slot.
-4. The current policy permits one recovery attempt per playback operation.
+On the first `fread()` failure while the SD manager is still READY:
+
+1. `audio_wav` logs the read failure, closes the stale FILE, and releases its
+   lease without immediately forcing a card unmount/remount.
+2. `audio_wav_prefetch` performs one logical recovery attempt by opening a fresh
+   FILE on the still-mounted VFS.
+3. It verifies the WAV metadata is unchanged, seeks to the last successfully
+   committed data offset, and resumes filling the current PSRAM slot.
+
+If that fresh open or seek confirms a real media/VFS failure:
+
+1. The low-level open/seek path reports the error to `sd_card_manager`.
+2. `sd_card_manager` enters RECOVERING, drains leases, and performs its existing
+   bounded unmount/remount recovery.
+3. The same prefetch recovery attempt waits for READY again within its 5-second
+   timeout, reopens a fresh FILE, revalidates metadata, seeks to the committed
+   offset, and resumes.
+4. The playback operation still permits only one logical prefetch recovery
+   attempt; repeated failures terminate the operation rather than looping
+   indefinitely.
 
 A missing file or malformed/unsupported WAV is not treated as physical SD media
 failure.
+
+This ordering is intentional: a transient stream error should not reset a card
+that is otherwise still mounted, while a confirmed media failure still reaches
+the existing `sd_card_manager` recovery path.
 
 ## Cancellation And Cleanup
 
@@ -142,6 +160,20 @@ prefetch_starve = 0
 A non-zero value means the manager reached a ping-pong boundary before another
 READY slot arrived within the bounded boundary wait. Correlate that event with
 audible output and TX diagnostics on hardware.
+
+When fault testing, distinguish the two recovery outcomes:
+
+```text
+Fresh-file fast retry:
+  sd_resume_attempt = 1
+  sd_resume_ok      = 1
+  SD may remain READY throughout
+
+Confirmed media failure:
+  SD transitions RECOVERING
+  remount occurs
+  the same logical retry reopens/seeks after READY
+```
 
 ## Phase 11.4.4 Hardware Acceptance
 
