@@ -47,7 +47,7 @@
 #define AUDIO_API_TEST_INTER_CYCLE_DELAY_MS            1000U
 
 /* Canonical PCM16 mono 16-kHz WAV below the mounted /sdcard filesystem. */
-#define AUDIO_API_TEST_WAV_PATH "/sdcard/audio/input_2.wav"
+#define AUDIO_API_TEST_WAV_PATH "/sdcard/audio/input_long.wav"
 
 #if AUDIO_API_TEST_ENABLED && \
     !AUDIO_API_TEST_ENABLE_FIXED_RECORD && \
