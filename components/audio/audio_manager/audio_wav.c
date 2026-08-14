@@ -585,16 +585,24 @@ esp_err_t audio_wav_stream_read_limited(
             read_errno,
             esp_err_to_name(result));
 
+        /*
+         * Do not escalate the first streaming fread() failure directly into a
+         * full SD unmount/remount. Close the sticky FILE and release its lease
+         * first. The prefetch layer owns one bounded fresh-file reopen/seek
+         * attempt at the last committed data offset. If that fresh open/seek
+         * confirms a real media failure, those operations report it through
+         * sd_card_manager and the existing remount recovery path takes over.
+         *
+         * A fclose() failure is still reported by audio_wav_stream_close(), as
+         * that is independent confirmation that the VFS/media path is unhealthy.
+         */
         if (io_error)
         {
-            audio_wav_report_media_error_if_needed(result, read_errno);
+            ESP_LOGW(
+                TAG,
+                "Deferring SD remount until fresh-file WAV retry confirms media failure");
         }
 
-        /*
-         * Close the sticky FILE and release the VFS lease before returning.
-         * The higher-level prefetch worker may then wait for remount, reopen a
-         * fresh FILE, verify metadata, and seek to data_bytes_read.
-         */
         const esp_err_t close_result = audio_wav_stream_close(stream);
         if (close_result != ESP_OK)
         {
