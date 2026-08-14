@@ -57,6 +57,7 @@
 
 /* Audio manager ------------------------------------------------------------ */
 #include "audio_manager.h"
+#include "audio_api_test_task.h"
 
 /* Macros ------------------------------------------------------------------- */
 #define PERFORMANCE_MONITOR 0
@@ -522,7 +523,7 @@ void app_main(void)
     {
         ESP_LOGE(
             TAG,
-            "Failed to register cloud status callback: %s",
+            "Failed to register cloud manager status callback: %s",
             esp_err_to_name(service_ret));
         return;
     }
@@ -635,6 +636,23 @@ void app_main(void)
             ESP_LOGI(
                 TAG,
                 "Audio manager task started; mode is reported by audio_manager");
+
+            const esp_err_t audio_test_ret =
+                app_audio_api_test_task_start();
+
+            if (audio_test_ret != ESP_OK)
+            {
+                ESP_LOGW(
+                    TAG,
+                    "Failed to start public audio API validation task: %s",
+                    esp_err_to_name(audio_test_ret));
+            }
+            else
+            {
+                ESP_LOGI(
+                    TAG,
+                    "Public audio API validation task started at priority 6");
+            }
         }
     }
 
@@ -992,7 +1010,8 @@ static void app_sensor_status_callback(
     };
 
     esp_err_t error =
-        app_gui_post_sensor_status(&ui_status);
+        app_gui_post_sensor_status(
+            &ui_status);
 
     if (error != ESP_OK)
     {
@@ -1094,7 +1113,8 @@ static void app_cloud_status_callback(
     };
 
     const esp_err_t error =
-        app_gui_post_cloud_status(&ui_status);
+        app_gui_post_cloud_status(
+            &ui_status);
 
     if (error != ESP_OK)
     {
