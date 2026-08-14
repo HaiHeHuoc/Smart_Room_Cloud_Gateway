@@ -14,6 +14,7 @@ Reusable component ownership is documented in [`components/README.md`](../compon
 ```text
 Release: v1.0.0
 Status: Implemented and hardware accepted
+SD recovery extension: target-hardware acceptance pending
 ```
 
 ## Startup Order
@@ -21,17 +22,26 @@ Status: Implemented and hardware accepted
 1. Log project name, semantic version, and release date.
 2. Initialize NVS, `config_manager`, ESP-NETIF, and the default event loop.
 3. Initialize the ST7735 display and LVGL integration.
-4. Mount microSD and register the LVGL `S:` filesystem.
-5. Initialize `app_gui` and start the single UI task.
-6. Optionally start `performance_monitor`.
-7. Initialize/start the reset coordinator and button manager.
-8. Initialize `wifi_manager` and its status callback.
-9. Initialize the application network coordinator.
-10. Initialize `firebase_auth` and `cloud_manager`; create the telemetry queue
+4. Prepare the non-blocking SD recovery service and register the LVGL `S:`
+   filesystem while it is still offline.
+5. Initialize `app_gui`, start the single UI task, and present the built-in
+   `Starting...` BOOT screen.
+6. Start the background SD recovery task. A missing card is non-fatal; retry
+   continues while the rest of the application starts.
+7. Optionally start `performance_monitor`.
+8. Initialize/start the reset coordinator and button manager.
+9. Initialize `wifi_manager` and its status callback.
+10. Initialize the application network coordinator.
+11. Initialize `firebase_auth` and `cloud_manager`; create the telemetry queue
     without starting TLS.
-11. Initialize/start `sensor_manager`.
-12. Schedule the one-shot network coordinator.
-13. Start `cloud_manager` only after stored-Wi-Fi startup or successful
+12. Initialize/start `sensor_manager`.
+13. Schedule the one-shot network coordinator.
+14. Initialize `audio_manager`, register its copied GUI status adapter, and
+    start its private I2S-owning task. During WAV playback, its private reader
+    owns the file/SD VFS lease and bounded PSRAM cache. Normal startup is
+    command-idle; the default-off golden/continuous-WAV stress hooks are
+    selected only in Kconfig.
+15. Start `cloud_manager` only after stored-Wi-Fi startup or successful
     provisioning cleanup and Station adoption.
 
 ## Runtime Event Flow
@@ -45,6 +55,10 @@ wifi_manager callback
 sensor_manager callback
     -> copied sensor GUI model
     -> copied latest-value cloud telemetry
+
+audio_manager callback
+    -> copied audio GUI model
+    -> app_gui task renders dashboard status
 
 cloud_manager callback
     -> copied cloud GUI model
@@ -74,6 +88,11 @@ cleanup transaction.
 - Maximum provisioning sessions: 3.
 - Cloud retry: 5 seconds to 60 seconds.
 - Factory-reset input: active-low GPIO9, five-second hold.
+- Audio stability default: five-second recording, DSP, and playback at 100% volume.
+  The current local WAV-only stress profile disables capture and replays the
+  configured SD WAV file to completion at priority 6.
+- SD initial settle/retry/deadline: 1 second / 2 seconds / 90 seconds.
+- SD background retry and idle health-check intervals: 2 seconds / 5 seconds.
 
 Firebase API key, device email, password, and optional expected UID come from
 local project Kconfig values in the generated, Git-ignored `sdkconfig`. They are
@@ -88,6 +107,11 @@ mechanism.
 - `provisioning_manager` owns temporary BLE transport and credential handoff.
 - `config_manager` owns durable application configuration.
 - `sensor_manager` owns DHT22 sampling.
+- `audio_manager` owns I2S RX/TX, PCM stability buffers, and audio diagnostics;
+  its private WAV reader owns the active VFS lease/file and bounded PSRAM cache.
+- `sd_card_manager` owns SDSPI/FAT VFS lifecycle and background recovery;
+  `lvgl_sd_fs` and private WAV playback hold managed VFS leases while files are
+  open.
 - `firebase_auth` owns sign-in and token lifecycle.
 - `cloud_manager` owns authenticated telemetry and retry.
 - `app_gui` and `ui_manager_lvgl` own screens and LVGL synchronization.

@@ -55,12 +55,12 @@
 /* Button manager ----------------------------------------------------------- */
 #include "button_manager.h"
 
-#include "audio_test.h"
+/* Audio manager ------------------------------------------------------------ */
+#include "audio_manager.h"
+#include "audio_api_test_task.h"
 
 /* Macros ------------------------------------------------------------------- */
 #define PERFORMANCE_MONITOR 1
-/* Test-only repeated RX/TX count; hardware acceptance requires >= 20 cycles. */
-#define AUDIO_TEST_CYCLE_COUNT 100U
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "MAIN_APP";
@@ -172,6 +172,15 @@ static void app_sensor_status_callback(
     const sensor_manager_status_t *status,
     void *user_context);
 
+/** @brief Map an audio manager pipeline state to its compact GUI equivalent. */
+static ui_audio_state_t app_map_audio_state(
+    audio_manager_state_t state);
+
+/** @brief Copy audio status into the GUI queue without calling LVGL. */
+static void app_audio_status_callback(
+    const audio_manager_status_t *status,
+    void *user_context);
+
 /** @brief Map a cloud manager state to its application GUI equivalent. */
 static ui_cloud_state_t app_map_cloud_state(
     cloud_manager_state_t state);
@@ -204,12 +213,6 @@ static bool app_map_wifi_status_to_network_event(
 static bool app_network_state_allows_cloud_start(
     app_network_coordinator_state_t state);
 
-/**
- * @brief Run bounded RX/TX coexistence cycles, release audio resources, and exit.
- *
- * @param[in] arg Unused task argument.
- */
-static void audio_test_task(void *arg);
 /* Application -------------------------------------------------------------- */
 /** @brief Initialize the current application services and run diagnostics. */
 void app_main(void)
@@ -260,16 +263,19 @@ void app_main(void)
         return;
     }
 
-    ret = sd_card_manager_init();
+    /*
+     * SD initialization is intentionally split from the recovery task. This
+     * lets LVGL register S: while offline, then lets the BOOT screen appear
+     * before a cold or slow SD card begins its retry sequence.
+     */
+    const esp_err_t sd_init_ret = sd_card_manager_init();
 
-    if (ret != ESP_OK)
+    if (sd_init_ret != ESP_OK)
     {
         ESP_LOGE(
             TAG,
-            "Failed to initialize SD card driver: %s",
-            esp_err_to_name(ret));
-
-        return;
+            "Failed to initialize SD recovery service: %s; continuing without SD",
+            esp_err_to_name(sd_init_ret));
     }
 
     ret = lvgl_sd_fs_register();
@@ -311,6 +317,37 @@ void app_main(void)
     }
 
     ESP_LOGI(TAG, "LVGL display initialized successfully");
+
+    ret = app_gui_request_screen(APP_GUI_SCREEN_BOOT);
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to request BOOT screen before SD recovery: %s",
+            esp_err_to_name(ret));
+
+        return;
+    }
+
+    /*
+     * Give the UI task one scheduled frame to draw its built-in, SD-free boot
+     * screen. No LVGL API is called from app_main after the task has started.
+     */
+    vTaskDelay(pdMS_TO_TICKS(50U));
+
+    if (sd_init_ret == ESP_OK)
+    {
+        const esp_err_t sd_start_ret = sd_card_manager_start();
+
+        if (sd_start_ret != ESP_OK)
+        {
+            ESP_LOGE(
+                TAG,
+                "Failed to start SD recovery task: %s; continuing without SD",
+                esp_err_to_name(sd_start_ret));
+        }
+    }
 
 #if PERFORMANCE_MONITOR
     esp_err_t monitor_ret =
@@ -399,6 +436,7 @@ void app_main(void)
             }
         }
     }
+
     esp_err_t wifi_ret =
         wifi_manager_init();
 
@@ -485,7 +523,7 @@ void app_main(void)
     {
         ESP_LOGE(
             TAG,
-            "Failed to register cloud status callback: %s",
+            "Failed to register cloud manager status callback: %s",
             esp_err_to_name(service_ret));
         return;
     }
@@ -552,33 +590,69 @@ void app_main(void)
 
     bool cloud_started = false;
 
-    esp_err_t audio_ret = audio_test_init();
+    /*
+     * app_main only composes the audio component. Its production task reaches
+     * IDLE and privately owns commands, WAV streams, and all I2S operations.
+     */
+    const audio_manager_config_t audio_config =
+        audio_manager_default_config();
+
+    esp_err_t audio_ret =
+        audio_manager_init(&audio_config);
 
     if (audio_ret != ESP_OK)
     {
         ESP_LOGE(
             TAG,
-            "Failed to initialize audio test: %s",
+            "Failed to initialize audio manager: %s",
             esp_err_to_name(audio_ret));
     }
     else
     {
-        BaseType_t task_ret =
-            xTaskCreate(
-                audio_test_task,
-                "audio_test",
-                4096,
-                NULL,
-                5,
+        const esp_err_t audio_gui_ret =
+            audio_manager_register_status_callback(
+                app_audio_status_callback,
                 NULL);
 
-        if (task_ret != pdPASS)
+        if (audio_gui_ret != ESP_OK)
+        {
+            ESP_LOGW(
+                TAG,
+                "Failed to register audio GUI status callback: %s",
+                esp_err_to_name(audio_gui_ret));
+        }
+
+        audio_ret = audio_manager_start();
+
+        if (audio_ret != ESP_OK)
         {
             ESP_LOGE(
                 TAG,
-                "Failed to create audio test task");
+                "Failed to start audio manager task: %s",
+                esp_err_to_name(audio_ret));
+        }
+        else
+        {
+            ESP_LOGI(
+                TAG,
+                "Audio manager task started; mode is reported by audio_manager");
 
-            (void)audio_test_deinit();
+            const esp_err_t audio_test_ret =
+                app_audio_api_test_task_start();
+
+            if (audio_test_ret != ESP_OK)
+            {
+                ESP_LOGW(
+                    TAG,
+                    "Failed to start public audio API validation task: %s",
+                    esp_err_to_name(audio_test_ret));
+            }
+            else
+            {
+                ESP_LOGI(
+                    TAG,
+                    "Public audio API validation task started at priority 6");
+            }
         }
     }
 
@@ -677,6 +751,7 @@ static esp_err_t network_platform_init(void)
 
         return ret;
     }
+
     /*
      * Create the default system event loop.
      *
@@ -733,7 +808,8 @@ static void app_wifi_status_callback(
 {
     (void)user_data;
 
-    if (status == NULL) {
+    if (status == NULL)
+    {
         return;
     }
 
@@ -778,28 +854,26 @@ static void app_wifi_status_callback(
         ui_status.ssid,
         sizeof(ui_status.ssid),
         "%s",
-        status->ssid
-    );
+        status->ssid);
 
     snprintf(
         ui_status.ipv4_address,
         sizeof(ui_status.ipv4_address),
         "%s",
-        status->ipv4_address
-    );
+        status->ipv4_address);
 
     const esp_err_t ret =
         app_gui_post_wifi_status(
-            &ui_status
-        );
+            &ui_status);
 
-    if (ret != ESP_OK) {
+    if (ret != ESP_OK)
+    {
         ESP_LOGW(
             TAG,
             "Failed to forward Wi-Fi status to UI: %s",
-            esp_err_to_name(ret)
-        );
+            esp_err_to_name(ret));
     }
+
     const esp_err_t cloud_network_error =
         cloud_manager_notify_network_state(
             status->has_ipv4_address);
@@ -814,7 +888,6 @@ static void app_wifi_status_callback(
             esp_err_to_name(cloud_network_error));
     }
 
-
     ESP_LOGD(
         TAG,
         "Wi-Fi callback: state=%s, ip=%s, reason=%u",
@@ -822,8 +895,7 @@ static void app_wifi_status_callback(
         status->has_ipv4_address
             ? status->ipv4_address
             : "<none>",
-        (unsigned int)status->disconnect_reason
-    );
+        (unsigned int)status->disconnect_reason);
 }
 
 static ui_sensor_state_t app_map_sensor_state(
@@ -845,6 +917,63 @@ static ui_sensor_state_t app_map_sensor_state(
         case SENSOR_MANAGER_STATE_RUNNING:
         default:
             return UI_SENSOR_STATE_INITIALIZING;
+    }
+}
+
+static ui_audio_state_t app_map_audio_state(
+    audio_manager_state_t state)
+{
+    switch (state)
+    {
+        case AUDIO_MANAGER_STATE_INITIALIZED:
+            return UI_AUDIO_STATE_READY;
+
+        case AUDIO_MANAGER_STATE_IDLE:
+            return UI_AUDIO_STATE_IDLE;
+
+        case AUDIO_MANAGER_STATE_RECORDING:
+            return UI_AUDIO_STATE_RECORDING;
+
+        case AUDIO_MANAGER_STATE_PROCESSING:
+            return UI_AUDIO_STATE_PROCESSING;
+
+        case AUDIO_MANAGER_STATE_PLAYBACK:
+            return UI_AUDIO_STATE_PLAYBACK;
+
+        case AUDIO_MANAGER_STATE_ERROR:
+            return UI_AUDIO_STATE_ERROR;
+
+        case AUDIO_MANAGER_STATE_UNINITIALIZED:
+        default:
+            return UI_AUDIO_STATE_UNAVAILABLE;
+    }
+}
+
+static void app_audio_status_callback(
+    const audio_manager_status_t *status,
+    void *user_context)
+{
+    (void)user_context;
+
+    if (status == NULL)
+    {
+        return;
+    }
+
+    const ui_audio_status_t ui_status =
+    {
+        .state = app_map_audio_state(status->state),
+        .last_error = status->last_error,
+    };
+
+    const esp_err_t ret = app_gui_post_audio_status(&ui_status);
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGD(
+            TAG,
+            "Audio GUI update dropped: %s",
+            esp_err_to_name(ret));
     }
 }
 
@@ -881,7 +1010,8 @@ static void app_sensor_status_callback(
     };
 
     esp_err_t error =
-        app_gui_post_sensor_status(&ui_status);
+        app_gui_post_sensor_status(
+            &ui_status);
 
     if (error != ESP_OK)
     {
@@ -983,7 +1113,8 @@ static void app_cloud_status_callback(
     };
 
     const esp_err_t error =
-        app_gui_post_cloud_status(&ui_status);
+        app_gui_post_cloud_status(
+            &ui_status);
 
     if (error != ESP_OK)
     {
@@ -1099,6 +1230,7 @@ static void app_button_event_callback(
                 (int)event_data->event);
             return;
     }
+
     /*
      * Non-blocking queue post only.
      *
@@ -1116,117 +1248,4 @@ static void app_button_event_callback(
             "Failed to forward button event to reset coordinator: %s",
             esp_err_to_name(post_ret));
     }
-}
-
-static void audio_test_task(void *arg)
-{
-    (void)arg;
-
-    uint32_t completed_cycles = 0U;
-    uint32_t rx_failures = 0U;
-    uint32_t tx_failures = 0U;
-
-    ESP_LOGI(
-        TAG,
-        "Starting audio coexistence stress test: cycles=%u",
-        AUDIO_TEST_CYCLE_COUNT);
-
-    for (uint32_t cycle = 1U;
-         cycle <= AUDIO_TEST_CYCLE_COUNT;
-         ++cycle)
-    {
-        ESP_LOGI(
-            TAG,
-            "========== AUDIO CYCLE %lu/%u ==========",
-            (unsigned long)cycle,
-            AUDIO_TEST_CYCLE_COUNT);
-
-        size_t samples_recorded = 0U;
-
-        esp_err_t ret =
-            audio_test_record_once(
-                &samples_recorded);
-
-        if (ret != ESP_OK)
-        {
-            rx_failures++;
-
-            ESP_LOGE(
-                TAG,
-                "Cycle %lu RX failed: %s",
-                (unsigned long)cycle,
-                esp_err_to_name(ret));
-
-            break;
-        }
-
-        ESP_LOGI(
-            TAG,
-            "Cycle %lu RX passed: samples=%lu",
-            (unsigned long)cycle,
-            (unsigned long)samples_recorded);
-
-        ret =
-            audio_test_play_recording_once(
-                samples_recorded);
-
-        if (ret != ESP_OK)
-        {
-            tx_failures++;
-
-            ESP_LOGE(
-                TAG,
-                "Cycle %lu TX failed: %s",
-                (unsigned long)cycle,
-                esp_err_to_name(ret));
-
-            break;
-        }
-
-        completed_cycles++;
-
-        ESP_LOGI(
-            TAG,
-            "Cycle %lu playback passed",
-            (unsigned long)cycle);
-
-        ESP_LOGI(
-            TAG,
-            "Cycle %lu stack remaining=%u bytes",
-            (unsigned long)cycle,
-            (unsigned)uxTaskGetStackHighWaterMark(NULL));
-    }
-
-    ESP_LOGI(
-        TAG,
-        "========== AUDIO STRESS SUMMARY ==========");
-
-    ESP_LOGI(
-        TAG,
-        "Completed cycles: %lu/%u",
-        (unsigned long)completed_cycles,
-        AUDIO_TEST_CYCLE_COUNT);
-
-    ESP_LOGI(
-        TAG,
-        "RX failures: %lu",
-        (unsigned long)rx_failures);
-
-    ESP_LOGI(
-        TAG,
-        "TX failures: %lu",
-        (unsigned long)tx_failures);
-
-    const esp_err_t deinit_ret =
-        audio_test_deinit();
-
-    if (deinit_ret != ESP_OK)
-    {
-        ESP_LOGW(
-            TAG,
-            "Audio test deinit failed: %s",
-            esp_err_to_name(deinit_ret));
-    }
-
-    vTaskDelete(NULL);
 }

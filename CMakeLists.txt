@@ -6,6 +6,7 @@ cmake_minimum_required(VERSION 3.16)
 
 set(EXTRA_COMPONENT_DIRS
     "${CMAKE_CURRENT_LIST_DIR}/components/application"
+    "${CMAKE_CURRENT_LIST_DIR}/components/audio"
     "${CMAKE_CURRENT_LIST_DIR}/components/cloud"
     "${CMAKE_CURRENT_LIST_DIR}/components/connectivity"
     "${CMAKE_CURRENT_LIST_DIR}/components/display"

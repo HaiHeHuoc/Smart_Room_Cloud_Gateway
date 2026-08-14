@@ -2,97 +2,150 @@
 
 ## Purpose
 
-`sd_card_manager` owns SD card bring-up over SDSPI.
-It initializes the SD SPI bus, mounts the card as a FAT filesystem, and provides
-simple read/write/list helpers for early hardware verification.
+`sd_card_manager` is the sole owner of the board's SDSPI bus, the FAT VFS
+mount, and SD recovery lifecycle. It mounts at `SD_MOUNT_POINT` (`/sdcard`),
+but a missing or slow card never stops the rest of the firmware from booting.
 
-This component is currently a bring-up component, not yet a full storage service.
+The component does not own application files, LVGL, WAV parsing, or audio I2S.
+Consumers use normal VFS/stdio only through the managed lease contract below.
 
-## What Is Done
+## Lifecycle
 
-- Initializes the SD card SPI bus using `SD_SPI_HOST` and SD GPIO settings from
-  `board_config.h`.
-- Mounts the SD card at `SD_MOUNT_POINT`.
-- Uses ESP-IDF `esp_vfs_fat_sdspi_mount()` to attach SDSPI, initialize the card,
-  and register FATFS with VFS.
-- Tracks internal mount state with `s_sd_mounted`.
-- Attempts SD card initialization up to 10 times before returning failure,
-  waiting 1500 ms between retry attempts.
-- Provides `sd_card_manager_write_test_file()` to create `/sdcard/hello.txt`.
-- Provides `sd_card_manager_read_test_file()` to read and log the same file.
-- Provides `sd_card_manager_list_files()` to log one directory level.
-- Provides `sd_card_manager_list_files_recursive()` to log a directory tree up
-  to a caller-selected depth.
+`sd_card_manager_init()` prepares only in-memory state; it does not touch SPI
+or the card. `sd_card_manager_start()` creates one lifetime recovery task:
 
-## How To Use
+```text
+app_main
+  -> initialize LVGL and app_gui
+  -> present the built-in BOOT / "Starting..." screen
+  -> sd_card_manager_start()
 
-Initialize and mount the SD card:
+sd_recovery task (priority 3, 4096-byte stack)
+  -> 1 s cold-card settle delay
+  -> mount attempt every 2 s for up to 90 s
+  -> READY on success
+  -> UNAVAILABLE after the initial deadline, while retrying every 2 s
+```
+
+The 90-second value is a user-visible initial-recovery deadline, not one
+90-second blocking call. Every driver/VFS call still has its own ESP-IDF
+timeout. Network, sensor, GUI, and direct record/DSP/playback audio continue
+while the card is unavailable.
+
+When a managed consumer reports a confirmed VFS I/O error, new opens are
+blocked, existing leases drain, then the recovery task safely unmounts the VFS,
+releases the SPI bus, and resumes its retry loop. The recovery task never calls
+LVGL or consumer callbacks.
+
+## Status API
+
+`sd_card_manager_get_status()` copies a diagnostic snapshot without doing card
+I/O:
 
 ```c
-esp_err_t ret = sd_card_manager_init();
-if (ret != ESP_OK) {
-    return;
+sd_card_manager_status_t status = {0};
+if (sd_card_manager_get_status(&status) == ESP_OK) {
+    // inspect state, last_error, mount attempts, I/O errors, and active leases
 }
 ```
 
-Check mount state:
+States are `INITIALIZING`, `MOUNTING`, `RETRY_WAIT`, `READY`, `RECOVERING`,
+and `UNAVAILABLE` (plus `UNINITIALIZED`). `initial_recovery_timed_out` remains
+true if the first successful mount occurred only after the initial deadline.
+
+`sd_card_manager_is_mounted()` is only a fast logical availability hint. It is
+not a reservation and is not a physical card-detect result.
+
+## Managed VFS Lease Contract
+
+Before opening an SD `FILE *` or `DIR *`, a consumer must acquire one lease and
+release it only after the handle is closed:
 
 ```c
-if (sd_card_manager_is_mounted()) {
-    // Safe to use SD file APIs.
+if (sd_card_manager_acquire() == ESP_OK) {
+    FILE *file = fopen("/sdcard/example.bin", "rb");
+
+    /* Use file, then close it before releasing the lease. */
+    if (file != NULL) {
+        fclose(file);
+    }
+
+    sd_card_manager_release();
 }
 ```
 
-Run the current bring-up test:
+`lvgl_sd_fs` wraps each LVGL file handle with this lease. The private
+`audio_wav` stream does the same. This blocks an unmount race when a card fails
+during an image decode or WAV stream. A consumer must call
+`sd_card_manager_report_io_error()` only for a real VFS/media failure such as
+`ferror()`, `fseek()`, or `fclose()` failure—not normal EOF or a missing path.
+For a failed `fopen()`/`opendir()`/`stat()` call, capture `errno` immediately
+and use `sd_card_manager_is_vfs_media_error()` first; it recognizes the
+ESP-IDF FAT VFS media mappings `EIO`, `ENODEV`, `ENXIO`, and `ETIMEDOUT`, while
+leaving normal `ENOENT` asset errors alone.
+
+The public read/write/list bring-up helpers also hold an internal lease for the
+complete handle lifetime.
+
+## LVGL Integration
+
+`lvgl_sd_fs_register()` may be registered once after `lv_init()`, before SD is
+mounted. Its `ready_cb` dynamically follows the manager state, so no LVGL
+driver re-registration is needed after a mount or recovery:
+
+```c
+ESP_ERROR_CHECK(sd_card_manager_init());
+ESP_ERROR_CHECK(lvgl_sd_fs_register());
+/* app_gui starts and presents BOOT here. */
+ESP_ERROR_CHECK(sd_card_manager_start());
+```
+
+`S:/...` remains LVGL-only. Audio uses the canonical VFS path `/sdcard/...`.
+
+## Bring-up Helpers
+
+The following helpers remain for manual hardware checks after status is
+`READY`:
 
 ```c
 sd_card_manager_write_test_file();
 sd_card_manager_read_test_file();
-```
-
-List files for debugging:
-
-```c
 sd_card_manager_list_files(NULL);
-sd_card_manager_list_files_recursive(NULL, 2);
+sd_card_manager_list_files_recursive(NULL, 2U);
 ```
 
-Passing `NULL` uses `SD_MOUNT_POINT`, currently `/sdcard`.
+Automatic formatting is disabled. A mount failure never formats or erases card
+data.
 
-After mount succeeds, normal C file APIs can be used with the configured mount
-point:
+## Hardware Limits
 
-```c
-FILE *file = fopen("/sdcard/example.txt", "w");
-```
+- This board configuration has no `SD_GPIO_CD` card-detect input and no
+  `SD_PWR_EN` control. Firmware cannot truthfully guarantee idle physical
+  removal detection or power-cycle a card.
+- The five-second idle `sdmmc_get_status()` probe is best effort only. It runs
+  only when there are no managed file leases, so it cannot race VFS I/O.
+- Runtime recovery depends on all SD VFS consumers following the lease
+  contract. Unmanaged direct `fopen("/sdcard/..." )` code is unsupported.
+- There is no public stop/deinit API because this component's recovery task is
+  designed for the firmware lifetime. A coordinated application shutdown is a
+  future lifecycle feature.
+- The current clock is the board-configured conservative 1 MHz. Increase it
+  only after repeated cold-boot and read/write hardware acceptance.
 
-## Important Notes
+## Hardware Acceptance Pending
 
-- `format_if_mount_failed` is disabled. This protects existing SD card data
-  during bring-up.
-- `sd_card_manager_is_mounted()` reports internal software state only. It does
-  not physically detect card removal.
-- The current test file path is fixed and intended only for verification.
-- File listing helpers print results to the log. They do not return a file list
-  to the caller.
-- Recursive listing uses `max_depth`; `0` means only the starting directory is
-  scanned.
-- `fclose()` is important after writes because it flushes buffered data to the
-  filesystem.
-- The current bring-up helpers do not inspect `fprintf()`, `fclose()`, or final
-  read-stream errors, so their success result confirms the basic path rather
-  than every storage operation.
-- SD card speed is intentionally low for bring-up. Increase it only after the
-  hardware wiring is stable.
-- With the current retry policy, a continuously failing mount can delay startup
-  by roughly 13.5 seconds before the final failure is returned.
+The asynchronous recovery behavior is not hardware-accepted until it is
+observed on the target. Capture serial evidence for these cases before raising
+the SD clock or depending on WAV assets in production:
 
-## Future Attention
-
-- Add a public unmount/deinit API when card removal or shutdown is needed.
-- Add generic file read/write/list result APIs after the data format is known.
-- Add better error reporting for common mount failures such as missing card,
-  wrong wiring, unsupported format, or unstable power.
-- Propagate stdio write, close, and read errors from the bring-up helpers.
-- Consider adding card-detect GPIO if the hardware supports it.
-- Revisit SD clock speed after repeated write/read tests are stable.
+1. Start with a cold or absent card: confirm BOOT/UI, Wi-Fi, sensor, and direct
+   record/DSP/playback audio continue while mount retries occur every two
+   seconds for the full 90-second initial window.
+2. Insert or make the card electrically ready after initial timeout: confirm a
+   later background retry reaches `READY` without rebooting the application.
+3. Open an LVGL asset or WAV stream, then induce a real SD I/O failure: confirm
+   the file closes, the final lease drains, recovery unmounts once, and a later
+   successful mount permits a new open.
+4. Remove a card while it is idle: because there is no card-detect pin, expect
+   detection only from the next five-second no-lease health probe or a later
+   VFS operation; firmware cannot prove removal instantly.

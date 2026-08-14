@@ -1,0 +1,26 @@
+idf_component_register(
+    SRCS
+        "audio_manager.c"
+        "audio_api_test_task.c"
+        "audio_dsp.c"
+        "audio_dsp_cooperative.c"
+        "audio_wav.c"
+        "audio_wav_prefetch.c"
+    INCLUDE_DIRS
+        "include"
+    PRIV_INCLUDE_DIRS
+        "."
+    REQUIRES
+        esp_common
+        common
+    PRIV_REQUIRES
+        freertos
+        log
+        esp_driver_i2s
+        esp_driver_gpio
+        esp_timer
+        heap
+        esp_hw_support
+        esp_psram
+        sd_card_manager
+)

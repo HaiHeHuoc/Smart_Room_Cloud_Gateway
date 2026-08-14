@@ -2,55 +2,63 @@
 
 ## Purpose
 
-`lvgl_sd_fs` connects LVGL's filesystem interface to the SD card mounted by
-`sd_card_manager`.
-
-After this component is registered, LVGL can load file-backed assets from the SD
-card using an LVGL drive-letter path such as:
+`lvgl_sd_fs` adapts LVGL's `S:` filesystem drive to the `/sdcard` VFS mounted
+by `sd_card_manager`.
 
 ```text
 S:/images/logo.png
-S:/gif/demo.gif
-S:/fonts/my_font.bin
+    -> lvgl_sd_fs
+    -> /sdcard/images/logo.png
 ```
 
-Internally, those paths are mapped to the ESP-IDF VFS mount point:
+It does not own SDSPI, FATFS, mount/unmount, retry timing, or UI routing.
 
-```text
-/sdcard/images/logo.png
-/sdcard/gif/demo.gif
-/sdcard/fonts/my_font.bin
-```
+## Offline-First Registration
 
-## What Is Done
-
-- Registers an LVGL filesystem driver with drive letter `S`.
-- Checks SD card availability through `sd_card_manager_is_mounted()`.
-- Maps LVGL paths to `SD_MOUNT_POINT`.
-- Opens files using standard C `fopen()`.
-- Supports LVGL file close, read, seek, and tell callbacks.
-- Exposes registration and readiness state helpers.
-- Keeps LVGL filesystem cache disabled to reduce RAM use during bring-up.
-
-## How To Use
-
-Initialize LVGL and mount the SD card before registering this component.
-One valid order is:
+The driver is registered once after LVGL initialization, before the SD card is
+required to be available:
 
 ```c
 ESP_ERROR_CHECK(ui_manager_lvgl_init(&display_handle));
 ESP_ERROR_CHECK(sd_card_manager_init());
 ESP_ERROR_CHECK(lvgl_sd_fs_register());
+ESP_ERROR_CHECK(app_gui_init());
+ESP_ERROR_CHECK(app_gui_start_ui_task());
+ESP_ERROR_CHECK(sd_card_manager_start());
 ```
 
-Then LVGL can use SD card files through the `S:` drive path:
+`ready_cb` follows `sd_card_manager_is_mounted()`. Therefore `S:` is not ready
+while SD recovery is mounting/retrying, becomes ready after a successful mount,
+and becomes unavailable again during safe recovery. Do not register a second
+LVGL driver after reconnect, and do not call `lvgl_sd_fs_register()` from the
+SD recovery task.
 
-```c
-lv_obj_t *img = lv_image_create(lv_screen_active());
-lv_image_set_src(img, "S:/images/logo.png");
+## File-Lifetime Safety
+
+Each successful LVGL `open_cb` creates a small private opaque wrapper:
+
+```text
+LVGL FILE request
+    -> sd_card_manager_acquire()
+    -> fopen("/sdcard/...")
+    -> wrapper { FILE *, lease }
+    -> LVGL read / seek / tell
+    -> fclose()
+    -> sd_card_manager_release()
 ```
 
-The public API is intentionally small:
+This keeps a managed SD lease from opening to closing the `FILE *`. If a real
+read/seek/tell/close error occurs, the adapter reports it to `sd_card_manager`.
+The manager then rejects new opens, waits for open handles to close, and
+performs unmount/retry in its own task. The callbacks never mount, unmount, or
+call LVGL outside LVGL's normal file-operation flow.
+
+Normal EOF is not an SD failure. A missing asset is also not treated as a card
+fault. A failed open whose errno is classified by
+`sd_card_manager_is_vfs_media_error()` is reported as a media failure, while
+normal missing-path errors are not.
+
+## Public API
 
 ```c
 esp_err_t lvgl_sd_fs_register(void);
@@ -58,32 +66,26 @@ bool lvgl_sd_fs_is_registered(void);
 bool lvgl_sd_fs_is_ready(void);
 ```
 
-`lvgl_sd_fs_is_registered()` only reports whether the LVGL driver was
-registered. `lvgl_sd_fs_is_ready()` additionally requires the SD manager to
-report a mounted card.
+`lvgl_sd_fs_is_registered()` reports only driver registration.
+`lvgl_sd_fs_is_ready()` additionally requires the SD manager to accept new VFS
+leases.
 
-## Important Notes
+## Current Support
 
-- Call `lvgl_sd_fs_register()` only after `lv_init()` and after the SD card is
-  mounted.
-- LVGL removes the `S:` drive prefix before calling this component's callbacks.
-  For example, `S:/a.png` arrives internally as `/a.png`.
-- File operations use ESP-IDF VFS and stdio, so the SD card must remain mounted
-  while LVGL is reading assets.
-- Repeated calls to `lvgl_sd_fs_register()` return `ESP_OK` without registering
-  a second driver.
-- The component currently focuses on reading assets for LVGL. `open_cb` maps
-  LVGL write mode to stdio mode, but there is no LVGL `write_cb`, directory
-  listing callback, remove callback, or rename callback yet.
-- Cache size is currently `0` to keep behavior simple and RAM usage low.
+- Drive letter `S`.
+- File open, close, read, seek, and tell callbacks.
+- Standard C stdio through ESP-IDF VFS.
+- Dynamic offline/ready behavior across SD recovery.
+- LVGL cache remains disabled (`cache_size = 0`) to keep RAM behavior simple.
 
-## Future Attention
+Write mode is mapped in `open_cb`, but no LVGL write/remove/rename/directory
+callbacks are implemented. The active project assets are read-oriented.
 
-- Add write, remove, rename, or directory callbacks only when LVGL actually
-  needs them.
-- Consider enabling a small LVGL FS cache after SD loading is stable and RAM
-  usage is measured.
-- Add examples for supported image formats once the project chooses PNG/JPG/BMP
-  or binary LVGL image assets.
-- Keep SD card mount/unmount ownership inside `sd_card_manager`; this component
-  should stay as the LVGL adapter layer.
+## Limits
+
+- The board has no card-detect GPIO, so a card removal while idle is not a
+  guaranteed physical detection event.
+- The manager's idle health probe is best effort; it runs only when this
+  adapter and other managed consumers have no open lease.
+- Asset code must close every LVGL file handle. A forgotten handle deliberately
+  delays recovery rather than risking VFS use-after-free.
