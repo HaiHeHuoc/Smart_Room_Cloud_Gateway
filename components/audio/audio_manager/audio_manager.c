@@ -49,11 +49,7 @@
 #define AUDIO_MANAGER_TASK_STOP_TIMEOUT_MS             5000U
 #define AUDIO_MANAGER_WAV_PREFETCH_WAIT_POLL_MS          100U
 #define AUDIO_MANAGER_WAV_PREFETCH_READER_PRIORITY         5U
-#define AUDIO_MANAGER_WAV_PREFETCH_BYTES_PER_SECOND \
-    (AUDIO_MANAGER_SAMPLE_RATE_HZ * sizeof(int16_t))
-#define AUDIO_MANAGER_WAV_PREFETCH_SLOT_BYTES \
-    (AUDIO_MANAGER_WAV_PREFETCH_BYTES_PER_SECOND * \
-     CONFIG_AUDIO_MANAGER_WAV_PREFETCH_SECONDS)
+#define AUDIO_MANAGER_WAV_PREFETCH_SLOT_BYTES          (32U * 1024U)
 #define AUDIO_MANAGER_MANUAL_RECORD_MAX_SECONDS \
     CONFIG_AUDIO_MANAGER_MANUAL_RECORD_MAX_SECONDS
 
@@ -1550,8 +1546,8 @@ static esp_err_t play_recording(
 /**
  * @brief Wait for the next producer-ready WAV block without touching I2S.
  *
- * The initial wait is intentionally completed before TX starts.  A later
- * wait means the consumer reached a 10-second boundary before the reader had
+ * The initial wait is intentionally completed before TX starts. A later wait
+ * means the consumer reached a 32 KiB slot boundary before the reader had
  * another cache block ready; it is diagnosed as software prefetch starvation,
  * not as a hardware I2S-underrun measurement.
  */
@@ -2229,9 +2225,8 @@ static esp_err_t playback_once(
             }
             ESP_LOGI(
                 TAG,
-                "WAV prefetch playback block=%uB cache=%us x%u volume=%u/100 policy=fixed_full_scale_pcm16 fixed_gain_q16=%u ceiling=+/-%u",
+                "WAV prefetch playback block=%uB slots=%u volume=%u/100 policy=fixed_full_scale_pcm16 fixed_gain_q16=%u ceiling=+/-%u",
                 (unsigned)AUDIO_MANAGER_WAV_PREFETCH_SLOT_BYTES,
-                (unsigned)CONFIG_AUDIO_MANAGER_WAV_PREFETCH_SECONDS,
                 (unsigned)AUDIO_WAV_PREFETCH_SLOT_COUNT,
                 (unsigned)s_runtime.config.playback_volume_percent,
                 (unsigned)AUDIO_WAV_PCM16_FULL_SCALE_GAIN_Q16(
@@ -3723,8 +3718,7 @@ esp_err_t audio_manager_init(const audio_manager_config_t *config)
         (unsigned)AUDIO_MANAGER_FRAMES_PER_BLOCK);
     ESP_LOGI(
         TAG,
-        "WAV prefetch=%us slot=%uB slots=%u PSRAM_total=%uB reader_priority=%u",
-        (unsigned)CONFIG_AUDIO_MANAGER_WAV_PREFETCH_SECONDS,
+        "WAV prefetch slot=%uB slots=%u PSRAM_total=%uB reader_priority=%u",
         (unsigned)AUDIO_MANAGER_WAV_PREFETCH_SLOT_BYTES,
         (unsigned)AUDIO_WAV_PREFETCH_SLOT_COUNT,
         (unsigned)(AUDIO_MANAGER_WAV_PREFETCH_SLOT_BYTES *
