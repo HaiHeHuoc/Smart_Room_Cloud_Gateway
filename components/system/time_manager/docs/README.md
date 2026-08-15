@@ -86,8 +86,16 @@ SNTP synchronization, which lets the GUI show an explicit placeholder. Once
 the manager has synchronized, the getter reads the system clock and remains
 usable while Wi-Fi is offline; the manager has no GUI/LVGL dependency.
 
+## Cloud consumer
+
+Task 4 maps a copied `time_manager_status_t`, current Unix time, and local
+ISO-8601 representation in `main` into cloud-owned telemetry. The Firebase
+component does not include `time_manager.h`, retain time-manager pointers, or
+call time APIs. A complete time snapshot is marked synchronized only when all
+three values are available; otherwise sensor/audio telemetry still uploads
+with the cloud contract's zero/empty unsynchronized time object.
+
 ## Deferred work
 
-Task 4 will add Firebase time telemetry and its later publish-period decision.
 NVS time persistence, external RTC support, REST time APIs, and long-duration
 hardware validation are intentionally outside this component's current scope.
