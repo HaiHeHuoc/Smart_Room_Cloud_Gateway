@@ -26,6 +26,9 @@ typedef struct
     bool initialized;
     bool start_in_progress;
     bool started;
+    bool sntp_initialized;
+    bool sntp_start_in_progress;
+    bool sntp_service_started;
 
     char sntp_server[TIME_MANAGER_SNTP_SERVER_MAX_BYTES];
     char timezone[TIME_MANAGER_TIMEZONE_MAX_BYTES];
@@ -62,6 +65,8 @@ static void time_manager_record_start_failure(
     esp_err_t error);
 static void time_manager_record_sync_failure(
     esp_err_t error);
+static void time_manager_finish_sntp_start(
+    esp_err_t result);
 static void time_manager_sntp_sync_callback(
     struct timeval *sync_time);
 static int64_t time_manager_days_from_civil(
@@ -154,12 +159,17 @@ static void time_manager_record_start_failure(
     taskENTER_CRITICAL(&s_time_manager_lock);
 
     s_time_manager.start_in_progress = false;
+    s_time_manager.started = false;
+    s_time_manager.sntp_initialized = false;
+    s_time_manager.sntp_start_in_progress = false;
+    s_time_manager.sntp_service_started = false;
 
     if (s_time_manager.initialized)
     {
         s_time_manager.status.state = TIME_MANAGER_STATE_ERROR;
         s_time_manager.status.synced = false;
         s_time_manager.status.last_error = error;
+        s_time_manager.status.network_available = false;
         status_updated = true;
     }
 
@@ -179,13 +189,76 @@ static void time_manager_record_sync_failure(
     taskENTER_CRITICAL(&s_time_manager_lock);
 
     if (s_time_manager.initialized &&
-        (s_time_manager.started ||
-            s_time_manager.start_in_progress))
+        s_time_manager.started &&
+        s_time_manager.sntp_initialized)
     {
-        s_time_manager.status.state = TIME_MANAGER_STATE_ERROR;
-        s_time_manager.status.synced = false;
+        s_time_manager.status.state =
+            s_time_manager.status.network_available ?
+                TIME_MANAGER_STATE_ERROR :
+                TIME_MANAGER_STATE_WAITING_NETWORK;
         s_time_manager.status.last_error = error;
         status_updated = true;
+    }
+
+    taskEXIT_CRITICAL(&s_time_manager_lock);
+
+    if (status_updated)
+    {
+        time_manager_notify_status_changed();
+    }
+}
+
+static void time_manager_finish_sntp_start(
+    esp_err_t result)
+{
+    bool status_updated = false;
+
+    taskENTER_CRITICAL(&s_time_manager_lock);
+
+    if (s_time_manager.initialized &&
+        s_time_manager.started &&
+        s_time_manager.sntp_initialized)
+    {
+        s_time_manager.sntp_start_in_progress = false;
+
+        if (result == ESP_OK)
+        {
+            s_time_manager.sntp_service_started = true;
+
+            if (!s_time_manager.status.network_available)
+            {
+                if (s_time_manager.status.state !=
+                    TIME_MANAGER_STATE_WAITING_NETWORK)
+                {
+                    s_time_manager.status.state =
+                        TIME_MANAGER_STATE_WAITING_NETWORK;
+                    status_updated = true;
+                }
+            }
+            else if (s_time_manager.status.state !=
+                     TIME_MANAGER_STATE_SYNCED)
+            {
+                if ((s_time_manager.status.state !=
+                     TIME_MANAGER_STATE_SYNCING) ||
+                    (s_time_manager.status.last_error != ESP_OK))
+                {
+                    s_time_manager.status.state =
+                        TIME_MANAGER_STATE_SYNCING;
+                    s_time_manager.status.last_error = ESP_OK;
+                    status_updated = true;
+                }
+            }
+        }
+        else
+        {
+            s_time_manager.sntp_service_started = false;
+            s_time_manager.status.state =
+                s_time_manager.status.network_available ?
+                    TIME_MANAGER_STATE_ERROR :
+                    TIME_MANAGER_STATE_WAITING_NETWORK;
+            s_time_manager.status.last_error = result;
+            status_updated = true;
+        }
     }
 
     taskEXIT_CRITICAL(&s_time_manager_lock);
@@ -215,10 +288,13 @@ static void time_manager_sntp_sync_callback(
     taskENTER_CRITICAL(&s_time_manager_lock);
 
     if (s_time_manager.initialized &&
-        (s_time_manager.started ||
-            s_time_manager.start_in_progress))
+        s_time_manager.started &&
+        s_time_manager.sntp_initialized)
     {
-        s_time_manager.status.state = TIME_MANAGER_STATE_SYNCED;
+        s_time_manager.status.state =
+            s_time_manager.status.network_available ?
+                TIME_MANAGER_STATE_SYNCED :
+                TIME_MANAGER_STATE_WAITING_NETWORK;
         s_time_manager.status.synced = true;
         s_time_manager.status.last_error = ESP_OK;
         s_time_manager.status.last_sync_unix = synchronized_time;
@@ -418,40 +494,25 @@ esp_err_t time_manager_start(void)
     }
 
     s_time_manager.start_in_progress = true;
-    s_time_manager.status.state = TIME_MANAGER_STATE_SYNCING;
-    s_time_manager.status.synced = false;
-    s_time_manager.status.last_error = ESP_OK;
 
     taskEXIT_CRITICAL(&s_time_manager_lock);
 
-    time_manager_notify_status_changed();
-
     esp_sntp_config_t sntp_config =
+        /* lwIP retains this copied static string for later DNS resolution. */
         ESP_NETIF_SNTP_DEFAULT_CONFIG(s_time_manager.sntp_server);
 
-    /* We only need the asynchronous callback, not ESP-NETIF's wait semaphore. */
+    /* The application starts SNTP after it reports a valid IPv4 address. */
     sntp_config.wait_for_sync = false;
     sntp_config.start = false;
     sntp_config.sync_cb = time_manager_sntp_sync_callback;
 
-    esp_err_t result = esp_netif_sntp_init(&sntp_config);
-
-    if (result == ESP_OK)
-    {
-        result = esp_netif_sntp_start();
-
-        if (result != ESP_OK)
-        {
-            /* The component owns this just-created ESP-NETIF SNTP instance. */
-            esp_netif_sntp_deinit();
-        }
-    }
+    const esp_err_t result = esp_netif_sntp_init(&sntp_config);
 
     if (result != ESP_OK)
     {
         ESP_LOGE(
             TAG,
-            "Failed to start ESP-NETIF SNTP: %s",
+            "Failed to configure ESP-NETIF SNTP: %s",
             esp_err_to_name(result));
 
         time_manager_record_start_failure(result);
@@ -462,11 +523,100 @@ esp_err_t time_manager_start(void)
     taskENTER_CRITICAL(&s_time_manager_lock);
     s_time_manager.start_in_progress = false;
     s_time_manager.started = true;
+    s_time_manager.sntp_initialized = true;
+    s_time_manager.sntp_start_in_progress = false;
+    s_time_manager.sntp_service_started = false;
+    s_time_manager.status.state = TIME_MANAGER_STATE_WAITING_NETWORK;
+    s_time_manager.status.synced = false;
+    s_time_manager.status.last_error = ESP_OK;
+    s_time_manager.status.network_available = false;
     taskEXIT_CRITICAL(&s_time_manager_lock);
 
-    ESP_LOGI(TAG, "ESP-NETIF SNTP started asynchronously");
+    ESP_LOGI(TAG, "ESP-NETIF SNTP configured; waiting for IPv4");
+
+    time_manager_notify_status_changed();
 
     return ESP_OK;
+}
+
+esp_err_t time_manager_notify_network_state(
+    bool has_ipv4_address)
+{
+    bool status_updated = false;
+    bool start_sntp = false;
+
+    taskENTER_CRITICAL(&s_time_manager_lock);
+
+    if (!s_time_manager.initialized ||
+        !s_time_manager.started ||
+        !s_time_manager.sntp_initialized)
+    {
+        taskEXIT_CRITICAL(&s_time_manager_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const bool was_network_available =
+        s_time_manager.status.network_available;
+
+    if (!has_ipv4_address)
+    {
+        if (was_network_available)
+        {
+            s_time_manager.status.network_available = false;
+            s_time_manager.status.state =
+                TIME_MANAGER_STATE_WAITING_NETWORK;
+            status_updated = true;
+        }
+    }
+    else
+    {
+        s_time_manager.status.network_available = true;
+
+        if (!s_time_manager.sntp_start_in_progress &&
+            (!s_time_manager.sntp_service_started ||
+             !was_network_available))
+        {
+            s_time_manager.sntp_start_in_progress = true;
+            s_time_manager.status.state = TIME_MANAGER_STATE_SYNCING;
+            s_time_manager.status.last_error = ESP_OK;
+            start_sntp = true;
+            status_updated = true;
+        }
+        else if (!was_network_available)
+        {
+            s_time_manager.status.state = TIME_MANAGER_STATE_SYNCING;
+            s_time_manager.status.last_error = ESP_OK;
+            status_updated = true;
+        }
+    }
+
+    taskEXIT_CRITICAL(&s_time_manager_lock);
+
+    if (status_updated)
+    {
+        time_manager_notify_status_changed();
+    }
+
+    if (!start_sntp)
+    {
+        return ESP_OK;
+    }
+
+    ESP_LOGI(TAG, "Starting ESP-NETIF SNTP after IPv4 notification");
+
+    const esp_err_t result = esp_netif_sntp_start();
+
+    if (result != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to start ESP-NETIF SNTP: %s",
+            esp_err_to_name(result));
+    }
+
+    time_manager_finish_sntp_start(result);
+
+    return result;
 }
 
 esp_err_t time_manager_register_status_callback(

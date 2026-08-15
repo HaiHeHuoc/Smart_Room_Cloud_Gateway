@@ -34,7 +34,7 @@ typedef enum
     /** Configuration and timezone are ready; SNTP has not started. */
     TIME_MANAGER_STATE_INITIALIZED,
 
-    /** Reserved for Task 2 network-readiness orchestration. */
+    /** SNTP is configured but the application has not reported valid IPv4. */
     TIME_MANAGER_STATE_WAITING_NETWORK,
 
     /** SNTP is running and has not yet reported a successful synchronization. */
@@ -43,7 +43,7 @@ typedef enum
     /** The ESP-IDF SNTP callback has synchronized the system clock. */
     TIME_MANAGER_STATE_SYNCED,
 
-    /** Reserved for Task 2 retry orchestration. */
+    /** Reserved for a future explicit component retry policy. */
     TIME_MANAGER_STATE_RETRY_WAIT,
 
     /** Initialization or SNTP startup failed. */
@@ -78,7 +78,7 @@ typedef struct
     /** Number of successful SNTP synchronization callbacks observed. */
     uint32_t sync_count;
 
-    /** Reserved for Task 2 internet-readiness notifications. */
+    /** Most recently reported valid IPv4 state; this does not prove Internet access. */
     bool network_available;
 } time_manager_status_t;
 
@@ -86,9 +86,10 @@ typedef struct
  * @brief Receive a copied time-manager status snapshot after a state change.
  *
  * The callback runs in task context. A successful SNTP update invokes it from
- * ESP-IDF's TCP/IP task; startup/error notifications run in the task that
- * called time_manager_start(). The status pointer is temporary and must not
- * be retained. Keep the callback non-blocking and do not call LVGL directly.
+ * ESP-IDF's TCP/IP task; lifecycle notifications run in the task that called
+ * time_manager_start() or time_manager_notify_network_state(). The status
+ * pointer is temporary and must not be retained. Keep the callback
+ * non-blocking and do not call LVGL directly.
  *
  * @param status Temporary status snapshot.
  * @param user_context Context supplied during registration.
@@ -123,18 +124,41 @@ esp_err_t time_manager_init(
     const time_manager_config_t *config);
 
 /**
- * @brief Configure and asynchronously start the ESP-NETIF SNTP service.
+ * @brief Configure ESP-NETIF SNTP and wait for a valid IPv4 notification.
  *
  * The ESP-IDF network stack must be initialized before this call. The function
- * never waits for an Internet connection or an SNTP response. A successful
- * synchronization is reported later through the registered callback/status.
- * Task context only.
+ * never waits for an Internet connection or an SNTP response. On success the
+ * lifecycle enters TIME_MANAGER_STATE_WAITING_NETWORK; the application must
+ * later call time_manager_notify_network_state(true) to start SNTP. A
+ * successful synchronization is reported through the registered
+ * callback/status. Task context only.
  *
- * @return ESP_OK when SNTP was configured and started, ESP_ERR_INVALID_STATE
- *         before initialization or for a duplicate concurrent/successful
- *         start, or an ESP-NETIF SNTP error.
+ * @return ESP_OK when SNTP was configured, ESP_ERR_INVALID_STATE before
+ *         initialization or for a duplicate concurrent/successful start, or
+ *         an ESP-NETIF SNTP error.
  */
 esp_err_t time_manager_start(void);
+
+/**
+ * @brief Report whether the application currently has a valid IPv4 address.
+ *
+ * This is an application-composition input, normally forwarded from the
+ * Wi-Fi manager status callback. true means an IPv4 address was acquired; it
+ * does not claim that DNS or Internet reachability was proven. The first true
+ * notification starts ESP-NETIF SNTP. A later false notification preserves a
+ * previously synchronized system clock while the lifecycle returns to
+ * TIME_MANAGER_STATE_WAITING_NETWORK. A subsequent true notification safely
+ * restarts the configured ESP-NETIF SNTP service for an early resync.
+ *
+ * The function does not wait for DNS resolution or an SNTP packet/response.
+ * It must run in task context, not ISR context. It does not call LVGL.
+ *
+ * @param has_ipv4_address Most recently observed IPv4 readiness.
+ * @return ESP_OK on a handled notification, ESP_ERR_INVALID_STATE before
+ *         successful time_manager_start(), or an ESP-NETIF SNTP start error.
+ */
+esp_err_t time_manager_notify_network_state(
+    bool has_ipv4_address);
 
 /**
  * @brief Register or remove the single application status callback.
@@ -166,7 +190,9 @@ esp_err_t time_manager_get_status(
  * @brief Return whether the system clock has been synchronized by SNTP.
  *
  * This is safe to call from task context and returns false before
- * initialization or before the first successful synchronization.
+ * initialization or before the first successful synchronization. Once true,
+ * it remains true across an IPv4 loss because the synchronized system clock
+ * continues locally.
  */
 bool time_manager_is_synced(void);
 
@@ -174,8 +200,9 @@ bool time_manager_is_synced(void);
  * @brief Read the synchronized ESP-IDF system Unix time.
  *
  * @param[out] unix_time Destination for the current Unix timestamp.
- * @return ESP_OK after synchronization, ESP_ERR_INVALID_ARG if unix_time is
- *         NULL, ESP_ERR_INVALID_STATE before a successful synchronization, or
+ * @return ESP_OK after synchronization, including while offline after a
+ *         prior sync; ESP_ERR_INVALID_ARG if unix_time is NULL,
+ *         ESP_ERR_INVALID_STATE before a successful synchronization, or
  *         ESP_FAIL if the C runtime cannot read system time.
  */
 esp_err_t time_manager_get_unix_time(
