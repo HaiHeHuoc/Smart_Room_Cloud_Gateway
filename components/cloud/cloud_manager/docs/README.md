@@ -4,17 +4,19 @@
 
 `cloud_manager` owns authenticated latest-value telemetry upload to Firebase
 Realtime Database. It receives copied sensor and application-composed audio
-snapshots through a length-one queue, waits for network readiness, obtains a
-valid Firebase ID token from `firebase_auth`, and performs HTTPS REST `PUT`
-operations from its own task.
+and time snapshots through a length-one queue, waits for network readiness,
+obtains a valid Firebase ID token from `firebase_auth`, and performs HTTPS
+REST `PUT` operations from its own task.
 
-It does not read the DHT22, own `audio_manager`, or call LVGL.
+It does not read the DHT22, own `audio_manager` or `time_manager`, or call
+LVGL.
 
 ## Version 1 Status
 
 ```text
 Release: v1.0.0
-Status: Implemented and hardware accepted
+Cloud transport baseline: hardware accepted
+Task 4 time telemetry: build and host-serializer verified; Firebase runtime acceptance pending
 ```
 
 ## Implemented Behavior
@@ -22,11 +24,16 @@ Status: Implemented and hardware accepted
 - One cloud FreeRTOS task with task-owned HTTPS/TLS lifecycle.
 - Length-one queue using `xQueueOverwrite()` to retain the newest telemetry.
 - Application-composed audio snapshot included with each telemetry update.
+- Application-composed synchronized time snapshot included with each telemetry
+  update without a `cloud_manager -> time_manager` dependency.
+- Successful latest-value uploads paced at 60 seconds.
 - Retained IPv4 readiness and a non-zero network epoch.
 - Task-notification wakeups for telemetry and network edges.
 - On-demand sign-in and token refresh through `firebase_auth`.
 - Authenticated Realtime Database requests using a Firebase ID token.
 - Bounded JSON and authenticated-URL buffers.
+- A 640-byte bounded JSON buffer that covers the existing sensor/audio fields,
+  two 64-bit time values, and a fixed 25-character ISO-8601 local string.
 - HTTP 2xx success handling, including Firebase `204 No Content`.
 - Explicit classification of network, transport, HTTP, authentication,
   configuration, and internal failures.
@@ -45,7 +52,7 @@ Status: Implemented and hardware accepted
 | `cloud_manager_start()` | Start the single upload task |
 | `cloud_manager_register_status_callback()` | Register one short non-blocking status callback |
 | `cloud_manager_notify_network_state()` | Retain IPv4 state, advance network epoch, and wake task |
-| `cloud_manager_post_sensor_telemetry()` | Replace pending sensor/audio data with the newest finite snapshot |
+| `cloud_manager_post_sensor_telemetry()` | Replace pending sensor/audio/time data with the newest validated snapshot |
 | `cloud_manager_get_status()` | Copy cloud state, counters, HTTP status, and retry delay |
 
 ## Initialization
@@ -71,7 +78,7 @@ const cloud_manager_config_t config = {
     .firebase_latest_url =
         "https://<database>.<region>.firebasedatabase.app/"
         "devices/esp32s3-001/latest.json",
-    .publish_period_ms = 10000U,
+    .publish_period_ms = 60000U,
 };
 ```
 
@@ -84,6 +91,8 @@ internally.
 sensor callback
     -> audio_manager_get_status()
     -> map audio_manager state to cloud-owned audio state
+    -> time_manager status/current Unix/ISO-8601 getters
+    -> map copied values to cloud-owned time telemetry
     -> cloud_manager_post_sensor_telemetry()
     -> overwrite length-one queue
     -> wake cloud task
@@ -119,6 +128,12 @@ Current payload:
     "playback": false,
     "last_error": 0
   },
+  "time": {
+    "synced": true,
+    "unix": 1786782000,
+    "local": "2026-08-15T14:20:00+07:00",
+    "last_sync_unix": 1786780800
+  },
   "source": "esp32_cloud_manager"
 }
 ```
@@ -133,11 +148,29 @@ The nested audio object follows these rules:
   is available. If the manager is not initialized/available yet, the state is
   `unavailable` and the status-query error is retained instead.
 
+The nested time object is a cloud-facing contract owned by `cloud_manager`:
+
+- `synced` means `time_manager` has previously accepted an SNTP correction; it
+  remains true during a temporary Wi-Fi loss after that correction.
+- `unix` is the current Unix timestamp captured by `main` when it composes the
+  latest telemetry snapshot. It is the machine-readable source of truth.
+- `local` is the human-readable ISO-8601 local representation produced by
+  `time_manager`, currently Vietnam `ICT-7` (`+07:00`).
+- `last_sync_unix` is the Unix timestamp of the most recent successful SNTP
+  correction, not the current time.
+- Before the first synchronization, or if a complete time snapshot cannot be
+  obtained, the stable representation is `false`, `0`, `""`, and `0`.
+
+`sync_count` remains a `time_manager` diagnostic and is intentionally not part
+of this Firebase schema. The existing flattened sensor fields remain unchanged;
+Task 4 adds only the nested `time` object.
+
 Audio status is sampled when the sensor callback composes a new latest-value
 telemetry snapshot. It therefore follows the existing cloud/sensor publish
 pipeline; changing audio state does not directly start an HTTPS/TLS request.
-Short audio transitions can be absent from Firebase if they occur entirely
-between telemetry snapshots.
+After a successful upload, the cloud task waits 60 seconds before sending the
+latest pending snapshot. Short audio transitions can be absent from Firebase
+if they occur entirely between snapshots.
 
 Consumers must inspect `sensor_valid` and `sensor_stale`; not every finite
 number represents a valid physical reading.
@@ -166,6 +199,9 @@ being retried. A successful request clears only the snapshot actually uploaded.
 - Sensor and Wi-Fi callbacks allocate no memory and do no network I/O.
 - The sensor callback obtains a bounded `audio_manager` status snapshot and
   copies only cloud-owned audio state/error fields into telemetry.
+- The same application callback maps a copied `time_manager` status/current
+  clock snapshot into cloud-owned values. `cloud_manager` neither includes
+  `time_manager.h` nor calls time APIs directly.
 - `cloud_manager` does not depend on `audio_manager` headers or own I2S/audio
   lifecycle.
 - The status callback runs in cloud-task context and must remain short.
@@ -173,6 +209,13 @@ being retried. A successful request clears only the snapshot actually uploaded.
   and token generations.
 - Network edges invalidate earlier TLS sessions.
 - The component is one-shot and has no stop/deinit API.
+
+## Serializer Verification
+
+`test/host/run_tests.ps1` compiles the production bounded formatter with GCC
+and verifies synchronized and unsynchronized JSON fixtures plus a
+maximum-numeric-value buffer-fit case. The test deliberately does not contact
+Firebase or require an ESP32 target.
 
 ## Firebase Setup And Security
 
