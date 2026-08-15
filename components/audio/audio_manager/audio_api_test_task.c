@@ -1,5 +1,6 @@
 #include "audio_api_test_task.h"
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "audio_manager.h"
@@ -15,7 +16,8 @@
  * menuconfig. Edit only this block when selecting a hardware stress scenario.
  * The coordinator never touches I2S, DSP buffers, WAV internals, or SD FILE
  * objects directly; every audio operation goes through audio_manager public
- * APIs and public status snapshots.
+ * APIs and public status snapshots. If SD VFS is unavailable, the WAV step is
+ * skipped for that cycle so SD-independent record/playback stress continues.
  */
 
 /* 1 = run continuously after app_main starts it; 0 = task exits immediately. */
@@ -199,27 +201,6 @@ static esp_err_t audio_api_test_wait_wav_terminal(
     }
 }
 
-static void audio_api_test_wait_sd_ready(void)
-{
-    bool waiting_logged = false;
-
-    while (!sd_card_manager_is_mounted())
-    {
-        if (!waiting_logged)
-        {
-            ESP_LOGI(TAG, "Waiting indefinitely for SD READY before WAV stress step");
-            waiting_logged = true;
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(AUDIO_API_TEST_POLL_MS));
-    }
-
-    if (waiting_logged)
-    {
-        ESP_LOGI(TAG, "SD READY; continuing WAV stress step");
-    }
-}
-
 static esp_err_t audio_api_test_fixed_record(void)
 {
     audio_manager_status_t before = {0};
@@ -312,8 +293,6 @@ static esp_err_t audio_api_test_manual_record(void)
 
 static esp_err_t audio_api_test_play_wav(void)
 {
-    audio_api_test_wait_sd_ready();
-
     audio_manager_status_t before = {0};
     esp_err_t result = audio_manager_get_status(&before);
     if (result != ESP_OK)
@@ -330,8 +309,17 @@ static esp_err_t audio_api_test_play_wav(void)
     return audio_api_test_wait_wav_terminal(&before);
 }
 
-static esp_err_t audio_api_test_run_cycle(uint32_t cycle)
+static esp_err_t audio_api_test_run_cycle(
+    uint32_t cycle,
+    bool *wav_skipped)
 {
+    if (wav_skipped == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *wav_skipped = false;
+
     ESP_LOGI(
         TAG,
         "========== PUBLIC AUDIO STRESS CYCLE %u =========",
@@ -368,15 +356,27 @@ static esp_err_t audio_api_test_run_cycle(uint32_t cycle)
 
     if (AUDIO_API_TEST_ENABLE_WAV_PLAYBACK != 0U)
     {
-        ESP_LOGI(
-            TAG,
-            "CYCLE %u WAV playback: %s",
-            (unsigned)cycle,
-            AUDIO_API_TEST_WAV_PATH);
-        result = audio_api_test_play_wav();
-        if (result != ESP_OK)
+        if (!sd_card_manager_is_mounted())
         {
-            return result;
+            *wav_skipped = true;
+            ESP_LOGW(
+                TAG,
+                "CYCLE %u WAV skipped: SD VFS is not READY; "
+                "continuing record/playback stress",
+                (unsigned)cycle);
+        }
+        else
+        {
+            ESP_LOGI(
+                TAG,
+                "CYCLE %u WAV playback: %s",
+                (unsigned)cycle,
+                AUDIO_API_TEST_WAV_PATH);
+            result = audio_api_test_play_wav();
+            if (result != ESP_OK)
+            {
+                return result;
+            }
         }
     }
 
@@ -397,7 +397,8 @@ static void audio_api_test_task(void *argument)
 
     ESP_LOGI(
         TAG,
-        "Public audio API stress started: priority=%u fixed=%u manual=%u wav=%u timeout=disabled continuous=yes",
+        "Public audio API stress started: priority=%u fixed=%u manual=%u "
+        "wav=%u sd_unavailable=skip continuous=yes",
         (unsigned)AUDIO_API_TEST_TASK_PRIORITY,
         (unsigned)AUDIO_API_TEST_ENABLE_FIXED_RECORD,
         (unsigned)AUDIO_API_TEST_ENABLE_MANUAL_RECORD,
@@ -406,21 +407,44 @@ static void audio_api_test_task(void *argument)
     audio_api_test_wait_manager_idle();
 
     uint32_t cycle = 1U;
-    uint32_t passed = 0U;
+    uint32_t completed = 0U;
     uint32_t failed = 0U;
+    uint32_t wav_skipped = 0U;
 
     while (true)
     {
-        const esp_err_t result = audio_api_test_run_cycle(cycle);
+        bool cycle_wav_skipped = false;
+        const esp_err_t result =
+            audio_api_test_run_cycle(
+                cycle,
+                &cycle_wav_skipped);
         if (result == ESP_OK)
         {
-            ++passed;
-            ESP_LOGI(
-                TAG,
-                "PUBLIC AUDIO STRESS CYCLE %u PASS totals: pass=%u fail=%u",
-                (unsigned)cycle,
-                (unsigned)passed,
-                (unsigned)failed);
+            ++completed;
+            if (cycle_wav_skipped)
+            {
+                ++wav_skipped;
+                ESP_LOGW(
+                    TAG,
+                    "PUBLIC AUDIO STRESS CYCLE %u PARTIAL: "
+                    "record/playback passed, WAV skipped; "
+                    "totals: completed=%u wav_skip=%u fail=%u",
+                    (unsigned)cycle,
+                    (unsigned)completed,
+                    (unsigned)wav_skipped,
+                    (unsigned)failed);
+            }
+            else
+            {
+                ESP_LOGI(
+                    TAG,
+                    "PUBLIC AUDIO STRESS CYCLE %u PASS totals: "
+                    "completed=%u wav_skip=%u fail=%u",
+                    (unsigned)cycle,
+                    (unsigned)completed,
+                    (unsigned)wav_skipped,
+                    (unsigned)failed);
+            }
         }
         else
         {
@@ -429,12 +453,14 @@ static void audio_api_test_task(void *argument)
             (void)audio_manager_get_status(&status);
             ESP_LOGE(
                 TAG,
-                "PUBLIC AUDIO STRESS CYCLE %u FAIL: %s state=%s last_error=%s totals: pass=%u fail=%u",
+                "PUBLIC AUDIO STRESS CYCLE %u FAIL: %s state=%s "
+                "last_error=%s totals: completed=%u wav_skip=%u fail=%u",
                 (unsigned)cycle,
                 esp_err_to_name(result),
                 audio_manager_state_to_string(status.state),
                 esp_err_to_name(status.last_error),
-                (unsigned)passed,
+                (unsigned)completed,
+                (unsigned)wav_skipped,
                 (unsigned)failed);
         }
 

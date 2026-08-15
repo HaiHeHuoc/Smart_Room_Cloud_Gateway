@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "cloud_manager.c"
+        "cloud_telemetry_json.c"
 
     INCLUDE_DIRS
         "include"

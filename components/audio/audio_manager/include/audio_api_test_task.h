@@ -17,6 +17,10 @@ extern "C"
  * audio_api_test_task.c so hardware scenarios can be changed without adding
  * production Kconfig surface.
  *
+ * When the configured WAV step finds SD VFS unavailable, it skips only that
+ * step for the current cycle. The SD-independent record/playback steps remain
+ * continuous and WAV is retried in a later cycle after SD recovery.
+ *
  * @return ESP_OK when the task was created.
  * @return ESP_ERR_INVALID_STATE when the stress task is already active.
  * @return ESP_ERR_NO_MEM when the FreeRTOS task cannot be created.
