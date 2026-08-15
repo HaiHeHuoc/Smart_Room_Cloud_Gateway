@@ -21,7 +21,7 @@ audio_wav
     v
 audio_wav_prefetch
   - one lower-priority reader task
-  - two PSRAM READY/FREE slots
+  - two 32 KiB PSRAM READY/FREE slots
   - fresh-file retry + remount fallback + seek policy
     |
     v
@@ -40,24 +40,41 @@ separate prefetch worker recover by closing/reopening one bounded stream.
 
 ## Ping-Pong Policy
 
-`CONFIG_AUDIO_MANAGER_WAV_PREFETCH_SECONDS` controls each logical PSRAM slot.
-The default is 10 seconds. For canonical PCM16 mono 16-kHz input:
+Each logical PSRAM slot is fixed at 32 KiB (`32 * 1024 = 32,768` bytes). The
+prefetch cache therefore uses exactly 64 KiB of PSRAM while WAV playback is
+active:
 
 ```text
-32,000 bytes/s x 10 s = 320,000 bytes/slot
-2 slots                         = 640,000 bytes (~625 KiB PSRAM)
+slot A = 32,768 bytes
+slot B = 32,768 bytes
+---------------------
+total  = 65,536 bytes (64 KiB PSRAM)
 ```
+
+For canonical PCM16 mono 16-kHz input, the source rate is 32,000 bytes/s, so
+one 32 KiB slot contains approximately 1.024 seconds of source audio.
 
 The producer fills whichever slot is FREE as soon as possible. It does not wait
 for a fixed 70-percent playback threshold. While the manager consumes slot A,
 the reader can fill slot B; releasing A returns it to the FREE queue for the
-next fill.
+next fill. This eager policy starts the next prefetch as early as ownership
+allows and gives the playback path a full-slot margin against normal SD/task
+latency.
 
 The low-level stream still reads at most 4 KiB per `fread()`. Each successful
 raw chunk is copied into the current PSRAM slot until that slot is full or the
 WAV reaches its final partial block. There is no pre-playback scan or rewind:
 once the first slot is READY, `audio_manager` maps each PCM16 sample with
 `round(sample * 9000 / 32768)`, then applies user volume and writes I2S.
+
+The PSRAM slots are software prefetch buffers, not DMA buffers. Playback data
+flows through the existing Internal/DMA-capable TX staging and I2S driver:
+
+```text
+SD -> 4 KiB bounded reads -> PSRAM slot A/B -> s_tx_block -> I2S DMA -> speaker
+```
+
+I2S DMA geometry is intentionally unchanged by this buffer-sizing change.
 
 ## Ownership Invariants
 
@@ -151,15 +168,16 @@ reader_hwm
 tx_requested / tx_written / tx_q_ovf / tx_timeout / tx_partial
 ```
 
-For nominal playback, the strongest software-side prefetch signal is:
+For this configuration, nominal diagnostics report:
 
 ```text
+prefetch_block = 32768
 prefetch_starve = 0
 ```
 
-A non-zero value means the manager reached a ping-pong boundary before another
-READY slot arrived within the bounded boundary wait. Correlate that event with
-audible output and TX diagnostics on hardware.
+A non-zero `prefetch_starve` means the manager reached a ping-pong boundary
+before another READY slot arrived within the bounded boundary wait. Correlate
+that event with audible output and TX diagnostics on hardware.
 
 When fault testing, distinguish the two recovery outcomes:
 
@@ -190,6 +208,7 @@ WAV playback completes to EOF
 fixed_gain_q16 = 18000
 output_peak <= 9000
 read_bytes == streamed_bytes == WAV data bytes
+prefetch_block = 32768
 prefetch_starve = 0
 tx_timeout = 0
 tx_partial = 0
