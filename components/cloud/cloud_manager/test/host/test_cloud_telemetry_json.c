@@ -57,10 +57,11 @@ static void test_synchronized_payload(void)
         &payload_length);
 
     static const char expected[] =
-        "{\"temperature_c\":30.1,\"humidity_percent\":64.5,"
-        "\"sensor_valid\":true,\"sensor_stale\":false,"
-        "\"sensor_state\":3,\"last_error\":0,"
-        "\"sample_uptime_ms\":123456,\"audio\":{"
+        "{\"sensor\":{\"temperature_c\":30.1,"
+        "\"humidity_percent\":64.5,\"sensor_valid\":true,"
+        "\"sensor_stale\":false,\"sensor_state\":3,"
+        "\"last_error\":0,\"sample_uptime_ms\":123456},"
+        "\"audio\":{"
         "\"state\":\"recording\",\"recording\":true,"
         "\"playback\":false,\"last_error\":0},\"time\":{"
         "\"synced\":true,\"unix\":1786782000,"
@@ -87,10 +88,11 @@ static void test_unsynchronized_payload(void)
         &payload_length);
 
     static const char expected[] =
-        "{\"temperature_c\":30.1,\"humidity_percent\":64.5,"
-        "\"sensor_valid\":true,\"sensor_stale\":false,"
-        "\"sensor_state\":3,\"last_error\":0,"
-        "\"sample_uptime_ms\":123456,\"audio\":{"
+        "{\"sensor\":{\"temperature_c\":30.1,"
+        "\"humidity_percent\":64.5,\"sensor_valid\":true,"
+        "\"sensor_stale\":false,\"sensor_state\":3,"
+        "\"last_error\":0,\"sample_uptime_ms\":123456},"
+        "\"audio\":{"
         "\"state\":\"recording\",\"recording\":true,"
         "\"playback\":false,\"last_error\":0},\"time\":{"
         "\"synced\":false,\"unix\":0,\"local\":\"\","

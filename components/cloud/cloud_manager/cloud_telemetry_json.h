@@ -27,8 +27,8 @@ bool cloud_telemetry_json_is_valid_time_telemetry(
  * @brief Serialize one validated latest-value snapshot into caller storage.
  *
  * This helper performs no allocation, synchronization, or network work. It
- * preserves the existing flattened sensor schema and nested audio object,
- * adding the cloud-owned nested time object before the source field.
+ * serializes sensor, audio, and time as sibling nested objects before the
+ * source field.
  */
 esp_err_t cloud_telemetry_json_serialize(
     const cloud_sensor_telemetry_t *telemetry,
