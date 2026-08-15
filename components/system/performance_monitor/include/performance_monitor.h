@@ -6,7 +6,7 @@
  * @brief Start the ESP32-S3 performance monitor task.
  *
  * The task periodically reports:
- * - CPU usage and idle percentage
+ * - Five-second CPU average, 500 ms-sampled CPU peak, and idle percentage
  * - Internal RAM
  * - PSRAM
  * - DMA-capable RAM

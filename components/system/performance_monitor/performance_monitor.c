@@ -38,6 +38,20 @@
 #define PERF_MONITOR_PERIOD_MS              5000U
 
 /*
+ * Peak CPU usage is the maximum of short samples within one report period.
+ *
+ * Ten 500 ms samples fit exactly in the nominal five-second report cycle.
+ * This is a sampled peak, not an instantaneous hardware peak.
+ */
+#define PERF_MONITOR_CPU_PEAK_SAMPLE_MS     500U
+#define PERF_MONITOR_CPU_PEAK_SAMPLE_COUNT  \
+    (PERF_MONITOR_PERIOD_MS / PERF_MONITOR_CPU_PEAK_SAMPLE_MS)
+
+#if ((PERF_MONITOR_PERIOD_MS % PERF_MONITOR_CPU_PEAK_SAMPLE_MS) != 0U)
+#error "PERF_MONITOR_PERIOD_MS must be divisible by PERF_MONITOR_CPU_PEAK_SAMPLE_MS"
+#endif
+
+/*
  * Maximum number of FreeRTOS tasks captured in one snapshot.
  *
  * Increase this if the project creates more than 40 tasks.
@@ -71,6 +85,7 @@ static const char *const TAG = "PERF_MONITOR";
 
 typedef struct {
     uint32_t used_x10;
+    uint32_t peak_used_x10;
     uint32_t idle_x10;
     uint32_t core_used_x10[CONFIG_FREERTOS_NUMBER_OF_CORES];
     bool core_valid[CONFIG_FREERTOS_NUMBER_OF_CORES];
@@ -96,11 +111,15 @@ static TaskHandle_t s_monitor_task_handle = NULL;
 /*
  * Keep task snapshots outside the task stack.
  *
- * Two snapshots are needed to calculate runtime differences over one period.
+ * The first and last snapshots calculate the five-second average and task
+ * table. The third snapshot retains the prior short sample for peak CPU
+ * measurement without consuming the monitor task stack.
  */
 #if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
 EXT_RAM_BSS_ATTR static TaskStatus_t s_start_snapshot[PERF_MONITOR_MAX_TASKS];
 EXT_RAM_BSS_ATTR static TaskStatus_t s_end_snapshot[PERF_MONITOR_MAX_TASKS];
+EXT_RAM_BSS_ATTR static TaskStatus_t
+    s_peak_previous_snapshot[PERF_MONITOR_MAX_TASKS];
 #endif
 
 /* Function Prototypes ------------------------------------------------------ */
@@ -131,8 +150,21 @@ static const TaskStatus_t *performance_monitor_find_task(
     UBaseType_t task_count,
     TaskHandle_t task_handle);
 
+static esp_err_t performance_monitor_capture_task_snapshot(
+    TaskStatus_t *snapshot,
+    UBaseType_t *task_count,
+    configRUN_TIME_COUNTER_TYPE *total_runtime);
+
+static esp_err_t performance_monitor_calculate_cpu(
+    const TaskStatus_t *start_tasks,
+    UBaseType_t start_task_count,
+    configRUN_TIME_COUNTER_TYPE start_total_runtime,
+    const TaskStatus_t *end_tasks,
+    UBaseType_t end_task_count,
+    configRUN_TIME_COUNTER_TYPE end_total_runtime,
+    performance_monitor_cpu_result_t *result);
+
 static esp_err_t performance_monitor_measure_cpu(
-    TickType_t measurement_ticks,
     performance_monitor_cpu_result_t *result);
 
 static uint32_t performance_monitor_get_task_cpu_x10(
@@ -380,18 +412,19 @@ static const TaskStatus_t *performance_monitor_find_task(
     return NULL;
 }
 
-static esp_err_t performance_monitor_measure_cpu(
-    TickType_t measurement_ticks,
-    performance_monitor_cpu_result_t *result)
+static esp_err_t performance_monitor_capture_task_snapshot(
+    TaskStatus_t *snapshot,
+    UBaseType_t *task_count,
+    configRUN_TIME_COUNTER_TYPE *total_runtime)
 {
     ESP_RETURN_ON_FALSE(
-        result != NULL,
+        (snapshot != NULL) &&
+        (task_count != NULL) &&
+        (total_runtime != NULL),
         ESP_ERR_INVALID_ARG,
         TAG,
-        "CPU result pointer is NULL"
+        "Invalid CPU snapshot arguments"
     );
-
-    memset(result, 0, sizeof(*result));
 
     const UBaseType_t current_task_count =
         uxTaskGetNumberOfTasks();
@@ -405,41 +438,48 @@ static esp_err_t performance_monitor_measure_cpu(
         (unsigned int)PERF_MONITOR_MAX_TASKS
     );
 
-    configRUN_TIME_COUNTER_TYPE start_total_runtime = 0;
-    configRUN_TIME_COUNTER_TYPE end_total_runtime = 0;
-
-    const UBaseType_t start_task_count =
+    const UBaseType_t captured_task_count =
         uxTaskGetSystemState(
-            s_start_snapshot,
+            snapshot,
             PERF_MONITOR_MAX_TASKS,
-            &start_total_runtime
+            total_runtime
         );
 
     ESP_RETURN_ON_FALSE(
-        start_task_count > 0U,
+        captured_task_count > 0U,
         ESP_FAIL,
         TAG,
-        "Failed to capture initial task snapshot"
+        "Failed to capture CPU task snapshot"
     );
 
-    /*
-     * CPU usage is calculated from runtime differences between two snapshots.
-     */
-    vTaskDelay(measurement_ticks);
+    *task_count = captured_task_count;
 
-    const UBaseType_t end_task_count =
-        uxTaskGetSystemState(
-            s_end_snapshot,
-            PERF_MONITOR_MAX_TASKS,
-            &end_total_runtime
-        );
+    return ESP_OK;
+}
 
+static esp_err_t performance_monitor_calculate_cpu(
+    const TaskStatus_t *start_tasks,
+    UBaseType_t start_task_count,
+    configRUN_TIME_COUNTER_TYPE start_total_runtime,
+    const TaskStatus_t *end_tasks,
+    UBaseType_t end_task_count,
+    configRUN_TIME_COUNTER_TYPE end_total_runtime,
+    performance_monitor_cpu_result_t *result)
+{
     ESP_RETURN_ON_FALSE(
-        end_task_count > 0U,
-        ESP_FAIL,
+        (start_tasks != NULL) &&
+        (end_tasks != NULL) &&
+        (result != NULL) &&
+        (start_task_count > 0U) &&
+        (end_task_count > 0U) &&
+        (start_task_count <= PERF_MONITOR_MAX_TASKS) &&
+        (end_task_count <= PERF_MONITOR_MAX_TASKS),
+        ESP_ERR_INVALID_ARG,
         TAG,
-        "Failed to capture final task snapshot"
+        "Invalid CPU snapshot data"
     );
+
+    memset(result, 0, sizeof(*result));
 
     const configRUN_TIME_COUNTER_TYPE elapsed_native =
         end_total_runtime - start_total_runtime;
@@ -463,11 +503,11 @@ static esp_err_t performance_monitor_measure_cpu(
          ++index) {
 
         const TaskStatus_t *start_task =
-            &s_start_snapshot[index];
+            &start_tasks[index];
 
         const TaskStatus_t *end_task =
             performance_monitor_find_task(
-                s_end_snapshot,
+                end_tasks,
                 end_task_count,
                 start_task->xHandle
             );
@@ -580,6 +620,127 @@ static esp_err_t performance_monitor_measure_cpu(
     return ESP_OK;
 }
 
+static esp_err_t performance_monitor_measure_cpu(
+    performance_monitor_cpu_result_t *result)
+{
+    ESP_RETURN_ON_FALSE(
+        result != NULL,
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "CPU result pointer is NULL"
+    );
+
+    const TickType_t peak_sample_ticks =
+        pdMS_TO_TICKS(PERF_MONITOR_CPU_PEAK_SAMPLE_MS);
+
+    ESP_RETURN_ON_FALSE(
+        peak_sample_ticks > 0U,
+        ESP_ERR_INVALID_STATE,
+        TAG,
+        "CPU peak sample interval is too short"
+    );
+
+    UBaseType_t start_task_count = 0U;
+    configRUN_TIME_COUNTER_TYPE start_total_runtime = 0;
+
+    esp_err_t measurement_result =
+        performance_monitor_capture_task_snapshot(
+            s_start_snapshot,
+            &start_task_count,
+            &start_total_runtime
+        );
+
+    if (measurement_result != ESP_OK) {
+        return measurement_result;
+    }
+
+    const TaskStatus_t *peak_start_tasks =
+        s_start_snapshot;
+    UBaseType_t peak_start_task_count =
+        start_task_count;
+    configRUN_TIME_COUNTER_TYPE peak_start_total_runtime =
+        start_total_runtime;
+
+    uint32_t peak_used_x10 = 0U;
+    UBaseType_t end_task_count = 0U;
+    configRUN_TIME_COUNTER_TYPE end_total_runtime = 0;
+
+    for (uint32_t sample_index = 0U;
+         sample_index < PERF_MONITOR_CPU_PEAK_SAMPLE_COUNT;
+         ++sample_index) {
+
+        vTaskDelay(peak_sample_ticks);
+
+        measurement_result =
+            performance_monitor_capture_task_snapshot(
+                s_end_snapshot,
+                &end_task_count,
+                &end_total_runtime
+            );
+
+        if (measurement_result != ESP_OK) {
+            return measurement_result;
+        }
+
+        performance_monitor_cpu_result_t sample_cpu = {0};
+
+        measurement_result =
+            performance_monitor_calculate_cpu(
+                peak_start_tasks,
+                peak_start_task_count,
+                peak_start_total_runtime,
+                s_end_snapshot,
+                end_task_count,
+                end_total_runtime,
+                &sample_cpu
+            );
+
+        if (measurement_result != ESP_OK) {
+            return measurement_result;
+        }
+
+        if (sample_cpu.used_x10 > peak_used_x10) {
+            peak_used_x10 = sample_cpu.used_x10;
+        }
+
+        if ((sample_index + 1U) <
+            PERF_MONITOR_CPU_PEAK_SAMPLE_COUNT) {
+            memcpy(
+                s_peak_previous_snapshot,
+                s_end_snapshot,
+                end_task_count *
+                sizeof(s_peak_previous_snapshot[0])
+            );
+
+            peak_start_tasks =
+                s_peak_previous_snapshot;
+            peak_start_task_count =
+                end_task_count;
+            peak_start_total_runtime =
+                end_total_runtime;
+        }
+    }
+
+    measurement_result =
+        performance_monitor_calculate_cpu(
+            s_start_snapshot,
+            start_task_count,
+            start_total_runtime,
+            s_end_snapshot,
+            end_task_count,
+            end_total_runtime,
+            result
+        );
+
+    if (measurement_result != ESP_OK) {
+        return measurement_result;
+    }
+
+    result->peak_used_x10 = peak_used_x10;
+
+    return ESP_OK;
+}
+
 static uint32_t performance_monitor_get_task_cpu_x10(
     const TaskStatus_t *start_task,
     const TaskStatus_t *end_task,
@@ -616,10 +777,13 @@ static void performance_monitor_log_cpu(
 
     ESP_LOGI(
         TAG,
-        "[REPORT:%06u][CPU] used=%u.%u%%, idle=%u.%u%%, cores=%u",
+        "[REPORT:%06u][CPU] used=%u.%u%%, peak_500ms=%u.%u%%, "
+        "idle=%u.%u%%, cores=%u",
         (unsigned int)report_index,
         (unsigned int)(cpu->used_x10 / 10U),
         (unsigned int)(cpu->used_x10 % 10U),
+        (unsigned int)(cpu->peak_used_x10 / 10U),
+        (unsigned int)(cpu->peak_used_x10 % 10U),
         (unsigned int)(cpu->idle_x10 / 10U),
         (unsigned int)(cpu->idle_x10 % 10U),
         (unsigned int)CONFIG_FREERTOS_NUMBER_OF_CORES
@@ -985,7 +1149,6 @@ static void performance_monitor_task(void *argument)
 
         const esp_err_t cpu_result =
             performance_monitor_measure_cpu(
-                pdMS_TO_TICKS(PERF_MONITOR_PERIOD_MS),
                 &cpu
             );
 
