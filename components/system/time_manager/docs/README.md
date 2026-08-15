@@ -78,9 +78,16 @@ There is no custom permanent FreeRTOS time task. Each successful lwIP sync
 invokes the ESP-IDF callback, which updates `last_sync_unix`, `sync_count`, and
 `last_error` exactly once for that callback.
 
+## GUI consumer
+
+Task 3 uses `time_manager_get_local_time()` from the existing `app_gui` LVGL
+timer. The getter returns `ESP_ERR_INVALID_STATE` before the first successful
+SNTP synchronization, which lets the GUI show an explicit placeholder. Once
+the manager has synchronized, the getter reads the system clock and remains
+usable while Wi-Fi is offline; the manager has no GUI/LVGL dependency.
+
 ## Deferred work
 
-Task 3 will add GUI clock presentation and its 1 Hz LVGL refresh. Task 4 will
-add Firebase time telemetry and its later publish-period decision. NVS time
-persistence, external RTC support, REST time APIs, and long-duration hardware
-validation are intentionally outside this component's current scope.
+Task 4 will add Firebase time telemetry and its later publish-period decision.
+NVS time persistence, external RTC support, REST time APIs, and long-duration
+hardware validation are intentionally outside this component's current scope.
