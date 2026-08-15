@@ -1,5 +1,6 @@
 /* Includes ----------------------------------------------------------------- */
 #include "cloud_manager.h"
+#include "cloud_telemetry_json.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -30,7 +31,6 @@
 #define CLOUD_MANAGER_TELEMETRY_QUEUE_LENGTH       1U
 
 #define CLOUD_MANAGER_HTTP_TIMEOUT_MS              15000U
-#define CLOUD_MANAGER_JSON_BUFFER_SIZE             512U
 #define CLOUD_MANAGER_URL_BUFFER_SIZE              256U
 #define CLOUD_MANAGER_AUTH_URL_BUFFER_SIZE          \
     (CLOUD_MANAGER_URL_BUFFER_SIZE +                \
@@ -94,7 +94,7 @@ EXT_RAM_BSS_ATTR static char s_authenticated_url[
 
 /* Static because the reusable HTTP client retains the request-body pointer. */
 EXT_RAM_BSS_ATTR static char s_telemetry_payload[
-    CLOUD_MANAGER_JSON_BUFFER_SIZE];
+    CLOUD_TELEMETRY_JSON_BUFFER_SIZE];
 
 /* Owned exclusively by the cloud task after cloud_manager_start(). */
 static esp_http_client_handle_t s_http_client;
@@ -182,9 +182,6 @@ cloud_manager_failure_class_from_attempt(
 
 static const char *cloud_manager_failure_class_to_string(
     cloud_manager_failure_class_t failure_class);
-
-static const char *cloud_audio_state_to_string(
-    cloud_audio_state_t state);
 
 static cloud_attempt_result_t
 cloud_manager_classify_auth_failure(
@@ -574,35 +571,6 @@ static const char *cloud_manager_failure_class_to_string(
     }
 }
 
-static const char *cloud_audio_state_to_string(
-    cloud_audio_state_t state)
-{
-    switch (state)
-    {
-        case CLOUD_AUDIO_STATE_READY:
-            return "ready";
-
-        case CLOUD_AUDIO_STATE_IDLE:
-            return "idle";
-
-        case CLOUD_AUDIO_STATE_RECORDING:
-            return "recording";
-
-        case CLOUD_AUDIO_STATE_PROCESSING:
-            return "processing";
-
-        case CLOUD_AUDIO_STATE_PLAYBACK:
-            return "playback";
-
-        case CLOUD_AUDIO_STATE_ERROR:
-            return "error";
-
-        case CLOUD_AUDIO_STATE_UNAVAILABLE:
-        default:
-            return "unavailable";
-    }
-}
-
 static cloud_attempt_result_t
 cloud_manager_classify_auth_failure(
     esp_err_t error,
@@ -926,58 +894,17 @@ cloud_manager_publish_telemetry(
         return outcome;
     }
 
-    const bool audio_recording =
-        telemetry->audio.state ==
-        CLOUD_AUDIO_STATE_RECORDING;
-    const bool audio_playback =
-        telemetry->audio.state ==
-        CLOUD_AUDIO_STATE_PLAYBACK;
+    size_t payload_length = 0U;
+    result = cloud_telemetry_json_serialize(
+        telemetry,
+        s_telemetry_payload,
+        sizeof(s_telemetry_payload),
+        &payload_length);
 
-    /*
-     * Numeric sensor readings are serialized exactly as posted. Audio boolean
-     * flags are derived from audio.state so the nested object cannot disagree
-     * with its source-of-truth state value.
-     */
-    const int payload_length =
-        snprintf(
-            s_telemetry_payload,
-            sizeof(s_telemetry_payload),
-            "{"
-                "\"temperature_c\":%.1f,"
-                "\"humidity_percent\":%.1f,"
-                "\"sensor_valid\":%s,"
-                "\"sensor_stale\":%s,"
-                "\"sensor_state\":%ld,"
-                "\"last_error\":%ld,"
-                "\"sample_uptime_ms\":%lld,"
-                "\"audio\":{"
-                    "\"state\":\"%s\","
-                    "\"recording\":%s,"
-                    "\"playback\":%s,"
-                    "\"last_error\":%ld"
-                "},"
-                "\"source\":\"esp32_cloud_manager\""
-            "}",
-            telemetry->temperature_c,
-            telemetry->humidity_percent,
-            telemetry->data_valid ? "true" : "false",
-            telemetry->data_stale ? "true" : "false",
-            (long)telemetry->sensor_state,
-            (long)telemetry->last_error,
-            (long long)telemetry->sample_uptime_ms,
-            cloud_audio_state_to_string(
-                telemetry->audio.state),
-            audio_recording ? "true" : "false",
-            audio_playback ? "true" : "false",
-            (long)telemetry->audio.last_error);
-
-    if ((payload_length < 0) ||
-        (payload_length >=
-         (int)sizeof(s_telemetry_payload)))
-    {
+    if (result != ESP_OK) {
         outcome.result =
             CLOUD_ATTEMPT_NONRETRYABLE_CONFIG;
-        outcome.error = ESP_ERR_INVALID_SIZE;
+        outcome.error = result;
         return outcome;
     }
 
@@ -1000,7 +927,7 @@ cloud_manager_publish_telemetry(
         esp_http_client_set_post_field(
             s_http_client,
             s_telemetry_payload,
-            payload_length);
+            (int)payload_length);
 
     if (result != ESP_OK)
     {
@@ -1723,6 +1650,12 @@ esp_err_t cloud_manager_post_sensor_telemetry(
          CLOUD_AUDIO_STATE_UNAVAILABLE) ||
         (telemetry->audio.state >
          CLOUD_AUDIO_STATE_ERROR))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!cloud_telemetry_json_is_valid_time_telemetry(
+            &telemetry->time))
     {
         return ESP_ERR_INVALID_ARG;
     }

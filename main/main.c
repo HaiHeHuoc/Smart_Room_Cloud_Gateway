@@ -1,6 +1,7 @@
 /* Includes ----------------------------------------------------------------- */
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -128,7 +129,7 @@ static const cloud_manager_config_t CLOUD_MANAGER_CONFIG =
         "asia-southeast1.firebasedatabase.app/"
         "devices/esp32s3-001/latest.json",
 
-    .publish_period_ms = 10000U,
+    .publish_period_ms = 60000U,
 };
 
 static const firebase_auth_config_t FIREBASE_AUTH_CONFIG =
@@ -169,6 +170,9 @@ static ui_wifi_state_t app_map_wifi_state(
 /** @brief Map a sensor manager state to its application GUI equivalent. */
 static ui_sensor_state_t app_map_sensor_state(
     sensor_manager_state_t state);
+
+/** @brief Copy a coherent time-manager view into cloud-owned telemetry. */
+static cloud_time_telemetry_t app_collect_cloud_time_telemetry(void);
 
 /** @brief Convert and forward sensor manager snapshots to the GUI queue. */
 static void app_sensor_status_callback(
@@ -1019,6 +1023,39 @@ static void app_audio_status_callback(
     }
 }
 
+static cloud_time_telemetry_t app_collect_cloud_time_telemetry(void)
+{
+    cloud_time_telemetry_t cloud_time = {0};
+    time_manager_status_t time_status = {0};
+
+    if ((time_manager_get_status(&time_status) != ESP_OK) ||
+        !time_status.synced ||
+        (time_status.last_sync_unix <= (time_t)0)) {
+        return cloud_time;
+    }
+
+    time_t current_unix = (time_t)0;
+    char local_time[CLOUD_TIME_LOCAL_ISO8601_BUFFER_SIZE] = {0};
+
+    if ((time_manager_get_unix_time(&current_unix) != ESP_OK) ||
+        (current_unix <= (time_t)0) ||
+        (time_manager_format_iso8601(
+             local_time,
+             sizeof(local_time)) != ESP_OK)) {
+        return cloud_time;
+    }
+
+    cloud_time.synced = true;
+    cloud_time.unix_time = current_unix;
+    cloud_time.last_sync_unix = time_status.last_sync_unix;
+    memcpy(
+        cloud_time.local_time,
+        local_time,
+        sizeof(cloud_time.local_time));
+
+    return cloud_time;
+}
+
 static void app_sensor_status_callback(
     const sensor_manager_status_t *status,
     void *user_context)
@@ -1117,6 +1154,9 @@ static void app_sensor_status_callback(
         }
     }
 
+    const cloud_time_telemetry_t cloud_time =
+        app_collect_cloud_time_telemetry();
+
     const cloud_sensor_telemetry_t telemetry =
     {
         .temperature_c =
@@ -1148,6 +1188,8 @@ static void app_sensor_status_callback(
             .last_error =
                 cloud_audio_error,
         },
+
+        .time = cloud_time,
     };
 
     error =
