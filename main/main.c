@@ -1,6 +1,7 @@
 /* Includes ----------------------------------------------------------------- */
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -27,6 +28,9 @@
 
 /* Performance monitor ----------------------------------------------------- */
 #include "performance_monitor.h"
+
+/* Time manager ------------------------------------------------------------ */
+#include "time_manager.h"
 
 /* Wifi manager ------------------------------------------------------------ */
 #include "wifi_manager.h"
@@ -125,7 +129,7 @@ static const cloud_manager_config_t CLOUD_MANAGER_CONFIG =
         "asia-southeast1.firebasedatabase.app/"
         "devices/esp32s3-001/latest.json",
 
-    .publish_period_ms = 10000U,
+    .publish_period_ms = 60000U,
 };
 
 static const firebase_auth_config_t FIREBASE_AUTH_CONFIG =
@@ -153,7 +157,7 @@ static void app_button_event_callback(
     void *user_context);
 
 /**
- * @brief Fan out Wi-Fi state to coordinator, GUI, and cloud network epoch.
+ * @brief Fan out Wi-Fi state to coordinator, GUI, cloud, and time services.
  */
 static void app_wifi_status_callback(
     const wifi_manager_status_t *status,
@@ -166,6 +170,9 @@ static ui_wifi_state_t app_map_wifi_state(
 /** @brief Map a sensor manager state to its application GUI equivalent. */
 static ui_sensor_state_t app_map_sensor_state(
     sensor_manager_state_t state);
+
+/** @brief Copy a coherent time-manager view into cloud-owned telemetry. */
+static cloud_time_telemetry_t app_collect_cloud_time_telemetry(void);
 
 /** @brief Convert and forward sensor manager snapshots to the GUI queue. */
 static void app_sensor_status_callback(
@@ -233,6 +240,31 @@ void app_main(void)
             esp_err_to_name(network_ret));
 
         return;
+    }
+
+    const time_manager_config_t time_config =
+        time_manager_default_config();
+    esp_err_t time_ret =
+        time_manager_init(&time_config);
+
+    if (time_ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to initialize time manager: %s; continuing without time sync",
+            esp_err_to_name(time_ret));
+    }
+    else
+    {
+        time_ret = time_manager_start();
+
+        if (time_ret != ESP_OK)
+        {
+            ESP_LOGE(
+                TAG,
+                "Failed to configure time manager: %s; continuing without time sync",
+                esp_err_to_name(time_ret));
+        }
     }
 
     esp_err_t ret =
@@ -888,6 +920,20 @@ static void app_wifi_status_callback(
             esp_err_to_name(cloud_network_error));
     }
 
+    const esp_err_t time_network_error =
+        time_manager_notify_network_state(
+            status->has_ipv4_address);
+
+    if ((time_network_error != ESP_OK) &&
+        (time_network_error !=
+         ESP_ERR_INVALID_STATE))
+    {
+        ESP_LOGW(
+            TAG,
+            "Failed to forward Wi-Fi state to time manager: %s",
+            esp_err_to_name(time_network_error));
+    }
+
     ESP_LOGD(
         TAG,
         "Wi-Fi callback: state=%s, ip=%s, reason=%u",
@@ -977,6 +1023,39 @@ static void app_audio_status_callback(
     }
 }
 
+static cloud_time_telemetry_t app_collect_cloud_time_telemetry(void)
+{
+    cloud_time_telemetry_t cloud_time = {0};
+    time_manager_status_t time_status = {0};
+
+    if ((time_manager_get_status(&time_status) != ESP_OK) ||
+        !time_status.synced ||
+        (time_status.last_sync_unix <= (time_t)0)) {
+        return cloud_time;
+    }
+
+    time_t current_unix = (time_t)0;
+    char local_time[CLOUD_TIME_LOCAL_ISO8601_BUFFER_SIZE] = {0};
+
+    if ((time_manager_get_unix_time(&current_unix) != ESP_OK) ||
+        (current_unix <= (time_t)0) ||
+        (time_manager_format_iso8601(
+             local_time,
+             sizeof(local_time)) != ESP_OK)) {
+        return cloud_time;
+    }
+
+    cloud_time.synced = true;
+    cloud_time.unix_time = current_unix;
+    cloud_time.last_sync_unix = time_status.last_sync_unix;
+    memcpy(
+        cloud_time.local_time,
+        local_time,
+        sizeof(cloud_time.local_time));
+
+    return cloud_time;
+}
+
 static void app_sensor_status_callback(
     const sensor_manager_status_t *status,
     void *user_context)
@@ -1021,6 +1100,63 @@ static void app_sensor_status_callback(
             esp_err_to_name(error));
     }
 
+    audio_manager_status_t audio_status = {0};
+    const esp_err_t audio_status_ret =
+        audio_manager_get_status(&audio_status);
+
+    cloud_audio_state_t cloud_audio_state =
+        CLOUD_AUDIO_STATE_UNAVAILABLE;
+    esp_err_t cloud_audio_error =
+        audio_status_ret;
+
+    if (audio_status_ret == ESP_OK)
+    {
+        cloud_audio_error =
+            audio_status.last_error;
+
+        switch (audio_status.state)
+        {
+            case AUDIO_MANAGER_STATE_INITIALIZED:
+                cloud_audio_state =
+                    CLOUD_AUDIO_STATE_READY;
+                break;
+
+            case AUDIO_MANAGER_STATE_IDLE:
+                cloud_audio_state =
+                    CLOUD_AUDIO_STATE_IDLE;
+                break;
+
+            case AUDIO_MANAGER_STATE_RECORDING:
+                cloud_audio_state =
+                    CLOUD_AUDIO_STATE_RECORDING;
+                break;
+
+            case AUDIO_MANAGER_STATE_PROCESSING:
+                cloud_audio_state =
+                    CLOUD_AUDIO_STATE_PROCESSING;
+                break;
+
+            case AUDIO_MANAGER_STATE_PLAYBACK:
+                cloud_audio_state =
+                    CLOUD_AUDIO_STATE_PLAYBACK;
+                break;
+
+            case AUDIO_MANAGER_STATE_ERROR:
+                cloud_audio_state =
+                    CLOUD_AUDIO_STATE_ERROR;
+                break;
+
+            case AUDIO_MANAGER_STATE_UNINITIALIZED:
+            default:
+                cloud_audio_state =
+                    CLOUD_AUDIO_STATE_UNAVAILABLE;
+                break;
+        }
+    }
+
+    const cloud_time_telemetry_t cloud_time =
+        app_collect_cloud_time_telemetry();
+
     const cloud_sensor_telemetry_t telemetry =
     {
         .temperature_c =
@@ -1043,6 +1179,17 @@ static void app_sensor_status_callback(
 
         .sample_uptime_ms =
             status->last_success_time_ms,
+
+        .audio =
+        {
+            .state =
+                cloud_audio_state,
+
+            .last_error =
+                cloud_audio_error,
+        },
+
+        .time = cloud_time,
     };
 
     error =
