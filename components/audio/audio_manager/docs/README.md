@@ -3,12 +3,13 @@
 ## Purpose
 
 `audio_manager` owns the Phase 11 audio foundation for the INMP441 microphone
-and MAX98357A speaker path. The Phase 11.4 production task starts in `IDLE`,
+and MAX98357A speaker path. The Phase 11 production task starts in `IDLE`,
 accepts one copied WAV request at a time, and owns all WAV, source, and I2S
 lifecycle work. The default production path no longer starts the infinite
 record/DSP/playback soak. The hardware-proven NewSolution algorithms remain
 available through a default-off golden stability mode. The optional continuous
-WAV stress hook can run standalone or with golden mode; its second, test-only
+WAV stress hook is disabled by default with
+`CONFIG_AUDIO_MANAGER_PUBLIC_API_TEST`; when enabled, its second, test-only
 coordinator task only polls status and submits commands, and does not own I2S,
 a file, or an SD lease.
 
@@ -38,9 +39,8 @@ optional golden stress profile is selected).
 - `audio_manager_init()` validates/copies configuration, creates synchronization, allocates PSRAM buffers, and establishes the safe speaker state.
 - `audio_manager_register_status_callback()` registers or removes one copied status callback for application integration.
 - `audio_manager_start()` starts the single I2S-owning manager task and waits
-  up to two seconds for it to reach production `IDLE`. The opt-in continuous
-  WAV stress hook also starts its non-I2S coordinator after that readiness
-  point.
+  up to two seconds for it to reach production `IDLE`. It never starts a
+  continuous test coordinator by itself.
 - `audio_manager_play_wav()` validates and copies one `/sdcard/...` path into
   bounded command storage; it never opens the file or waits for playback.
 - `audio_manager_stop_playback()` requests cancellation of the pending/active
@@ -60,10 +60,14 @@ calls. Busy audio requests are rejected rather than accumulated as a playlist.
 
 ## Public-API Hardware Stress Coordinator
 
-`app_audio_api_test_task_start()` starts the test-only, priority-6 coordinator
-implemented in `audio_api_test_task.c`. It calls only public `audio_manager`
-APIs and polls copied status; it does not own I2S, PCM buffers, WAV files, or
-SD leases.
+Enable `CONFIG_AUDIO_MANAGER_PUBLIC_API_TEST` only for a target-hardware
+validation run. It causes `main` to call `app_audio_api_test_task_start()`,
+which starts the test-only, priority-6 coordinator implemented in
+`audio_api_test_task.c`. It calls only public `audio_manager` APIs and polls
+copied status; it does not own I2S, PCM buffers, WAV files, or SD leases.
+
+With the default `n` setting, no continuous record/playback/WAV coordinator is
+created during normal production startup.
 
 With the default local test selection, each cycle exercises fixed recording and
 manual recording followed by recorded playback, then attempts the configured

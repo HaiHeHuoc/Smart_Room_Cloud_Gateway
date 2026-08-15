@@ -9,6 +9,7 @@
 #include "esp_netif.h"
 #include "esp_event.h"
 #include "esp_log.h"
+#include "sdkconfig.h"
 
 /* Common components ------------------------------------------------------- */
 #include "app_common.h"
@@ -61,7 +62,9 @@
 
 /* Audio manager ------------------------------------------------------------ */
 #include "audio_manager.h"
+#if CONFIG_AUDIO_MANAGER_PUBLIC_API_TEST
 #include "audio_api_test_task.h"
+#endif
 
 /* Macros ------------------------------------------------------------------- */
 #define PERFORMANCE_MONITOR 1
@@ -669,6 +672,7 @@ void app_main(void)
                 TAG,
                 "Audio manager task started; mode is reported by audio_manager");
 
+#if CONFIG_AUDIO_MANAGER_PUBLIC_API_TEST
             const esp_err_t audio_test_ret =
                 app_audio_api_test_task_start();
 
@@ -685,6 +689,7 @@ void app_main(void)
                     TAG,
                     "Public audio API validation task started at priority 6");
             }
+#endif
         }
     }
 

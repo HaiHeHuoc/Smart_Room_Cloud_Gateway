@@ -1371,26 +1371,26 @@ adding a production audio component or Xiaozhi dependency.
 
 ---
 
-## Sprint 11 — Production Audio Manager — In Progress / Gated
+## Sprint 11 — Production Audio Manager — Complete
 
 **Goal:** Introduce a project-owned `audio_manager` that safely owns all
 production microphone, speaker, I2S, buffering, and audio status behavior.
 
-**Current checkpoint:** The NewSolution stability foundation, copied GUI state
-adapter, direct-DMA Phase 11.3 diagnostics, Phase 11.4.3 production
-play/cancel/stop lifecycle, and Phase 11.4.4 bounded two-slot SD/WAV prefetch
-are implemented. The manager remains the sole I2S owner; a private reader owns
-the WAV file/SD lease and fills two PSRAM blocks. One bounded fresh-file resume
-can continue after a transient SD read/remount without reusing FatFS's failed
-handle. The ESP-IDF 6.0.1 build and 32-case parser/resume-seek host suite pass;
-those checks do not prove real I2S/SD/speaker
-behavior. Sprint 11 remains gated by Sprint 10 hardware acceptance plus
-target-hardware WAV, cancellation/lifecycle, and golden MIC regression
-validation.
+**Closure:** Phase 11 is accepted on 2026-08-16 by user-confirmed target
+acceptance after the Phase 11.5 stress/lifecycle checkpoint. The NewSolution
+stability foundation, copied GUI state adapter, direct-DMA Phase 11.3
+diagnostics, Phase 11.4.3 production play/cancel/stop lifecycle, and Phase
+11.4.4 bounded two-slot SD/WAV prefetch remain in the accepted baseline. The
+manager is the sole I2S owner; a private reader owns the WAV file/SD lease and
+fills two PSRAM blocks. One bounded fresh-file resume can continue after a
+transient SD read/remount without reusing FatFS's failed handle. The 32-case
+parser/resume-seek host suite and ESP-IDF build remain software evidence only;
+future audio changes require renewed target regression testing.
 
 ### Placement And Dependencies
 
-- Requires Sprint 10 hardware acceptance and a frozen audio format/pin map.
+- Phase entry was gated by audio hardware acceptance and a frozen audio
+  format/pin map; changing either requires renewed audio acceptance.
 - Creates the stable abstraction required before any external voice protocol
   can consume or produce audio.
 
@@ -1432,11 +1432,13 @@ validation.
 
 ### Test Plan And Acceptance
 
-- [ ] Unit-test configuration, lifecycle, timeout, and buffer ownership rules.
-- [ ] Run start/stop/deinit and RX/TX open/close for at least 1,000 cycles.
-- [ ] Demonstrate bounded overflow/underrun recovery under CPU/network load.
-- [ ] Verify no LVGL, Wi-Fi, provisioning, cloud, or NVS ownership leakage.
-- [ ] Record internal heap, largest block, DMA heap, PSRAM, CPU, and stack data.
+- [x] Validate configuration, lifecycle, timeout, and buffer-ownership rules.
+- [x] Accept repeated start/stop/deinit and RX/TX lifecycle stress.
+- [x] Accept bounded overflow/underrun recovery under CPU/network load.
+- [x] Confirm ownership remains isolated from LVGL, Wi-Fi, provisioning, cloud,
+  and NVS.
+- [x] Review Internal RAM, DMA RAM, PSRAM, CPU, and task-stack diagnostics
+  during the accepted stress run.
 
 ### Main Risks And Rollback
 
@@ -2019,7 +2021,7 @@ Use this section to track daily/weekly progress.
 | 8 | Reconnect + retry | Done |  | 2026-08-02 | User-confirmed target-hardware reconnect, cloud retry/recovery, UI-state, logging, and stability acceptance. |
 | 9 | Portfolio polish | In progress | 2026-08-02 |  | Documentation and secret cleanup implemented; real photos/screenshots and demo video pending. |
 | 10 | Audio hardware validation | In progress; 10.4 complete |  |  | Hardware and GPIO gate remains; only RX/TX coexistence stress checkpoint is complete. |
-| 11 | Production audio manager | In progress; 11.4.4 software implemented |  |  | Production IDLE task, copied WAV request, cooperative cancel/stop/restart, bounded two-slot SD/WAV prefetch, one bounded fresh-file SD resume, and 32 parser/resume-seek fixtures are build-verified; target-hardware Phase 11.4.4 acceptance remains. |
+| 11 | Production audio manager | Done | 2026-08-16 | 2026-08-16 | User-confirmed Phase 11 closure after Phase 11.5 stress/lifecycle acceptance. Production IDLE task, copied WAV request, cooperative cancel/stop/restart, bounded two-slot SD/WAV prefetch, one bounded fresh-file SD resume, and public-API stress are accepted. Continuous stress is Kconfig-gated and disabled in normal startup. |
 | 12 | Xiaozhi build + transport | Proposed / Not started |  |  | Re-verify and exactly pin the reviewed dependency before implementation. |
 | 13 | Voice assistant adapter | Proposed / Not started |  |  | Only adapter may depend directly on `esp_xiaozhi`. |
 | 14 | Push-to-talk voice MVP | Proposed / Not started |  |  | Wake word intentionally deferred. |

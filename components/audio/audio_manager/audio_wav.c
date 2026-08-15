@@ -577,6 +577,9 @@ esp_err_t audio_wav_stream_read_limited(
         const bool io_error = ferror(stream->file);
         const esp_err_t result = io_error ? ESP_FAIL : ESP_ERR_INVALID_SIZE;
 
+        /* Host test logging is a no-op, but firmware keeps errno diagnostics. */
+        (void)read_errno;
+
         ESP_LOGW(
             TAG,
             "WAV read failed: requested=%u received=%u errno=%d error=%s",

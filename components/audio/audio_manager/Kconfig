@@ -1,5 +1,16 @@
 menu "Audio manager"
 
+    config AUDIO_MANAGER_PUBLIC_API_TEST
+        bool "Enable continuous public audio API stress coordinator"
+        default n
+        help
+            Starts the test-only audio_api_test task from app_main after the
+            production audio_manager reaches IDLE. The coordinator repeatedly
+            exercises public record, recorded-playback, and WAV APIs; it is
+            intended for target-hardware validation only and is disabled in
+            normal firmware. Its local scenario settings remain in
+            audio_api_test_task.c.
+
     config AUDIO_MANAGER_MANUAL_RECORD_MAX_SECONDS
         int "Maximum manual recording duration (seconds)"
         range 1 120

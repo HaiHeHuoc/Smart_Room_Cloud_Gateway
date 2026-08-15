@@ -29,6 +29,7 @@ The accepted baseline keeps these ownership rules intact:
 
 ## Phase 11.5 Exit Gate
 
-Phase 11.5 is considered passed for project tracking. Subsequent work may proceed to the next planned Sprint 11/12 integration checkpoint without reopening this stress phase unless new hardware evidence shows a regression.
-
-This record intentionally marks only **Phase 11.5** as passed. It does not silently close unrelated pending hardware-acceptance items elsewhere in the roadmap.
+Phase 11.5 remains the stress/lifecycle acceptance record. The user-confirmed
+parent Phase 11 closure is recorded in `docs/PHASE_11_CLOSURE.md`. Subsequent
+audio changes must repeat the relevant target regression checks before relying
+on that parent acceptance.

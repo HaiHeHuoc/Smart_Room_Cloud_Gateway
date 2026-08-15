@@ -7,21 +7,21 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "sdkconfig.h"
 #include "sd_card_manager.h"
+
+#if CONFIG_AUDIO_MANAGER_PUBLIC_API_TEST
 
 /* --------------------------------------------------------------------------
  * Public-API hardware stress configuration
  * --------------------------------------------------------------------------
- * This file is intentionally configured with local #defines instead of
- * menuconfig. Edit only this block when selecting a hardware stress scenario.
+ * CONFIG_AUDIO_MANAGER_PUBLIC_API_TEST is the production Kconfig gate. Edit
+ * only this block when selecting an enabled hardware stress scenario.
  * The coordinator never touches I2S, DSP buffers, WAV internals, or SD FILE
  * objects directly; every audio operation goes through audio_manager public
  * APIs and public status snapshots. If SD VFS is unavailable, the WAV step is
  * skipped for that cycle so SD-independent record/playback stress continues.
  */
-
-/* 1 = run continuously after app_main starts it; 0 = task exits immediately. */
-#define AUDIO_API_TEST_ENABLED                         1U
 
 /*
  * Enable the operation groups independently.
@@ -51,8 +51,7 @@
 /* Canonical PCM16 mono 16-kHz WAV below the mounted /sdcard filesystem. */
 #define AUDIO_API_TEST_WAV_PATH "/sdcard/audio/input_long.wav"
 
-#if AUDIO_API_TEST_ENABLED && \
-    !AUDIO_API_TEST_ENABLE_FIXED_RECORD && \
+#if !AUDIO_API_TEST_ENABLE_FIXED_RECORD && \
     !AUDIO_API_TEST_ENABLE_MANUAL_RECORD && \
     !AUDIO_API_TEST_ENABLE_WAV_PLAYBACK
 #error "Enable at least one public audio stress operation"
@@ -387,14 +386,6 @@ static void audio_api_test_task(void *argument)
 {
     (void)argument;
 
-    if (AUDIO_API_TEST_ENABLED == 0U)
-    {
-        ESP_LOGI(TAG, "Public audio API stress test disabled by #define");
-        s_test_task_handle = NULL;
-        vTaskDelete(NULL);
-        return;
-    }
-
     ESP_LOGI(
         TAG,
         "Public audio API stress started: priority=%u fixed=%u manual=%u "
@@ -507,3 +498,12 @@ esp_err_t app_audio_api_test_task_start(void)
 
     return ESP_OK;
 }
+
+#else
+
+esp_err_t app_audio_api_test_task_start(void)
+{
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+#endif /* CONFIG_AUDIO_MANAGER_PUBLIC_API_TEST */
