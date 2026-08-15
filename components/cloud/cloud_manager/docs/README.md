@@ -187,6 +187,7 @@ if they occur entirely between snapshots.
 
 Consumers must inspect `sensor.sensor_valid` and `sensor.sensor_stale`; not
 every finite number represents a valid physical reading.
+
 ## State And Retry Policy
 
 | State / result | Behavior |
