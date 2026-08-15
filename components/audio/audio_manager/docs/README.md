@@ -240,13 +240,13 @@ offsets are checked against both the RIFF-declared and actual file bounds.
 
 Each open stream owns exactly one `FILE *` and one reusable 4 KiB Internal-RAM
 raw reader buffer. The worker reuses it for each bounded `fread()` and copies
-the result into the inactive logical PSRAM block. At the default
-`AUDIO_MANAGER_WAV_PREFETCH_SECONDS=10`, PCM16 mono 16 kHz needs 32,000 B/s,
-so each block is 320,000 B and the two-slot cache is 640,000 B. These buffers
-are allocated only for active WAV playback, checked as external PSRAM, and are
-never passed directly to I2S; the manager converts/copies into the existing
-DMA-capable `s_tx_block`. Playback memory remains bounded and independent of
-the total WAV-file duration.
+the result into the inactive logical PSRAM block. WAV prefetch uses two fixed
+32 KiB slots: 32,768 bytes per slot and 65,536 bytes total while playback is
+active. PCM16 mono 16 kHz needs 32,000 B/s, so one slot contains approximately
+1.024 seconds of source audio. These buffers are allocated only for active WAV
+playback, checked as external PSRAM, and are never passed directly to I2S; the
+manager converts/copies into the existing DMA-capable `s_tx_block`. Playback
+memory remains bounded and independent of the total WAV-file duration.
 
 `audio_wav_stream_open()` closes the local file and releases its lease on every
 parse/allocation failure. `audio_wav_stream_read_limited()` lets the worker end
@@ -384,22 +384,22 @@ Suggested hardware files are valid 5-second, 30-second, and 60-second PCM16
 mono 16-kHz WAVs, followed by missing, bad-RIFF, stereo, 44.1-kHz, 24-bit, and
 truncated cases. At volume 100, confirm `fixed_gain_q16=18000` and
 `output_peak <= 9000`; for a source with peak 27752, the expected output peak
-is about 7622. For a 30/60-second file, listen carefully across every 10-second
-boundary and confirm `expected_bytes == read_bytes == streamed_bytes`,
-`prefetch_fill_fail=0`, and `prefetch_starve=0`. Check that each successful
-`max_prefetch_fill_us` remains comfortably below the available 10-second cache
-margin. Also cancel during initial fill and active playback, then induce an SD
-read failure during refill and verify that the same WAV resumes from its
-committed offset through a fresh file handle. For one transient failure, expect
+is about 7622. For a 30/60-second file, listen carefully across repeated 32 KiB
+ping-pong boundaries and confirm `expected_bytes == read_bytes == streamed_bytes`,
+`prefetch_block=32768`, `prefetch_fill_fail=0`, and `prefetch_starve=0`. Check
+that each successful `max_prefetch_fill_us` remains comfortably below the
+approximately 1.024-second source-audio time represented by one slot. Also
+cancel during initial fill and active playback, then induce an SD read failure
+during refill and verify that the same WAV resumes from its committed offset
+through a fresh file handle. For one transient failure, expect
 `sd_resume_attempt=1`, `sd_resume_ok=1`, exact expected/read/streamed byte
-parity, and no false cleanup
-error; `max_prefetch_fill_us` includes the recovery wait. Without an injected
-fault, both resume counters remain zero. Separately force a recovery timeout or
-second read failure and verify clean terminal failure before the next stress
-iteration. Verify clean EOF to `IDLE`, zero nominal TX timeouts/partial writes,
-safe speaker inactivity afterward, and then confirm the configured golden
-record/DSP/playback cycle still works. These remain hardware checks until
-serial and listening evidence exists.
+parity, and no false cleanup error; `max_prefetch_fill_us` includes the recovery
+wait. Without an injected fault, both resume counters remain zero. Separately
+force a recovery timeout or second read failure and verify clean terminal
+failure before the next stress iteration. Verify clean EOF to `IDLE`, zero
+nominal TX timeouts/partial writes, safe speaker inactivity afterward, and then
+confirm the configured golden record/DSP/playback cycle still works. These
+remain hardware checks until serial and listening evidence exists.
 
 ## Proven Audio Behavior Preserved
 
@@ -506,9 +506,8 @@ network, and watchdog responsiveness.
   copied path (520 bytes of payload total with the current 4-byte enum, plus
   FreeRTOS queue metadata/storage alignment).
 - Active WAV stream: one reusable 4096-byte Internal/8-bit raw reader buffer,
-  one `FILE *`, and two configured-size PSRAM cache blocks. At the default
-  ten-second setting the blocks total 640000 bytes. All are released after the
-  reader has stopped at EOF, cancellation, or error.
+  one `FILE *`, and two fixed 32 KiB PSRAM cache blocks (65,536 bytes total).
+  All are released after the reader has stopped at EOF, cancellation, or error.
 - WAV prefetch worker: one private 4096-byte stack at priority 5. It owns only
   SD/VFS and cache fill; it never owns I2S or LVGL.
 - PSRAM: the whole-recording PCM24 buffer and DSP workspace remain allocated at
