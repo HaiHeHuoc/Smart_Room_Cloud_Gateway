@@ -23,9 +23,9 @@ Task 4 time telemetry: build and host-serializer verified; Firebase runtime acce
 
 - One cloud FreeRTOS task with task-owned HTTPS/TLS lifecycle.
 - Length-one queue using `xQueueOverwrite()` to retain the newest telemetry.
-- Application-composed audio snapshot included with each telemetry update.
-- Application-composed synchronized time snapshot included with each telemetry
-  update without a `cloud_manager -> time_manager` dependency.
+- Application-composed sensor, audio, and synchronized time snapshots grouped
+  into nested Firebase objects; `cloud_manager` has no `time_manager`
+  dependency.
 - Successful latest-value uploads paced at 60 seconds.
 - Retained IPv4 readiness and a non-zero network epoch.
 - Task-notification wakeups for telemetry and network edges.
@@ -140,6 +140,17 @@ Current payload:
 }
 ```
 
+The nested sensor object follows these rules:
+
+- `temperature_c` and `humidity_percent` are the latest copied readings.
+- `sensor_valid` and `sensor_stale` are independent data-quality flags and
+  must be inspected before treating a finite numeric reading as current valid
+  sensor data.
+- `sensor_state` is the numeric project sensor-manager state already carried
+  by the existing telemetry structure.
+- `last_error` is the most recent sensor read result.
+- `sample_uptime_ms` is the uptime of the latest successful sensor sample.
+
 The nested audio object follows these rules:
 
 - `state` is the source of truth and is serialized as one of `unavailable`,
@@ -176,7 +187,6 @@ if they occur entirely between snapshots.
 
 Consumers must inspect `sensor.sensor_valid` and `sensor.sensor_stale`; not
 every finite number represents a valid physical reading.
-
 ## State And Retry Policy
 
 | State / result | Behavior |
