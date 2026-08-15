@@ -58,6 +58,21 @@ soak. Public lifecycle/control APIs are task-context APIs, not ISR APIs.
 Application code should serialize concurrent `start`, `stop`, and `deinit`
 calls. Busy audio requests are rejected rather than accumulated as a playlist.
 
+## Public-API Hardware Stress Coordinator
+
+`app_audio_api_test_task_start()` starts the test-only, priority-6 coordinator
+implemented in `audio_api_test_task.c`. It calls only public `audio_manager`
+APIs and polls copied status; it does not own I2S, PCM buffers, WAV files, or
+SD leases.
+
+With the default local test selection, each cycle exercises fixed recording and
+manual recording followed by recorded playback, then attempts the configured
+WAV. If `sd_card_manager_is_mounted()` is false at the WAV step, the
+coordinator logs `WAV skipped`, reports the cycle as `PARTIAL`, and starts the
+next record/playback cycle after its configured delay. It neither mounts the
+card nor waits indefinitely for SD readiness. Once SD recovery returns VFS to
+READY, a later cycle automatically attempts WAV playback again.
+
 ## Production Command And Ownership Model
 
 ```text

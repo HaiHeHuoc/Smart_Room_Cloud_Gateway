@@ -5,5 +5,6 @@ idf_component_register(
         common
         lvgl
         heap
+        time_manager
         ui_manager_lvgl
 )

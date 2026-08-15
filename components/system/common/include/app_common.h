@@ -17,7 +17,7 @@
  * credentials. These values are compiled into the development firmware and
  * are not a production secret-storage mechanism.
  */
-#define FIREBASE_API_KEY             CONFIG_APP_FIREBASE_API_KEY
-#define FIREBASE_DEVICE_EMAIL        CONFIG_APP_FIREBASE_DEVICE_EMAIL
-#define FIREBASE_DEVICE_PASSWORD     CONFIG_APP_FIREBASE_DEVICE_PASSWORD
-#define FIREBASE_DEVICE_UID          CONFIG_APP_FIREBASE_DEVICE_UID
+#define FIREBASE_API_KEY             "AIzaSyBXsyDzNYGd0xxRDvms8nnwtuIYwR3h8ks"
+#define FIREBASE_DEVICE_EMAIL        "tranlonghai21@gmail.com"
+#define FIREBASE_DEVICE_PASSWORD     "Musaking888"
+#define FIREBASE_DEVICE_UID          "0leuYu7fCMRnM8w5bvv8VzquPgV2"
