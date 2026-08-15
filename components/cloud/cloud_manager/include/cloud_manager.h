@@ -3,12 +3,17 @@
 /* Includes ----------------------------------------------------------------- */
 #include <stdbool.h>
 #include <stdint.h>
+#include <time.h>
 
 #include "esp_err.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* Telemetry Limits --------------------------------------------------------- */
+/** ISO-8601 local time (YYYY-MM-DDTHH:MM:SS+07:00) plus null terminator. */
+#define CLOUD_TIME_LOCAL_ISO8601_BUFFER_SIZE  26U
 
 /* Type Definitions --------------------------------------------------------- */
 /** @brief Cloud upload lifecycle and latest request result. */
@@ -77,6 +82,22 @@ typedef struct
     esp_err_t last_error;
 } cloud_audio_telemetry_t;
 
+/** @brief Time snapshot owned by the cloud-facing Firebase schema. */
+typedef struct
+{
+    /** True after the application has mapped a valid SNTP-synchronized clock. */
+    bool synced;
+
+    /** Current Unix time at application telemetry composition, or zero. */
+    time_t unix_time;
+
+    /** Local ISO-8601 time copied by the application, or an empty string. */
+    char local_time[CLOUD_TIME_LOCAL_ISO8601_BUFFER_SIZE];
+
+    /** Unix time of the most recent successful SNTP correction, or zero. */
+    time_t last_sync_unix;
+} cloud_time_telemetry_t;
+
 /** @brief Sensor snapshot copied into the cloud manager's latest-value queue. */
 typedef struct
 {
@@ -112,6 +133,9 @@ typedef struct
 
     /** Latest audio manager state sampled by the application layer. */
     cloud_audio_telemetry_t audio;
+
+    /** Latest synchronized time mapped by the application layer. */
+    cloud_time_telemetry_t time;
 } cloud_sensor_telemetry_t;
 
 /** @brief Thread-safe snapshot of cloud state and upload statistics. */
@@ -238,7 +262,7 @@ esp_err_t cloud_manager_notify_network_state(
     bool has_ipv4_address);
 
 /**
- * @brief Replace pending telemetry with the newest sensor/audio snapshot.
+ * @brief Replace pending telemetry with the newest sensor/audio/time snapshot.
  *
  * This non-blocking API copies the structure into a queue of length one. It is
  * suitable for the sensor callback, wakes the cloud task when present, and
@@ -246,7 +270,9 @@ esp_err_t cloud_manager_notify_network_state(
  * cloud_manager_init() and before cloud_manager_start().
  *
  * @param[in] telemetry Snapshot to copy. Numeric values marked valid must be
- *            finite and audio.state must be a defined cloud audio state.
+ *            finite, audio.state must be defined, and time must be either a
+ *            complete synchronized snapshot or the zero/empty unsynchronized
+ *            representation.
  * @return ESP_OK on success, ESP_ERR_INVALID_ARG for invalid input,
  *         ESP_ERR_INVALID_STATE before initialization, or ESP_FAIL if the
  *         queue update fails.
