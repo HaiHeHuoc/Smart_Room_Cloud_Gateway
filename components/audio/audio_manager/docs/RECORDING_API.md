@@ -200,6 +200,7 @@ and serial diagnostics:
 10. Repeat fixed/manual/replay cycles while checking Internal RAM, DMA RAM,
     PSRAM, and task high-water marks for monotonic leaks.
 
-Do not treat an ESP-IDF build alone as hardware validation. MIC slot detection,
-I2S RX/TX, DSP output quality, button timing, and long-run resource stability
-must still be exercised on the ESP32-S3 target.
+An ESP-IDF build alone is never hardware validation. Phase 11 target acceptance
+has been recorded at closure; repeat the listed checks after changes to MIC
+slot detection, I2S RX/TX, DSP output, button timing, or long-run resource
+behavior.

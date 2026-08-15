@@ -177,9 +177,11 @@ Confirmed media failure:
 
 ## Phase 11.4.4 Hardware Acceptance
 
-Hardware is still required before calling the path glitch-free or stable.
-Validate at least canonical 5 s, 10 s, 11 s, 30 s, and 60 s WAV files with the
-full Gateway services active.
+Phase 11 closure records target-hardware acceptance for the production path.
+Treat the following as regression requirements whenever audio configuration,
+SD media, I2S settings, or the prefetch implementation changes. Validate at
+least canonical 5 s, 10 s, 11 s, 30 s, and 60 s WAV files with the full Gateway
+services active.
 
 Expected nominal results:
 
