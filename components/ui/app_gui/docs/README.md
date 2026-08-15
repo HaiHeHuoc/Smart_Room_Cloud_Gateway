@@ -23,6 +23,8 @@ generation-aware so delayed messages from an old session cannot corrupt the
 new session's screen model.
 Phase 7.4 adds a modal factory-reset result screen plus an exact,
 transaction-aware presentation acknowledgment for controlled restart timing.
+Task 3 adds the synchronized local clock and date to the sensor dashboard;
+the existing UI task refreshes those labels through the LVGL timer handler.
 
 ## Application Screens
 
@@ -32,7 +34,7 @@ transaction-aware presentation acknowledgment for controlled restart timing.
 | `APP_GUI_SCREEN_BOOT` | Static `Smart Gateway` / `Starting...` placeholder. |
 | `APP_GUI_SCREEN_PROVISIONING` | Stable provisioning layout with a scannable QR code, instruction/status labels, and state indicator. |
 | `APP_GUI_SCREEN_WIFI_STATUS` | Existing Wi-Fi mode, SSID, and IPv4 screen. |
-| `APP_GUI_SCREEN_SENSOR_DASHBOARD` | Sensor dashboard with temperature/humidity at left and Wi-Fi, cloud, sensor, and audio summaries in the right status column. |
+| `APP_GUI_SCREEN_SENSOR_DASHBOARD` | Sensor dashboard with synchronized local time/date in its left header, temperature/humidity below, and Wi-Fi, cloud, sensor, and audio summaries in the right status column. |
 | `APP_GUI_SCREEN_RESET_RESULT` | Factory-reset success or failure result; entered only through `app_gui_show_reset_result()`. |
 
 The old `APP_GUI_SCREEN_WIFI` and `APP_GUI_SCREEN_SENSOR` identifiers were
@@ -168,6 +170,26 @@ mutex is held. It therefore only posts a non-blocking
 processed during the next UI iteration; the callback never tries to take the
 mutex recursively.
 
+## Task 3 Clock And Date
+
+`app_gui` reads `time_manager_get_local_time()` directly from a private LVGL
+timer that runs every 1000 ms only while `SENSOR_DASHBOARD` is active. The
+timer is serviced by the existing UI task inside `lv_timer_handler()`; there is
+no clock FreeRTOS task, callback-to-GUI path, or screen-command producer.
+
+Before the first successful SNTP synchronization, the header shows
+`--:--:--` and `--/--/----`. After synchronization, each refresh formats the
+ESP-IDF local system clock as `HH:MM:SS` and `DD/MM/YYYY`, so the last known
+clock continues advancing while Wi-Fi is offline. `app_gui` never adds UTC+7
+or increments a local counter.
+
+The timer stores no LVGL widget pointer in its user data. Screen activation
+pauses it before an old dashboard root is deleted, then renders and resumes it
+only after a new dashboard root is loaded. This keeps clock refreshes within
+the UI ownership and screen-lifecycle rules. The dependency direction is
+read-only: `app_gui -> time_manager`; `time_manager` remains independent of
+GUI/LVGL.
+
 ## Model Caching
 
 The GUI retains the latest complete:
@@ -201,8 +223,8 @@ Status events never choose a screen:
 Entering `PROVISIONING` renders the latest provisioning model, or the default
 `STARTING` model before the first update, and renders the latest valid QR
 payload when available. Entering `WIFI_STATUS` renders the latest Wi-Fi model.
-Entering
-`SENSOR_DASHBOARD` renders the latest sensor, Wi-Fi summary, and cloud models.
+Entering `SENSOR_DASHBOARD` renders the latest sensor, Wi-Fi summary, cloud
+models, and the current time/date header.
 
 ## Phase 7.4 Reset Result UI
 
@@ -566,6 +588,15 @@ Run any temporary state driver outside the UI task, call only public
     select the 1500 ms dwell.
 19. Repeat successful and failed cycles while monitoring UI-task stack and
     heap minima; verify no stale pointer, LVGL assertion, or growth trend.
+20. Before the first successful SNTP synchronization, enter
+    `SENSOR_DASHBOARD`; verify the header shows `--:--:--` and `--/--/----`,
+    never an unsynchronized 1970-era time.
+21. After SNTP synchronization, verify the header uses Vietnam local time in
+    `HH:MM:SS` and `DD/MM/YYYY` format and advances about once per second
+    without clipping or overlap.
+22. Disconnect Wi-Fi after a successful synchronization, then cycle into and
+    out of `SENSOR_DASHBOARD`; verify the clock continues advancing and no
+    LVGL assertion, stale pointer, or duplicate timer behavior occurs.
 
 ## Phase 6.4.7 Closure Status
 
