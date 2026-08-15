@@ -84,7 +84,7 @@
     CONFIG_AUDIO_MANAGER_WAV_STRESS_TASK_PRIORITY
 #else
 #define AUDIO_MANAGER_DEFAULT_RECORD_SECONDS          5U
-#define AUDIO_MANAGER_TASK_PRIORITY                   5U
+#define AUDIO_MANAGER_TASK_PRIORITY                   7U
 #endif
 
 /* Proven transport baseline. Do not change during structural refactor. */
