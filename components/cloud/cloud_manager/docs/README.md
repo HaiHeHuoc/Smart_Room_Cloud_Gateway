@@ -105,7 +105,7 @@ Wi-Fi callback
 cloud task
     -> discard client from an obsolete network/token generation
     -> firebase_auth_get_valid_id_token()
-    -> serialize sensor data plus nested audio object
+    -> serialize nested sensor, audio, and time objects
     -> HTTPS PUT latest.json with Firebase ID token
     -> classify result
     -> reset, retry, latch error, or publish Online status
@@ -115,13 +115,15 @@ Current payload:
 
 ```json
 {
-  "temperature_c": 30.1,
-  "humidity_percent": 64.5,
-  "sensor_valid": true,
-  "sensor_stale": false,
-  "sensor_state": 3,
-  "last_error": 0,
-  "sample_uptime_ms": 123456,
+  "sensor": {
+    "temperature_c": 30.1,
+    "humidity_percent": 64.5,
+    "sensor_valid": true,
+    "sensor_stale": false,
+    "sensor_state": 3,
+    "last_error": 0,
+    "sample_uptime_ms": 123456
+  },
   "audio": {
     "state": "recording",
     "recording": true,
@@ -162,8 +164,8 @@ The nested time object is a cloud-facing contract owned by `cloud_manager`:
   obtained, the stable representation is `false`, `0`, `""`, and `0`.
 
 `sync_count` remains a `time_manager` diagnostic and is intentionally not part
-of this Firebase schema. The existing flattened sensor fields remain unchanged;
-Task 4 adds only the nested `time` object.
+of this Firebase schema. Sensor field names and semantics are unchanged, but
+they are grouped under the nested `sensor` object to match `audio` and `time`.
 
 Audio status is sampled when the sensor callback composes a new latest-value
 telemetry snapshot. It therefore follows the existing cloud/sensor publish
@@ -172,8 +174,8 @@ After a successful upload, the cloud task waits 60 seconds before sending the
 latest pending snapshot. Short audio transitions can be absent from Firebase
 if they occur entirely between snapshots.
 
-Consumers must inspect `sensor_valid` and `sensor_stale`; not every finite
-number represents a valid physical reading.
+Consumers must inspect `sensor.sensor_valid` and `sensor.sensor_stale`; not
+every finite number represents a valid physical reading.
 
 ## State And Retry Policy
 
