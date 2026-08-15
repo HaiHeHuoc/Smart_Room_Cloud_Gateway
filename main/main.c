@@ -28,6 +28,9 @@
 /* Performance monitor ----------------------------------------------------- */
 #include "performance_monitor.h"
 
+/* Time manager ------------------------------------------------------------ */
+#include "time_manager.h"
+
 /* Wifi manager ------------------------------------------------------------ */
 #include "wifi_manager.h"
 
@@ -153,7 +156,7 @@ static void app_button_event_callback(
     void *user_context);
 
 /**
- * @brief Fan out Wi-Fi state to coordinator, GUI, and cloud network epoch.
+ * @brief Fan out Wi-Fi state to coordinator, GUI, cloud, and time services.
  */
 static void app_wifi_status_callback(
     const wifi_manager_status_t *status,
@@ -233,6 +236,31 @@ void app_main(void)
             esp_err_to_name(network_ret));
 
         return;
+    }
+
+    const time_manager_config_t time_config =
+        time_manager_default_config();
+    esp_err_t time_ret =
+        time_manager_init(&time_config);
+
+    if (time_ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to initialize time manager: %s; continuing without time sync",
+            esp_err_to_name(time_ret));
+    }
+    else
+    {
+        time_ret = time_manager_start();
+
+        if (time_ret != ESP_OK)
+        {
+            ESP_LOGE(
+                TAG,
+                "Failed to configure time manager: %s; continuing without time sync",
+                esp_err_to_name(time_ret));
+        }
     }
 
     esp_err_t ret =
@@ -886,6 +914,20 @@ static void app_wifi_status_callback(
             TAG,
             "Failed to forward Wi-Fi state to cloud manager: %s",
             esp_err_to_name(cloud_network_error));
+    }
+
+    const esp_err_t time_network_error =
+        time_manager_notify_network_state(
+            status->has_ipv4_address);
+
+    if ((time_network_error != ESP_OK) &&
+        (time_network_error !=
+         ESP_ERR_INVALID_STATE))
+    {
+        ESP_LOGW(
+            TAG,
+            "Failed to forward Wi-Fi state to time manager: %s",
+            esp_err_to_name(time_network_error));
     }
 
     ESP_LOGD(
