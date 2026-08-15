@@ -11,6 +11,7 @@ idf_component_register(
         lvgl_sd_fs
         lvgl_image_handler
         performance_monitor
+        time_manager
         wifi_manager
         app_gui
         sensor_manager

@@ -1,6 +1,7 @@
 /* Includes ----------------------------------------------------------------- */
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -8,6 +9,7 @@
 
 #include "ui_manager_lvgl.h"
 #include "app_gui.h"
+#include "time_manager.h"
 #include "esp_log.h"
 #include "esp_err.h"
 #include "esp_check.h"
@@ -22,6 +24,7 @@
 
 /* Macros ------------------------------------------------------------------- */
 #define APP_GUI_WIFI_SCREEN_TIMEOUT_MS 10000U
+#define APP_GUI_CLOCK_REFRESH_PERIOD_MS 1000U
 #define APP_GUI_COMMAND_QUEUE_LENGTH 8U
 #define APP_GUI_PROVISIONING_STATUS_QUEUE_LENGTH 1U
 #define APP_GUI_PROVISIONING_QR_QUEUE_LENGTH 1U
@@ -39,6 +42,10 @@
 #define APP_GUI_WIFI_IP_VALUE_WIDTH_PX        120
 #define APP_GUI_SENSOR_VALUE_WIDTH_PX          92
 #define APP_GUI_SENSOR_VALUE_HEIGHT_PX         18
+#define APP_GUI_CLOCK_TIME_TEXT_BUFFER_SIZE    16U
+#define APP_GUI_CLOCK_DATE_TEXT_BUFFER_SIZE    16U
+#define APP_GUI_CLOCK_TIME_PLACEHOLDER         "--:--:--"
+#define APP_GUI_CLOCK_DATE_PLACEHOLDER         "--/--/----"
 
 /*
  * The 73-byte Security 1 payload needs QR version 5 at LVGL's medium ECC:
@@ -63,6 +70,14 @@
 #define APP_GUI_DASHBOARD_HEADER_HEIGHT_PX       25
 #define APP_GUI_DASHBOARD_COLUMN_X_PX            78
 #define APP_GUI_DASHBOARD_MARGIN_PX               4
+#define APP_GUI_DASHBOARD_CLOCK_X_PX \
+    APP_GUI_DASHBOARD_MARGIN_PX
+#define APP_GUI_DASHBOARD_CLOCK_TIME_Y_PX          1
+#define APP_GUI_DASHBOARD_CLOCK_DATE_Y_PX         13
+#define APP_GUI_DASHBOARD_CLOCK_WIDTH_PX \
+    (APP_GUI_DASHBOARD_COLUMN_X_PX - \
+     (2 * APP_GUI_DASHBOARD_MARGIN_PX))
+#define APP_GUI_DASHBOARD_CLOCK_LABEL_HEIGHT_PX   11
 #define APP_GUI_DASHBOARD_RIGHT_X_PX             82
 #define APP_GUI_DASHBOARD_RIGHT_WIDTH_PX         76
 #define APP_GUI_DASHBOARD_STATUS_PANEL_HEIGHT_PX \
@@ -127,6 +142,8 @@ typedef struct
     lv_obj_t *wifi_mode_label;
     lv_obj_t *wifi_ssid_label;
     lv_obj_t *wifi_ip_label;
+    lv_obj_t *sensor_time_label;
+    lv_obj_t *sensor_date_label;
     lv_obj_t *sensor_temperature_label;
     lv_obj_t *sensor_humidity_label;
     lv_obj_t *sensor_audio_label;
@@ -196,6 +213,8 @@ static lv_obj_t *s_wifi_ip_label = NULL;
 static lv_timer_t *s_wifi_screen_timer = NULL;
 
 /* Sensor object references are valid only while the sensor screen is active. */
+static lv_obj_t *s_sensor_time_label = NULL;
+static lv_obj_t *s_sensor_date_label = NULL;
 static lv_obj_t *s_sensor_temperature_label = NULL;
 static lv_obj_t *s_sensor_humidity_label = NULL;
 static lv_obj_t *s_sensor_audio_label = NULL;
@@ -204,6 +223,7 @@ static lv_obj_t *s_sensor_wifi_label = NULL;
 static lv_obj_t *s_sensor_wifi_dot = NULL;
 static lv_obj_t *s_sensor_cloud_label = NULL;
 static lv_obj_t *s_sensor_cloud_dot = NULL;
+static lv_timer_t *s_sensor_clock_timer = NULL;
 
 static bool s_latest_reset_status_available = false;
 
@@ -270,6 +290,8 @@ static void app_gui_apply_widget_refs(
     const app_gui_widget_refs_t *refs);
 static void app_gui_wifi_screen_timeout_cb(lv_timer_t *timer);
 static void app_gui_restart_wifi_screen_timer(void);
+static void app_gui_sensor_clock_timer_cb(lv_timer_t *timer);
+static void app_gui_restart_sensor_clock_timer(void);
 static esp_err_t app_gui_create_boot_screen(
     lv_obj_t *screen);
 static void app_gui_render_boot_status(
@@ -313,10 +335,14 @@ static lv_obj_t *app_gui_create_sensor_value_label(
     lv_obj_t *screen,
     int32_t y,
     const char *initial_text);
+static void app_gui_set_label_text_if_changed(
+    lv_obj_t *label,
+    const char *text);
 static void app_gui_render_wifi_status(
     const ui_wifi_status_t *status);
 static void app_gui_render_sensor_status(
     const ui_sensor_status_t *status);
+static void app_gui_render_sensor_clock(void);
 static void app_gui_render_audio_status(
     const ui_audio_status_t *status);
 static void app_gui_render_sensor_wifi_status(
@@ -873,6 +899,8 @@ static void app_gui_capture_widget_refs(
     refs->wifi_mode_label = s_wifi_mode_label;
     refs->wifi_ssid_label = s_wifi_ssid_label;
     refs->wifi_ip_label = s_wifi_ip_label;
+    refs->sensor_time_label = s_sensor_time_label;
+    refs->sensor_date_label = s_sensor_date_label;
     refs->sensor_temperature_label = s_sensor_temperature_label;
     refs->sensor_humidity_label = s_sensor_humidity_label;
     refs->sensor_audio_label = s_sensor_audio_label;
@@ -902,6 +930,8 @@ static void app_gui_clear_widget_refs(void)
     s_wifi_mode_label = NULL;
     s_wifi_ssid_label = NULL;
     s_wifi_ip_label = NULL;
+    s_sensor_time_label = NULL;
+    s_sensor_date_label = NULL;
     s_sensor_temperature_label = NULL;
     s_sensor_humidity_label = NULL;
     s_sensor_audio_label = NULL;
@@ -937,6 +967,8 @@ static void app_gui_apply_widget_refs(
     s_wifi_mode_label = refs->wifi_mode_label;
     s_wifi_ssid_label = refs->wifi_ssid_label;
     s_wifi_ip_label = refs->wifi_ip_label;
+    s_sensor_time_label = refs->sensor_time_label;
+    s_sensor_date_label = refs->sensor_date_label;
     s_sensor_temperature_label = refs->sensor_temperature_label;
     s_sensor_humidity_label = refs->sensor_humidity_label;
     s_sensor_audio_label = refs->sensor_audio_label;
@@ -999,6 +1031,42 @@ static void app_gui_restart_wifi_screen_timer(void)
     lv_timer_resume(s_wifi_screen_timer);
     lv_timer_reset(s_wifi_screen_timer);
     ESP_LOGD(TAG, "Timer restarted");
+}
+
+/* Sensor Dashboard Clock Helpers ------------------------------------------ */
+static void app_gui_sensor_clock_timer_cb(lv_timer_t *timer)
+{
+    /*
+     * LVGL invokes this callback from lv_timer_handler() while the UI task
+     * owns the non-recursive LVGL mutex. The timer keeps no widget pointer;
+     * it is paused before a dashboard root can be deleted.
+     */
+    app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
+
+    if ((timer == NULL) ||
+        (app_gui_get_screen_id(&screen_id) != ESP_OK) ||
+        (screen_id != APP_GUI_SCREEN_SENSOR_DASHBOARD)) {
+        if (timer != NULL) {
+            lv_timer_pause(timer);
+        }
+
+        return;
+    }
+
+    app_gui_render_sensor_clock();
+}
+
+static void app_gui_restart_sensor_clock_timer(void)
+{
+    if (s_sensor_clock_timer == NULL) {
+        return;
+    }
+
+    lv_timer_set_period(
+        s_sensor_clock_timer,
+        APP_GUI_CLOCK_REFRESH_PERIOD_MS);
+    lv_timer_resume(s_sensor_clock_timer);
+    lv_timer_reset(s_sensor_clock_timer);
 }
 
 static const char *app_gui_wifi_state_to_string(ui_wifi_state_t state)
@@ -1243,6 +1311,23 @@ static lv_obj_t *app_gui_create_sensor_value_label(
                                 LV_PART_MAIN);
 
     return label;
+}
+
+static void app_gui_set_label_text_if_changed(
+    lv_obj_t *label,
+    const char *text)
+{
+    if ((label == NULL) ||
+        (text == NULL)) {
+        return;
+    }
+
+    const char *const current_text = lv_label_get_text(label);
+
+    if ((current_text == NULL) ||
+        (strcmp(current_text, text) != 0)) {
+        lv_label_set_text(label, text);
+    }
 }
 
 /* Placeholder Screen Construction ----------------------------------------- */
@@ -1784,19 +1869,58 @@ static esp_err_t app_gui_create_sensor_screen(
             ? app_gui_cloud_state_color(cloud_state)
             : inactive_color;
 
-    lv_obj_t *title = lv_label_create(screen);
-    if (title == NULL) {
+    s_sensor_time_label = lv_label_create(screen);
+    s_sensor_date_label = lv_label_create(screen);
+
+    if ((s_sensor_time_label == NULL) ||
+        (s_sensor_date_label == NULL)) {
         return ESP_ERR_NO_MEM;
     }
 
-    lv_label_set_text(title, "Smart Room");
-    lv_obj_set_pos(title, 7, 7);
-    lv_obj_set_style_text_font(title,
-                               &lv_font_montserrat_10,
-                               LV_PART_MAIN);
-    lv_obj_set_style_text_color(title,
-                               lv_color_hex(0xF2F5F7),
-                               LV_PART_MAIN);
+    lv_label_set_text(
+        s_sensor_time_label,
+        APP_GUI_CLOCK_TIME_PLACEHOLDER);
+    lv_label_set_text(
+        s_sensor_date_label,
+        APP_GUI_CLOCK_DATE_PLACEHOLDER);
+
+    lv_obj_t *clock_labels[] = {
+        s_sensor_time_label,
+        s_sensor_date_label,
+    };
+
+    for (size_t index = 0U;
+         index < (sizeof(clock_labels) / sizeof(clock_labels[0]));
+         ++index) {
+        lv_label_set_long_mode(
+            clock_labels[index],
+            LV_LABEL_LONG_MODE_CLIP);
+        lv_obj_set_size(
+            clock_labels[index],
+            APP_GUI_DASHBOARD_CLOCK_WIDTH_PX,
+            APP_GUI_DASHBOARD_CLOCK_LABEL_HEIGHT_PX);
+        lv_obj_set_style_text_font(
+            clock_labels[index],
+            &lv_font_montserrat_10,
+            LV_PART_MAIN);
+        lv_obj_set_style_text_color(
+            clock_labels[index],
+            lv_color_hex(0xF2F5F7),
+            LV_PART_MAIN);
+        lv_obj_set_style_text_align(
+            clock_labels[index],
+            LV_TEXT_ALIGN_LEFT,
+            LV_PART_MAIN);
+    }
+
+    lv_obj_set_pos(
+        s_sensor_time_label,
+        APP_GUI_DASHBOARD_CLOCK_X_PX,
+        APP_GUI_DASHBOARD_CLOCK_TIME_Y_PX);
+    lv_obj_set_pos(
+        s_sensor_date_label,
+        APP_GUI_DASHBOARD_CLOCK_X_PX,
+        APP_GUI_DASHBOARD_CLOCK_DATE_Y_PX);
 
     lv_obj_t *wifi_header = lv_label_create(screen);
     lv_obj_t *cloud_header = lv_label_create(screen);
@@ -2346,6 +2470,49 @@ static void app_gui_render_sensor_status(
         LV_PART_MAIN);
 }
 
+static void app_gui_render_sensor_clock(void)
+{
+    if ((s_sensor_time_label == NULL) ||
+        (s_sensor_date_label == NULL)) {
+        return;
+    }
+
+    struct tm local_time = {0};
+    char time_text[APP_GUI_CLOCK_TIME_TEXT_BUFFER_SIZE] = {0};
+    char date_text[APP_GUI_CLOCK_DATE_TEXT_BUFFER_SIZE] = {0};
+
+    const esp_err_t time_result =
+        time_manager_get_local_time(&local_time);
+
+    if ((time_result == ESP_OK) &&
+        (strftime(
+             time_text,
+             sizeof(time_text),
+             "%H:%M:%S",
+             &local_time) != 0U) &&
+        (strftime(
+             date_text,
+             sizeof(date_text),
+             "%d/%m/%Y",
+             &local_time) != 0U)) {
+        app_gui_set_label_text_if_changed(
+            s_sensor_time_label,
+            time_text);
+        app_gui_set_label_text_if_changed(
+            s_sensor_date_label,
+            date_text);
+        return;
+    }
+
+    /* ESP_ERR_INVALID_STATE before first SNTP sync is an expected placeholder. */
+    app_gui_set_label_text_if_changed(
+        s_sensor_time_label,
+        APP_GUI_CLOCK_TIME_PLACEHOLDER);
+    app_gui_set_label_text_if_changed(
+        s_sensor_date_label,
+        APP_GUI_CLOCK_DATE_PLACEHOLDER);
+}
+
 static void app_gui_render_audio_status(
     const ui_audio_status_t *status)
 {
@@ -2650,6 +2817,23 @@ static esp_err_t app_gui_activate_screen(
         }
     }
 
+    if ((ret == ESP_OK) &&
+        (target_screen == APP_GUI_SCREEN_SENSOR_DASHBOARD) &&
+        (s_sensor_clock_timer == NULL)) {
+        s_sensor_clock_timer = lv_timer_create(
+            app_gui_sensor_clock_timer_cb,
+            APP_GUI_CLOCK_REFRESH_PERIOD_MS,
+            NULL);
+
+        if (s_sensor_clock_timer == NULL) {
+            ret = ESP_ERR_NO_MEM;
+        }
+        else {
+            /* It becomes active only after the completed root is loaded. */
+            lv_timer_pause(s_sensor_clock_timer);
+        }
+    }
+
     if (ret != ESP_OK) {
         lv_obj_delete(target_root);
         app_gui_apply_widget_refs(&previous_refs);
@@ -2672,11 +2856,21 @@ static esp_err_t app_gui_activate_screen(
         lv_timer_pause(s_wifi_screen_timer);
     }
 
+    if ((s_sensor_clock_timer != NULL) &&
+        (target_screen != APP_GUI_SCREEN_SENSOR_DASHBOARD)) {
+        lv_timer_pause(s_sensor_clock_timer);
+    }
+
     lv_screen_load(target_root);
     app_gui_set_active_screen_id(target_screen);
 
     if (target_screen == APP_GUI_SCREEN_WIFI_STATUS) {
         app_gui_restart_wifi_screen_timer();
+    }
+
+    if (target_screen == APP_GUI_SCREEN_SENSOR_DASHBOARD) {
+        app_gui_render_sensor_clock();
+        app_gui_restart_sensor_clock_timer();
     }
 
     lv_obj_delete(current_root);
