@@ -21,7 +21,8 @@ Status: Implemented and hardware accepted
 
 - One cloud FreeRTOS task with task-owned HTTPS/TLS lifecycle.
 - Length-one queue using `xQueueOverwrite()` to retain the newest telemetry.
-- Application-composed audio snapshot included with each telemetry update.
+- Application-composed sensor and audio snapshots grouped into nested Firebase
+  objects.
 - Retained IPv4 readiness and a non-zero network epoch.
 - Task-notification wakeups for telemetry and network edges.
 - On-demand sign-in and token refresh through `firebase_auth`.
@@ -96,7 +97,7 @@ Wi-Fi callback
 cloud task
     -> discard client from an obsolete network/token generation
     -> firebase_auth_get_valid_id_token()
-    -> serialize sensor data plus nested audio object
+    -> serialize nested sensor and audio objects
     -> HTTPS PUT latest.json with Firebase ID token
     -> classify result
     -> reset, retry, latch error, or publish Online status
@@ -106,13 +107,15 @@ Current payload:
 
 ```json
 {
-  "temperature_c": 30.1,
-  "humidity_percent": 64.5,
-  "sensor_valid": true,
-  "sensor_stale": false,
-  "sensor_state": 3,
-  "last_error": 0,
-  "sample_uptime_ms": 123456,
+  "sensor": {
+    "temperature_c": 30.1,
+    "humidity_percent": 64.5,
+    "valid": true,
+    "stale": false,
+    "state": 3,
+    "last_error": 0,
+    "sample_uptime_ms": 123456
+  },
   "audio": {
     "state": "recording",
     "recording": true,
@@ -122,6 +125,16 @@ Current payload:
   "source": "esp32_cloud_manager"
 }
 ```
+
+The nested sensor object follows these rules:
+
+- `temperature_c` and `humidity_percent` are the latest copied readings.
+- `valid` and `stale` are independent data-quality flags and must be inspected
+  before treating a finite numeric reading as current valid sensor data.
+- `state` is the numeric project sensor-manager state already carried by the
+  existing telemetry structure.
+- `last_error` is the most recent sensor read result.
+- `sample_uptime_ms` is the uptime of the latest successful sensor sample.
 
 The nested audio object follows these rules:
 
@@ -138,9 +151,6 @@ telemetry snapshot. It therefore follows the existing cloud/sensor publish
 pipeline; changing audio state does not directly start an HTTPS/TLS request.
 Short audio transitions can be absent from Firebase if they occur entirely
 between telemetry snapshots.
-
-Consumers must inspect `sensor_valid` and `sensor_stale`; not every finite
-number represents a valid physical reading.
 
 ## State And Retry Policy
 
