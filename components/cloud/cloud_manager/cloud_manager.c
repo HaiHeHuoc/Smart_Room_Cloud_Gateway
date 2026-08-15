@@ -30,7 +30,7 @@
 #define CLOUD_MANAGER_TELEMETRY_QUEUE_LENGTH       1U
 
 #define CLOUD_MANAGER_HTTP_TIMEOUT_MS              15000U
-#define CLOUD_MANAGER_JSON_BUFFER_SIZE             320U
+#define CLOUD_MANAGER_JSON_BUFFER_SIZE             512U
 #define CLOUD_MANAGER_URL_BUFFER_SIZE              256U
 #define CLOUD_MANAGER_AUTH_URL_BUFFER_SIZE          \
     (CLOUD_MANAGER_URL_BUFFER_SIZE +                \
@@ -182,6 +182,9 @@ cloud_manager_failure_class_from_attempt(
 
 static const char *cloud_manager_failure_class_to_string(
     cloud_manager_failure_class_t failure_class);
+
+static const char *cloud_audio_state_to_string(
+    cloud_audio_state_t state);
 
 static cloud_attempt_result_t
 cloud_manager_classify_auth_failure(
@@ -571,6 +574,35 @@ static const char *cloud_manager_failure_class_to_string(
     }
 }
 
+static const char *cloud_audio_state_to_string(
+    cloud_audio_state_t state)
+{
+    switch (state)
+    {
+        case CLOUD_AUDIO_STATE_READY:
+            return "ready";
+
+        case CLOUD_AUDIO_STATE_IDLE:
+            return "idle";
+
+        case CLOUD_AUDIO_STATE_RECORDING:
+            return "recording";
+
+        case CLOUD_AUDIO_STATE_PROCESSING:
+            return "processing";
+
+        case CLOUD_AUDIO_STATE_PLAYBACK:
+            return "playback";
+
+        case CLOUD_AUDIO_STATE_ERROR:
+            return "error";
+
+        case CLOUD_AUDIO_STATE_UNAVAILABLE:
+        default:
+            return "unavailable";
+    }
+}
+
 static cloud_attempt_result_t
 cloud_manager_classify_auth_failure(
     esp_err_t error,
@@ -894,9 +926,17 @@ cloud_manager_publish_telemetry(
         return outcome;
     }
 
+    const bool audio_recording =
+        telemetry->audio.state ==
+        CLOUD_AUDIO_STATE_RECORDING;
+    const bool audio_playback =
+        telemetry->audio.state ==
+        CLOUD_AUDIO_STATE_PLAYBACK;
+
     /*
-     * Numeric readings are serialized exactly as posted. sensor_valid and
-     * sensor_stale remain separate data-quality metadata.
+     * Numeric sensor readings are serialized exactly as posted. Audio boolean
+     * flags are derived from audio.state so the nested object cannot disagree
+     * with its source-of-truth state value.
      */
     const int payload_length =
         snprintf(
@@ -910,6 +950,12 @@ cloud_manager_publish_telemetry(
                 "\"sensor_state\":%ld,"
                 "\"last_error\":%ld,"
                 "\"sample_uptime_ms\":%lld,"
+                "\"audio\":{"
+                    "\"state\":\"%s\","
+                    "\"recording\":%s,"
+                    "\"playback\":%s,"
+                    "\"last_error\":%ld"
+                "},"
                 "\"source\":\"esp32_cloud_manager\""
             "}",
             telemetry->temperature_c,
@@ -918,7 +964,12 @@ cloud_manager_publish_telemetry(
             telemetry->data_stale ? "true" : "false",
             (long)telemetry->sensor_state,
             (long)telemetry->last_error,
-            (long long)telemetry->sample_uptime_ms);
+            (long long)telemetry->sample_uptime_ms,
+            cloud_audio_state_to_string(
+                telemetry->audio.state),
+            audio_recording ? "true" : "false",
+            audio_playback ? "true" : "false",
+            (long)telemetry->audio.last_error);
 
     if ((payload_length < 0) ||
         (payload_length >=
@@ -1297,7 +1348,7 @@ static void cloud_manager_task(
             if (invalidate_result != ESP_OK)
             {
                 cloud_attempt_outcome_t fatal_outcome =
-                outcome;
+                    outcome;
 
                 fatal_outcome.result =
                     CLOUD_ATTEMPT_AUTH_FATAL;
@@ -1664,6 +1715,14 @@ esp_err_t cloud_manager_post_sensor_telemetry(
     if (telemetry->data_valid &&
         (!isfinite(telemetry->temperature_c) ||
          !isfinite(telemetry->humidity_percent)))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if ((telemetry->audio.state <
+         CLOUD_AUDIO_STATE_UNAVAILABLE) ||
+        (telemetry->audio.state >
+         CLOUD_AUDIO_STATE_ERROR))
     {
         return ESP_ERR_INVALID_ARG;
     }

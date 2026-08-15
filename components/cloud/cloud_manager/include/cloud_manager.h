@@ -55,6 +55,28 @@ typedef enum
     CLOUD_MANAGER_FAILURE_NONRETRYABLE_INTERNAL
 } cloud_manager_failure_class_t;
 
+/** @brief Cloud-owned audio state used by the Firebase telemetry schema. */
+typedef enum
+{
+    CLOUD_AUDIO_STATE_UNAVAILABLE = 0,
+    CLOUD_AUDIO_STATE_READY,
+    CLOUD_AUDIO_STATE_IDLE,
+    CLOUD_AUDIO_STATE_RECORDING,
+    CLOUD_AUDIO_STATE_PROCESSING,
+    CLOUD_AUDIO_STATE_PLAYBACK,
+    CLOUD_AUDIO_STATE_ERROR
+} cloud_audio_state_t;
+
+/** @brief Latest audio snapshot copied into the cloud telemetry payload. */
+typedef struct
+{
+    /** Current project-owned audio state mapped by the application layer. */
+    cloud_audio_state_t state;
+
+    /** Result of the most recently completed audio operation. */
+    esp_err_t last_error;
+} cloud_audio_telemetry_t;
+
 /** @brief Sensor snapshot copied into the cloud manager's latest-value queue. */
 typedef struct
 {
@@ -87,6 +109,9 @@ typedef struct
 
     /** Uptime of the latest valid sensor sample, in milliseconds. */
     int64_t sample_uptime_ms;
+
+    /** Latest audio manager state sampled by the application layer. */
+    cloud_audio_telemetry_t audio;
 } cloud_sensor_telemetry_t;
 
 /** @brief Thread-safe snapshot of cloud state and upload statistics. */
@@ -213,7 +238,7 @@ esp_err_t cloud_manager_notify_network_state(
     bool has_ipv4_address);
 
 /**
- * @brief Replace pending telemetry with the newest sensor snapshot.
+ * @brief Replace pending telemetry with the newest sensor/audio snapshot.
  *
  * This non-blocking API copies the structure into a queue of length one. It is
  * suitable for the sensor callback, wakes the cloud task when present, and
@@ -221,8 +246,7 @@ esp_err_t cloud_manager_notify_network_state(
  * cloud_manager_init() and before cloud_manager_start().
  *
  * @param[in] telemetry Snapshot to copy. Numeric values marked valid must be
- *            finite. The current payload still serializes finite values when
- *            data_valid is false or data_stale is true.
+ *            finite and audio.state must be a defined cloud audio state.
  * @return ESP_OK on success, ESP_ERR_INVALID_ARG for invalid input,
  *         ESP_ERR_INVALID_STATE before initialization, or ESP_FAIL if the
  *         queue update fails.
