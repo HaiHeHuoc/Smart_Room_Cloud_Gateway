@@ -1021,6 +1021,60 @@ static void app_sensor_status_callback(
             esp_err_to_name(error));
     }
 
+    audio_manager_status_t audio_status = {0};
+    const esp_err_t audio_status_ret =
+        audio_manager_get_status(&audio_status);
+
+    cloud_audio_state_t cloud_audio_state =
+        CLOUD_AUDIO_STATE_UNAVAILABLE;
+    esp_err_t cloud_audio_error =
+        audio_status_ret;
+
+    if (audio_status_ret == ESP_OK)
+    {
+        cloud_audio_error =
+            audio_status.last_error;
+
+        switch (audio_status.state)
+        {
+            case AUDIO_MANAGER_STATE_INITIALIZED:
+                cloud_audio_state =
+                    CLOUD_AUDIO_STATE_READY;
+                break;
+
+            case AUDIO_MANAGER_STATE_IDLE:
+                cloud_audio_state =
+                    CLOUD_AUDIO_STATE_IDLE;
+                break;
+
+            case AUDIO_MANAGER_STATE_RECORDING:
+                cloud_audio_state =
+                    CLOUD_AUDIO_STATE_RECORDING;
+                break;
+
+            case AUDIO_MANAGER_STATE_PROCESSING:
+                cloud_audio_state =
+                    CLOUD_AUDIO_STATE_PROCESSING;
+                break;
+
+            case AUDIO_MANAGER_STATE_PLAYBACK:
+                cloud_audio_state =
+                    CLOUD_AUDIO_STATE_PLAYBACK;
+                break;
+
+            case AUDIO_MANAGER_STATE_ERROR:
+                cloud_audio_state =
+                    CLOUD_AUDIO_STATE_ERROR;
+                break;
+
+            case AUDIO_MANAGER_STATE_UNINITIALIZED:
+            default:
+                cloud_audio_state =
+                    CLOUD_AUDIO_STATE_UNAVAILABLE;
+                break;
+        }
+    }
+
     const cloud_sensor_telemetry_t telemetry =
     {
         .temperature_c =
@@ -1043,6 +1097,15 @@ static void app_sensor_status_callback(
 
         .sample_uptime_ms =
             status->last_success_time_ms,
+
+        .audio =
+        {
+            .state =
+                cloud_audio_state,
+
+            .last_error =
+                cloud_audio_error,
+        },
     };
 
     error =
