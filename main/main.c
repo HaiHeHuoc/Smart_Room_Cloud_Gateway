@@ -223,6 +223,31 @@ static bool app_map_wifi_status_to_network_event(
 static bool app_network_state_allows_cloud_start(
     app_network_coordinator_state_t state);
 
+/**
+ * @brief Check whether audio startup may claim its runtime resources.
+ *
+ * The audio manager remains uninitialized while BLE provisioning or the
+ * Station IPv4 handoff is active. This application-level gate keeps those
+ * temporary network phases independent from audio I2S/DMA/task allocation.
+ *
+ * @param[in] state Current application network coordinator state.
+ *
+ * @return true only after the coordinator has completed network handoff.
+ */
+static bool app_network_state_allows_audio_start(
+    app_network_coordinator_state_t state);
+
+/**
+ * @brief Initialize and start audio from the app_main lifecycle context.
+ *
+ * The caller must first satisfy app_network_state_allows_audio_start(). This
+ * helper must not be called from a Wi-Fi or provisioning callback.
+ *
+ * @return ESP_OK when the audio manager task reaches IDLE; otherwise an audio
+ *         manager initialization or startup error.
+ */
+static esp_err_t app_start_audio_manager_after_network_online(void);
+
 /* Application -------------------------------------------------------------- */
 /** @brief Initialize the current application services and run diagnostics. */
 void app_main(void)
@@ -624,78 +649,12 @@ void app_main(void)
     }
 
     bool cloud_started = false;
-
-    /*
-     * app_main only composes the audio component. Its production task reaches
-     * IDLE and privately owns commands, WAV streams, and all I2S operations.
-     */
-    const audio_manager_config_t audio_config =
-        audio_manager_default_config();
-
-    esp_err_t audio_ret =
-        audio_manager_init(&audio_config);
-
-    if (audio_ret != ESP_OK)
-    {
-        ESP_LOGE(
-            TAG,
-            "Failed to initialize audio manager: %s",
-            esp_err_to_name(audio_ret));
-    }
-    else
-    {
-        const esp_err_t audio_gui_ret =
-            audio_manager_register_status_callback(
-                app_audio_status_callback,
-                NULL);
-
-        if (audio_gui_ret != ESP_OK)
-        {
-            ESP_LOGW(
-                TAG,
-                "Failed to register audio GUI status callback: %s",
-                esp_err_to_name(audio_gui_ret));
-        }
-
-        audio_ret = audio_manager_start();
-
-        if (audio_ret != ESP_OK)
-        {
-            ESP_LOGE(
-                TAG,
-                "Failed to start audio manager task: %s",
-                esp_err_to_name(audio_ret));
-        }
-        else
-        {
-            ESP_LOGI(
-                TAG,
-                "Audio manager task started; mode is reported by audio_manager");
-
-#if CONFIG_AUDIO_MANAGER_PUBLIC_API_TEST
-            const esp_err_t audio_test_ret =
-                app_audio_api_test_task_start();
-
-            if (audio_test_ret != ESP_OK)
-            {
-                ESP_LOGW(
-                    TAG,
-                    "Failed to start public audio API validation task: %s",
-                    esp_err_to_name(audio_test_ret));
-            }
-            else
-            {
-                ESP_LOGI(
-                    TAG,
-                    "Public audio API validation task started at priority 6");
-            }
-#endif
-        }
-    }
+    /* Preserve the prior one-shot audio lifecycle attempt after the new gate. */
+    bool audio_start_attempted = false;
 
     while (1)
     {
-        if (!cloud_started)
+        if (!cloud_started || !audio_start_attempted)
         {
             app_network_coordinator_state_t network_state =
                 APP_NETWORK_COORDINATOR_STATE_UNINITIALIZED;
@@ -708,10 +667,36 @@ void app_main(void)
             {
                 ESP_LOGW(
                     TAG,
-                    "Failed to inspect network readiness for cloud startup: %s",
+                    "Failed to inspect network readiness for deferred startup: %s",
                     esp_err_to_name(service_ret));
             }
-            else if (app_network_state_allows_cloud_start(
+            else if (!audio_start_attempted &&
+                     app_network_state_allows_audio_start(
+                         network_state))
+            {
+                audio_start_attempted = true;
+
+                const esp_err_t audio_ret =
+                    app_start_audio_manager_after_network_online();
+
+                if (audio_ret == ESP_OK)
+                {
+                    ESP_LOGI(
+                        TAG,
+                        "Audio manager started after network handoff: state=%s",
+                        app_network_coordinator_state_to_string(
+                            network_state));
+                }
+                else
+                {
+                    ESP_LOGE(
+                        TAG,
+                        "Audio manager startup after network handoff failed: %s",
+                        esp_err_to_name(audio_ret));
+                }
+            }
+            else if (!cloud_started &&
+                     app_network_state_allows_cloud_start(
                          network_state))
             {
                 service_ret =
@@ -744,7 +729,7 @@ void app_main(void)
 
         vTaskDelay(
             pdMS_TO_TICKS(
-                cloud_started
+                (cloud_started && audio_start_attempted)
                     ? 5000U
                     : 500U));
     }
@@ -1333,6 +1318,93 @@ static bool app_network_state_allows_cloud_start(
          APP_NETWORK_COORDINATOR_STATE_CONNECTING) ||
         (state ==
          APP_NETWORK_COORDINATOR_STATE_ONLINE);
+}
+
+static bool app_network_state_allows_audio_start(
+    app_network_coordinator_state_t state)
+{
+    /*
+     * Unlike cloud startup for stored credentials, audio must not allocate
+     * I2S/DMA/task resources while Station association or IPv4 acquisition is
+     * still in progress. For provisioning, ONLINE also proves BLE cleanup and
+     * active-connection adoption have completed.
+     */
+    return
+        state ==
+        APP_NETWORK_COORDINATOR_STATE_ONLINE;
+}
+
+static esp_err_t app_start_audio_manager_after_network_online(void)
+{
+    /*
+     * app_main only composes the audio component. Its production task reaches
+     * IDLE and privately owns commands, WAV streams, and all I2S operations.
+     */
+    const audio_manager_config_t audio_config =
+        audio_manager_default_config();
+
+    esp_err_t audio_ret =
+        audio_manager_init(&audio_config);
+
+    if (audio_ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to initialize audio manager: %s",
+            esp_err_to_name(audio_ret));
+
+        return audio_ret;
+    }
+
+    const esp_err_t audio_gui_ret =
+        audio_manager_register_status_callback(
+            app_audio_status_callback,
+            NULL);
+
+    if (audio_gui_ret != ESP_OK)
+    {
+        ESP_LOGW(
+            TAG,
+            "Failed to register audio GUI status callback: %s",
+            esp_err_to_name(audio_gui_ret));
+    }
+
+    audio_ret = audio_manager_start();
+
+    if (audio_ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to start audio manager task: %s",
+            esp_err_to_name(audio_ret));
+
+        return audio_ret;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Audio manager task started; mode is reported by audio_manager");
+
+#if CONFIG_AUDIO_MANAGER_PUBLIC_API_TEST
+    const esp_err_t audio_test_ret =
+        app_audio_api_test_task_start();
+
+    if (audio_test_ret != ESP_OK)
+    {
+        ESP_LOGW(
+            TAG,
+            "Failed to start public audio API validation task: %s",
+            esp_err_to_name(audio_test_ret));
+    }
+    else
+    {
+        ESP_LOGI(
+            TAG,
+            "Public audio API validation task started at priority 6");
+    }
+#endif
+
+    return ESP_OK;
 }
 
 static void app_button_event_callback(

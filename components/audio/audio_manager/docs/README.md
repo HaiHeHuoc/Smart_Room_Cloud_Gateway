@@ -13,6 +13,13 @@ WAV stress hook is disabled by default with
 coordinator task only polls status and submits commands, and does not own I2S,
 a file, or an SD lease.
 
+The application composition root defers `audio_manager_init()` and
+`audio_manager_start()` until `app_network_coordinator` reports `ONLINE`. This
+is an application lifecycle policy, not an audio-to-network dependency: it
+keeps audio I2S/DMA/task allocation out of BLE provisioning, Station
+association, and IPv4 handoff. The optional public-API stress coordinator is
+started only after that same gate has opened.
+
 ## State Model
 
 ```text
@@ -63,8 +70,9 @@ calls. Busy audio requests are rejected rather than accumulated as a playlist.
 Enable `CONFIG_AUDIO_MANAGER_PUBLIC_API_TEST` only for a target-hardware
 validation run. It causes `main` to call `app_audio_api_test_task_start()`,
 which starts the test-only, priority-6 coordinator implemented in
-`audio_api_test_task.c`. It calls only public `audio_manager` APIs and polls
-copied status; it does not own I2S, PCM buffers, WAV files, or SD leases.
+`audio_api_test_task.c` after the application network coordinator reaches
+`ONLINE`. It calls only public `audio_manager` APIs and polls copied status; it
+does not own I2S, PCM buffers, WAV files, or SD leases.
 
 With the default `n` setting, no continuous record/playback/WAV coordinator is
 created during normal production startup.
