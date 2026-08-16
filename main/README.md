@@ -36,13 +36,17 @@ SD recovery extension: target-hardware acceptance pending
     without starting TLS.
 12. Initialize/start `sensor_manager`.
 13. Schedule the one-shot network coordinator.
-14. Initialize `audio_manager`, register its copied GUI status adapter, and
-    start its private I2S-owning task. During WAV playback, its private reader
-    owns the file/SD VFS lease and bounded PSRAM cache. Normal startup is
-    command-idle; the default-off golden/continuous-WAV stress hooks are
-    selected only in Kconfig.
-15. Start `cloud_manager` only after stored-Wi-Fi startup or successful
-    provisioning cleanup and Station adoption.
+14. During lifecycle polling, start `cloud_manager` only after stored-Wi-Fi
+    startup or successful provisioning cleanup and Station adoption.
+15. In the same lifecycle polling, initialize `audio_manager`, register its
+    copied GUI status adapter, and start its private I2S-owning task only after
+    the coordinator reaches `ONLINE`. This reserves audio I2S/DMA/task
+    allocation until Wi-Fi has a valid IPv4 address and any BLE provisioning
+    cleanup and Station adoption have completed. During WAV playback, its
+    private reader owns the file/SD VFS lease and bounded PSRAM cache. Normal
+    startup is command-idle; the default-off golden/continuous-WAV stress
+    hooks are selected only in Kconfig and start through the same `ONLINE`
+    gate.
 
 ## Runtime Event Flow
 
@@ -88,6 +92,8 @@ cleanup transaction.
 - Maximum provisioning sessions: 3.
 - Cloud retry: 5 seconds to 60 seconds.
 - Factory-reset input: active-low GPIO9, five-second hold.
+- Audio startup gate: coordinator `ONLINE` after a valid IPv4 address and, for
+  a provisioned device, BLE cleanup plus Station adoption.
 - Audio stability default: five-second recording, DSP, and playback at 100% volume.
   The current local WAV-only stress profile disables capture and replays the
   configured SD WAV file to completion at priority 6.
@@ -109,6 +115,8 @@ mechanism.
 - `sensor_manager` owns DHT22 sampling.
 - `audio_manager` owns I2S RX/TX, PCM stability buffers, and audio diagnostics;
   its private WAV reader owns the active VFS lease/file and bounded PSRAM cache.
+- `main` owns only the one-shot audio startup timing policy; it never starts
+  audio from a Wi-Fi or provisioning callback.
 - `sd_card_manager` owns SDSPI/FAT VFS lifecycle and background recovery;
   `lvgl_sd_fs` and private WAV playback hold managed VFS leases while files are
   open.
