@@ -15,6 +15,8 @@
 #include "provisioning_manager.h"
 #include "wifi_manager.h"
 
+#include "xiaozhi_foundation.h"
+
 /* Macros ------------------------------------------------------------------- */
 #define APP_NETWORK_COORDINATOR_TASK_NAME \
     "app_net_coord"
@@ -333,7 +335,31 @@ static void app_network_coordinator_wait_for_stored_wifi_boot_grace(void);
 static void app_network_coordinator_task(
     void *argument);
 
+static void app_request_xiaozhi_probe_best_effort(void);
+
 /* Static Functions --------------------------------------------------------- */
+static void app_request_xiaozhi_probe_best_effort(void)
+{
+    const esp_err_t ret =
+        xiaozhi_foundation_request_probe();
+
+    if (ret == ESP_ERR_INVALID_STATE) {
+        /*
+         * A probe is already running.
+         * This is not an application error.
+         */
+        return;
+    }
+
+    if (ret != ESP_OK) {
+        ESP_LOGW(
+            TAG,
+            "Failed to request Xiaozhi service probe: %s",
+            esp_err_to_name(ret));
+    }
+}
+
+
 static void app_network_coordinator_task(
     void *argument)
 {
@@ -2127,6 +2153,10 @@ app_run_one_wifi_provisioning_session(
         outcome.error = ESP_OK;
     }
 
+    if (!reset_requested) {
+        app_request_xiaozhi_probe_best_effort();
+    }
+
     return outcome;
 
 release_handoff:
@@ -3354,6 +3384,8 @@ esp_err_t app_network_coordinator_notify_wifi_event(
             APP_NETWORK_COORDINATOR_STATE_ONLINE &&
             !success_dwell_active)
         {
+            app_request_xiaozhi_probe_best_effort();
+
             const esp_err_t screen_ret =
                 app_gui_request_screen(
                     APP_GUI_SCREEN_WIFI_STATUS);

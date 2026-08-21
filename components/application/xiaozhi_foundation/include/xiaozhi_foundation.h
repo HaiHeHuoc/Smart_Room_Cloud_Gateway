@@ -63,6 +63,18 @@ typedef struct {
  */
 esp_err_t xiaozhi_foundation_probe(xiaozhi_foundation_info_t *out_info);
 
+/**
+ * @brief Request a one-shot Xiaozhi service probe.
+ *
+ * This function is non-blocking. The HTTP probe runs in a worker task.
+ *
+ * @return
+ *      - ESP_OK if the probe task was started
+ *      - ESP_ERR_INVALID_STATE if a probe is already running
+ *      - ESP_ERR_NO_MEM if the worker task could not be created
+ */
+esp_err_t xiaozhi_foundation_request_probe(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -15,6 +15,26 @@
 #include "esp_log.h"
 #include "esp_xiaozhi_info.h"
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+#define XIAOZHI_FOUNDATION_PROBE_TASK_NAME \
+    "xiaozhi_probe"
+
+#define XIAOZHI_FOUNDATION_PROBE_TASK_STACK_SIZE \
+    (8U * 1024U)
+
+#define XIAOZHI_FOUNDATION_PROBE_TASK_PRIORITY \
+    4U
+
+#define XIAOZHI_FOUNDATION_DEBUG_ACTIVATION_CODE 0
+
+static portMUX_TYPE s_probe_lock =
+    portMUX_INITIALIZER_UNLOCKED;
+
+static bool s_probe_in_progress = false;
+
+
 /* Constants ---------------------------------------------------------------- */
 static const char *TAG = "XIAOZHI_FOUNDATION";
 
@@ -32,6 +52,26 @@ esp_err_t xiaozhi_foundation_probe(xiaozhi_foundation_info_t *out_info)
     ESP_LOGI(TAG, "Probing Xiaozhi service");
 
     esp_err_t ret = esp_xiaozhi_chat_get_info(&info);
+
+#if XIAOZHI_FOUNDATION_DEBUG_ACTIVATION_CODE
+    if (info.has_activation_code &&
+        info.activation_code != NULL)
+    {
+        ESP_LOGW(
+            TAG,
+            "PHASE12 ONLY - Activation code: %s",
+            info.activation_code);
+    }
+
+    if (info.activation_message != NULL)
+    {
+        ESP_LOGI(
+            TAG,
+            "PHASE12 ONLY - Activation message: %s",
+            info.activation_message);
+    }
+#endif
+
     if (ret != ESP_OK) {
         ESP_LOGE(TAG,
                  "Xiaozhi service probe failed: %s",
@@ -89,6 +129,70 @@ esp_err_t xiaozhi_foundation_probe(xiaozhi_foundation_info_t *out_info)
                  esp_err_to_name(ret));
 
         return ret;
+    }
+
+    return ESP_OK;
+}
+
+static void xiaozhi_foundation_probe_task(void *argument)
+{
+    (void)argument;
+
+    xiaozhi_foundation_info_t info = {0};
+
+    const esp_err_t ret =
+        xiaozhi_foundation_probe(&info);
+
+    if (ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Background service probe failed: %s",
+            esp_err_to_name(ret));
+    } else {
+        ESP_LOGI(
+            TAG,
+            "Background service probe completed");
+    }
+
+    portENTER_CRITICAL(&s_probe_lock);
+
+    s_probe_in_progress = false;
+
+    portEXIT_CRITICAL(&s_probe_lock);
+
+    vTaskDelete(NULL);
+}
+
+esp_err_t xiaozhi_foundation_request_probe(void)
+{
+    portENTER_CRITICAL(&s_probe_lock);
+
+    if (s_probe_in_progress) {
+        portEXIT_CRITICAL(&s_probe_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    s_probe_in_progress = true;
+
+    portEXIT_CRITICAL(&s_probe_lock);
+
+    const BaseType_t task_created =
+        xTaskCreate(
+            xiaozhi_foundation_probe_task,
+            XIAOZHI_FOUNDATION_PROBE_TASK_NAME,
+            XIAOZHI_FOUNDATION_PROBE_TASK_STACK_SIZE,
+            NULL,
+            XIAOZHI_FOUNDATION_PROBE_TASK_PRIORITY,
+            NULL);
+
+    if (task_created != pdPASS) {
+        portENTER_CRITICAL(&s_probe_lock);
+
+        s_probe_in_progress = false;
+
+        portEXIT_CRITICAL(&s_probe_lock);
+
+        return ESP_ERR_NO_MEM;
     }
 
     return ESP_OK;
