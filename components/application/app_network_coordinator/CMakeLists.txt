@@ -15,4 +15,5 @@ idf_component_register(
         config_manager
         provisioning_manager
         wifi_manager
+        xiaozhi_foundation
 )
