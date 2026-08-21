@@ -1,0 +1,68 @@
+#pragma once
+
+/**
+ * @file xiaozhi_foundation.h
+ * @brief Public non-sensitive Xiaozhi service-information probe.
+ *
+ * The component returns caller-owned scalar service state only. It does not
+ * expose Xiaozhi-owned pointers and does not start, stop, or own Wi-Fi or
+ * Xiaozhi lifecycle management.
+ */
+
+/* Includes ----------------------------------------------------------------- */
+#include <stdint.h>
+#include <stdbool.h>
+
+#include "esp_err.h"
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
+/* Type Definitions --------------------------------------------------------- */
+/**
+ * @brief Caller-owned scalar snapshot of non-sensitive Xiaozhi service state.
+ *
+ * Availability flags reveal only whether a service value is present. This
+ * structure never contains activation data, tokens, endpoint strings, or
+ * Xiaozhi-owned pointers.
+ */
+typedef struct {
+    bool service_reachable;
+
+    bool mqtt_available;
+    bool websocket_available;
+
+    bool activation_code_available;
+    bool activation_challenge_available;
+    int activation_timeout_ms;
+
+    bool server_time_available;
+    bool new_firmware_available;
+} xiaozhi_foundation_info_t;
+
+/* Functions ---------------------------------------------------------------- */
+/**
+ * @brief Probe Xiaozhi and copy non-sensitive service state to caller storage.
+ *
+ * @param[out] out_info Writable destination for the scalar snapshot. It is
+ *                       cleared before the service request. The caller owns
+ *                       this storage and no release operation is required.
+ *
+ * @return ESP_OK when the service information is copied and released;
+ *         ESP_ERR_INVALID_ARG when @p out_info is NULL; otherwise an error
+ *         from the underlying Xiaozhi get-info or release operation.
+ *
+ * @pre Network connectivity must already be available. This function does not
+ *      start Wi-Fi and does not own its lifecycle.
+ *
+ * Call from normal task context only; it is not ISR-safe. Blocking and timeout
+ * behavior are determined by the underlying Xiaozhi API. This wrapper adds no
+ * retry or timeout policy and exposes no Xiaozhi-owned pointer after return.
+ */
+esp_err_t xiaozhi_foundation_probe(xiaozhi_foundation_info_t *out_info);
+
+#ifdef __cplusplus
+}
+#endif
