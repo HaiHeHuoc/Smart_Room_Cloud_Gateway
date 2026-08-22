@@ -13,6 +13,7 @@ dependencies:
   #   # For transient dependencies `public` flag can be set.
   #   # `public` flag doesn't have an effect dependencies of the `main` component.
   #   # All dependencies of `main` are public by default.
+  #   public: true
   # Add LCD/LVGL dependencies when Sprint 1 implementation starts.
   # waveshare/esp_lcd_st7735: ^1.0.1
   # espressif/esp_lvgl_port: ^2.8.0
@@ -21,4 +22,4 @@ dependencies:
   esp-idf-lib/dht: ^1.2.0
   espressif/cjson: ^1.7.19
   espressif/network_provisioning: ^1.2.4
-  espressif/esp_xiaozhi: "0.1.2"
+  espressif/esp_xiaozhi: ^0.1.1
