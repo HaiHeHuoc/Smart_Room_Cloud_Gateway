@@ -1,4 +1,4 @@
-# Xiaozhi Foundation — Phase 12.3 Service And Activation
+# Xiaozhi Foundation — Phases 12.3–12.4.3
 
 ## Goal
 
@@ -165,9 +165,47 @@ This proves the service/info/activation path on the target board. It does not
 prove chat transport selection, audio, lifecycle stress, or server-outage
 recovery; those remain Phase 12.5 and 12.6 work.
 
+## Phase 12.4.2–12.4.3 Configuration And NVS Execution Audit
+
+The effective Phase 12 configuration is deliberately conservative:
+
+| Setting | Effective value | Reason |
+|---|---|---|
+| `XIAOZHI_SYNC_SYSTEM_TIME_FROM_SERVER` | off | Xiaozhi information responses may report server time, but do not set the Gateway system clock. `time_manager` remains the owner of time policy. |
+| `XIAOZHI_AUDIO_TASK_ALLOC_STATIC` | on | The chat audio worker uses the component file-scope static TCB and stack. |
+| `XIAOZHI_AUDIO_TASK_ALLOC_DYNAMIC` | off | Mutually exclusive with static allocation. |
+| `XIAOZHI_STACK_IN_PSRAM` | off | It is unavailable with static allocation; no Xiaozhi audio-task stack resides in PSRAM. |
+| `AUDIO_MANAGER_PUBLIC_API_TEST` | off | The continuous audio stress coordinator remains a target-test-only feature. |
+| `AUDIO_MANAGER_MANUAL_RECORD_MAX_SECONDS` | 30 seconds | The `audio_manager` Kconfig default is retained; no Phase 12 override is present. |
+
+`sdkconfig.defaults` contains only the Phase 12 Xiaozhi overrides needed to
+preserve these choices (`XIAOZHI_SYNC_SYSTEM_TIME_FROM_SERVER=n` and static
+audio-task allocation). It does not carry the unrelated audio stress switch or
+manual-record-duration override that a `save-defconfig` operation can retain.
+
+### NVS and cache-off policy
+
+In pinned `esp_xiaozhi` 0.1.2, the default keystore calls IDF `nvs_*` APIs
+directly in its caller context. The information path opens/writes `board`,
+`mqtt`, and `websocket`; later MQTT/WebSocket start paths open their respective
+namespaces for reads. The component offers an optional NVS-operations callback
+layer, but this phase does not register it or add a project NVS service.
+
+All project calls to a Xiaozhi lifecycle API that can reach this storage path
+must execute from a task with an **internal-RAM stack**, never from a PSRAM-stack
+task, ISR, or cache-disabled callback. This includes `get_info()` and future
+`init`, `start`, `stop`, and `deinit` flows because their dependent transport
+paths can access `board`, `mqtt`, or `websocket`. The current `xiaozhi_probe`
+worker is created with `xTaskCreate`, so its normal ESP-IDF stack is internal.
+The static Xiaozhi audio worker is also internal under the selected Kconfig.
+
+No architecture defect requiring an NVS service was found for this configuration.
+If a future lifecycle caller must use PSRAM stack storage, introduce and validate
+the component NVS-operations service before that caller is allowed to reach a
+Xiaozhi lifecycle API.
+
 ## Deferred Work
 
-- Phase 12.4: system-time side effect, Kconfig/resource/storage execution audit.
 - Phase 12.5: MQTT+UDP versus WebSocket transport decision and failure behavior.
 - Phase 12.6: init/start/connected/stop/deinit lifecycle matrix and repeated
   stress/fault testing.
