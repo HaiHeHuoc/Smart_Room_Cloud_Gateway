@@ -27,16 +27,13 @@
 #define XIAOZHI_FOUNDATION_PROBE_TASK_PRIORITY \
     4U
 
-#define XIAOZHI_FOUNDATION_DEBUG_ACTIVATION_CODE 0
-
 static portMUX_TYPE s_probe_lock =
     portMUX_INITIALIZER_UNLOCKED;
 
 static bool s_probe_in_progress = false;
 
-
 /* Constants ---------------------------------------------------------------- */
-static const char *TAG = "XIAOZHI_FOUNDATION";
+static const char *const TAG = "XIAOZHI_FOUNDATION";
 
 /* Functions ---------------------------------------------------------------- */
 esp_err_t xiaozhi_foundation_probe(xiaozhi_foundation_info_t *out_info)
@@ -52,25 +49,6 @@ esp_err_t xiaozhi_foundation_probe(xiaozhi_foundation_info_t *out_info)
     ESP_LOGI(TAG, "Probing Xiaozhi service");
 
     esp_err_t ret = esp_xiaozhi_chat_get_info(&info);
-
-#if XIAOZHI_FOUNDATION_DEBUG_ACTIVATION_CODE
-    if (info.has_activation_code &&
-        info.activation_code != NULL)
-    {
-        ESP_LOGW(
-            TAG,
-            "PHASE12 ONLY - Activation code: %s",
-            info.activation_code);
-    }
-
-    if (info.activation_message != NULL)
-    {
-        ESP_LOGI(
-            TAG,
-            "PHASE12 ONLY - Activation message: %s",
-            info.activation_message);
-    }
-#endif
 
     if (ret != ESP_OK) {
         ESP_LOGE(TAG,
