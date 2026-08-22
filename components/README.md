@@ -11,7 +11,8 @@ documentation.
 components/
 |-- application/
 |   |-- app_network_coordinator/
-|   `-- app_reset_coordinator/
+|   |-- app_reset_coordinator/
+|   `-- xiaozhi_foundation/
 |-- audio/
 |   `-- audio_manager/
 |-- cloud/
@@ -49,7 +50,7 @@ not define facade APIs or runtime behavior.
 
 | Domain | Components | Primary responsibility |
 |---|---|---|
-| Application | `app_network_coordinator`, `app_reset_coordinator` | Network boot policy and ordered factory reset |
+| Application | `app_network_coordinator`, `app_reset_coordinator`, `xiaozhi_foundation` | Network boot/reset policy plus isolated Sprint 12 Xiaozhi service and lifecycle validation |
 | Audio | `audio_manager` | I2S microphone/speaker ownership, PCM stability flow, and copied status diagnostics |
 | Cloud | `cloud_manager`, `firebase_auth` | Authenticated Firebase telemetry and token lifecycle |
 | Connectivity | `provisioning_manager`, `wifi_manager` | BLE provisioning and Wi-Fi Station lifecycle |
@@ -60,6 +61,11 @@ not define facade APIs or runtime behavior.
 | System | `common`, `performance_monitor` | Shared definitions and diagnostics |
 | UI | `app_gui`, `ui_manager_lvgl`, `lvgl_image_handler`, `lvgl_sd_fs` | Screens, LVGL ownership, and media support |
 
+`xiaozhi_foundation` is a temporary Sprint 12 integration boundary. It may
+include managed Xiaozhi headers privately for audit/validation, but its public
+API exposes only project-owned scalar types. Production Xiaozhi lifecycle
+ownership moves to the planned `voice_assistant` component in Sprint 13.
+
 ## Dependency Rules
 
 - Application code uses public component APIs.
@@ -67,12 +73,16 @@ not define facade APIs or runtime behavior.
 - Domain folders introduce no task, queue, mutex, state machine, or lifecycle.
 - `managed_components/` remains owned by ESP-IDF Component Manager.
 - Cross-domain facade APIs require a separate design decision.
+- Managed Xiaozhi handles, enums, callback payloads, credentials, and pointers
+  must not escape `xiaozhi_foundation` during Sprint 12.
 
 ## Documentation Index
 
 - Application composition: [`main/README.md`](../main/README.md)
 - System architecture: [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)
 - Build and hardware setup: [`docs/SETUP.md`](../docs/SETUP.md)
+- Xiaozhi Phase 12.3 service/activation audit:
+  [`application/xiaozhi_foundation/docs/README.md`](application/xiaozhi_foundation/docs/README.md)
 - Audio manager: [`audio/audio_manager/docs/README.md`](audio/audio_manager/docs/README.md)
 - Firebase Authentication component:
   [`cloud/firebase_auth/docs/README.md`](cloud/firebase_auth/docs/README.md)
