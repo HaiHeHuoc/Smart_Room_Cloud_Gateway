@@ -413,11 +413,13 @@ SD card
 
 ## Phase 12.4 — Side Effects And Storage
 
-- [ ] Audit and initially disable Xiaozhi-owned system-time sync unless assigned.
-- [ ] Review timeout, response size, UDP buffers, task stack/core/allocation and
+- [x] 12.4.2: Audit and disable Xiaozhi-owned system-time sync unless assigned.
+- [x] 12.4.2: Review timeout, response size, UDP buffers, task stack/core/allocation and
       hello-message Kconfig.
-- [ ] Route NVS through an internal-stack service where PSRAM stacks would enter
-      cache-off storage paths.
+- [x] 12.4.3: Audit NVS/cache-off execution paths and require every Xiaozhi
+      lifecycle caller that may access NVS to use an internal-stack task.
+- [x] 12.4.3: Keep the component NVS-operations service unregistered: static
+      internal Xiaozhi audio stack removes the identified PSRAM-stack path.
 
 ## Phase 12.5 — Transport Decision
 
