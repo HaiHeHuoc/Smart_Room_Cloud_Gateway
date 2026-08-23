@@ -258,11 +258,77 @@ available.
   MQTT support.
 - No MQTT fallback is allowed.
 
+### P2-D — WebSocket Text Protocol Receive Validation
+
+The exact resolved dependency is `espressif/esp_xiaozhi` **0.1.2**. Its public
+`esp_xiaozhi_chat.h` defines:
+
+- `ESP_XIAOZHI_CHAT_EVENT_CHAT_TEXT`, whose `event_data` is an
+  `esp_xiaozhi_chat_text_data_t *`;
+- `ESP_XIAOZHI_CHAT_TEXT_ROLE_USER` and
+  `ESP_XIAOZHI_CHAT_TEXT_ROLE_ASSISTANT`;
+- `ESP_XIAOZHI_CHAT_EVENT_CHAT_TTS_STATE`,
+  `ESP_XIAOZHI_CHAT_EVENT_CHAT_ERROR`, and
+  `ESP_XIAOZHI_CHAT_EVENT_CHAT_EMOJI`.
+
+The pinned public header exposes chat lifecycle, audio-channel, audio-data,
+wake-word, listening, and abort-speaking APIs, but **does not expose an API for
+arbitrary typed user-text transmission** such as `send_text(chat, prompt)`.
+`esp_xiaozhi_chat_open_audio_channel()` accepts an optional protocol hello
+message only as part of opening an audio channel; it is not a typed-text chat
+prompt API and P2-D does not call it. `esp_xiaozhi_transport_send_text()` is a
+private component implementation detail and is not used by project code.
+
+P2-D therefore records:
+
+```text
+Public arbitrary text TX: NOT AVAILABLE
+CHAT_TEXT receive handler: IMPLEMENTED
+End-to-end USER/ASSISTANT CHAT_TEXT evidence: DEFERRED TO P2-F AUDIO/STT
+```
+
+The temporary WebSocket validation configures both
+`chat_config.event_callback` and `chat_config.event_callback_ctx`. Its protocol
+callback is deliberately small:
+
+- validates every event and payload pointer before use;
+- casts `CHAT_TEXT` only to `esp_xiaozhi_chat_text_data_t *` and separates
+  `USER` from `ASSISTANT` data;
+- treats every upstream callback pointer as borrowed and never retains it;
+- copies each role's latest text to a separate application-owned **192-byte**
+  buffer, including NUL termination (at most 191 payload bytes); text beyond
+  that bound is deterministically truncated and marked as such;
+- records bounded `CHAT_TTS_STATE`, `CHAT_ERROR` source/code, and `CHAT_EMOJI`
+  diagnostics, then sets EventGroup fact bits;
+- does not call LVGL, provisioning, Wi-Fi/config/NVS/Firebase operations,
+  hardware APIs, or Xiaozhi lifecycle APIs.
+
+The worker, not the callback, owns timeout decisions, lifecycle cleanup, and
+diagnostic logs. It logs only role, copied length, truncation status, TTS state,
+error code/source, and emoji length. It never logs text content, tokens,
+credentials, endpoint values, or raw server payloads. The callback context and
+EventGroup remain valid through `chat_deinit()`; copied text is then cleared
+before the worker exits.
+
+P2-D does not send audio, open/close an audio channel, start/stop listening,
+encode OPUS, integrate `audio_manager`, or add a project text-send abstraction.
+The accepted P2-C WebSocket-only `init -> start -> CONNECTED -> 2000 ms hold ->
+stop -> deinit` lifecycle is unchanged.
+
+### P2-D Hardware Acceptance
+
+No P2-D hardware pass is claimed by this implementation. The pinned public API
+cannot produce an arbitrary typed-text prompt in isolation, so an actual
+`CHAT_TEXT role=USER` / `CHAT_TEXT role=ASSISTANT` serial trace remains deferred
+to the supported P2-F audio/STT interaction path. A future P2-F pass must show
+the received role/length diagnostics while preserving the WebSocket-only
+lifecycle and no secret logging.
+
 ### Remaining validation
 
-Future Xiaozhi work validates only the selected WebSocket path, including text,
-audio format/PCM integration, reconnect behavior, lifecycle stress, cleanup,
-and resource measurements.
+P2-E/P2-F will validate only the selected WebSocket path: supported audio/STT
+generation of USER and ASSISTANT text events, audio format/PCM integration,
+reconnect behavior, lifecycle stress, cleanup, and resource measurements.
 
 ## Deferred / Closed Work
 

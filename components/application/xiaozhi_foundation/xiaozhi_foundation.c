@@ -39,27 +39,87 @@
 #define XIAOZHI_FOUNDATION_EVENT_DISCONNECTED \
     BIT1
 
+#define XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT \
+    BIT2
+
+#define XIAOZHI_FOUNDATION_EVENT_CHAT_TTS_STATE \
+    BIT3
+
+#define XIAOZHI_FOUNDATION_EVENT_CHAT_ERROR \
+    BIT4
+
+#define XIAOZHI_FOUNDATION_EVENT_CHAT_EMOJI \
+    BIT5
+
 #define XIAOZHI_FOUNDATION_CONNECT_TIMEOUT_MS \
     15000U
 
 #define XIAOZHI_FOUNDATION_CONNECTED_HOLD_MS \
     2000U
 
+/* Includes the terminating NUL; copied text is never logged. */
+#define XIAOZHI_FOUNDATION_CHAT_TEXT_BUFFER_SIZE \
+    192U
+
+/* Includes the terminating NUL. The component currently reports short hints. */
+#define XIAOZHI_FOUNDATION_CHAT_ERROR_SOURCE_BUFFER_SIZE \
+    32U
+
+#define XIAOZHI_FOUNDATION_CHAT_EMOJI_MAX_LENGTH \
+    32U
+
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "XIAOZHI_FOUNDATION";
 
 /* Type Definitions --------------------------------------------------------- */
 /**
+ * @brief One copied text event for a single protocol role.
+ *
+ * The upstream text pointer is callback-lifetime only. This storage belongs to
+ * the validation worker and is overwritten by a later event for the same role.
+ */
+typedef struct {
+    bool received;
+    size_t length;
+    bool truncated;
+    char value[XIAOZHI_FOUNDATION_CHAT_TEXT_BUFFER_SIZE];
+} xiaozhi_foundation_text_snapshot_t;
+
+/**
+ * @brief Bounded, application-owned diagnostic state from protocol callbacks.
+ */
+typedef struct {
+    xiaozhi_foundation_text_snapshot_t user_text;
+    xiaozhi_foundation_text_snapshot_t assistant_text;
+
+    bool tts_state_received;
+    esp_xiaozhi_chat_tts_state_kind_t last_tts_state;
+
+    bool error_received;
+    esp_err_t last_error_code;
+    bool last_error_source_truncated;
+    char last_error_source[
+        XIAOZHI_FOUNDATION_CHAT_ERROR_SOURCE_BUFFER_SIZE];
+
+    bool emoji_received;
+    size_t last_emoji_length;
+    bool last_emoji_truncated;
+} xiaozhi_foundation_protocol_state_t;
+
+/**
  * @brief Private state for one WebSocket validation operation.
  *
  * Only the WebSocket service capability fact and a short-lived EventGroup
- * handle are retained. No endpoint, credential, token, topic, or Xiaozhi-owned
- * string pointer is stored here.
+ * handle are retained. Protocol callback data is copied into bounded,
+ * application-owned state while the worker is live; no Xiaozhi-owned string
+ * pointer is stored here.
  */
 typedef struct {
     xiaozhi_foundation_transport_t requested_transport;
     bool websocket_available;
     EventGroupHandle_t events;
+    portMUX_TYPE protocol_lock;
+    xiaozhi_foundation_protocol_state_t protocol;
 } xiaozhi_foundation_validation_ctx_t;
 
 /* Static Variables --------------------------------------------------------- */
@@ -77,6 +137,28 @@ static void xiaozhi_foundation_chat_event_handler(
     esp_event_base_t event_base,
     int32_t event_id,
     void *event_data);
+
+static void xiaozhi_foundation_protocol_event_callback(
+    esp_xiaozhi_chat_event_t event,
+    void *event_data,
+    void *ctx);
+
+static size_t xiaozhi_foundation_copy_bounded_string(
+    char *destination,
+    size_t destination_size,
+    const char *source,
+    bool *out_truncated);
+
+static size_t xiaozhi_foundation_get_bounded_string_length(
+    const char *source,
+    size_t maximum_length,
+    bool *out_truncated);
+
+static void xiaozhi_foundation_log_protocol_diagnostics(
+    xiaozhi_foundation_validation_ctx_t *ctx);
+
+static const char *xiaozhi_foundation_tts_state_to_string(
+    esp_xiaozhi_chat_tts_state_kind_t state);
 
 static esp_err_t xiaozhi_foundation_select_transport(
     const xiaozhi_foundation_validation_ctx_t *ctx,
@@ -162,6 +244,332 @@ static void xiaozhi_foundation_chat_event_handler(
 
     default:
         break;
+    }
+}
+
+static size_t xiaozhi_foundation_copy_bounded_string(
+    char *destination,
+    size_t destination_size,
+    const char *source,
+    bool *out_truncated)
+{
+    size_t length = 0U;
+
+    if (out_truncated != NULL) {
+        *out_truncated = false;
+    }
+
+    if ((destination == NULL) || (destination_size == 0U)) {
+        return 0U;
+    }
+
+    destination[0] = '\0';
+
+    if (source == NULL) {
+        return 0U;
+    }
+
+    while ((length < (destination_size - 1U)) &&
+           (source[length] != '\0')) {
+        destination[length] = source[length];
+        ++length;
+    }
+
+    destination[length] = '\0';
+
+    if (out_truncated != NULL) {
+        *out_truncated = (source[length] != '\0');
+    }
+
+    return length;
+}
+
+static size_t xiaozhi_foundation_get_bounded_string_length(
+    const char *source,
+    size_t maximum_length,
+    bool *out_truncated)
+{
+    size_t length = 0U;
+
+    if (out_truncated != NULL) {
+        *out_truncated = false;
+    }
+
+    if (source == NULL) {
+        return 0U;
+    }
+
+    while ((length < maximum_length) && (source[length] != '\0')) {
+        ++length;
+    }
+
+    if (out_truncated != NULL) {
+        *out_truncated = (source[length] != '\0');
+    }
+
+    return length;
+}
+
+static void xiaozhi_foundation_protocol_event_callback(
+    esp_xiaozhi_chat_event_t event,
+    void *event_data,
+    void *callback_ctx)
+{
+    xiaozhi_foundation_validation_ctx_t *ctx =
+        (xiaozhi_foundation_validation_ctx_t *)callback_ctx;
+
+    if ((ctx == NULL) || (ctx->events == NULL)) {
+        return;
+    }
+
+    /*
+     * The pinned component calls this directly from its protocol handlers.
+     * Keep it bounded: copy only callback-lifetime data, set a fact bit, and
+     * leave all logging, wait/timeout decisions, and lifecycle work to the
+     * validation worker.
+     */
+    switch (event) {
+    case ESP_XIAOZHI_CHAT_EVENT_CHAT_TEXT: {
+        const esp_xiaozhi_chat_text_data_t *const text_data =
+            (const esp_xiaozhi_chat_text_data_t *)event_data;
+        xiaozhi_foundation_text_snapshot_t *snapshot = NULL;
+        EventBits_t event_bit = 0U;
+
+        if ((text_data == NULL) || (text_data->text == NULL)) {
+            return;
+        }
+
+        switch (text_data->role) {
+        case ESP_XIAOZHI_CHAT_TEXT_ROLE_USER:
+            snapshot = &ctx->protocol.user_text;
+            event_bit = XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT;
+            break;
+
+        case ESP_XIAOZHI_CHAT_TEXT_ROLE_ASSISTANT:
+            snapshot = &ctx->protocol.assistant_text;
+            event_bit = XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT;
+            break;
+
+        default:
+            return;
+        }
+
+        /* A bounded copy is the only critical-section work in this callback. */
+        portENTER_CRITICAL(&ctx->protocol_lock);
+        snapshot->length = xiaozhi_foundation_copy_bounded_string(
+            snapshot->value,
+            sizeof(snapshot->value),
+            text_data->text,
+            &snapshot->truncated);
+        snapshot->received = true;
+        portEXIT_CRITICAL(&ctx->protocol_lock);
+
+        (void)xEventGroupSetBits(ctx->events, event_bit);
+        break;
+    }
+
+    case ESP_XIAOZHI_CHAT_EVENT_CHAT_TTS_STATE: {
+        const esp_xiaozhi_chat_tts_state_t *const tts_state =
+            (const esp_xiaozhi_chat_tts_state_t *)event_data;
+
+        if (tts_state == NULL) {
+            return;
+        }
+
+        switch (tts_state->state) {
+        case ESP_XIAOZHI_CHAT_TTS_STATE_START:
+        case ESP_XIAOZHI_CHAT_TTS_STATE_SENTENCE_START:
+        case ESP_XIAOZHI_CHAT_TTS_STATE_STOP:
+            break;
+
+        default:
+            return;
+        }
+
+        portENTER_CRITICAL(&ctx->protocol_lock);
+        ctx->protocol.last_tts_state = tts_state->state;
+        ctx->protocol.tts_state_received = true;
+        portEXIT_CRITICAL(&ctx->protocol_lock);
+
+        (void)xEventGroupSetBits(
+            ctx->events,
+            XIAOZHI_FOUNDATION_EVENT_CHAT_TTS_STATE);
+        break;
+    }
+
+    case ESP_XIAOZHI_CHAT_EVENT_CHAT_ERROR: {
+        const esp_xiaozhi_chat_error_info_t *const error_info =
+            (const esp_xiaozhi_chat_error_info_t *)event_data;
+
+        if (error_info == NULL) {
+            return;
+        }
+
+        portENTER_CRITICAL(&ctx->protocol_lock);
+        ctx->protocol.last_error_code = error_info->code;
+        (void)xiaozhi_foundation_copy_bounded_string(
+            ctx->protocol.last_error_source,
+            sizeof(ctx->protocol.last_error_source),
+            error_info->source,
+            &ctx->protocol.last_error_source_truncated);
+        ctx->protocol.error_received = true;
+        portEXIT_CRITICAL(&ctx->protocol_lock);
+
+        (void)xEventGroupSetBits(
+            ctx->events,
+            XIAOZHI_FOUNDATION_EVENT_CHAT_ERROR);
+        break;
+    }
+
+    case ESP_XIAOZHI_CHAT_EVENT_CHAT_EMOJI: {
+        const char *const emoji = (const char *)event_data;
+        bool emoji_truncated = false;
+        const size_t emoji_length =
+            xiaozhi_foundation_get_bounded_string_length(
+                emoji,
+                XIAOZHI_FOUNDATION_CHAT_EMOJI_MAX_LENGTH,
+                &emoji_truncated);
+
+        if (emoji == NULL) {
+            return;
+        }
+
+        portENTER_CRITICAL(&ctx->protocol_lock);
+        ctx->protocol.last_emoji_length = emoji_length;
+        ctx->protocol.last_emoji_truncated = emoji_truncated;
+        ctx->protocol.emoji_received = true;
+        portEXIT_CRITICAL(&ctx->protocol_lock);
+
+        (void)xEventGroupSetBits(
+            ctx->events,
+            XIAOZHI_FOUNDATION_EVENT_CHAT_EMOJI);
+        break;
+    }
+
+    default:
+        break;
+    }
+}
+
+static const char *xiaozhi_foundation_tts_state_to_string(
+    esp_xiaozhi_chat_tts_state_kind_t state)
+{
+    switch (state) {
+    case ESP_XIAOZHI_CHAT_TTS_STATE_START:
+        return "START";
+
+    case ESP_XIAOZHI_CHAT_TTS_STATE_SENTENCE_START:
+        return "SENTENCE_START";
+
+    case ESP_XIAOZHI_CHAT_TTS_STATE_STOP:
+        return "STOP";
+
+    default:
+        return "UNKNOWN";
+    }
+}
+
+static void xiaozhi_foundation_log_protocol_diagnostics(
+    xiaozhi_foundation_validation_ctx_t *ctx)
+{
+    if ((ctx == NULL) || (ctx->events == NULL)) {
+        return;
+    }
+
+    const EventBits_t protocol_bits =
+        xEventGroupGetBits(ctx->events);
+
+    if ((protocol_bits & (XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT |
+                          XIAOZHI_FOUNDATION_EVENT_CHAT_TTS_STATE |
+                          XIAOZHI_FOUNDATION_EVENT_CHAT_ERROR |
+                          XIAOZHI_FOUNDATION_EVENT_CHAT_EMOJI)) == 0U) {
+        return;
+    }
+
+    bool user_text_received = false;
+    size_t user_text_length = 0U;
+    bool user_text_truncated = false;
+    bool assistant_text_received = false;
+    size_t assistant_text_length = 0U;
+    bool assistant_text_truncated = false;
+    bool tts_state_received = false;
+    esp_xiaozhi_chat_tts_state_kind_t last_tts_state =
+        ESP_XIAOZHI_CHAT_TTS_STATE_START;
+    bool error_received = false;
+    esp_err_t last_error_code = ESP_OK;
+    char last_error_source[
+        XIAOZHI_FOUNDATION_CHAT_ERROR_SOURCE_BUFFER_SIZE] = {0};
+    bool last_error_source_truncated = false;
+    bool emoji_received = false;
+    size_t last_emoji_length = 0U;
+    bool last_emoji_truncated = false;
+
+    portENTER_CRITICAL(&ctx->protocol_lock);
+    user_text_received = ctx->protocol.user_text.received;
+    user_text_length = ctx->protocol.user_text.length;
+    user_text_truncated = ctx->protocol.user_text.truncated;
+    assistant_text_received = ctx->protocol.assistant_text.received;
+    assistant_text_length = ctx->protocol.assistant_text.length;
+    assistant_text_truncated = ctx->protocol.assistant_text.truncated;
+    tts_state_received = ctx->protocol.tts_state_received;
+    last_tts_state = ctx->protocol.last_tts_state;
+    error_received = ctx->protocol.error_received;
+    last_error_code = ctx->protocol.last_error_code;
+    last_error_source_truncated =
+        ctx->protocol.last_error_source_truncated;
+    (void)xiaozhi_foundation_copy_bounded_string(
+        last_error_source,
+        sizeof(last_error_source),
+        ctx->protocol.last_error_source,
+        NULL);
+    emoji_received = ctx->protocol.emoji_received;
+    last_emoji_length = ctx->protocol.last_emoji_length;
+    last_emoji_truncated = ctx->protocol.last_emoji_truncated;
+    portEXIT_CRITICAL(&ctx->protocol_lock);
+
+    if (((protocol_bits & XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT) != 0U) &&
+        user_text_received) {
+        ESP_LOGI(
+            TAG,
+            "CHAT_TEXT role=USER len=%u%s",
+            (unsigned)user_text_length,
+            user_text_truncated ? " truncated" : "");
+    }
+
+    if (((protocol_bits & XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT) != 0U) &&
+        assistant_text_received) {
+        ESP_LOGI(
+            TAG,
+            "CHAT_TEXT role=ASSISTANT len=%u%s",
+            (unsigned)assistant_text_length,
+            assistant_text_truncated ? " truncated" : "");
+    }
+
+    if (((protocol_bits & XIAOZHI_FOUNDATION_EVENT_CHAT_TTS_STATE) != 0U) &&
+        tts_state_received) {
+        ESP_LOGI(
+            TAG,
+            "TTS state=%s",
+            xiaozhi_foundation_tts_state_to_string(last_tts_state));
+    }
+
+    if (((protocol_bits & XIAOZHI_FOUNDATION_EVENT_CHAT_ERROR) != 0U) &&
+        error_received) {
+        ESP_LOGW(
+            TAG,
+            "CHAT_ERROR code=%s source=%s%s",
+            esp_err_to_name(last_error_code),
+            (last_error_source[0] != '\0') ? last_error_source : "unknown",
+            last_error_source_truncated ? " truncated" : "");
+    }
+
+    if (((protocol_bits & XIAOZHI_FOUNDATION_EVENT_CHAT_EMOJI) != 0U) &&
+        emoji_received) {
+        ESP_LOGI(
+            TAG,
+            "CHAT_EMOJI len=%u%s",
+            (unsigned)last_emoji_length,
+            last_emoji_truncated ? " truncated" : "");
     }
 }
 
@@ -268,6 +676,7 @@ static esp_err_t xiaozhi_foundation_validate_transport(
     xiaozhi_foundation_validation_ctx_t ctx = {
         .requested_transport = requested,
         .events = NULL,
+        .protocol_lock = portMUX_INITIALIZER_UNLOCKED,
     };
 
     esp_xiaozhi_chat_info_t info = {0};
@@ -345,6 +754,13 @@ static esp_err_t xiaozhi_foundation_validate_transport(
 
     ESP_LOGI(TAG, "MCP engine created");
 
+    ctx.events = xEventGroupCreate();
+    if (ctx.events == NULL) {
+        ESP_LOGE(TAG, "Failed to create transport EventGroup");
+        ret = ESP_ERR_NO_MEM;
+        goto cleanup;
+    }
+
     esp_xiaozhi_chat_config_t chat_config =
         ESP_XIAOZHI_CHAT_DEFAULT_CONFIG();
 
@@ -354,6 +770,15 @@ static esp_err_t xiaozhi_foundation_validate_transport(
      */
     chat_config.mcp_engine = mcp;
     chat_config.owns_mcp_engine = false;
+
+    /*
+     * Protocol callback payload pointers are borrowed by contract. The worker
+     * owns ctx until chat_deinit() returns, and the callback copies only
+     * bounded data into its application-owned diagnostic state.
+     */
+    chat_config.event_callback =
+        xiaozhi_foundation_protocol_event_callback;
+    chat_config.event_callback_ctx = &ctx;
 
     /*
      * Project policy is WebSocket-only. has_mqtt_config is an upstream
@@ -377,13 +802,6 @@ static esp_err_t xiaozhi_foundation_validate_transport(
     }
 
     ESP_LOGI(TAG, "chat_init: OK");
-
-    ctx.events = xEventGroupCreate();
-    if (ctx.events == NULL) {
-        ESP_LOGE(TAG, "Failed to create transport EventGroup");
-        ret = ESP_ERR_NO_MEM;
-        goto cleanup;
-    }
 
     ret = esp_event_handler_instance_register(
         ESP_XIAOZHI_CHAT_EVENTS,
@@ -413,6 +831,8 @@ static esp_err_t xiaozhi_foundation_validate_transport(
 
     chat_started = true;
     ESP_LOGI(TAG, "chat_start: OK");
+    ESP_LOGI(TAG, "Public arbitrary text TX: NOT AVAILABLE");
+    ESP_LOGI(TAG, "CHAT_TEXT receive handler: armed");
 
     const EventBits_t initial_bits =
         xEventGroupWaitBits(
@@ -481,12 +901,15 @@ static esp_err_t xiaozhi_foundation_validate_transport(
         TAG,
         "Transport stable for %u ms",
         XIAOZHI_FOUNDATION_CONNECTED_HOLD_MS);
+    ESP_LOGI(
+        TAG,
+        "End-to-end CHAT_TEXT validation deferred to P2-F audio/STT");
 
 cleanup:
     /*
-     * Keep the handler context and EventGroup alive while chat_stop() runs,
-     * because stop may emit DISCONNECTED. Then unregister before deleting the
-     * EventGroup or returning from this stack frame.
+     * Keep the ESP event-handler context, direct protocol-callback context,
+     * and EventGroup alive until chat_deinit() returns. chat_stop()/deinit()
+     * can still emit connection or protocol events that refer to ctx.
      */
     if (chat_started) {
         const esp_err_t stop_ret =
@@ -525,11 +948,6 @@ cleanup:
         }
     }
 
-    if (ctx.events != NULL) {
-        vEventGroupDelete(ctx.events);
-        ctx.events = NULL;
-    }
-
     if (chat != 0) {
         const esp_err_t deinit_ret =
             esp_xiaozhi_chat_deinit(chat);
@@ -547,6 +965,16 @@ cleanup:
             ESP_LOGI(TAG, "chat_deinit: OK");
         }
     }
+
+    xiaozhi_foundation_log_protocol_diagnostics(&ctx);
+
+    if (ctx.events != NULL) {
+        vEventGroupDelete(ctx.events);
+        ctx.events = NULL;
+    }
+
+    /* Do not leave copied user/assistant text on this short-lived task stack. */
+    memset(&ctx.protocol, 0, sizeof(ctx.protocol));
 
     if (mcp != NULL) {
         const esp_err_t destroy_ret =
