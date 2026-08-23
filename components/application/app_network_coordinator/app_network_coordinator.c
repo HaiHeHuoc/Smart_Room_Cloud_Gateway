@@ -335,17 +335,18 @@ static void app_network_coordinator_wait_for_stored_wifi_boot_grace(void);
 static void app_network_coordinator_task(
     void *argument);
 
-static void app_request_xiaozhi_probe_best_effort(void);
+static void app_request_xiaozhi_validation_best_effort(void);
 
 /* Static Functions --------------------------------------------------------- */
-static void app_request_xiaozhi_probe_best_effort(void)
+static void app_request_xiaozhi_validation_best_effort(void)
 {
     const esp_err_t ret =
-        xiaozhi_foundation_request_probe();
+        xiaozhi_foundation_request_transport_validation(
+            XIAOZHI_FOUNDATION_TRANSPORT_AUTO);
 
     if (ret == ESP_ERR_INVALID_STATE) {
         /*
-         * A probe is already running.
+         * A Xiaozhi probe or validation is already running.
          * This is not an application error.
          */
         return;
@@ -354,7 +355,7 @@ static void app_request_xiaozhi_probe_best_effort(void)
     if (ret != ESP_OK) {
         ESP_LOGW(
             TAG,
-            "Failed to request Xiaozhi service probe: %s",
+            "Failed to request Xiaozhi transport validation: %s",
             esp_err_to_name(ret));
     }
 }
@@ -2154,8 +2155,7 @@ app_run_one_wifi_provisioning_session(
     }
 
     if (!reset_requested) {
-        app_request_xiaozhi_probe_best_effort();
-        xiaozhi_foundation_request_transport_validation(XIAOZHI_FOUNDATION_TRANSPORT_AUTO);
+        app_request_xiaozhi_validation_best_effort();
     }
 
     return outcome;
@@ -3385,8 +3385,7 @@ esp_err_t app_network_coordinator_notify_wifi_event(
             APP_NETWORK_COORDINATOR_STATE_ONLINE &&
             !success_dwell_active)
         {
-            app_request_xiaozhi_probe_best_effort();
-            xiaozhi_foundation_request_transport_validation(XIAOZHI_FOUNDATION_TRANSPORT_AUTO);
+            app_request_xiaozhi_validation_best_effort();
 
             const esp_err_t screen_ret =
                 app_gui_request_screen(

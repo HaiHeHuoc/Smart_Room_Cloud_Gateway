@@ -45,10 +45,10 @@ typedef struct {
 } xiaozhi_foundation_validation_ctx_t;
 
 /* Static Variables --------------------------------------------------------- */
-static portMUX_TYPE s_probe_lock =
+static portMUX_TYPE s_operation_lock =
     portMUX_INITIALIZER_UNLOCKED;
 
-static bool s_probe_in_progress = false;
+static bool s_operation_in_progress = false;
 
 /* Function Prototypes ------------------------------------------------------ */
 static void xiaozhi_foundation_transport_validation_task(
@@ -63,6 +63,13 @@ static const char *xiaozhi_foundation_transport_to_string(
 
 static esp_err_t xiaozhi_foundation_validate_transport(
     xiaozhi_foundation_transport_t requested);
+
+static esp_err_t xiaozhi_foundation_probe_impl(
+    xiaozhi_foundation_info_t *out_info);
+
+static bool xiaozhi_foundation_try_begin_operation(void);
+
+static void xiaozhi_foundation_finish_operation(void);
 
 /* Static Functions --------------------------------------------------------- */
 static void xiaozhi_foundation_transport_validation_task(
@@ -91,7 +98,31 @@ static void xiaozhi_foundation_transport_validation_task(
             "Transport selection validation completed");
     }
 
+    xiaozhi_foundation_finish_operation();
     vTaskDelete(NULL);
+}
+
+static bool xiaozhi_foundation_try_begin_operation(void)
+{
+    bool started = false;
+
+    portENTER_CRITICAL(&s_operation_lock);
+
+    if (!s_operation_in_progress) {
+        s_operation_in_progress = true;
+        started = true;
+    }
+
+    portEXIT_CRITICAL(&s_operation_lock);
+
+    return started;
+}
+
+static void xiaozhi_foundation_finish_operation(void)
+{
+    portENTER_CRITICAL(&s_operation_lock);
+    s_operation_in_progress = false;
+    portEXIT_CRITICAL(&s_operation_lock);
 }
 
 static esp_err_t xiaozhi_foundation_select_transport(
@@ -171,7 +202,7 @@ static void xiaozhi_foundation_probe_task(void *argument)
     xiaozhi_foundation_info_t info = {0};
 
     const esp_err_t ret =
-        xiaozhi_foundation_probe(&info);
+        xiaozhi_foundation_probe_impl(&info);
 
     if (ret != ESP_OK) {
         ESP_LOGE(
@@ -184,9 +215,7 @@ static void xiaozhi_foundation_probe_task(void *argument)
             "Background service probe completed");
     }
 
-    portENTER_CRITICAL(&s_probe_lock);
-    s_probe_in_progress = false;
-    portEXIT_CRITICAL(&s_probe_lock);
+    xiaozhi_foundation_finish_operation();
 
     vTaskDelete(NULL);
 }
@@ -282,8 +311,8 @@ static esp_err_t xiaozhi_foundation_validate_transport(
     return ESP_OK;
 }
 
-/* Functions ---------------------------------------------------------------- */
-esp_err_t xiaozhi_foundation_probe(xiaozhi_foundation_info_t *out_info)
+static esp_err_t xiaozhi_foundation_probe_impl(
+    xiaozhi_foundation_info_t *out_info)
 {
     if (out_info == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -359,18 +388,30 @@ esp_err_t xiaozhi_foundation_probe(xiaozhi_foundation_info_t *out_info)
     return ESP_OK;
 }
 
-esp_err_t xiaozhi_foundation_request_probe(void)
+/* Functions ---------------------------------------------------------------- */
+esp_err_t xiaozhi_foundation_probe(xiaozhi_foundation_info_t *out_info)
 {
-    portENTER_CRITICAL(&s_probe_lock);
+    if (out_info == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
 
-    if (s_probe_in_progress) {
-        portEXIT_CRITICAL(&s_probe_lock);
+    if (!xiaozhi_foundation_try_begin_operation()) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    s_probe_in_progress = true;
+    const esp_err_t ret =
+        xiaozhi_foundation_probe_impl(out_info);
 
-    portEXIT_CRITICAL(&s_probe_lock);
+    xiaozhi_foundation_finish_operation();
+
+    return ret;
+}
+
+esp_err_t xiaozhi_foundation_request_probe(void)
+{
+    if (!xiaozhi_foundation_try_begin_operation()) {
+        return ESP_ERR_INVALID_STATE;
+    }
 
     const BaseType_t task_created =
         xTaskCreate(
@@ -382,10 +423,7 @@ esp_err_t xiaozhi_foundation_request_probe(void)
             NULL);
 
     if (task_created != pdPASS) {
-        portENTER_CRITICAL(&s_probe_lock);
-        s_probe_in_progress = false;
-        portEXIT_CRITICAL(&s_probe_lock);
-
+        xiaozhi_foundation_finish_operation();
         return ESP_ERR_NO_MEM;
     }
 
@@ -398,6 +436,10 @@ esp_err_t xiaozhi_foundation_request_transport_validation(
     if ((transport < XIAOZHI_FOUNDATION_TRANSPORT_AUTO) ||
         (transport > XIAOZHI_FOUNDATION_TRANSPORT_WEBSOCKET)) {
         return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!xiaozhi_foundation_try_begin_operation()) {
+        return ESP_ERR_INVALID_STATE;
     }
 
     /*
@@ -415,6 +457,7 @@ esp_err_t xiaozhi_foundation_request_transport_validation(
             NULL);
 
     if (task_created != pdPASS) {
+        xiaozhi_foundation_finish_operation();
         return ESP_ERR_NO_MEM;
     }
 
