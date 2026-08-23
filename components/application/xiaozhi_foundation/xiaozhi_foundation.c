@@ -82,6 +82,9 @@
 #define XIAOZHI_FOUNDATION_EVENT_AUDIO_RX \
     BIT14
 
+#define XIAOZHI_FOUNDATION_EVENT_CONVERSATION_TURN_COMPLETE \
+    BIT15
+
 #define XIAOZHI_FOUNDATION_CONNECT_TIMEOUT_MS \
     15000U
 
@@ -174,6 +177,7 @@ typedef struct {
 typedef struct {
     xiaozhi_foundation_text_snapshot_t user_text;
     xiaozhi_foundation_text_snapshot_t assistant_text;
+    bool conversation_turn_complete;
 
     bool tts_state_received;
     esp_xiaozhi_chat_tts_state_kind_t last_tts_state;
@@ -598,6 +602,7 @@ static void xiaozhi_foundation_set_ui_state(
             &ctx->protocol.assistant_text,
             0,
             sizeof(ctx->protocol.assistant_text));
+        ctx->protocol.conversation_turn_complete = false;
     } else if (((state == XIAOZHI_FOUNDATION_UI_PROCESSING) ||
                 (state == XIAOZHI_FOUNDATION_UI_RESPONDING) ||
                 (state == XIAOZHI_FOUNDATION_UI_READY) ||
@@ -635,7 +640,13 @@ static size_t xiaozhi_foundation_get_bounded_string_length(
     }
 
     if (out_truncated != NULL) {
-        *out_truncated = (source[length] != '\0');
+        /*
+         * Do not read source[maximum_length] merely to distinguish an exact
+         * boundary-length string from a longer one. Reaching the scan bound is
+         * conservatively reported as truncated and keeps this helper truly
+         * bounded to maximum_length readable bytes.
+         */
+        *out_truncated = (length == maximum_length);
     }
 
     return length;
@@ -666,6 +677,7 @@ static void xiaozhi_foundation_protocol_event_callback(
         xiaozhi_foundation_text_snapshot_t *snapshot = NULL;
         EventBits_t event_bit = 0U;
         bool non_empty = false;
+        bool conversation_turn_completed_now = false;
 
         if ((text_data == NULL) || (text_data->text == NULL)) {
             return;
@@ -697,12 +709,28 @@ static void xiaozhi_foundation_protocol_event_callback(
             &snapshot->truncated);
         snapshot->received = true;
         non_empty = (snapshot->length > 0U);
+
+        const bool full_turn_available =
+            ctx->protocol.user_text.received &&
+            (ctx->protocol.user_text.length > 0U) &&
+            ctx->protocol.assistant_text.received &&
+            (ctx->protocol.assistant_text.length > 0U);
+
+        if (full_turn_available &&
+            !ctx->protocol.conversation_turn_complete) {
+            ctx->protocol.conversation_turn_complete = true;
+            conversation_turn_completed_now = true;
+        }
         portEXIT_CRITICAL(&ctx->protocol_lock);
 
         /* P2-F requires non-empty STT/assistant evidence, not just an event. */
         if (!non_empty) {
             event_bit &= ~XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT_USER;
             event_bit &= ~XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT_ASSISTANT;
+        }
+
+        if (conversation_turn_completed_now) {
+            event_bit |= XIAOZHI_FOUNDATION_EVENT_CONVERSATION_TURN_COMPLETE;
         }
 
         (void)xEventGroupSetBits(ctx->events, event_bit);
@@ -914,7 +942,8 @@ static void xiaozhi_foundation_log_protocol_diagnostics(
     if ((protocol_bits & (XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT |
                           XIAOZHI_FOUNDATION_EVENT_CHAT_TTS_STATE |
                           XIAOZHI_FOUNDATION_EVENT_CHAT_ERROR |
-                          XIAOZHI_FOUNDATION_EVENT_CHAT_EMOJI)) == 0U) {
+                          XIAOZHI_FOUNDATION_EVENT_CHAT_EMOJI |
+                          XIAOZHI_FOUNDATION_EVENT_CONVERSATION_TURN_COMPLETE)) == 0U) {
         return;
     }
 
@@ -924,6 +953,7 @@ static void xiaozhi_foundation_log_protocol_diagnostics(
     bool assistant_text_received = false;
     size_t assistant_text_length = 0U;
     bool assistant_text_truncated = false;
+    bool conversation_turn_complete = false;
     bool tts_state_received = false;
     esp_xiaozhi_chat_tts_state_kind_t last_tts_state =
         ESP_XIAOZHI_CHAT_TTS_STATE_START;
@@ -943,6 +973,7 @@ static void xiaozhi_foundation_log_protocol_diagnostics(
     assistant_text_received = ctx->protocol.assistant_text.received;
     assistant_text_length = ctx->protocol.assistant_text.length;
     assistant_text_truncated = ctx->protocol.assistant_text.truncated;
+    conversation_turn_complete = ctx->protocol.conversation_turn_complete;
     tts_state_received = ctx->protocol.tts_state_received;
     last_tts_state = ctx->protocol.last_tts_state;
     error_received = ctx->protocol.error_received;
@@ -975,6 +1006,11 @@ static void xiaozhi_foundation_log_protocol_diagnostics(
             "CHAT_TEXT role=ASSISTANT len=%u%s",
             (unsigned)assistant_text_length,
             assistant_text_truncated ? " truncated" : "");
+    }
+
+    if (((protocol_bits & XIAOZHI_FOUNDATION_EVENT_CONVERSATION_TURN_COMPLETE) != 0U) &&
+        conversation_turn_complete) {
+        ESP_LOGI(TAG, "Conversation turn complete: USER -> ASSISTANT");
     }
 
     if (((protocol_bits & XIAOZHI_FOUNDATION_EVENT_CHAT_TTS_STATE) != 0U) &&
@@ -1130,12 +1166,14 @@ static esp_err_t xiaozhi_foundation_open_audio_channel(
         .frame_duration = XIAOZHI_FOUNDATION_AUDIO_FRAME_DURATION_MS,
     };
 
+    /*
+     * Clear only checkpoint-local observations. DISCONNECTED and CHAT_ERROR
+     * are sticky runtime-failure facts and must never be erased between steps.
+     */
     xEventGroupClearBits(
         ctx->events,
         XIAOZHI_FOUNDATION_EVENT_AUDIO_CHANNEL_OPENED |
-            XIAOZHI_FOUNDATION_EVENT_AUDIO_CHANNEL_CLOSED |
-            XIAOZHI_FOUNDATION_EVENT_DISCONNECTED |
-            XIAOZHI_FOUNDATION_EVENT_CHAT_ERROR);
+            XIAOZHI_FOUNDATION_EVENT_AUDIO_CHANNEL_CLOSED);
 
     ESP_LOGI(TAG, "Opening audio channel");
 
@@ -1437,6 +1475,7 @@ static esp_err_t xiaozhi_foundation_wait_for_p2f_evidence(
     const EventBits_t required =
         XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT_USER |
         XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT_ASSISTANT |
+        XIAOZHI_FOUNDATION_EVENT_CONVERSATION_TURN_COMPLETE |
         XIAOZHI_FOUNDATION_EVENT_AUDIO_RX;
     const TickType_t timeout_ticks =
         pdMS_TO_TICKS(XIAOZHI_FOUNDATION_P2F_RESPONSE_TIMEOUT_MS);
@@ -1519,6 +1558,7 @@ static void xiaozhi_foundation_log_p2f_evidence(
     bool assistant_text_truncated = false;
     size_t assistant_text_length = 0U;
     char assistant_text[XIAOZHI_FOUNDATION_CHAT_TEXT_BUFFER_SIZE] = {0};
+    bool conversation_turn_complete = false;
     bool tts_start_received = false;
     bool tts_sentence_start_received = false;
     bool tts_stop_received = false;
@@ -1544,6 +1584,7 @@ static void xiaozhi_foundation_log_p2f_evidence(
         sizeof(assistant_text),
         ctx->protocol.assistant_text.value,
         NULL);
+    conversation_turn_complete = ctx->protocol.conversation_turn_complete;
     tts_start_received = ctx->protocol.tts_start_received;
     tts_sentence_start_received = ctx->protocol.tts_sentence_start_received;
     tts_stop_received = ctx->protocol.tts_stop_received;
@@ -1577,6 +1618,10 @@ static void xiaozhi_foundation_log_p2f_evidence(
                  assistant_text_truncated ? " truncated" : "");
         ESP_LOGI(TAG, "ASSISTANT text=\"%s\"", safe_text);
         memset(safe_text, 0, sizeof(safe_text));
+    }
+
+    if (conversation_turn_complete) {
+        ESP_LOGI(TAG, "Conversation Q/A text turn: COMPLETE");
     }
 
     if (tts_start_received) {
@@ -1641,6 +1686,10 @@ static esp_err_t xiaozhi_foundation_validate_p2f_audio_e2e(
         return ret;
     }
 
+    /*
+     * Start a fresh interaction evidence window, but keep transport/protocol
+     * failures sticky so a race cannot be converted into a misleading timeout.
+     */
     xEventGroupClearBits(
         ctx->events,
         XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT |
@@ -1652,8 +1701,12 @@ static esp_err_t xiaozhi_foundation_validate_p2f_audio_e2e(
             XIAOZHI_FOUNDATION_EVENT_CHAT_TTS_STOP |
             XIAOZHI_FOUNDATION_EVENT_AUDIO_RX |
             XIAOZHI_FOUNDATION_EVENT_AUDIO_DATA_INCOMING |
-            XIAOZHI_FOUNDATION_EVENT_DISCONNECTED |
-            XIAOZHI_FOUNDATION_EVENT_CHAT_ERROR);
+            XIAOZHI_FOUNDATION_EVENT_CONVERSATION_TURN_COMPLETE);
+
+    ret = xiaozhi_foundation_get_runtime_error(ctx, "P2-F start");
+    if (ret != ESP_OK) {
+        return ret;
+    }
 
     bool listening_started = false;
     uint32_t frames_sent = 0U;
@@ -1708,6 +1761,10 @@ static esp_err_t xiaozhi_foundation_validate_p2f_audio_e2e(
 
     xiaozhi_foundation_log_p2f_evidence(ctx);
 
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "Conversation Q/A text evidence: PASS");
+    }
+
     if (ret == ESP_ERR_TIMEOUT) {
         const EventBits_t evidence = xEventGroupGetBits(ctx->events);
         if ((evidence & XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT_USER) == 0U) {
@@ -1715,6 +1772,9 @@ static esp_err_t xiaozhi_foundation_validate_p2f_audio_e2e(
         }
         if ((evidence & XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT_ASSISTANT) == 0U) {
             ESP_LOGE(TAG, "P2-F FAIL: no ASSISTANT CHAT_TEXT");
+        }
+        if ((evidence & XIAOZHI_FOUNDATION_EVENT_CONVERSATION_TURN_COMPLETE) == 0U) {
+            ESP_LOGE(TAG, "P2-F FAIL: no complete USER -> ASSISTANT conversation turn");
         }
         if ((evidence & XIAOZHI_FOUNDATION_EVENT_AUDIO_RX) == 0U) {
             ESP_LOGE(TAG, "P2-F FAIL: no audio callback data");
@@ -2069,9 +2129,10 @@ static esp_err_t xiaozhi_foundation_validate_transport(
 
 cleanup:
     /*
-     * Keep the ESP event-handler context, direct protocol-callback context,
-     * and EventGroup alive until chat_deinit() returns. chat_stop()/deinit()
-     * can still emit connection or protocol events that refer to ctx.
+     * Keep the direct protocol-callback context and EventGroup alive until
+     * chat_deinit() returns. The ESP event handler may be unregistered after
+     * chat_stop(); direct esp_xiaozhi callbacks can still refer to ctx while
+     * deinitialization releases the chat-owned runtime.
      */
     if (audio_channel_open) {
         const esp_err_t close_ret = xiaozhi_foundation_close_audio_channel(
