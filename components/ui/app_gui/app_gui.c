@@ -13,6 +13,7 @@
 #include "esp_log.h"
 #include "esp_err.h"
 #include "esp_check.h"
+#include "esp_timer.h"
 #include "lvgl.h"
 
 #include "freertos/idf_additions.h"
@@ -32,6 +33,7 @@
 #define APP_GUI_SENSOR_STATUS_QUEUE_LENGTH 5U
 #define APP_GUI_AUDIO_STATUS_QUEUE_LENGTH 1U
 #define APP_GUI_CLOUD_STATUS_QUEUE_LENGTH 1U
+#define APP_GUI_XIAOZHI_STATUS_QUEUE_LENGTH 1U
 #define APP_GUI_UI_TASK_STACK_SIZE_BYTES   (24U * 1024U)
 #define APP_GUI_TASK_PRIORITY              5U
 #define APP_GUI_TASK_PERIOD_MS              33U
@@ -46,6 +48,8 @@
 #define APP_GUI_CLOCK_DATE_TEXT_BUFFER_SIZE    16U
 #define APP_GUI_CLOCK_TIME_PLACEHOLDER         "--:--:--"
 #define APP_GUI_CLOCK_DATE_PLACEHOLDER         "--/--/----"
+#define APP_GUI_XIAOZHI_TIMER_PERIOD_MS        100U
+#define APP_GUI_XIAOZHI_DURATION_BUFFER_SIZE   16U
 
 /*
  * The 73-byte Security 1 payload needs QR version 5 at LVGL's medium ECC:
@@ -152,6 +156,13 @@ typedef struct
     lv_obj_t *sensor_wifi_dot;
     lv_obj_t *sensor_cloud_label;
     lv_obj_t *sensor_cloud_dot;
+    lv_obj_t *xiaozhi_connection_label;
+    lv_obj_t *xiaozhi_state_label;
+    lv_obj_t *xiaozhi_detail_label;
+    lv_obj_t *xiaozhi_duration_label;
+    lv_obj_t *xiaozhi_user_text_label;
+    lv_obj_t *xiaozhi_assistant_text_label;
+    lv_obj_t *xiaozhi_state_indicator;
     lv_obj_t *reset_status_label;
     lv_obj_t *reset_detail_label;
     lv_obj_t *reset_state_indicator;
@@ -169,6 +180,7 @@ static QueueHandle_t s_wifi_status_queue = NULL;
 static QueueHandle_t s_sensor_status_queue = NULL;
 static QueueHandle_t s_audio_status_queue = NULL;
 static QueueHandle_t s_cloud_status_queue = NULL;
+static QueueHandle_t s_xiaozhi_status_queue = NULL;
 static TaskHandle_t s_ui_task_handle = NULL;
 static app_gui_screen_id_t s_current_screen_id = APP_GUI_SCREEN_NONE;
 static portMUX_TYPE s_screen_id_lock = portMUX_INITIALIZER_UNLOCKED;
@@ -197,6 +209,13 @@ static ui_audio_status_t s_latest_audio_status = {
 };
 static bool s_latest_cloud_status_available = false;
 static ui_cloud_status_t s_latest_cloud_status = {0};
+static bool s_latest_xiaozhi_status_available = false;
+static ui_xiaozhi_status_t s_latest_xiaozhi_status = {
+    .state = UI_XIAOZHI_STATE_DISCONNECTED,
+    .listening_started_at_us = 0,
+    .listening_stopped_at_us = 0,
+    .last_error = ESP_OK,
+};
 
 /* Provisioning references are valid only while its screen is active. */
 static lv_obj_t *s_provisioning_qr_container = NULL;
@@ -224,6 +243,16 @@ static lv_obj_t *s_sensor_wifi_dot = NULL;
 static lv_obj_t *s_sensor_cloud_label = NULL;
 static lv_obj_t *s_sensor_cloud_dot = NULL;
 static lv_timer_t *s_sensor_clock_timer = NULL;
+
+/* Xiaozhi references are valid only while the Xiaozhi screen is active. */
+static lv_obj_t *s_xiaozhi_connection_label = NULL;
+static lv_obj_t *s_xiaozhi_state_label = NULL;
+static lv_obj_t *s_xiaozhi_detail_label = NULL;
+static lv_obj_t *s_xiaozhi_duration_label = NULL;
+static lv_obj_t *s_xiaozhi_user_text_label = NULL;
+static lv_obj_t *s_xiaozhi_assistant_text_label = NULL;
+static lv_obj_t *s_xiaozhi_state_indicator = NULL;
+static lv_timer_t *s_xiaozhi_screen_timer = NULL;
 
 static bool s_latest_reset_status_available = false;
 
@@ -262,6 +291,8 @@ static void app_gui_zeroize(
     size_t size);
 static bool app_gui_is_valid_provisioning_state(
     ui_provisioning_state_t state);
+static bool app_gui_is_valid_xiaozhi_status(
+    const ui_xiaozhi_status_t *status);
 static bool app_gui_is_valid_provisioning_qr_payload(
     const ui_provisioning_qr_payload_t *payload);
 static bool app_gui_accept_provisioning_generation(
@@ -292,6 +323,8 @@ static void app_gui_wifi_screen_timeout_cb(lv_timer_t *timer);
 static void app_gui_restart_wifi_screen_timer(void);
 static void app_gui_sensor_clock_timer_cb(lv_timer_t *timer);
 static void app_gui_restart_sensor_clock_timer(void);
+static void app_gui_xiaozhi_timer_cb(lv_timer_t *timer);
+static void app_gui_restart_xiaozhi_screen_timer(void);
 static esp_err_t app_gui_create_boot_screen(
     lv_obj_t *screen);
 static void app_gui_render_boot_status(
@@ -306,6 +339,8 @@ static esp_err_t app_gui_create_wifi_screen(
     lv_obj_t *screen);
 static esp_err_t app_gui_create_sensor_screen(
     lv_obj_t *screen);
+static esp_err_t app_gui_create_xiaozhi_screen(
+    lv_obj_t *screen);
 static const char *app_gui_wifi_state_to_string(ui_wifi_state_t state);
 static lv_color_t app_gui_wifi_state_color(ui_wifi_state_t state);
 static const char *app_gui_sensor_state_to_string(ui_sensor_state_t state);
@@ -316,6 +351,12 @@ static lv_color_t app_gui_audio_status_color(
     const ui_audio_status_t *status);
 static const char *app_gui_cloud_state_to_string(ui_cloud_state_t state);
 static lv_color_t app_gui_cloud_state_color(ui_cloud_state_t state);
+static const char *app_gui_xiaozhi_state_to_string(
+    ui_xiaozhi_state_t state);
+static const char *app_gui_xiaozhi_detail_text(
+    const ui_xiaozhi_status_t *status);
+static lv_color_t app_gui_xiaozhi_state_color(
+    ui_xiaozhi_state_t state);
 static lv_obj_t *app_gui_create_dashboard_rule(
     lv_obj_t *screen,
     int32_t x,
@@ -349,6 +390,8 @@ static void app_gui_render_sensor_wifi_status(
     const ui_wifi_status_t *status);
 static void app_gui_render_cloud_status(
     const ui_cloud_status_t *status);
+static void app_gui_render_xiaozhi_status(
+    const ui_xiaozhi_status_t *status);
 static bool app_gui_render_cached_status(
     app_gui_screen_id_t screen_id);
 static esp_err_t app_gui_activate_screen(
@@ -374,6 +417,7 @@ static void app_gui_process_sensor_status(void);
 static void app_gui_process_audio_status(void);
 static void app_gui_process_wifi_status(void);
 static void app_gui_process_cloud_status(void);
+static void app_gui_process_xiaozhi_status(void);
 static void app_gui_log_stack_usage(const char *task_name);
 static void app_gui_process_lvgl(void);
 static void app_gui_ui_task(void *param);
@@ -391,6 +435,7 @@ static bool app_gui_is_valid_screen_id(
          (screen_id == APP_GUI_SCREEN_PROVISIONING) ||
          (screen_id == APP_GUI_SCREEN_WIFI_STATUS) ||
          (screen_id == APP_GUI_SCREEN_SENSOR_DASHBOARD) ||
+         (screen_id == APP_GUI_SCREEN_XIAOZHI) ||
          (screen_id == APP_GUI_SCREEN_RESET_RESULT));
 }
 
@@ -461,6 +506,36 @@ static bool app_gui_is_valid_provisioning_state(
     return
         (state >= UI_PROVISIONING_STATE_STARTING) &&
         (state <= UI_PROVISIONING_STATE_RETRYING);
+}
+
+static bool app_gui_is_valid_xiaozhi_status(
+    const ui_xiaozhi_status_t *status)
+{
+    if ((status == NULL) ||
+        (status->state < UI_XIAOZHI_STATE_DISCONNECTED) ||
+        (status->state > UI_XIAOZHI_STATE_ERROR) ||
+        (status->listening_started_at_us < 0) ||
+        (status->listening_stopped_at_us < 0) ||
+        ((status->listening_stopped_at_us > 0) &&
+         (status->listening_started_at_us == 0)) ||
+        ((status->listening_stopped_at_us > 0) &&
+         (status->listening_stopped_at_us <
+          status->listening_started_at_us)) ||
+        ((status->state == UI_XIAOZHI_STATE_ERROR) &&
+         (status->last_error == ESP_OK)) ||
+        ((status->state != UI_XIAOZHI_STATE_ERROR) &&
+         (status->last_error != ESP_OK))) {
+        return false;
+    }
+
+    return (strnlen(
+                status->user_text,
+                sizeof(status->user_text)) <
+            sizeof(status->user_text)) &&
+           (strnlen(
+                status->assistant_text,
+                sizeof(status->assistant_text)) <
+            sizeof(status->assistant_text));
 }
 
 static bool app_gui_is_valid_provisioning_qr_payload(
@@ -598,6 +673,9 @@ static const char *app_gui_screen_id_to_string(
 
         case APP_GUI_SCREEN_SENSOR_DASHBOARD:
             return "SENSOR_DASHBOARD";
+
+        case APP_GUI_SCREEN_XIAOZHI:
+            return "XIAOZHI";
 
         case APP_GUI_SCREEN_RESET_RESULT:
             return "RESET_RESULT";
@@ -869,6 +947,11 @@ static void app_gui_cleanup_queues(void)
         vQueueDeleteWithCaps(s_cloud_status_queue);
         s_cloud_status_queue = NULL;
     }
+
+    if (s_xiaozhi_status_queue != NULL) {
+        vQueueDeleteWithCaps(s_xiaozhi_status_queue);
+        s_xiaozhi_status_queue = NULL;
+    }
 }
 
 static void app_gui_set_active_screen_id(
@@ -909,6 +992,13 @@ static void app_gui_capture_widget_refs(
     refs->sensor_wifi_dot = s_sensor_wifi_dot;
     refs->sensor_cloud_label = s_sensor_cloud_label;
     refs->sensor_cloud_dot = s_sensor_cloud_dot;
+    refs->xiaozhi_connection_label = s_xiaozhi_connection_label;
+    refs->xiaozhi_state_label = s_xiaozhi_state_label;
+    refs->xiaozhi_detail_label = s_xiaozhi_detail_label;
+    refs->xiaozhi_duration_label = s_xiaozhi_duration_label;
+    refs->xiaozhi_user_text_label = s_xiaozhi_user_text_label;
+    refs->xiaozhi_assistant_text_label = s_xiaozhi_assistant_text_label;
+    refs->xiaozhi_state_indicator = s_xiaozhi_state_indicator;
     refs->reset_status_label =
         s_reset_status_label;
 
@@ -940,6 +1030,13 @@ static void app_gui_clear_widget_refs(void)
     s_sensor_wifi_dot = NULL;
     s_sensor_cloud_label = NULL;
     s_sensor_cloud_dot = NULL;
+    s_xiaozhi_connection_label = NULL;
+    s_xiaozhi_state_label = NULL;
+    s_xiaozhi_detail_label = NULL;
+    s_xiaozhi_duration_label = NULL;
+    s_xiaozhi_user_text_label = NULL;
+    s_xiaozhi_assistant_text_label = NULL;
+    s_xiaozhi_state_indicator = NULL;
     s_reset_status_label = NULL;
     s_reset_detail_label = NULL;
     s_reset_state_indicator = NULL;
@@ -977,6 +1074,13 @@ static void app_gui_apply_widget_refs(
     s_sensor_wifi_dot = refs->sensor_wifi_dot;
     s_sensor_cloud_label = refs->sensor_cloud_label;
     s_sensor_cloud_dot = refs->sensor_cloud_dot;
+    s_xiaozhi_connection_label = refs->xiaozhi_connection_label;
+    s_xiaozhi_state_label = refs->xiaozhi_state_label;
+    s_xiaozhi_detail_label = refs->xiaozhi_detail_label;
+    s_xiaozhi_duration_label = refs->xiaozhi_duration_label;
+    s_xiaozhi_user_text_label = refs->xiaozhi_user_text_label;
+    s_xiaozhi_assistant_text_label = refs->xiaozhi_assistant_text_label;
+    s_xiaozhi_state_indicator = refs->xiaozhi_state_indicator;
     s_reset_status_label = refs->reset_status_label;
     s_reset_detail_label = refs->reset_detail_label;
     s_reset_state_indicator = refs->reset_state_indicator;
@@ -1067,6 +1171,55 @@ static void app_gui_restart_sensor_clock_timer(void)
         APP_GUI_CLOCK_REFRESH_PERIOD_MS);
     lv_timer_resume(s_sensor_clock_timer);
     lv_timer_reset(s_sensor_clock_timer);
+}
+
+/* Xiaozhi Screen Timing --------------------------------------------------- */
+static void app_gui_xiaozhi_timer_cb(lv_timer_t *timer)
+{
+    /*
+     * This runs from lv_timer_handler() while the UI task owns LVGL. It keeps
+     * no root/widget pointer in timer user data and is paused before a screen
+     * root can be deleted.
+     */
+    app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
+
+    if ((timer == NULL) ||
+        (app_gui_get_screen_id(&screen_id) != ESP_OK) ||
+        (screen_id != APP_GUI_SCREEN_XIAOZHI)) {
+        if (timer != NULL) {
+            lv_timer_pause(timer);
+        }
+
+        return;
+    }
+
+    ui_xiaozhi_status_t status = {
+        .state = UI_XIAOZHI_STATE_DISCONNECTED,
+        .listening_started_at_us = 0,
+        .listening_stopped_at_us = 0,
+        .last_error = ESP_OK,
+    };
+
+    taskENTER_CRITICAL(&s_screen_id_lock);
+    if (s_latest_xiaozhi_status_available) {
+        status = s_latest_xiaozhi_status;
+    }
+    taskEXIT_CRITICAL(&s_screen_id_lock);
+
+    app_gui_render_xiaozhi_status(&status);
+}
+
+static void app_gui_restart_xiaozhi_screen_timer(void)
+{
+    if (s_xiaozhi_screen_timer == NULL) {
+        return;
+    }
+
+    lv_timer_set_period(
+        s_xiaozhi_screen_timer,
+        APP_GUI_XIAOZHI_TIMER_PERIOD_MS);
+    lv_timer_resume(s_xiaozhi_screen_timer);
+    lv_timer_reset(s_xiaozhi_screen_timer);
 }
 
 static const char *app_gui_wifi_state_to_string(ui_wifi_state_t state)
@@ -1204,6 +1357,87 @@ static lv_color_t app_gui_cloud_state_color(
             return lv_color_hex(0xF06464);
 
         case UI_CLOUD_STATE_UNKNOWN:
+        default:
+            return lv_color_hex(0x7B858A);
+    }
+}
+
+static const char *app_gui_xiaozhi_state_to_string(
+    ui_xiaozhi_state_t state)
+{
+    switch (state) {
+        case UI_XIAOZHI_STATE_READY:
+            return "READY";
+
+        case UI_XIAOZHI_STATE_LISTENING:
+            return "LISTENING";
+
+        case UI_XIAOZHI_STATE_PROCESSING:
+            return "PROCESSING";
+
+        case UI_XIAOZHI_STATE_RESPONDING:
+            return "RESPONDING";
+
+        case UI_XIAOZHI_STATE_ERROR:
+            return "ERROR";
+
+        case UI_XIAOZHI_STATE_DISCONNECTED:
+        default:
+            return "DISCONNECTED";
+    }
+}
+
+static const char *app_gui_xiaozhi_detail_text(
+    const ui_xiaozhi_status_t *status)
+{
+    if (status == NULL) {
+        return "No validation status";
+    }
+
+    switch (status->state) {
+        case UI_XIAOZHI_STATE_READY:
+            return "Ready for validation";
+
+        case UI_XIAOZHI_STATE_LISTENING:
+            return "Speak now";
+
+        case UI_XIAOZHI_STATE_PROCESSING:
+            return "Waiting for response";
+
+        case UI_XIAOZHI_STATE_RESPONDING:
+            return "Xiaozhi replying";
+
+        case UI_XIAOZHI_STATE_ERROR:
+            return (status->last_error == ESP_ERR_TIMEOUT)
+                ? "Validation timeout"
+                : "Validation failed";
+
+        case UI_XIAOZHI_STATE_DISCONNECTED:
+        default:
+            return "No active session";
+    }
+}
+
+static lv_color_t app_gui_xiaozhi_state_color(
+    ui_xiaozhi_state_t state)
+{
+    switch (state) {
+        case UI_XIAOZHI_STATE_READY:
+            return lv_color_hex(0x49C978);
+
+        case UI_XIAOZHI_STATE_LISTENING:
+            return lv_color_hex(0x4DB6E5);
+
+        case UI_XIAOZHI_STATE_PROCESSING:
+            return lv_color_hex(0xFFC857);
+
+        case UI_XIAOZHI_STATE_RESPONDING:
+            return lv_color_hex(0xA987FF);
+
+        case UI_XIAOZHI_STATE_ERROR:
+            return lv_color_hex(0xF06464);
+
+        case UI_XIAOZHI_STATE_DISCONNECTED:
         default:
             return lv_color_hex(0x7B858A);
     }
@@ -2093,6 +2327,301 @@ static esp_err_t app_gui_create_sensor_screen(
     return ESP_OK;
 }
 
+/* Xiaozhi Validation Screen ---------------------------------------------- */
+static esp_err_t app_gui_create_xiaozhi_screen(
+    lv_obj_t *screen)
+{
+    if (screen == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    app_gui_clear_widget_refs();
+
+    lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(screen, lv_color_hex(0x101619), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(screen, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(screen, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(screen, 0, LV_PART_MAIN);
+
+    lv_obj_t *title = lv_label_create(screen);
+    lv_obj_t *top_rule = lv_obj_create(screen);
+    lv_obj_t *bottom_rule = lv_obj_create(screen);
+    lv_obj_t *user_header = lv_label_create(screen);
+    lv_obj_t *assistant_header = lv_label_create(screen);
+
+    s_xiaozhi_connection_label = lv_label_create(screen);
+    s_xiaozhi_state_label = lv_label_create(screen);
+    s_xiaozhi_detail_label = lv_label_create(screen);
+    s_xiaozhi_duration_label = lv_label_create(screen);
+    s_xiaozhi_user_text_label = lv_label_create(screen);
+    s_xiaozhi_assistant_text_label = lv_label_create(screen);
+    s_xiaozhi_state_indicator = lv_obj_create(screen);
+
+    if ((title == NULL) || (top_rule == NULL) || (bottom_rule == NULL) ||
+        (user_header == NULL) || (assistant_header == NULL) ||
+        (s_xiaozhi_connection_label == NULL) ||
+        (s_xiaozhi_state_label == NULL) ||
+        (s_xiaozhi_detail_label == NULL) ||
+        (s_xiaozhi_duration_label == NULL) ||
+        (s_xiaozhi_user_text_label == NULL) ||
+        (s_xiaozhi_assistant_text_label == NULL) ||
+        (s_xiaozhi_state_indicator == NULL)) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    lv_label_set_text(title, "XIAOZHI");
+    lv_obj_set_pos(title, 4, 2);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_color(title, lv_color_hex(0xF2F5F7), LV_PART_MAIN);
+
+    lv_label_set_text(s_xiaozhi_connection_label, "OFFLINE");
+    lv_label_set_long_mode(
+        s_xiaozhi_connection_label,
+        LV_LABEL_LONG_MODE_CLIP);
+    lv_obj_set_size(s_xiaozhi_connection_label, 42, 11);
+    lv_obj_set_pos(s_xiaozhi_connection_label, 105, 7);
+    lv_obj_set_style_text_font(
+        s_xiaozhi_connection_label,
+        &lv_font_montserrat_10,
+        LV_PART_MAIN);
+    lv_obj_set_style_text_align(
+        s_xiaozhi_connection_label,
+        LV_TEXT_ALIGN_RIGHT,
+        LV_PART_MAIN);
+
+    lv_obj_remove_style_all(s_xiaozhi_state_indicator);
+    lv_obj_set_size(s_xiaozhi_state_indicator, 5, 5);
+    lv_obj_set_pos(s_xiaozhi_state_indicator, 151, 9);
+    lv_obj_set_style_radius(
+        s_xiaozhi_state_indicator,
+        LV_RADIUS_CIRCLE,
+        LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(
+        s_xiaozhi_state_indicator,
+        LV_OPA_COVER,
+        LV_PART_MAIN);
+
+    lv_obj_t *rules[] = {top_rule, bottom_rule};
+    const int32_t rule_y[] = {25, 87};
+
+    for (size_t index = 0U;
+         index < (sizeof(rules) / sizeof(rules[0]));
+         ++index) {
+        lv_obj_remove_style_all(rules[index]);
+        lv_obj_set_size(rules[index], 152, 1);
+        lv_obj_set_pos(rules[index], 4, rule_y[index]);
+        lv_obj_set_style_bg_opa(rules[index], LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(
+            rules[index],
+            lv_color_hex(0x344047),
+            LV_PART_MAIN);
+    }
+
+    lv_label_set_text(s_xiaozhi_state_label, "DISCONNECTED");
+    lv_label_set_long_mode(s_xiaozhi_state_label, LV_LABEL_LONG_MODE_CLIP);
+    lv_obj_set_size(s_xiaozhi_state_label, 152, 21);
+    lv_obj_set_pos(s_xiaozhi_state_label, 4, 30);
+    lv_obj_set_style_text_font(
+        s_xiaozhi_state_label,
+        &lv_font_montserrat_18,
+        LV_PART_MAIN);
+
+    lv_label_set_text(s_xiaozhi_detail_label, "No active session");
+    lv_label_set_long_mode(s_xiaozhi_detail_label, LV_LABEL_LONG_MODE_CLIP);
+    lv_obj_set_size(s_xiaozhi_detail_label, 152, 11);
+    lv_obj_set_pos(s_xiaozhi_detail_label, 4, 53);
+    lv_obj_set_style_text_font(
+        s_xiaozhi_detail_label,
+        &lv_font_montserrat_10,
+        LV_PART_MAIN);
+    lv_obj_set_style_text_color(
+        s_xiaozhi_detail_label,
+        lv_color_hex(0xA6B0B6),
+        LV_PART_MAIN);
+
+    lv_label_set_text(s_xiaozhi_duration_label, "LISTEN 00:00.0");
+    lv_label_set_long_mode(
+        s_xiaozhi_duration_label,
+        LV_LABEL_LONG_MODE_CLIP);
+    lv_obj_set_size(s_xiaozhi_duration_label, 152, 18);
+    lv_obj_set_pos(s_xiaozhi_duration_label, 4, 66);
+    lv_obj_set_style_text_font(
+        s_xiaozhi_duration_label,
+        &lv_font_montserrat_18,
+        LV_PART_MAIN);
+    lv_obj_set_style_text_color(
+        s_xiaozhi_duration_label,
+        lv_color_hex(0xF2F5F7),
+        LV_PART_MAIN);
+
+    lv_label_set_text(user_header, "YOU");
+    lv_label_set_text(assistant_header, "XZ");
+    lv_obj_t *transcript_headers[] = {user_header, assistant_header};
+    const int32_t transcript_y[] = {91, 108};
+
+    for (size_t index = 0U;
+         index < (sizeof(transcript_headers) / sizeof(transcript_headers[0]));
+         ++index) {
+        lv_obj_set_size(transcript_headers[index], 25, 11);
+        lv_obj_set_pos(transcript_headers[index], 4, transcript_y[index]);
+        lv_obj_set_style_text_font(
+            transcript_headers[index],
+            &lv_font_montserrat_10,
+            LV_PART_MAIN);
+        lv_obj_set_style_text_color(
+            transcript_headers[index],
+            lv_color_hex(0x8C989F),
+            LV_PART_MAIN);
+    }
+
+    lv_obj_t *transcript_labels[] = {
+        s_xiaozhi_user_text_label,
+        s_xiaozhi_assistant_text_label,
+    };
+    const int32_t transcript_text_y[] = {90, 106};
+    const int32_t transcript_height[] = {16, 20};
+
+    for (size_t index = 0U;
+         index < (sizeof(transcript_labels) / sizeof(transcript_labels[0]));
+         ++index) {
+        lv_label_set_text(transcript_labels[index], "-");
+        /* Fixed region prevents transcript growth from moving other widgets. */
+        lv_label_set_long_mode(
+            transcript_labels[index],
+            LV_LABEL_LONG_MODE_CLIP);
+        lv_obj_set_size(
+            transcript_labels[index],
+            126,
+            transcript_height[index]);
+        lv_obj_set_pos(transcript_labels[index], 30, transcript_text_y[index]);
+        lv_obj_set_style_text_font(
+            transcript_labels[index],
+            &lv_font_montserrat_10,
+            LV_PART_MAIN);
+        lv_obj_set_style_text_color(
+            transcript_labels[index],
+            lv_color_hex(0xF2F5F7),
+            LV_PART_MAIN);
+    }
+
+    return ESP_OK;
+}
+
+static uint64_t app_gui_get_xiaozhi_duration_us(
+    const ui_xiaozhi_status_t *status)
+{
+    if ((status == NULL) || (status->listening_started_at_us <= 0)) {
+        return 0U;
+    }
+
+    int64_t end_time_us = status->listening_stopped_at_us;
+
+    if (status->state == UI_XIAOZHI_STATE_LISTENING) {
+        end_time_us = esp_timer_get_time();
+    }
+
+    if (end_time_us <= status->listening_started_at_us) {
+        return 0U;
+    }
+
+    return (uint64_t)(end_time_us - status->listening_started_at_us);
+}
+
+static void app_gui_format_xiaozhi_duration(
+    uint64_t duration_us,
+    char *output,
+    size_t output_size)
+{
+    if ((output == NULL) || (output_size == 0U)) {
+        return;
+    }
+
+    const uint64_t tenths = duration_us / 100000U;
+    const uint64_t minutes = tenths / 600U;
+    const uint64_t seconds = (tenths / 10U) % 60U;
+    const uint64_t decimal = tenths % 10U;
+
+    (void)snprintf(
+        output,
+        output_size,
+        "%02llu:%02llu.%llu",
+        (unsigned long long)minutes,
+        (unsigned long long)seconds,
+        (unsigned long long)decimal);
+}
+
+static void app_gui_render_xiaozhi_status(
+    const ui_xiaozhi_status_t *status)
+{
+    if (!app_gui_is_valid_xiaozhi_status(status) ||
+        (s_xiaozhi_connection_label == NULL) ||
+        (s_xiaozhi_state_label == NULL) ||
+        (s_xiaozhi_detail_label == NULL) ||
+        (s_xiaozhi_duration_label == NULL) ||
+        (s_xiaozhi_user_text_label == NULL) ||
+        (s_xiaozhi_assistant_text_label == NULL) ||
+        (s_xiaozhi_state_indicator == NULL)) {
+        return;
+    }
+
+    const bool online =
+        (status->state == UI_XIAOZHI_STATE_READY) ||
+        (status->state == UI_XIAOZHI_STATE_LISTENING) ||
+        (status->state == UI_XIAOZHI_STATE_PROCESSING) ||
+        (status->state == UI_XIAOZHI_STATE_RESPONDING);
+    const lv_color_t state_color =
+        app_gui_xiaozhi_state_color(status->state);
+    char duration[APP_GUI_XIAOZHI_DURATION_BUFFER_SIZE] = {0};
+    char duration_text[APP_GUI_XIAOZHI_DURATION_BUFFER_SIZE + 8U] = {0};
+
+    app_gui_format_xiaozhi_duration(
+        app_gui_get_xiaozhi_duration_us(status),
+        duration,
+        sizeof(duration));
+    (void)snprintf(
+        duration_text,
+        sizeof(duration_text),
+        "LISTEN %s",
+        duration);
+
+    app_gui_set_label_text_if_changed(
+        s_xiaozhi_connection_label,
+        (status->state == UI_XIAOZHI_STATE_ERROR)
+            ? "ERROR"
+            : (online ? "ONLINE" : "OFFLINE"));
+    app_gui_set_label_text_if_changed(
+        s_xiaozhi_state_label,
+        app_gui_xiaozhi_state_to_string(status->state));
+    app_gui_set_label_text_if_changed(
+        s_xiaozhi_detail_label,
+        app_gui_xiaozhi_detail_text(status));
+    app_gui_set_label_text_if_changed(
+        s_xiaozhi_duration_label,
+        duration_text);
+    app_gui_set_label_text_if_changed(
+        s_xiaozhi_user_text_label,
+        (status->user_text[0] != '\0') ? status->user_text : "-");
+    app_gui_set_label_text_if_changed(
+        s_xiaozhi_assistant_text_label,
+        (status->assistant_text[0] != '\0')
+            ? status->assistant_text
+            : "-");
+
+    lv_obj_set_style_text_color(
+        s_xiaozhi_connection_label,
+        state_color,
+        LV_PART_MAIN);
+    lv_obj_set_style_text_color(
+        s_xiaozhi_state_label,
+        state_color,
+        LV_PART_MAIN);
+    lv_obj_set_style_bg_color(
+        s_xiaozhi_state_indicator,
+        state_color,
+        LV_PART_MAIN);
+}
+
 /* Reset Result Screen ----------------------------------------------------- */
 
 static esp_err_t app_gui_create_reset_result_screen(
@@ -2607,6 +3136,7 @@ static bool app_gui_render_cached_status(
     bool sensor_available = false;
     bool audio_available = false;
     bool cloud_available = false;
+    bool xiaozhi_available = false;
     ui_provisioning_status_t provisioning_status = {
         .session_generation = 0U,
         .session_number = 0U,
@@ -2623,6 +3153,12 @@ static bool app_gui_render_cached_status(
         .last_error = ESP_OK,
     };
     ui_cloud_status_t cloud_status = {0};
+    ui_xiaozhi_status_t xiaozhi_status = {
+        .state = UI_XIAOZHI_STATE_DISCONNECTED,
+        .listening_started_at_us = 0,
+        .listening_stopped_at_us = 0,
+        .last_error = ESP_OK,
+    };
 
     taskENTER_CRITICAL(&s_screen_id_lock);
 
@@ -2654,6 +3190,8 @@ static bool app_gui_render_cached_status(
         audio_status = s_latest_audio_status;
         cloud_available = s_latest_cloud_status_available;
         cloud_status = s_latest_cloud_status;
+        xiaozhi_available = s_latest_xiaozhi_status_available;
+        xiaozhi_status = s_latest_xiaozhi_status;
     }
 
     taskEXIT_CRITICAL(&s_screen_id_lock);
@@ -2696,6 +3234,18 @@ static bool app_gui_render_cached_status(
     if ((screen_id == APP_GUI_SCREEN_WIFI_STATUS) &&
         wifi_available) {
         app_gui_render_wifi_status(&wifi_status);
+        return true;
+    }
+
+    if (screen_id == APP_GUI_SCREEN_XIAOZHI) {
+        if (!xiaozhi_available) {
+            xiaozhi_status.state = UI_XIAOZHI_STATE_DISCONNECTED;
+            xiaozhi_status.listening_started_at_us = 0;
+            xiaozhi_status.listening_stopped_at_us = 0;
+            xiaozhi_status.last_error = ESP_OK;
+        }
+
+        app_gui_render_xiaozhi_status(&xiaozhi_status);
         return true;
     }
 
@@ -2792,6 +3342,10 @@ static esp_err_t app_gui_activate_screen(
             ret = app_gui_create_sensor_screen(target_root);
             break;
 
+        case APP_GUI_SCREEN_XIAOZHI:
+            ret = app_gui_create_xiaozhi_screen(target_root);
+            break;
+
         case APP_GUI_SCREEN_RESET_RESULT:
             ret =
                 app_gui_create_reset_result_screen(
@@ -2834,6 +3388,22 @@ static esp_err_t app_gui_activate_screen(
         }
     }
 
+    if ((ret == ESP_OK) &&
+        (target_screen == APP_GUI_SCREEN_XIAOZHI) &&
+        (s_xiaozhi_screen_timer == NULL)) {
+        s_xiaozhi_screen_timer = lv_timer_create(
+            app_gui_xiaozhi_timer_cb,
+            APP_GUI_XIAOZHI_TIMER_PERIOD_MS,
+            NULL);
+
+        if (s_xiaozhi_screen_timer == NULL) {
+            ret = ESP_ERR_NO_MEM;
+        } else {
+            /* It becomes active only after the completed root is loaded. */
+            lv_timer_pause(s_xiaozhi_screen_timer);
+        }
+    }
+
     if (ret != ESP_OK) {
         lv_obj_delete(target_root);
         app_gui_apply_widget_refs(&previous_refs);
@@ -2861,6 +3431,11 @@ static esp_err_t app_gui_activate_screen(
         lv_timer_pause(s_sensor_clock_timer);
     }
 
+    if ((s_xiaozhi_screen_timer != NULL) &&
+        (target_screen != APP_GUI_SCREEN_XIAOZHI)) {
+        lv_timer_pause(s_xiaozhi_screen_timer);
+    }
+
     lv_screen_load(target_root);
     app_gui_set_active_screen_id(target_screen);
 
@@ -2871,6 +3446,10 @@ static esp_err_t app_gui_activate_screen(
     if (target_screen == APP_GUI_SCREEN_SENSOR_DASHBOARD) {
         app_gui_render_sensor_clock();
         app_gui_restart_sensor_clock_timer();
+    }
+
+    if (target_screen == APP_GUI_SCREEN_XIAOZHI) {
+        app_gui_restart_xiaozhi_screen_timer();
     }
 
     lv_obj_delete(current_root);
@@ -3300,6 +3879,52 @@ static void app_gui_process_cloud_status(void)
         cloud_status.last_http_status);
 }
 
+/* Xiaozhi Queue Processing ------------------------------------------------ */
+static void app_gui_process_xiaozhi_status(void)
+{
+    ui_xiaozhi_status_t status = {
+        .state = UI_XIAOZHI_STATE_DISCONNECTED,
+        .listening_started_at_us = 0,
+        .listening_stopped_at_us = 0,
+        .last_error = ESP_OK,
+    };
+
+    if ((s_xiaozhi_status_queue == NULL) ||
+        (xQueueReceive(s_xiaozhi_status_queue, &status, 0) != pdTRUE)) {
+        return;
+    }
+
+    if (!app_gui_is_valid_xiaozhi_status(&status)) {
+        ESP_LOGW(TAG, "Ignoring invalid Xiaozhi GUI status");
+        return;
+    }
+
+    taskENTER_CRITICAL(&s_screen_id_lock);
+    s_latest_xiaozhi_status = status;
+    s_latest_xiaozhi_status_available = true;
+    taskEXIT_CRITICAL(&s_screen_id_lock);
+
+    app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
+
+    if ((app_gui_get_screen_id(&screen_id) == ESP_OK) &&
+        (screen_id == APP_GUI_SCREEN_XIAOZHI)) {
+        ui_manager_lvgl_wait_for_mutex();
+        app_gui_render_xiaozhi_status(&status);
+        ui_manager_lvgl_release_mutex();
+    }
+
+    ESP_LOGD(
+        TAG,
+        "GUI received Xiaozhi status: state=%s, start=%lld, stop=%lld, "
+        "error=%s, user_truncated=%d, assistant_truncated=%d",
+        app_gui_xiaozhi_state_to_string(status.state),
+        (long long)status.listening_started_at_us,
+        (long long)status.listening_stopped_at_us,
+        esp_err_to_name(status.last_error),
+        (int)status.user_text_truncated,
+        (int)status.assistant_text_truncated);
+}
+
 /* Wi-Fi Queue Processing -------------------------------------------------- */
 static void app_gui_process_wifi_status(void)
 {
@@ -3384,6 +4009,8 @@ static void app_gui_process_lvgl(void)
 
     app_gui_process_cloud_status();
 
+    app_gui_process_xiaozhi_status();
+
     app_gui_process_wifi_status();
 
     ui_manager_lvgl_wait_for_mutex();
@@ -3425,7 +4052,8 @@ esp_err_t app_gui_init(void)
         (s_wifi_status_queue != NULL) ||
         (s_sensor_status_queue != NULL) ||
         (s_audio_status_queue != NULL) ||
-        (s_cloud_status_queue != NULL)) {
+        (s_cloud_status_queue != NULL) ||
+        (s_xiaozhi_status_queue != NULL)) {
         ESP_LOGW(TAG, "Application GUI is already initialized");
         return ESP_ERR_INVALID_STATE;
     }
@@ -3518,6 +4146,19 @@ esp_err_t app_gui_init(void)
         return ESP_ERR_NO_MEM;
     }
 
+    s_xiaozhi_status_queue =
+        xQueueCreateWithCaps(
+            APP_GUI_XIAOZHI_STATUS_QUEUE_LENGTH,
+            sizeof(ui_xiaozhi_status_t),
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
+        );
+
+    if (s_xiaozhi_status_queue == NULL) {
+        ESP_LOGE(TAG, "Failed to create Xiaozhi GUI status queue");
+        app_gui_cleanup_queues();
+        return ESP_ERR_NO_MEM;
+    }
+
     ESP_LOGI(TAG, "Application GUI initialized");
 
     return ESP_OK;
@@ -3531,7 +4172,8 @@ esp_err_t app_gui_start_ui_task(void)
         (s_wifi_status_queue == NULL) ||
         (s_sensor_status_queue == NULL) ||
         (s_audio_status_queue == NULL) ||
-        (s_cloud_status_queue == NULL)) {
+        (s_cloud_status_queue == NULL) ||
+        (s_xiaozhi_status_queue == NULL)) {
         ESP_LOGE(TAG, "Application GUI is not initialized");
         return ESP_ERR_INVALID_STATE;
     }
@@ -3760,6 +4402,25 @@ esp_err_t app_gui_post_audio_status(
             status) != pdTRUE)
     {
         ESP_LOGW(TAG, "Failed to post audio status to UI");
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t app_gui_post_xiaozhi_status(
+    const ui_xiaozhi_status_t *status)
+{
+    if (!app_gui_is_valid_xiaozhi_status(status)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_xiaozhi_status_queue == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (xQueueOverwrite(s_xiaozhi_status_queue, status) != pdTRUE) {
+        ESP_LOGW(TAG, "Failed to post Xiaozhi status to UI");
         return ESP_FAIL;
     }
 

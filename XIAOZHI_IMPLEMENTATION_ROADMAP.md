@@ -434,6 +434,11 @@ get_info()
 - [x] P2-D: Audit the resolved 0.1.2 public chat API. It has no arbitrary
       typed-text TX API; `CHAT_TEXT` receive callback plumbing uses bounded
       copied storage for USER and ASSISTANT roles.
+- [x] P2.1: Add a temporary copied-status UI bridge and dedicated `XIAOZHI`
+      screen for `DISCONNECTED`, `READY`, `LISTENING`, `PROCESSING`,
+      `RESPONDING`, and `ERROR`. The existing GUI task owns the 100 ms local
+      duration timer and cached transcript rendering; build is verified while
+      LCD/P2-E/P2-F hardware acceptance remains pending.
 - [ ] P2-E hardware acceptance: the temporary WebSocket-only worker now
       implements `CONNECTED -> open audio -> observed OPENED -> bounded hold ->
       close -> observed CLOSED -> stop -> deinit`; ESP-IDF build is verified,

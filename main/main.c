@@ -54,6 +54,9 @@
 /* app network coordinator ------------------------------------------------- */
 #include "app_network_coordinator.h"
 
+/* Xiaozhi validation foundation ------------------------------------------- */
+#include "xiaozhi_foundation.h"
+
 /* app reset coordinator --------------------------------------------------- */
 #include "app_reset_coordinator.h"
 
@@ -198,6 +201,15 @@ static ui_cloud_state_t app_map_cloud_state(
 /** @brief Convert and forward cloud manager snapshots to the GUI queue. */
 static void app_cloud_status_callback(
     const cloud_manager_status_t *status,
+    void *user_context);
+
+/** @brief Map a foundation validation state to its GUI equivalent. */
+static ui_xiaozhi_state_t app_map_xiaozhi_state(
+    xiaozhi_foundation_ui_state_t state);
+
+/** @brief Copy a foundation snapshot to the GUI queue without calling LVGL. */
+static void app_xiaozhi_ui_status_callback(
+    const xiaozhi_foundation_ui_status_t *status,
     void *user_context);
 
 /**
@@ -374,6 +386,24 @@ void app_main(void)
             esp_err_to_name(ret));
 
         return;
+    }
+
+    /*
+     * The foundation borrows this callback for application lifetime. It only
+     * copies bounded status into app_gui; it cannot route screens or access
+     * LVGL from Xiaozhi worker/event-loop context.
+     */
+    const esp_err_t xiaozhi_ui_ret =
+        xiaozhi_foundation_register_ui_status_callback(
+            app_xiaozhi_ui_status_callback,
+            NULL);
+
+    if (xiaozhi_ui_ret != ESP_OK)
+    {
+        ESP_LOGW(
+            TAG,
+            "Xiaozhi validation UI observer unavailable: %s",
+            esp_err_to_name(xiaozhi_ui_ret));
     }
 
     ESP_LOGI(TAG, "LVGL display initialized successfully");
@@ -1223,6 +1253,88 @@ static ui_cloud_state_t app_map_cloud_state(
         case CLOUD_MANAGER_STATE_UNINITIALIZED:
         default:
             return UI_CLOUD_STATE_UNKNOWN;
+    }
+}
+
+static ui_xiaozhi_state_t app_map_xiaozhi_state(
+    xiaozhi_foundation_ui_state_t state)
+{
+    switch (state)
+    {
+        case XIAOZHI_FOUNDATION_UI_READY:
+            return UI_XIAOZHI_STATE_READY;
+
+        case XIAOZHI_FOUNDATION_UI_LISTENING:
+            return UI_XIAOZHI_STATE_LISTENING;
+
+        case XIAOZHI_FOUNDATION_UI_PROCESSING:
+            return UI_XIAOZHI_STATE_PROCESSING;
+
+        case XIAOZHI_FOUNDATION_UI_RESPONDING:
+            return UI_XIAOZHI_STATE_RESPONDING;
+
+        case XIAOZHI_FOUNDATION_UI_ERROR:
+            return UI_XIAOZHI_STATE_ERROR;
+
+        case XIAOZHI_FOUNDATION_UI_DISCONNECTED:
+        default:
+            return UI_XIAOZHI_STATE_DISCONNECTED;
+    }
+}
+
+static void app_xiaozhi_ui_status_callback(
+    const xiaozhi_foundation_ui_status_t *status,
+    void *user_context)
+{
+    (void)user_context;
+
+    if (status == NULL)
+    {
+        return;
+    }
+
+    const ui_xiaozhi_state_t ui_state =
+        app_map_xiaozhi_state(status->state);
+    ui_xiaozhi_status_t ui_status =
+    {
+        .state = ui_state,
+        .listening_started_at_us = status->listening_started_at_us,
+        .listening_stopped_at_us = status->listening_stopped_at_us,
+        .last_error =
+            (ui_state == UI_XIAOZHI_STATE_ERROR)
+                ? ((status->last_error == ESP_OK)
+                    ? ESP_FAIL
+                    : status->last_error)
+                : ESP_OK,
+        .user_text_truncated = status->user_text_truncated,
+        .assistant_text_truncated = status->assistant_text_truncated,
+    };
+
+    _Static_assert(
+        sizeof(ui_status.user_text) == sizeof(status->user_text),
+        "Xiaozhi UI text bounds must match at the composition boundary");
+
+    memcpy(
+        ui_status.user_text,
+        status->user_text,
+        sizeof(ui_status.user_text));
+    memcpy(
+        ui_status.assistant_text,
+        status->assistant_text,
+        sizeof(ui_status.assistant_text));
+    ui_status.user_text[sizeof(ui_status.user_text) - 1U] = '\0';
+    ui_status.assistant_text[sizeof(ui_status.assistant_text) - 1U] = '\0';
+
+    const esp_err_t ret = app_gui_post_xiaozhi_status(&ui_status);
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGD(
+            TAG,
+            "Xiaozhi GUI update dropped: state=%d, error=%s, post=%s",
+            (int)ui_state,
+            esp_err_to_name(ui_status.last_error),
+            esp_err_to_name(ret));
     }
 }
 

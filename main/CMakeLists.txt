@@ -20,6 +20,7 @@ idf_component_register(
         config_manager
         provisioning_manager
         app_network_coordinator
+        xiaozhi_foundation
         button_manager
         app_reset_coordinator
         audio_manager
