@@ -5,12 +5,15 @@
  * Phase 12.5 closes project-side MQTT support after the same pre-CONNECTED
  * failure was reproduced in both the Gateway integration and a standalone
  * official-flow esp_xiaozhi test. The foundation therefore exposes and
- * validates WebSocket only. It does not open an audio channel in this phase.
+ * validates WebSocket only. P2-E validates the WebSocket audio-channel
+ * lifecycle; an explicitly enabled P2-F test can stream one embedded,
+ * validation-only Opus fixture. Neither path owns production audio hardware.
  */
 
 /* Includes ----------------------------------------------------------------- */
 #include "xiaozhi_foundation.h"
 
+#include <stdint.h>
 #include <string.h>
 
 #include "esp_event.h"
@@ -51,13 +54,61 @@
 #define XIAOZHI_FOUNDATION_EVENT_CHAT_EMOJI \
     BIT5
 
+#define XIAOZHI_FOUNDATION_EVENT_AUDIO_CHANNEL_OPENED \
+    BIT6
+
+#define XIAOZHI_FOUNDATION_EVENT_AUDIO_CHANNEL_CLOSED \
+    BIT7
+
+#define XIAOZHI_FOUNDATION_EVENT_AUDIO_DATA_INCOMING \
+    BIT8
+
+#define XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT_USER \
+    BIT9
+
+#define XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT_ASSISTANT \
+    BIT10
+
+#define XIAOZHI_FOUNDATION_EVENT_CHAT_TTS_START \
+    BIT11
+
+#define XIAOZHI_FOUNDATION_EVENT_CHAT_TTS_SENTENCE_START \
+    BIT12
+
+#define XIAOZHI_FOUNDATION_EVENT_CHAT_TTS_STOP \
+    BIT13
+
+#define XIAOZHI_FOUNDATION_EVENT_AUDIO_RX \
+    BIT14
+
 #define XIAOZHI_FOUNDATION_CONNECT_TIMEOUT_MS \
     15000U
 
-#define XIAOZHI_FOUNDATION_CONNECTED_HOLD_MS \
-    2000U
+#define XIAOZHI_FOUNDATION_AUDIO_CHANNEL_OPEN_TIMEOUT_MS \
+    15000U
 
-/* Includes the terminating NUL; copied text is never logged. */
+#define XIAOZHI_FOUNDATION_AUDIO_CHANNEL_CLOSE_TIMEOUT_MS \
+    8000U
+
+#define XIAOZHI_FOUNDATION_AUDIO_CHANNEL_HOLD_MS \
+    1000U
+
+#define XIAOZHI_FOUNDATION_P2F_RESPONSE_TIMEOUT_MS \
+    30000U
+
+#define XIAOZHI_FOUNDATION_AUDIO_FORMAT \
+    "opus"
+
+#define XIAOZHI_FOUNDATION_AUDIO_SAMPLE_RATE \
+    16000
+
+#define XIAOZHI_FOUNDATION_AUDIO_CHANNELS \
+    1
+
+#define XIAOZHI_FOUNDATION_AUDIO_FRAME_DURATION_MS \
+    60
+
+/* Includes the terminating NUL. P2-F logs a separately bounded safe copy. */
 #define XIAOZHI_FOUNDATION_CHAT_TEXT_BUFFER_SIZE \
     192U
 
@@ -67,6 +118,32 @@
 
 #define XIAOZHI_FOUNDATION_CHAT_EMOJI_MAX_LENGTH \
     32U
+
+/* P2-F fixture is a test-only XZF1 raw-Opus packet stream. */
+#define XIAOZHI_FOUNDATION_P2F_FIXTURE_MAGIC \
+    "XZF1"
+
+#define XIAOZHI_FOUNDATION_P2F_FIXTURE_VERSION \
+    1U
+
+#define XIAOZHI_FOUNDATION_P2F_FIXTURE_CODEC_OPUS \
+    1U
+
+#define XIAOZHI_FOUNDATION_P2F_FIXTURE_HEADER_SIZE \
+    24U
+
+#define XIAOZHI_FOUNDATION_P2F_MAX_FIXTURE_BYTES \
+    (64U * 1024U)
+
+#define XIAOZHI_FOUNDATION_P2F_MAX_FRAMES \
+    120U
+
+#define XIAOZHI_FOUNDATION_P2F_MAX_FRAME_BYTES \
+    2048U
+
+/* Includes the terminating NUL and excludes untrusted control characters. */
+#define XIAOZHI_FOUNDATION_P2F_LOG_TEXT_BUFFER_SIZE \
+    97U
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "XIAOZHI_FOUNDATION";
@@ -94,6 +171,14 @@ typedef struct {
 
     bool tts_state_received;
     esp_xiaozhi_chat_tts_state_kind_t last_tts_state;
+    bool tts_start_received;
+    bool tts_sentence_start_received;
+    bool tts_stop_received;
+
+    size_t audio_rx_callback_count;
+    size_t audio_rx_total_bytes;
+    size_t audio_rx_first_packet_size;
+    size_t audio_rx_max_packet_size;
 
     bool error_received;
     esp_err_t last_error_code;
@@ -105,6 +190,24 @@ typedef struct {
     size_t last_emoji_length;
     bool last_emoji_truncated;
 } xiaozhi_foundation_protocol_state_t;
+
+typedef enum {
+    XIAOZHI_FOUNDATION_VALIDATION_P2E_AUDIO_CHANNEL = 0,
+    XIAOZHI_FOUNDATION_VALIDATION_P2F_AUDIO_E2E,
+} xiaozhi_foundation_validation_checkpoint_t;
+
+/**
+ * @brief Parsed, application-owned view of a validation-only fixture.
+ *
+ * The raw packet bytes remain in immutable embedded storage. Each record is
+ * one complete Opus packet and is never retained by a callback.
+ */
+typedef struct {
+    const uint8_t *first_frame;
+    const uint8_t *end;
+    uint32_t frame_count;
+    uint16_t frame_duration_ms;
+} xiaozhi_foundation_p2f_fixture_t;
 
 /**
  * @brief Private state for one WebSocket validation operation.
@@ -128,6 +231,13 @@ static portMUX_TYPE s_operation_lock =
 
 static bool s_operation_in_progress = false;
 
+#if CONFIG_XIAOZHI_FOUNDATION_P2F_EMBED_FIXTURE
+extern const uint8_t xiaozhi_p2f_fixture_start[]
+    asm("_binary_xiaozhi_p2f_fixture_start");
+extern const uint8_t xiaozhi_p2f_fixture_end[]
+    asm("_binary_xiaozhi_p2f_fixture_end");
+#endif
+
 /* Function Prototypes ------------------------------------------------------ */
 static void xiaozhi_foundation_transport_validation_task(
     void *argument);
@@ -143,6 +253,11 @@ static void xiaozhi_foundation_protocol_event_callback(
     void *event_data,
     void *ctx);
 
+static void xiaozhi_foundation_audio_callback(
+    const uint8_t *data,
+    int len,
+    void *callback_ctx);
+
 static size_t xiaozhi_foundation_copy_bounded_string(
     char *destination,
     size_t destination_size,
@@ -156,6 +271,65 @@ static size_t xiaozhi_foundation_get_bounded_string_length(
 
 static void xiaozhi_foundation_log_protocol_diagnostics(
     xiaozhi_foundation_validation_ctx_t *ctx);
+
+static void xiaozhi_foundation_log_p2f_evidence(
+    xiaozhi_foundation_validation_ctx_t *ctx);
+
+static esp_err_t xiaozhi_foundation_validate_p2e_audio_channel(
+    xiaozhi_foundation_validation_ctx_t *ctx,
+    esp_xiaozhi_chat_handle_t chat,
+    bool *audio_channel_open);
+
+static esp_err_t xiaozhi_foundation_validate_p2f_audio_e2e(
+    xiaozhi_foundation_validation_ctx_t *ctx,
+    esp_xiaozhi_chat_handle_t chat,
+    bool *audio_channel_open);
+
+static esp_err_t xiaozhi_foundation_open_audio_channel(
+    xiaozhi_foundation_validation_ctx_t *ctx,
+    esp_xiaozhi_chat_handle_t chat,
+    bool *audio_channel_open);
+
+static esp_err_t xiaozhi_foundation_close_audio_channel(
+    xiaozhi_foundation_validation_ctx_t *ctx,
+    esp_xiaozhi_chat_handle_t chat,
+    bool *audio_channel_open,
+    bool cleanup);
+
+static esp_err_t xiaozhi_foundation_wait_for_event(
+    xiaozhi_foundation_validation_ctx_t *ctx,
+    EventBits_t expected,
+    uint32_t timeout_ms,
+    const char *operation);
+
+static esp_err_t xiaozhi_foundation_get_runtime_error(
+    xiaozhi_foundation_validation_ctx_t *ctx,
+    const char *operation);
+
+static esp_err_t xiaozhi_foundation_parse_p2f_fixture(
+    const uint8_t *data,
+    size_t data_size,
+    xiaozhi_foundation_p2f_fixture_t *out_fixture);
+
+static esp_err_t xiaozhi_foundation_get_p2f_fixture(
+    const uint8_t **out_data,
+    size_t *out_size);
+
+static esp_err_t xiaozhi_foundation_send_p2f_fixture(
+    xiaozhi_foundation_validation_ctx_t *ctx,
+    esp_xiaozhi_chat_handle_t chat,
+    const xiaozhi_foundation_p2f_fixture_t *fixture,
+    uint32_t *out_frames_sent,
+    size_t *out_bytes_sent);
+
+static esp_err_t xiaozhi_foundation_wait_for_p2f_evidence(
+    xiaozhi_foundation_validation_ctx_t *ctx);
+
+static xiaozhi_foundation_validation_checkpoint_t
+xiaozhi_foundation_get_validation_checkpoint(void);
+
+static const char *xiaozhi_foundation_validation_checkpoint_to_string(
+    xiaozhi_foundation_validation_checkpoint_t checkpoint);
 
 static const char *xiaozhi_foundation_tts_state_to_string(
     esp_xiaozhi_chat_tts_state_kind_t state);
@@ -194,14 +368,8 @@ static void xiaozhi_foundation_transport_validation_task(
             requested_transport);
 
     if (ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
-            "Transport connection validation failed: %s",
-            esp_err_to_name(ret));
-    } else {
-        ESP_LOGI(
-            TAG,
-            "Transport connection validation completed");
+        ESP_LOGE(TAG, "Xiaozhi validation worker finished: %s",
+                 esp_err_to_name(ret));
     }
 
     xiaozhi_foundation_finish_operation();
@@ -240,6 +408,25 @@ static void xiaozhi_foundation_chat_event_handler(
         (void)xEventGroupSetBits(
             ctx->events,
             XIAOZHI_FOUNDATION_EVENT_DISCONNECTED);
+        break;
+
+    case ESP_XIAOZHI_CHAT_EVENT_AUDIO_CHANNEL_OPENED:
+        (void)xEventGroupSetBits(
+            ctx->events,
+            XIAOZHI_FOUNDATION_EVENT_AUDIO_CHANNEL_OPENED);
+        break;
+
+    case ESP_XIAOZHI_CHAT_EVENT_AUDIO_CHANNEL_CLOSED:
+        (void)xEventGroupSetBits(
+            ctx->events,
+            XIAOZHI_FOUNDATION_EVENT_AUDIO_CHANNEL_CLOSED);
+        break;
+
+    case ESP_XIAOZHI_CHAT_EVENT_AUDIO_DATA_INCOMING:
+        /* 0.1.2 exposes this ID but does not post it; RX uses audio_callback. */
+        (void)xEventGroupSetBits(
+            ctx->events,
+            XIAOZHI_FOUNDATION_EVENT_AUDIO_DATA_INCOMING);
         break;
 
     default:
@@ -334,6 +521,7 @@ static void xiaozhi_foundation_protocol_event_callback(
             (const esp_xiaozhi_chat_text_data_t *)event_data;
         xiaozhi_foundation_text_snapshot_t *snapshot = NULL;
         EventBits_t event_bit = 0U;
+        bool non_empty = false;
 
         if ((text_data == NULL) || (text_data->text == NULL)) {
             return;
@@ -342,12 +530,14 @@ static void xiaozhi_foundation_protocol_event_callback(
         switch (text_data->role) {
         case ESP_XIAOZHI_CHAT_TEXT_ROLE_USER:
             snapshot = &ctx->protocol.user_text;
-            event_bit = XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT;
+            event_bit = XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT |
+                        XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT_USER;
             break;
 
         case ESP_XIAOZHI_CHAT_TEXT_ROLE_ASSISTANT:
             snapshot = &ctx->protocol.assistant_text;
-            event_bit = XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT;
+            event_bit = XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT |
+                        XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT_ASSISTANT;
             break;
 
         default:
@@ -362,7 +552,14 @@ static void xiaozhi_foundation_protocol_event_callback(
             text_data->text,
             &snapshot->truncated);
         snapshot->received = true;
+        non_empty = (snapshot->length > 0U);
         portEXIT_CRITICAL(&ctx->protocol_lock);
+
+        /* P2-F requires non-empty STT/assistant evidence, not just an event. */
+        if (!non_empty) {
+            event_bit &= ~XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT_USER;
+            event_bit &= ~XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT_ASSISTANT;
+        }
 
         (void)xEventGroupSetBits(ctx->events, event_bit);
         break;
@@ -386,14 +583,35 @@ static void xiaozhi_foundation_protocol_event_callback(
             return;
         }
 
+        EventBits_t tts_event_bit = XIAOZHI_FOUNDATION_EVENT_CHAT_TTS_STATE;
+
         portENTER_CRITICAL(&ctx->protocol_lock);
         ctx->protocol.last_tts_state = tts_state->state;
         ctx->protocol.tts_state_received = true;
+
+        switch (tts_state->state) {
+        case ESP_XIAOZHI_CHAT_TTS_STATE_START:
+            ctx->protocol.tts_start_received = true;
+            tts_event_bit |= XIAOZHI_FOUNDATION_EVENT_CHAT_TTS_START;
+            break;
+
+        case ESP_XIAOZHI_CHAT_TTS_STATE_SENTENCE_START:
+            ctx->protocol.tts_sentence_start_received = true;
+            tts_event_bit |= XIAOZHI_FOUNDATION_EVENT_CHAT_TTS_SENTENCE_START;
+            break;
+
+        case ESP_XIAOZHI_CHAT_TTS_STATE_STOP:
+            ctx->protocol.tts_stop_received = true;
+            tts_event_bit |= XIAOZHI_FOUNDATION_EVENT_CHAT_TTS_STOP;
+            break;
+
+        default:
+            /* Validated immediately above; keep compiler flow explicit. */
+            break;
+        }
         portEXIT_CRITICAL(&ctx->protocol_lock);
 
-        (void)xEventGroupSetBits(
-            ctx->events,
-            XIAOZHI_FOUNDATION_EVENT_CHAT_TTS_STATE);
+        (void)xEventGroupSetBits(ctx->events, tts_event_bit);
         break;
     }
 
@@ -449,6 +667,51 @@ static void xiaozhi_foundation_protocol_event_callback(
     default:
         break;
     }
+}
+
+static void xiaozhi_foundation_audio_callback(
+    const uint8_t *data,
+    int len,
+    void *callback_ctx)
+{
+    xiaozhi_foundation_validation_ctx_t *ctx =
+        (xiaozhi_foundation_validation_ctx_t *)callback_ctx;
+
+    if ((ctx == NULL) || (ctx->events == NULL) || (data == NULL) ||
+        (len <= 0)) {
+        return;
+    }
+
+    /*
+     * The source pointer is valid only for this callback. P2-F deliberately
+     * records scalar evidence only: no logging, allocation, or ownership
+     * transfer occurs on the binary receive path.
+     */
+    const size_t packet_size = (size_t)len;
+
+    portENTER_CRITICAL(&ctx->protocol_lock);
+
+    if (ctx->protocol.audio_rx_callback_count == 0U) {
+        ctx->protocol.audio_rx_first_packet_size = packet_size;
+    }
+
+    if (ctx->protocol.audio_rx_callback_count < SIZE_MAX) {
+        ++ctx->protocol.audio_rx_callback_count;
+    }
+
+    if (packet_size > ctx->protocol.audio_rx_max_packet_size) {
+        ctx->protocol.audio_rx_max_packet_size = packet_size;
+    }
+
+    if (packet_size <= (SIZE_MAX - ctx->protocol.audio_rx_total_bytes)) {
+        ctx->protocol.audio_rx_total_bytes += packet_size;
+    } else {
+        ctx->protocol.audio_rx_total_bytes = SIZE_MAX;
+    }
+
+    portEXIT_CRITICAL(&ctx->protocol_lock);
+
+    (void)xEventGroupSetBits(ctx->events, XIAOZHI_FOUNDATION_EVENT_AUDIO_RX);
 }
 
 static const char *xiaozhi_foundation_tts_state_to_string(
@@ -573,6 +836,717 @@ static void xiaozhi_foundation_log_protocol_diagnostics(
     }
 }
 
+static xiaozhi_foundation_validation_checkpoint_t
+xiaozhi_foundation_get_validation_checkpoint(void)
+{
+#if CONFIG_XIAOZHI_FOUNDATION_P2F_E2E_ONLINE_VALIDATION
+    return XIAOZHI_FOUNDATION_VALIDATION_P2F_AUDIO_E2E;
+#else
+    return XIAOZHI_FOUNDATION_VALIDATION_P2E_AUDIO_CHANNEL;
+#endif
+}
+
+static const char *xiaozhi_foundation_validation_checkpoint_to_string(
+    xiaozhi_foundation_validation_checkpoint_t checkpoint)
+{
+    switch (checkpoint) {
+    case XIAOZHI_FOUNDATION_VALIDATION_P2E_AUDIO_CHANNEL:
+        return "P2-E";
+
+    case XIAOZHI_FOUNDATION_VALIDATION_P2F_AUDIO_E2E:
+        return "P2-F";
+
+    default:
+        return "UNKNOWN";
+    }
+}
+
+static esp_err_t xiaozhi_foundation_get_runtime_error(
+    xiaozhi_foundation_validation_ctx_t *ctx,
+    const char *operation)
+{
+    if ((ctx == NULL) || (ctx->events == NULL)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const EventBits_t bits = xEventGroupGetBits(ctx->events);
+
+    if ((bits & XIAOZHI_FOUNDATION_EVENT_DISCONNECTED) != 0U) {
+        ESP_LOGE(TAG, "%s: DISCONNECTED", operation);
+        return ESP_FAIL;
+    }
+
+    if ((bits & XIAOZHI_FOUNDATION_EVENT_CHAT_ERROR) != 0U) {
+        esp_err_t error_code = ESP_FAIL;
+        char error_source[
+            XIAOZHI_FOUNDATION_CHAT_ERROR_SOURCE_BUFFER_SIZE] = {0};
+        bool error_source_truncated = false;
+
+        portENTER_CRITICAL(&ctx->protocol_lock);
+        if (ctx->protocol.error_received &&
+            (ctx->protocol.last_error_code != ESP_OK)) {
+            error_code = ctx->protocol.last_error_code;
+        }
+        error_source_truncated =
+            ctx->protocol.last_error_source_truncated;
+        (void)xiaozhi_foundation_copy_bounded_string(
+            error_source,
+            sizeof(error_source),
+            ctx->protocol.last_error_source,
+            NULL);
+        portEXIT_CRITICAL(&ctx->protocol_lock);
+
+        ESP_LOGE(
+            TAG,
+            "%s: CHAT_ERROR code=%s source=%s%s",
+            operation,
+            esp_err_to_name(error_code),
+            (error_source[0] != '\0') ? error_source : "unknown",
+            error_source_truncated ? " truncated" : "");
+        return error_code;
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t xiaozhi_foundation_wait_for_event(
+    xiaozhi_foundation_validation_ctx_t *ctx,
+    EventBits_t expected,
+    uint32_t timeout_ms,
+    const char *operation)
+{
+    if ((ctx == NULL) || (ctx->events == NULL) || (expected == 0U) ||
+        (operation == NULL)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const EventBits_t observed = xEventGroupWaitBits(
+        ctx->events,
+        expected |
+            XIAOZHI_FOUNDATION_EVENT_DISCONNECTED |
+            XIAOZHI_FOUNDATION_EVENT_CHAT_ERROR,
+        pdFALSE,
+        pdFALSE,
+        pdMS_TO_TICKS(timeout_ms));
+
+    const esp_err_t runtime_ret =
+        xiaozhi_foundation_get_runtime_error(ctx, operation);
+    if (runtime_ret != ESP_OK) {
+        return runtime_ret;
+    }
+
+    if ((observed & expected) == 0U) {
+        ESP_LOGE(TAG, "%s: timeout after %u ms", operation,
+                 (unsigned)timeout_ms);
+        return ESP_ERR_TIMEOUT;
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t xiaozhi_foundation_open_audio_channel(
+    xiaozhi_foundation_validation_ctx_t *ctx,
+    esp_xiaozhi_chat_handle_t chat,
+    bool *audio_channel_open)
+{
+    if ((ctx == NULL) || (ctx->events == NULL) || (chat == 0) ||
+        (audio_channel_open == NULL)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const esp_xiaozhi_chat_audio_t audio = {
+        .format = XIAOZHI_FOUNDATION_AUDIO_FORMAT,
+        .sample_rate = XIAOZHI_FOUNDATION_AUDIO_SAMPLE_RATE,
+        .channels = XIAOZHI_FOUNDATION_AUDIO_CHANNELS,
+        .frame_duration = XIAOZHI_FOUNDATION_AUDIO_FRAME_DURATION_MS,
+    };
+
+    xEventGroupClearBits(
+        ctx->events,
+        XIAOZHI_FOUNDATION_EVENT_AUDIO_CHANNEL_OPENED |
+            XIAOZHI_FOUNDATION_EVENT_AUDIO_CHANNEL_CLOSED |
+            XIAOZHI_FOUNDATION_EVENT_DISCONNECTED |
+            XIAOZHI_FOUNDATION_EVENT_CHAT_ERROR);
+
+    ESP_LOGI(TAG, "Opening audio channel");
+
+    esp_err_t ret = esp_xiaozhi_chat_open_audio_channel(
+        chat,
+        &audio,
+        NULL,
+        0U);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "open_audio_channel failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    *audio_channel_open = true;
+    ESP_LOGI(TAG, "open_audio_channel: OK");
+
+    ret = xiaozhi_foundation_wait_for_event(
+        ctx,
+        XIAOZHI_FOUNDATION_EVENT_AUDIO_CHANNEL_OPENED,
+        XIAOZHI_FOUNDATION_AUDIO_CHANNEL_OPEN_TIMEOUT_MS,
+        "AUDIO_CHANNEL_OPENED");
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "AUDIO_CHANNEL_OPENED");
+    return ESP_OK;
+}
+
+static esp_err_t xiaozhi_foundation_close_audio_channel(
+    xiaozhi_foundation_validation_ctx_t *ctx,
+    esp_xiaozhi_chat_handle_t chat,
+    bool *audio_channel_open,
+    bool cleanup)
+{
+    if ((ctx == NULL) || (ctx->events == NULL) || (chat == 0) ||
+        (audio_channel_open == NULL)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!*audio_channel_open) {
+        return ESP_OK;
+    }
+
+    xEventGroupClearBits(ctx->events,
+                         XIAOZHI_FOUNDATION_EVENT_AUDIO_CHANNEL_CLOSED);
+
+    if (cleanup) {
+        ESP_LOGI(TAG, "Cleanup closing audio channel");
+    } else {
+        ESP_LOGI(TAG, "Closing audio channel");
+    }
+
+    esp_err_t ret = esp_xiaozhi_chat_close_audio_channel(chat);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "close_audio_channel failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    *audio_channel_open = false;
+    ESP_LOGI(TAG, "close_audio_channel: OK");
+
+    ret = xiaozhi_foundation_wait_for_event(
+        ctx,
+        XIAOZHI_FOUNDATION_EVENT_AUDIO_CHANNEL_CLOSED,
+        XIAOZHI_FOUNDATION_AUDIO_CHANNEL_CLOSE_TIMEOUT_MS,
+        "AUDIO_CHANNEL_CLOSED");
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "AUDIO_CHANNEL_CLOSED");
+    return ESP_OK;
+}
+
+static esp_err_t xiaozhi_foundation_validate_p2e_audio_channel(
+    xiaozhi_foundation_validation_ctx_t *ctx,
+    esp_xiaozhi_chat_handle_t chat,
+    bool *audio_channel_open)
+{
+    ESP_LOGI(TAG, "=== P2-E WEBSOCKET AUDIO CHANNEL ===");
+
+    esp_err_t ret = xiaozhi_foundation_open_audio_channel(
+        ctx,
+        chat,
+        audio_channel_open);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    const EventBits_t hold_bits = xEventGroupWaitBits(
+        ctx->events,
+        XIAOZHI_FOUNDATION_EVENT_DISCONNECTED |
+            XIAOZHI_FOUNDATION_EVENT_CHAT_ERROR,
+        pdFALSE,
+        pdFALSE,
+        pdMS_TO_TICKS(XIAOZHI_FOUNDATION_AUDIO_CHANNEL_HOLD_MS));
+    (void)hold_bits;
+
+    ret = xiaozhi_foundation_get_runtime_error(ctx, "P2-E audio hold");
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "Audio channel stable for %u ms",
+             (unsigned)XIAOZHI_FOUNDATION_AUDIO_CHANNEL_HOLD_MS);
+
+    return xiaozhi_foundation_close_audio_channel(
+        ctx,
+        chat,
+        audio_channel_open,
+        false);
+}
+
+static uint16_t xiaozhi_foundation_read_le16(const uint8_t *data)
+{
+    return (uint16_t)data[0] | ((uint16_t)data[1] << 8U);
+}
+
+static uint32_t xiaozhi_foundation_read_le32(const uint8_t *data)
+{
+    return (uint32_t)data[0] |
+           ((uint32_t)data[1] << 8U) |
+           ((uint32_t)data[2] << 16U) |
+           ((uint32_t)data[3] << 24U);
+}
+
+static esp_err_t xiaozhi_foundation_get_p2f_fixture(
+    const uint8_t **out_data,
+    size_t *out_size)
+{
+    if ((out_data == NULL) || (out_size == NULL)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *out_data = NULL;
+    *out_size = 0U;
+
+#if CONFIG_XIAOZHI_FOUNDATION_P2F_EMBED_FIXTURE
+    if ((uintptr_t)xiaozhi_p2f_fixture_end <=
+        (uintptr_t)xiaozhi_p2f_fixture_start) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    *out_data = xiaozhi_p2f_fixture_start;
+    *out_size = (size_t)((uintptr_t)xiaozhi_p2f_fixture_end -
+                         (uintptr_t)xiaozhi_p2f_fixture_start);
+    return ESP_OK;
+#else
+    return ESP_ERR_NOT_FOUND;
+#endif
+}
+
+static esp_err_t xiaozhi_foundation_parse_p2f_fixture(
+    const uint8_t *data,
+    size_t data_size,
+    xiaozhi_foundation_p2f_fixture_t *out_fixture)
+{
+    if ((data == NULL) || (out_fixture == NULL)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    memset(out_fixture, 0, sizeof(*out_fixture));
+
+    if ((data_size < XIAOZHI_FOUNDATION_P2F_FIXTURE_HEADER_SIZE) ||
+        (data_size > XIAOZHI_FOUNDATION_P2F_MAX_FIXTURE_BYTES)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    if ((memcmp(data, XIAOZHI_FOUNDATION_P2F_FIXTURE_MAGIC, 4U) != 0) ||
+        (data[4] != XIAOZHI_FOUNDATION_P2F_FIXTURE_VERSION) ||
+        (data[5] != XIAOZHI_FOUNDATION_P2F_FIXTURE_CODEC_OPUS) ||
+        (xiaozhi_foundation_read_le16(&data[6]) !=
+         XIAOZHI_FOUNDATION_P2F_FIXTURE_HEADER_SIZE) ||
+        (xiaozhi_foundation_read_le32(&data[8]) !=
+         XIAOZHI_FOUNDATION_AUDIO_SAMPLE_RATE) ||
+        (data[12] != XIAOZHI_FOUNDATION_AUDIO_CHANNELS) ||
+        (data[13] != 0U) ||
+        (xiaozhi_foundation_read_le16(&data[14]) !=
+         XIAOZHI_FOUNDATION_AUDIO_FRAME_DURATION_MS)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const uint32_t frame_count = xiaozhi_foundation_read_le32(&data[16]);
+    const uint32_t records_size = xiaozhi_foundation_read_le32(&data[20]);
+
+    if ((frame_count == 0U) ||
+        (frame_count > XIAOZHI_FOUNDATION_P2F_MAX_FRAMES) ||
+        ((size_t)records_size !=
+         (data_size - XIAOZHI_FOUNDATION_P2F_FIXTURE_HEADER_SIZE))) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    const uint8_t *const first_frame =
+        data + XIAOZHI_FOUNDATION_P2F_FIXTURE_HEADER_SIZE;
+    const uint8_t *const end = data + data_size;
+    const uint8_t *cursor = first_frame;
+
+    /* Validate the complete fixed-duration frame table before transmitting. */
+    for (uint32_t index = 0U; index < frame_count; ++index) {
+        if ((size_t)(end - cursor) < sizeof(uint16_t)) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+
+        const uint16_t frame_size = xiaozhi_foundation_read_le16(cursor);
+        cursor += sizeof(uint16_t);
+
+        if ((frame_size == 0U) ||
+            (frame_size > XIAOZHI_FOUNDATION_P2F_MAX_FRAME_BYTES) ||
+            ((size_t)(end - cursor) < (size_t)frame_size)) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+
+        cursor += frame_size;
+    }
+
+    if (cursor != end) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    out_fixture->first_frame = first_frame;
+    out_fixture->end = end;
+    out_fixture->frame_count = frame_count;
+    out_fixture->frame_duration_ms =
+        XIAOZHI_FOUNDATION_AUDIO_FRAME_DURATION_MS;
+    return ESP_OK;
+}
+
+static esp_err_t xiaozhi_foundation_send_p2f_fixture(
+    xiaozhi_foundation_validation_ctx_t *ctx,
+    esp_xiaozhi_chat_handle_t chat,
+    const xiaozhi_foundation_p2f_fixture_t *fixture,
+    uint32_t *out_frames_sent,
+    size_t *out_bytes_sent)
+{
+    if ((ctx == NULL) || (chat == 0) || (fixture == NULL) ||
+        (fixture->first_frame == NULL) || (fixture->end == NULL) ||
+        (out_frames_sent == NULL) || (out_bytes_sent == NULL)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *out_frames_sent = 0U;
+    *out_bytes_sent = 0U;
+
+    const uint8_t *cursor = fixture->first_frame;
+
+    for (uint32_t index = 0U; index < fixture->frame_count; ++index) {
+        esp_err_t ret = xiaozhi_foundation_get_runtime_error(
+            ctx,
+            "P2-F audio TX");
+        if (ret != ESP_OK) {
+            return ret;
+        }
+
+        /* The fixture parser has already validated every record boundary. */
+        if ((size_t)(fixture->end - cursor) < sizeof(uint16_t)) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+
+        const uint16_t frame_size = xiaozhi_foundation_read_le16(cursor);
+        cursor += sizeof(uint16_t);
+
+        if ((frame_size == 0U) ||
+            ((size_t)(fixture->end - cursor) < (size_t)frame_size)) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+
+        ret = esp_xiaozhi_chat_send_audio_data(
+            chat,
+            (const char *)cursor,
+            frame_size);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Audio TX frame %u/%u failed: %s",
+                     (unsigned)(index + 1U),
+                     (unsigned)fixture->frame_count,
+                     esp_err_to_name(ret));
+            return ret;
+        }
+
+        ++(*out_frames_sent);
+        *out_bytes_sent += frame_size;
+        cursor += frame_size;
+
+        if ((index + 1U) < fixture->frame_count) {
+            vTaskDelay(pdMS_TO_TICKS(fixture->frame_duration_ms));
+        }
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t xiaozhi_foundation_wait_for_p2f_evidence(
+    xiaozhi_foundation_validation_ctx_t *ctx)
+{
+    if ((ctx == NULL) || (ctx->events == NULL)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const EventBits_t required =
+        XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT_USER |
+        XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT_ASSISTANT |
+        XIAOZHI_FOUNDATION_EVENT_AUDIO_RX;
+    const TickType_t timeout_ticks =
+        pdMS_TO_TICKS(XIAOZHI_FOUNDATION_P2F_RESPONSE_TIMEOUT_MS);
+    const TickType_t started_at = xTaskGetTickCount();
+
+    for (;;) {
+        const esp_err_t runtime_ret = xiaozhi_foundation_get_runtime_error(
+            ctx,
+            "P2-F protocol response");
+        if (runtime_ret != ESP_OK) {
+            return runtime_ret;
+        }
+
+        const EventBits_t current = xEventGroupGetBits(ctx->events);
+        if ((current & required) == required) {
+            return ESP_OK;
+        }
+
+        const TickType_t elapsed = xTaskGetTickCount() - started_at;
+        if (elapsed >= timeout_ticks) {
+            ESP_LOGE(TAG, "P2-F response timeout after %u ms",
+                     (unsigned)XIAOZHI_FOUNDATION_P2F_RESPONSE_TIMEOUT_MS);
+            return ESP_ERR_TIMEOUT;
+        }
+
+        const EventBits_t missing = required & ~current;
+        const TickType_t remaining = timeout_ticks - elapsed;
+
+        (void)xEventGroupWaitBits(
+            ctx->events,
+            missing |
+                XIAOZHI_FOUNDATION_EVENT_DISCONNECTED |
+                XIAOZHI_FOUNDATION_EVENT_CHAT_ERROR,
+            pdFALSE,
+            pdFALSE,
+            remaining);
+    }
+}
+
+static void xiaozhi_foundation_copy_log_safe_text(
+    char *destination,
+    size_t destination_size,
+    const char *source)
+{
+    if ((destination == NULL) || (destination_size == 0U)) {
+        return;
+    }
+
+    destination[0] = '\0';
+    if (source == NULL) {
+        return;
+    }
+
+    size_t index = 0U;
+    while ((index < (destination_size - 1U)) && (source[index] != '\0')) {
+        const unsigned char value = (unsigned char)source[index];
+        destination[index] = ((value >= 0x20U) && (value <= 0x7eU) &&
+                              (value != (unsigned char)'"') &&
+                              (value != (unsigned char)'\\')) ?
+                                 (char)value :
+                                 '?';
+        ++index;
+    }
+
+    destination[index] = '\0';
+}
+
+static void xiaozhi_foundation_log_p2f_evidence(
+    xiaozhi_foundation_validation_ctx_t *ctx)
+{
+    if (ctx == NULL) {
+        return;
+    }
+
+    bool user_text_received = false;
+    bool user_text_truncated = false;
+    size_t user_text_length = 0U;
+    char user_text[XIAOZHI_FOUNDATION_CHAT_TEXT_BUFFER_SIZE] = {0};
+    bool assistant_text_received = false;
+    bool assistant_text_truncated = false;
+    size_t assistant_text_length = 0U;
+    char assistant_text[XIAOZHI_FOUNDATION_CHAT_TEXT_BUFFER_SIZE] = {0};
+    bool tts_start_received = false;
+    bool tts_sentence_start_received = false;
+    bool tts_stop_received = false;
+    size_t audio_rx_callback_count = 0U;
+    size_t audio_rx_total_bytes = 0U;
+    size_t audio_rx_first_packet_size = 0U;
+    size_t audio_rx_max_packet_size = 0U;
+
+    portENTER_CRITICAL(&ctx->protocol_lock);
+    user_text_received = ctx->protocol.user_text.received;
+    user_text_truncated = ctx->protocol.user_text.truncated;
+    user_text_length = ctx->protocol.user_text.length;
+    (void)xiaozhi_foundation_copy_bounded_string(
+        user_text,
+        sizeof(user_text),
+        ctx->protocol.user_text.value,
+        NULL);
+    assistant_text_received = ctx->protocol.assistant_text.received;
+    assistant_text_truncated = ctx->protocol.assistant_text.truncated;
+    assistant_text_length = ctx->protocol.assistant_text.length;
+    (void)xiaozhi_foundation_copy_bounded_string(
+        assistant_text,
+        sizeof(assistant_text),
+        ctx->protocol.assistant_text.value,
+        NULL);
+    tts_start_received = ctx->protocol.tts_start_received;
+    tts_sentence_start_received = ctx->protocol.tts_sentence_start_received;
+    tts_stop_received = ctx->protocol.tts_stop_received;
+    audio_rx_callback_count = ctx->protocol.audio_rx_callback_count;
+    audio_rx_total_bytes = ctx->protocol.audio_rx_total_bytes;
+    audio_rx_first_packet_size = ctx->protocol.audio_rx_first_packet_size;
+    audio_rx_max_packet_size = ctx->protocol.audio_rx_max_packet_size;
+    portEXIT_CRITICAL(&ctx->protocol_lock);
+
+    if (user_text_received) {
+        char safe_text[XIAOZHI_FOUNDATION_P2F_LOG_TEXT_BUFFER_SIZE] = {0};
+        xiaozhi_foundation_copy_log_safe_text(
+            safe_text,
+            sizeof(safe_text),
+            user_text);
+        ESP_LOGI(TAG, "CHAT_TEXT role=USER len=%u%s",
+                 (unsigned)user_text_length,
+                 user_text_truncated ? " truncated" : "");
+        ESP_LOGI(TAG, "USER text=\"%s\"", safe_text);
+        memset(safe_text, 0, sizeof(safe_text));
+    }
+
+    if (assistant_text_received) {
+        char safe_text[XIAOZHI_FOUNDATION_P2F_LOG_TEXT_BUFFER_SIZE] = {0};
+        xiaozhi_foundation_copy_log_safe_text(
+            safe_text,
+            sizeof(safe_text),
+            assistant_text);
+        ESP_LOGI(TAG, "CHAT_TEXT role=ASSISTANT len=%u%s",
+                 (unsigned)assistant_text_length,
+                 assistant_text_truncated ? " truncated" : "");
+        ESP_LOGI(TAG, "ASSISTANT text=\"%s\"", safe_text);
+        memset(safe_text, 0, sizeof(safe_text));
+    }
+
+    if (tts_start_received) {
+        ESP_LOGI(TAG, "TTS state=START");
+    }
+    if (tts_sentence_start_received) {
+        ESP_LOGI(TAG, "TTS state=SENTENCE_START");
+    }
+    if (tts_stop_received) {
+        ESP_LOGI(TAG, "TTS state=STOP");
+    }
+
+    ESP_LOGI(TAG, "Audio RX packets=%u bytes=%u first=%u max=%u",
+             (unsigned)audio_rx_callback_count,
+             (unsigned)audio_rx_total_bytes,
+             (unsigned)audio_rx_first_packet_size,
+             (unsigned)audio_rx_max_packet_size);
+
+    memset(user_text, 0, sizeof(user_text));
+    memset(assistant_text, 0, sizeof(assistant_text));
+}
+
+static esp_err_t xiaozhi_foundation_validate_p2f_audio_e2e(
+    xiaozhi_foundation_validation_ctx_t *ctx,
+    esp_xiaozhi_chat_handle_t chat,
+    bool *audio_channel_open)
+{
+    if ((ctx == NULL) || (ctx->events == NULL) || (chat == 0) ||
+        (audio_channel_open == NULL)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    ESP_LOGI(TAG, "=== P2-F WEBSOCKET AUDIO E2E ===");
+
+    const uint8_t *fixture_data = NULL;
+    size_t fixture_size = 0U;
+    xiaozhi_foundation_p2f_fixture_t fixture = {0};
+    esp_err_t ret = xiaozhi_foundation_get_p2f_fixture(
+        &fixture_data,
+        &fixture_size);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "P2-F fixture is not embedded: %s",
+                 esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = xiaozhi_foundation_parse_p2f_fixture(
+        fixture_data,
+        fixture_size,
+        &fixture);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "P2-F fixture format rejected: %s",
+                 esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = xiaozhi_foundation_open_audio_channel(
+        ctx,
+        chat,
+        audio_channel_open);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    xEventGroupClearBits(
+        ctx->events,
+        XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT |
+            XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT_USER |
+            XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT_ASSISTANT |
+            XIAOZHI_FOUNDATION_EVENT_CHAT_TTS_STATE |
+            XIAOZHI_FOUNDATION_EVENT_CHAT_TTS_START |
+            XIAOZHI_FOUNDATION_EVENT_CHAT_TTS_SENTENCE_START |
+            XIAOZHI_FOUNDATION_EVENT_CHAT_TTS_STOP |
+            XIAOZHI_FOUNDATION_EVENT_AUDIO_RX |
+            XIAOZHI_FOUNDATION_EVENT_AUDIO_DATA_INCOMING |
+            XIAOZHI_FOUNDATION_EVENT_DISCONNECTED |
+            XIAOZHI_FOUNDATION_EVENT_CHAT_ERROR);
+
+    bool listening_started = false;
+    uint32_t frames_sent = 0U;
+    size_t bytes_sent = 0U;
+
+    ret = esp_xiaozhi_chat_send_start_listening(
+        chat,
+        ESP_XIAOZHI_CHAT_LISTENING_MODE_MANUAL);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "start_listening failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    listening_started = true;
+    ESP_LOGI(TAG, "start_listening: OK");
+    ESP_LOGI(TAG, "Sending known audio");
+
+    ret = xiaozhi_foundation_send_p2f_fixture(
+        ctx,
+        chat,
+        &fixture,
+        &frames_sent,
+        &bytes_sent);
+    ESP_LOGI(TAG, "Audio TX frames=%u bytes=%u",
+             (unsigned)frames_sent,
+             (unsigned)bytes_sent);
+
+    if (listening_started) {
+        const esp_err_t stop_ret = esp_xiaozhi_chat_send_stop_listening(chat);
+        if (stop_ret != ESP_OK) {
+            ESP_LOGW(TAG, "stop_listening failed: %s",
+                     esp_err_to_name(stop_ret));
+            if (ret == ESP_OK) {
+                ret = stop_ret;
+            }
+        } else {
+            ESP_LOGI(TAG, "stop_listening: OK");
+        }
+    }
+
+    if (ret == ESP_OK) {
+        ret = xiaozhi_foundation_wait_for_p2f_evidence(ctx);
+    }
+
+    xiaozhi_foundation_log_p2f_evidence(ctx);
+
+    if (ret == ESP_ERR_TIMEOUT) {
+        const EventBits_t evidence = xEventGroupGetBits(ctx->events);
+        if ((evidence & XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT_USER) == 0U) {
+            ESP_LOGE(TAG, "P2-F FAIL: no USER CHAT_TEXT");
+        }
+        if ((evidence & XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT_ASSISTANT) == 0U) {
+            ESP_LOGE(TAG, "P2-F FAIL: no ASSISTANT CHAT_TEXT");
+        }
+        if ((evidence & XIAOZHI_FOUNDATION_EVENT_AUDIO_RX) == 0U) {
+            ESP_LOGE(TAG, "P2-F FAIL: no audio callback data");
+        }
+    }
+
+    return ret;
+}
+
 static bool xiaozhi_foundation_try_begin_operation(void)
 {
     bool started = false;
@@ -668,10 +1642,16 @@ static esp_err_t xiaozhi_foundation_validate_transport(
         return ESP_ERR_INVALID_ARG;
     }
 
+    const xiaozhi_foundation_validation_checkpoint_t checkpoint =
+        xiaozhi_foundation_get_validation_checkpoint();
+    const char *const checkpoint_name =
+        xiaozhi_foundation_validation_checkpoint_to_string(checkpoint);
+
     ESP_LOGI(
         TAG,
         "Transport requested: %s",
         xiaozhi_foundation_transport_to_string(requested));
+    ESP_LOGI(TAG, "Validation checkpoint selected: %s", checkpoint_name);
 
     xiaozhi_foundation_validation_ctx_t ctx = {
         .requested_transport = requested,
@@ -692,6 +1672,8 @@ static esp_err_t xiaozhi_foundation_validate_transport(
 
         /* get_info() may have partially allocated response fields. */
         (void)esp_xiaozhi_chat_free_info(&info);
+        ESP_LOGE(TAG, "%s RESULT: FAIL: %s", checkpoint_name,
+                 esp_err_to_name(ret));
         return ret;
     }
 
@@ -709,6 +1691,8 @@ static esp_err_t xiaozhi_foundation_validate_transport(
             TAG,
             "Failed to free Xiaozhi service info: %s",
             esp_err_to_name(ret));
+        ESP_LOGE(TAG, "%s RESULT: FAIL: %s", checkpoint_name,
+                 esp_err_to_name(ret));
         return ret;
     }
 
@@ -728,6 +1712,8 @@ static esp_err_t xiaozhi_foundation_validate_transport(
             TAG,
             "No usable Xiaozhi WebSocket transport: %s",
             esp_err_to_name(ret));
+        ESP_LOGE(TAG, "%s RESULT: FAIL: %s", checkpoint_name,
+                 esp_err_to_name(ret));
         return ret;
     }
 
@@ -740,6 +1726,7 @@ static esp_err_t xiaozhi_foundation_validate_transport(
     esp_mcp_t *mcp = NULL;
     esp_xiaozhi_chat_handle_t chat = 0;
     bool chat_started = false;
+    bool audio_channel_open = false;
     bool event_handler_registered = false;
     esp_event_handler_instance_t event_handler_instance = NULL;
 
@@ -749,6 +1736,8 @@ static esp_err_t xiaozhi_foundation_validate_transport(
             TAG,
             "Failed to create MCP engine: %s",
             esp_err_to_name(ret));
+        ESP_LOGE(TAG, "%s RESULT: FAIL: %s", checkpoint_name,
+                 esp_err_to_name(ret));
         return ret;
     }
 
@@ -779,6 +1768,9 @@ static esp_err_t xiaozhi_foundation_validate_transport(
     chat_config.event_callback =
         xiaozhi_foundation_protocol_event_callback;
     chat_config.event_callback_ctx = &ctx;
+    chat_config.audio_type = ESP_XIAOZHI_CHAT_AUDIO_TYPE_OPUS;
+    chat_config.audio_callback = xiaozhi_foundation_audio_callback;
+    chat_config.audio_callback_ctx = &ctx;
 
     /*
      * Project policy is WebSocket-only. has_mqtt_config is an upstream
@@ -834,39 +1826,12 @@ static esp_err_t xiaozhi_foundation_validate_transport(
     ESP_LOGI(TAG, "Public arbitrary text TX: NOT AVAILABLE");
     ESP_LOGI(TAG, "CHAT_TEXT receive handler: armed");
 
-    const EventBits_t initial_bits =
-        xEventGroupWaitBits(
-            ctx.events,
-            XIAOZHI_FOUNDATION_EVENT_CONNECTED |
-                XIAOZHI_FOUNDATION_EVENT_DISCONNECTED,
-            pdTRUE,
-            pdFALSE,
-            pdMS_TO_TICKS(
-                XIAOZHI_FOUNDATION_CONNECT_TIMEOUT_MS));
-
-    /*
-     * EventGroups preserve facts, not event ordering. If both connection and
-     * disconnection were observed before this worker ran, fail conservatively
-     * instead of declaring a stable connection.
-     */
-    if ((initial_bits & XIAOZHI_FOUNDATION_EVENT_DISCONNECTED) != 0U) {
-        ESP_LOGE(
-            TAG,
-            "%s disconnected before a stable CONNECTED state",
-            xiaozhi_foundation_transport_to_string(
-                selected_transport));
-        ret = ESP_FAIL;
-        goto cleanup;
-    }
-
-    if ((initial_bits & XIAOZHI_FOUNDATION_EVENT_CONNECTED) == 0U) {
-        ESP_LOGE(
-            TAG,
-            "Timed out waiting %u ms for %s transport connection",
-            XIAOZHI_FOUNDATION_CONNECT_TIMEOUT_MS,
-            xiaozhi_foundation_transport_to_string(
-                selected_transport));
-        ret = ESP_ERR_TIMEOUT;
+    ret = xiaozhi_foundation_wait_for_event(
+        &ctx,
+        XIAOZHI_FOUNDATION_EVENT_CONNECTED,
+        XIAOZHI_FOUNDATION_CONNECT_TIMEOUT_MS,
+        "CONNECTED");
+    if (ret != ESP_OK) {
         goto cleanup;
     }
 
@@ -876,34 +1841,32 @@ static esp_err_t xiaozhi_foundation_validate_transport(
         "Transport connected: %s",
         xiaozhi_foundation_transport_to_string(
             selected_transport));
+    ESP_LOGI(TAG, "WebSocket connected");
 
-    const EventBits_t hold_bits =
-        xEventGroupWaitBits(
-            ctx.events,
-            XIAOZHI_FOUNDATION_EVENT_DISCONNECTED,
-            pdTRUE,
-            pdFALSE,
-            pdMS_TO_TICKS(
-                XIAOZHI_FOUNDATION_CONNECTED_HOLD_MS));
+    if (checkpoint == XIAOZHI_FOUNDATION_VALIDATION_P2E_AUDIO_CHANNEL) {
+        ret = xiaozhi_foundation_validate_p2e_audio_channel(
+            &ctx,
+            chat,
+            &audio_channel_open);
+    } else {
+        ret = xiaozhi_foundation_validate_p2f_audio_e2e(
+            &ctx,
+            chat,
+            &audio_channel_open);
 
-    if ((hold_bits & XIAOZHI_FOUNDATION_EVENT_DISCONNECTED) != 0U) {
-        ESP_LOGE(
-            TAG,
-            "%s disconnected during %u ms stability hold",
-            xiaozhi_foundation_transport_to_string(
-                selected_transport),
-            XIAOZHI_FOUNDATION_CONNECTED_HOLD_MS);
-        ret = ESP_FAIL;
-        goto cleanup;
+        if (audio_channel_open) {
+            const esp_err_t close_ret =
+                xiaozhi_foundation_close_audio_channel(
+                    &ctx,
+                    chat,
+                    &audio_channel_open,
+                    false);
+
+            if ((ret == ESP_OK) && (close_ret != ESP_OK)) {
+                ret = close_ret;
+            }
+        }
     }
-
-    ESP_LOGI(
-        TAG,
-        "Transport stable for %u ms",
-        XIAOZHI_FOUNDATION_CONNECTED_HOLD_MS);
-    ESP_LOGI(
-        TAG,
-        "End-to-end CHAT_TEXT validation deferred to P2-F audio/STT");
 
 cleanup:
     /*
@@ -911,6 +1874,18 @@ cleanup:
      * and EventGroup alive until chat_deinit() returns. chat_stop()/deinit()
      * can still emit connection or protocol events that refer to ctx.
      */
+    if (audio_channel_open) {
+        const esp_err_t close_ret = xiaozhi_foundation_close_audio_channel(
+            &ctx,
+            chat,
+            &audio_channel_open,
+            true);
+
+        if ((ret == ESP_OK) && (close_ret != ESP_OK)) {
+            ret = close_ret;
+        }
+    }
+
     if (chat_started) {
         const esp_err_t stop_ret =
             esp_xiaozhi_chat_stop(chat);
@@ -992,6 +1967,13 @@ cleanup:
         } else {
             ESP_LOGI(TAG, "MCP engine destroyed");
         }
+    }
+
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "%s RESULT: PASS", checkpoint_name);
+    } else {
+        ESP_LOGE(TAG, "%s RESULT: FAIL: %s", checkpoint_name,
+                 esp_err_to_name(ret));
     }
 
     return ret;

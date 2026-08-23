@@ -434,8 +434,15 @@ get_info()
 - [x] P2-D: Audit the resolved 0.1.2 public chat API. It has no arbitrary
       typed-text TX API; `CHAT_TEXT` receive callback plumbing uses bounded
       copied storage for USER and ASSISTANT roles.
-- [ ] P2-F: Obtain target-hardware USER/ASSISTANT `CHAT_TEXT` evidence through
-      the supported audio/STT path. Do not add a private/raw typed-text path.
+- [ ] P2-E hardware acceptance: the temporary WebSocket-only worker now
+      implements `CONNECTED -> open audio -> observed OPENED -> bounded hold ->
+      close -> observed CLOSED -> stop -> deinit`; ESP-IDF build is verified,
+      but target serial evidence is still required.
+- [ ] P2-F hardware acceptance: validation-only, fixed 16 kHz mono 60 ms Opus
+      fixture infrastructure streams one embedded packet per send and records
+      bounded USER/ASSISTANT text plus audio callback evidence. A lawful local
+      fixture and target serial evidence are still required; do not add a
+      private/raw typed-text path.
 - [ ] Compare connection/reconnect, sockets, heap, CPU, audio loss, cleanup, and
       network failures.
 - [ ] Record the selected MVP transport in an ADR.

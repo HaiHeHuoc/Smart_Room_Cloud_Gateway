@@ -310,10 +310,11 @@ credentials, endpoint values, or raw server payloads. The callback context and
 EventGroup remain valid through `chat_deinit()`; copied text is then cleared
 before the worker exits.
 
-P2-D does not send audio, open/close an audio channel, start/stop listening,
-encode OPUS, integrate `audio_manager`, or add a project text-send abstraction.
-The accepted P2-C WebSocket-only `init -> start -> CONNECTED -> 2000 ms hold ->
-stop -> deinit` lifecycle is unchanged.
+P2-D itself does not add a project text-send abstraction, audio encoder,
+`audio_manager` dependency, microphone, speaker, LVGL, or production voice
+state machine. The accepted P2-C WebSocket-only connection evidence is retained;
+the temporary Phase 12.5 worker now extends the selected connection into the
+separate P2-E or explicitly opted-in P2-F validation checkpoint.
 
 ### P2-D Hardware Acceptance
 
@@ -324,11 +325,145 @@ to the supported P2-F audio/STT interaction path. A future P2-F pass must show
 the received role/length diagnostics while preserving the WebSocket-only
 lifecycle and no secret logging.
 
+### P2-E - WebSocket Audio-Channel Lifecycle
+
+**Implementation status:** implemented and ESP-IDF 6.0.1 build-verified.
+**Hardware status:** pending real serial evidence.
+
+The default validation requested after the coordinator reaches `ONLINE` is:
+
+```text
+CONNECTED
+  -> open_audio_channel(opus, 16000 Hz, mono, 60 ms)
+  -> AUDIO_CHANNEL_OPENED
+  -> 1000 ms bounded hold
+  -> close_audio_channel()
+  -> AUDIO_CHANNEL_CLOSED
+  -> chat_stop() -> chat_deinit() -> destroy MCP
+```
+
+The worker waits at most 15 seconds for `CONNECTED` and
+`AUDIO_CHANNEL_OPENED`, and at most 8 seconds for `AUDIO_CHANNEL_CLOSED`.
+`DISCONNECTED` and protocol `CHAT_ERROR` immediately fail the active wait. If
+an audio channel was opened when another step fails, cleanup still attempts a
+bounded close before stopping/deinitializing chat. The original failure remains
+the reported result if cleanup also fails.
+
+In pinned source, `esp_xiaozhi_chat_open_audio_channel()` sends the hello,
+waits internally for the server hello (up to 10 seconds), opens the local
+WebSocket audio state, then posts `AUDIO_CHANNEL_OPENED`. Closing clears local
+session state and posts `AUDIO_CHANNEL_CLOSED`. These are real component event
+loop observations, but they are **not** independent server-originated media
+acknowledgements with payload. P2-E therefore proves the exposed 0.1.2
+lifecycle contract; it does not by itself prove ASR or server audio media.
+
+Expected successful evidence includes:
+
+```text
+=== P2-E WEBSOCKET AUDIO CHANNEL ===
+WebSocket connected
+Opening audio channel
+open_audio_channel: OK
+AUDIO_CHANNEL_OPENED
+Audio channel stable for 1000 ms
+Closing audio channel
+close_audio_channel: OK
+AUDIO_CHANNEL_CLOSED
+chat_stop: OK
+chat_deinit: OK
+P2-E RESULT: PASS
+```
+
+Hardware PASS requires the complete trace above, no disconnect/protocol error,
+no crash/watchdog, and no reconnect/session activity after complete deinit.
+No P2-E hardware pass is claimed until that trace is supplied.
+
+### P2-F - Known-Audio WebSocket E2E
+
+**Implementation status:** implemented as validation-only infrastructure and
+default-config build-verified. **Hardware status:** pending a legal local
+fixture and real serial evidence.
+
+No reusable speech asset exists in this repository. P2-F therefore does not
+invent PCM, random bytes, or a copyrighted sample. It is disabled by default
+and has no production dependency. To enable it, place a lawful, non-sensitive
+local fixture at `test_assets/p2f_fixture.bin`, then enable both menuconfig
+options under `Component config -> Xiaozhi Phase 12 validation`:
+
+```text
+Embed the optional P2-F known-audio fixture = y
+Run P2-F known-audio E2E instead of default P2-E = y
+```
+
+The fixture format is documented in `test_assets/README.md`. It is an `XZF1`
+container of one raw **Opus** packet per 60 ms record: 16 kHz, mono, at most
+120 frames, 2048 bytes/frame, and 64 KiB total. It is not WAV, PCM, Ogg, WebM,
+or a decoder input. The test sends exactly one record through
+`esp_xiaozhi_chat_send_audio_data()` and delays approximately 60 ms before the
+next record; it never sends the whole utterance as one blob. The parser checks
+the declared container fields and bounds, but cannot decode an Opus packet to
+prove its duration; the fixture creator must guarantee the 60 ms contract.
+
+The P2-F test first parses and bounds-checks every fixture record, opens its
+own WebSocket audio channel, sends `listen/start` with mode `manual`, streams
+the fixture, sends `listen/stop`, then waits at most 30 seconds for all of:
+
+- non-empty `USER` `CHAT_TEXT`;
+- non-empty `ASSISTANT` `CHAT_TEXT`;
+- at least one non-empty `audio_callback` payload.
+
+It reports `TTS START`, `SENTENCE_START`, and `STOP` when supplied by the
+pinned protocol, but audio callback count/total bytes are the hard audio
+response evidence. The test does not play, decode, retain, log, or forward raw
+audio. P2-F only logs bounded, printable-safe copies of the USER/ASSISTANT
+text for human inspection of the known fixture interaction; all other Phase
+12.5 paths retain the P2-D rule of never logging text content.
+
+The exact pinned source contract is:
+
+- The hello contains caller-supplied `format`, `sample_rate`, `channels`, and
+  `frame_duration`; the defaults are `opus`, 16000, 1, and 60 respectively.
+- `format = "pcm"` passes only the source's non-empty-string validation. The
+  public `audio_type` enum/config has only `OPUS`, server hello stores only
+  sample rate/frame duration, and no PCM encoder/validation path exists.
+  **PCM direct supported for this validation: no.**
+- `esp_xiaozhi_chat_send_audio_data()` performs no encoding. For WebSocket it
+  sends the caller's buffer as one binary WebSocket frame, so the caller must
+  provide an already encoded complete Opus packet. Source does not enforce
+  packet duration/boundaries; P2-F fixes its fixture contract to 60 ms packets
+  and applies real-time pacing.
+- The WebSocket binary handler forwards raw server bytes directly to
+  `audio_callback`; it does not decode them. With P2-F's `opus` hello, the
+  expected RX is raw Opus payload, but the public API does not expose a
+  negotiated RX-format object.
+- `ESP_XIAOZHI_CHAT_EVENT_AUDIO_DATA_INCOMING` is declared in the 0.1.2 public
+  header but is not posted by its pinned implementation. P2-F registers the
+  event defensively and uses the supported `audio_callback` counters for the
+  actual RX criterion.
+
+The P2-F completion trace must show `start_listening: OK`, non-zero TX frames
+and bytes, `stop_listening: OK`, non-empty USER and ASSISTANT diagnostics,
+non-zero audio RX counters, `AUDIO_CHANNEL_CLOSED`, successful stop/deinit, and
+`P2-F RESULT: PASS`. Human review may accept recognizably related transcript
+text; byte-for-byte ASR/LLM wording is not required. No P2-F hardware PASS is
+claimed without that serial trace.
+
+### Callback and cleanup ownership
+
+Both `event_callback` and `audio_callback` receive borrowed source pointers.
+The callbacks only perform bounded copies or scalar counter updates under the
+short `portMUX` critical section and set EventGroup facts. They do not block,
+allocate, call lifecycle/Wi-Fi/provisioning/LVGL/Firebase/hardware APIs, or
+retain text/audio/error pointers. The worker owns all waits, logging,
+open/close/start/stop/deinit decisions, handler unregistration, EventGroup
+deletion, MCP destruction, and zeroization of copied text before exit.
+
 ### Remaining validation
 
-P2-E/P2-F will validate only the selected WebSocket path: supported audio/STT
-generation of USER and ASSISTANT text events, audio format/PCM integration,
-reconnect behavior, lifecycle stress, cleanup, and resource measurements.
+P2-E/P2-F hardware acceptance, reconnect/failure stress, resource measurement,
+and the later Phase 12.6 lifecycle matrix remain pending. MQTT remains closed;
+no MQTT fallback, production voice assistant, microphone, speaker, or GUI
+integration is part of this validation layer.
 
 ## Deferred / Closed Work
 
