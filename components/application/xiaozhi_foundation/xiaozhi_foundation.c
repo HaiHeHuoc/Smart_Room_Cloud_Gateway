@@ -1,13 +1,11 @@
 /**
  * @file xiaozhi_foundation.c
- * @brief Isolated, non-sensitive Xiaozhi service and transport validation.
+ * @brief Isolated, non-sensitive Xiaozhi service and WebSocket validation.
  *
- * Phase 12.5.2 P1 discovers server transport capabilities and applies the
- * project-side transport selection policy. P2-A validates local MCP/chat
- * init/deinit ownership. P2-B additionally starts exactly the selected control
- * transport, waits for a bounded CONNECTED/DISCONNECTED result, holds a
- * successful connection briefly, then stops and cleans up. It does not open an
- * audio channel or validate the MQTT-mode UDP path.
+ * Phase 12.5 closes project-side MQTT support after the same pre-CONNECTED
+ * failure was reproduced in both the Gateway integration and a standalone
+ * official-flow esp_xiaozhi test. The foundation therefore exposes and
+ * validates WebSocket only. It does not open an audio channel in this phase.
  */
 
 /* Includes ----------------------------------------------------------------- */
@@ -52,15 +50,14 @@ static const char *const TAG = "XIAOZHI_FOUNDATION";
 
 /* Type Definitions --------------------------------------------------------- */
 /**
- * @brief Private state for one transport validation operation.
+ * @brief Private state for one WebSocket validation operation.
  *
- * Only scalar service capability facts and a short-lived EventGroup handle are
- * retained. No endpoint, credential, token, topic, or Xiaozhi-owned string
- * pointer is stored here.
+ * Only the WebSocket service capability fact and a short-lived EventGroup
+ * handle are retained. No endpoint, credential, token, topic, or Xiaozhi-owned
+ * string pointer is stored here.
  */
 typedef struct {
     xiaozhi_foundation_transport_t requested_transport;
-    bool mqtt_available;
     bool websocket_available;
     EventGroupHandle_t events;
 } xiaozhi_foundation_validation_ctx_t;
@@ -201,33 +198,6 @@ static esp_err_t xiaozhi_foundation_select_transport(
 
     switch (ctx->requested_transport) {
     case XIAOZHI_FOUNDATION_TRANSPORT_AUTO:
-        /*
-         * Pinned esp_xiaozhi 0.1.2 prefers MQTT when both server transport
-         * configurations exist. Keep AUTO aligned with that upstream policy.
-         */
-        if (ctx->mqtt_available) {
-            *selected_transport =
-                XIAOZHI_FOUNDATION_TRANSPORT_MQTT;
-            return ESP_OK;
-        }
-
-        if (ctx->websocket_available) {
-            *selected_transport =
-                XIAOZHI_FOUNDATION_TRANSPORT_WEBSOCKET;
-            return ESP_OK;
-        }
-
-        return ESP_ERR_NOT_FOUND;
-
-    case XIAOZHI_FOUNDATION_TRANSPORT_MQTT:
-        if (!ctx->mqtt_available) {
-            return ESP_ERR_NOT_FOUND;
-        }
-
-        *selected_transport =
-            XIAOZHI_FOUNDATION_TRANSPORT_MQTT;
-        return ESP_OK;
-
     case XIAOZHI_FOUNDATION_TRANSPORT_WEBSOCKET:
         if (!ctx->websocket_available) {
             return ESP_ERR_NOT_FOUND;
@@ -248,9 +218,6 @@ static const char *xiaozhi_foundation_transport_to_string(
     switch (transport) {
     case XIAOZHI_FOUNDATION_TRANSPORT_AUTO:
         return "AUTO";
-
-    case XIAOZHI_FOUNDATION_TRANSPORT_MQTT:
-        return "MQTT";
 
     case XIAOZHI_FOUNDATION_TRANSPORT_WEBSOCKET:
         return "WebSocket";
@@ -320,13 +287,10 @@ static esp_err_t xiaozhi_foundation_validate_transport(
     }
 
     /*
-     * Copy only the capability facts needed by the project before releasing
-     * esp_xiaozhi-owned response storage. These members remain valid after
-     * free_info() because they are plain booleans.
+     * The project deliberately ignores server-provided MQTT capability. Copy
+     * only the WebSocket fact needed by the selected architecture before
+     * releasing esp_xiaozhi-owned response storage.
      */
-    ctx.mqtt_available =
-        info.has_mqtt_config;
-
     ctx.websocket_available =
         info.has_websocket_config;
 
@@ -338,11 +302,6 @@ static esp_err_t xiaozhi_foundation_validate_transport(
             esp_err_to_name(ret));
         return ret;
     }
-
-    ESP_LOGI(
-        TAG,
-        "MQTT available: %s",
-        ctx.mqtt_available ? "yes" : "no");
 
     ESP_LOGI(
         TAG,
@@ -358,7 +317,7 @@ static esp_err_t xiaozhi_foundation_validate_transport(
     if (ret != ESP_OK) {
         ESP_LOGE(
             TAG,
-            "No usable Xiaozhi transport: %s",
+            "No usable Xiaozhi WebSocket transport: %s",
             esp_err_to_name(ret));
         return ret;
     }
@@ -397,25 +356,13 @@ static esp_err_t xiaozhi_foundation_validate_transport(
     chat_config.owns_mcp_engine = false;
 
     /*
-     * Enable exactly one transport in the chat config. Therefore an AUTO
-     * request that P1 resolves to MQTT still performs an MQTT-only P2-B run;
-     * WebSocket cannot act as an implicit fallback inside this operation.
+     * Project policy is WebSocket-only. has_mqtt_config is an upstream
+     * esp_xiaozhi configuration switch and is explicitly disabled here so the
+     * component cannot apply its normal MQTT preference when the server
+     * advertises both transports.
      */
-    switch (selected_transport) {
-    case XIAOZHI_FOUNDATION_TRANSPORT_MQTT:
-        chat_config.has_mqtt_config = true;
-        chat_config.has_websocket_config = false;
-        break;
-
-    case XIAOZHI_FOUNDATION_TRANSPORT_WEBSOCKET:
-        chat_config.has_mqtt_config = false;
-        chat_config.has_websocket_config = true;
-        break;
-
-    default:
-        ret = ESP_ERR_INVALID_STATE;
-        goto cleanup;
-    }
+    chat_config.has_mqtt_config = false;
+    chat_config.has_websocket_config = true;
 
     ret = esp_xiaozhi_chat_init(
         &chat_config,
@@ -649,13 +596,11 @@ static esp_err_t xiaozhi_foundation_probe_impl(
     }
 
     /*
-     * Copy only scalar/non-sensitive information.
-     * Do not expose Xiaozhi-owned string pointers.
+     * Copy only scalar/non-sensitive information used by the project.
+     * MQTT capability is intentionally not exposed because the selected
+     * Xiaozhi architecture is WebSocket-only.
      */
     out_info->service_reachable = true;
-
-    out_info->mqtt_available =
-        info.has_mqtt_config;
 
     out_info->websocket_available =
         info.has_websocket_config;
@@ -676,8 +621,6 @@ static esp_err_t xiaozhi_foundation_probe_impl(
         info.has_new_version;
 
     ESP_LOGI(TAG, "Service reachable");
-    ESP_LOGI(TAG, "MQTT available: %s",
-             out_info->mqtt_available ? "yes" : "no");
     ESP_LOGI(TAG, "WebSocket available: %s",
              out_info->websocket_available ? "yes" : "no");
     ESP_LOGI(TAG, "Activation code: %s",

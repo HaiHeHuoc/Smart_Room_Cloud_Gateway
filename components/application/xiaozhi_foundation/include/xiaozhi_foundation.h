@@ -31,7 +31,6 @@ extern "C"
 typedef struct {
     bool service_reachable;
 
-    bool mqtt_available;
     bool websocket_available;
 
     bool activation_code_available;
@@ -45,12 +44,13 @@ typedef struct {
 /**
  * @brief Requested transport for a Xiaozhi transport-validation operation.
  *
- * This selection contains no credentials, endpoint values, or other
- * sensitive transport configuration.
+ * The project has closed MQTT support for Xiaozhi. AUTO is retained only as a
+ * compatibility request mode and resolves to WebSocket. This selection
+ * contains no credentials, endpoint values, or other sensitive transport
+ * configuration.
  */
 typedef enum {
     XIAOZHI_FOUNDATION_TRANSPORT_AUTO = 0,
-    XIAOZHI_FOUNDATION_TRANSPORT_MQTT,
     XIAOZHI_FOUNDATION_TRANSPORT_WEBSOCKET,
 } xiaozhi_foundation_transport_t;
 
@@ -90,13 +90,14 @@ esp_err_t xiaozhi_foundation_probe(xiaozhi_foundation_info_t *out_info);
 esp_err_t xiaozhi_foundation_request_probe(void);
 
 /**
- * @brief Request validation of a selected Xiaozhi transport.
+ * @brief Request validation of the project-selected Xiaozhi transport.
  *
- * @param[in] transport Transport mode to validate.
+ * @param[in] transport AUTO or WebSocket. AUTO resolves to WebSocket because
+ *                       MQTT is intentionally not supported by the project.
  *
  * This interface is intended for normal task context and is not ISR-safe.
- * Its blocking, timeout, result, and ownership contract will be defined with
- * the transport-validation implementation.
+ * Its blocking, timeout, result, and ownership contract are implemented by the
+ * foundation worker task.
  */
 esp_err_t xiaozhi_foundation_request_transport_validation(
     xiaozhi_foundation_transport_t transport);

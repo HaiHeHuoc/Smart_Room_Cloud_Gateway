@@ -136,7 +136,7 @@ The approved post-Version 1 order is:
 ```text
 Sprint 10: audio hardware validation
 Sprint 11: production audio manager
-Sprint 12: Xiaozhi build and transport validation
+Sprint 12: Xiaozhi build and WebSocket transport validation
 Sprint 13: voice assistant adapter
 Sprint 14: push-to-talk MVP
 Sprint 15: GUI voice integration
@@ -148,6 +148,25 @@ Sprint 18: wake word and advanced voice UX
 Version 2 must not replace existing Wi-Fi, provisioning, storage, cloud, GUI,
 or reset ownership.
 
+### Xiaozhi Transport Boundary
+
+- Xiaozhi MQTT+UDP is intentionally **not selected** for the current roadmap.
+- The same pre-CONNECTED MQTT failure (`Certificate validated` followed by
+  `transport_read(): EOF`, `errno=119`, and `mqtt_message_receive()=-2`) was
+  reproduced in both the Gateway integration and a standalone official-flow
+  `esp_xiaozhi` test.
+- This evidence is sufficient to classify the MQTT path as unusable in the
+  validated environment; it does not prove the remote broker itself defective
+  without broker/server logs.
+- Project-side MQTT availability and MQTT transport-selection attributes are
+  removed. The project selects WebSocket only and does not provide MQTT
+  fallback.
+- `esp_xiaozhi` may still contain its own MQTT dependency/private NVS state as
+  upstream implementation detail. The Gateway does not read, expose, or start
+  that transport.
+- Remaining voice validation is WebSocket-only: control/text, PCM/audio,
+  reconnect, cleanup, stress, and resource measurements.
+
 ## Deliberately Deferred
 
 - Custom mobile application
@@ -155,5 +174,6 @@ or reset ownership.
 - Always-on BLE data streaming
 - Local web dashboard
 - OTA before a complete security and rollback design
+- Xiaozhi MQTT+UDP transport
 - Wake word before push-to-talk and audio resource acceptance
 - AI-controlled destructive actions such as reset, credential erase, reboot, or OTA

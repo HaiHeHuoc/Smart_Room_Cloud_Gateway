@@ -1,11 +1,14 @@
-# Xiaozhi Foundation — Phases 12.3–12.4.3
+# Xiaozhi Foundation — Phases 12.3–12.5
 
 ## Goal
 
 Phase 12.3 validates the Xiaozhi service-information and activation path without
-starting the chat/audio lifecycle. The project keeps the external component
-behind the `xiaozhi_foundation` boundary and exposes only copied,
-non-sensitive scalar state.
+starting the chat/audio lifecycle. Phase 12.4 audits configuration, NVS, stack,
+and cache-off behavior. Phase 12.5 records the transport decision: the project
+uses **WebSocket only** for Xiaozhi and does not implement MQTT+UDP.
+
+The project keeps the external component behind the `xiaozhi_foundation`
+boundary and exposes only copied, non-sensitive scalar state.
 
 ## Runtime Flow
 
@@ -15,7 +18,7 @@ Wi-Fi ONLINE
     -> xiaozhi_foundation_request_probe()
     -> private worker task
     -> esp_xiaozhi_chat_get_info()
-    -> copy non-sensitive flags
+    -> copy project-used non-sensitive flags
     -> esp_xiaozhi_chat_free_info()
 ```
 
@@ -51,13 +54,16 @@ Observed target-hardware sequence for Phase 12.3:
 2. Before account binding, activation code and challenge were present.
 3. The device was bound to the user's Xiaozhi account/agent through the Xiaozhi
    console.
-4. After reboot/binding, the probe again reached the service, MQTT and
-   WebSocket remained available, and both activation code and challenge were
-   absent.
+4. After reboot/binding, the probe again reached the service and activation code
+   and challenge were absent.
 5. `activation_timeout_ms` was `0` in the observed response. In the managed
    component this field is reset to zero before parsing and changes only when
    the server supplies a numeric timeout, so zero is treated as "no useful
    server-provided activation timeout" rather than a local failure.
+
+The historical presence of MQTT capability in the server response does not
+change the Phase 12.5 architecture decision. Project code no longer exposes or
+selects MQTT for Xiaozhi.
 
 ## Ownership And Cleanup
 
@@ -71,8 +77,9 @@ The public `xiaozhi_foundation_info_t` never contains:
 
 - activation code or challenge strings;
 - serial number or firmware URL strings;
-- MQTT/WebSocket endpoints, tokens, usernames, passwords, or topics;
-- any Xiaozhi-owned pointer or handle.
+- transport endpoints, tokens, usernames, passwords, or topics;
+- any Xiaozhi-owned pointer or handle;
+- MQTT availability or any project-side MQTT selection attribute.
 
 ## Private Xiaozhi Storage Audit
 
@@ -82,12 +89,14 @@ Xiaozhi component:
 | Namespace | Purpose | Sensitivity | Project policy |
 |---|---|---|---|
 | `board` | persistent Xiaozhi UUID/device identity | identity | preserve |
-| `mqtt` | server-provided MQTT endpoint/credentials/topics | secret | preserve/private |
-| `websocket` | server-provided WebSocket URL/token/version | secret | preserve/private |
+| `mqtt` | upstream server-provided MQTT data | secret | upstream-owned, ignored by project, preserve |
+| `websocket` | server-provided WebSocket URL/token/version | secret | preserve/private and use through `esp_xiaozhi` |
 
-`esp_xiaozhi_chat_get_info()` persists MQTT and WebSocket response objects into
-those namespaces when present. The project does not read their credentials and
-does not mirror them into `config_manager`.
+`esp_xiaozhi_chat_get_info()` may persist both MQTT and WebSocket response
+objects when the server returns them. That is upstream component behavior. The
+project does not read MQTT credentials, mirror them into `config_manager`, or
+start the MQTT transport. The private upstream namespace is not considered a
+project MQTT feature.
 
 ## Reset Policy
 
@@ -95,17 +104,19 @@ The current project long-press reset is a **Wi-Fi configuration reset**, not a
 full device identity wipe. It clears project Wi-Fi credentials and Wi-Fi driver
 persistence while preserving other device identity/configuration.
 
-Phase 12.3 therefore defines the Xiaozhi reset policy as:
+Phase 12 defines the Xiaozhi reset policy as:
 
-- preserve `board`, `mqtt`, and `websocket` during the existing Wi-Fi reset;
+- preserve upstream-owned `board`, `mqtt`, and `websocket` namespaces during the
+  existing Wi-Fi reset;
 - do not erase Xiaozhi namespaces from `app_reset_coordinator`;
 - preserve the bound Xiaozhi UUID across Wi-Fi reprovisioning and normal reboot;
 - if a future explicit "full device identity reset" is introduced, Xiaozhi
   unbind/credential erasure must be designed and verified separately before
   these namespaces are removed.
 
-This prevents a Wi-Fi reset from silently generating a new Xiaozhi identity or
-breaking account binding.
+Preserving the unused upstream MQTT namespace avoids introducing unrelated
+identity/storage side effects while still keeping MQTT completely outside the
+project-selected transport architecture.
 
 ## Timeout And Error Recovery
 
@@ -126,26 +137,28 @@ lifecycle:
   or tight-loop retries. Wi-Fi reconnect remains owned by `wifi_manager`.
 
 A service-only outage while Wi-Fi remains continuously `ONLINE` is not polled
-in Phase 12.3; transport/server reconnect policy is evaluated later in Phase
-12.5/12.6 where the real chat lifecycle exists.
+in Phase 12.3; WebSocket session reconnect and lifecycle behavior are validated
+in the later Xiaozhi lifecycle phases.
 
 ## Sensitive Logging Policy
 
-Production Phase 12.3 code never logs activation codes, activation challenges,
-transport tokens, credentials, private payloads, or raw server responses.
-Temporary activation-code logging used during manual account binding was
-removed at phase closure rather than left behind behind a disabled macro.
+Production code never logs activation codes, activation challenges, transport
+tokens, credentials, private payloads, or raw server responses. Temporary
+activation-code logging used during manual account binding was removed at phase
+closure rather than left behind behind a disabled macro.
 
-Safe diagnostics are limited to availability facts such as:
+Safe diagnostics are limited to project-relevant availability facts such as:
 
 ```text
 Service reachable
-MQTT available: yes/no
 WebSocket available: yes/no
 Activation code: present/none
 Activation challenge: present/none
 Activation timeout: <integer> ms
 ```
+
+MQTT availability is intentionally no longer copied or logged by
+`xiaozhi_foundation`.
 
 ## Phase 12.3 Acceptance Evidence
 
@@ -153,7 +166,6 @@ Target-hardware evidence supplied during Phase 12.3 after account binding:
 
 ```text
 XIAOZHI_FOUNDATION: Service reachable
-XIAOZHI_FOUNDATION: MQTT available: yes
 XIAOZHI_FOUNDATION: WebSocket available: yes
 XIAOZHI_FOUNDATION: Activation code: none
 XIAOZHI_FOUNDATION: Activation challenge: none
@@ -162,8 +174,7 @@ XIAOZHI_FOUNDATION: Background service probe completed
 ```
 
 This proves the service/info/activation path on the target board. It does not
-prove chat transport selection, audio, lifecycle stress, or server-outage
-recovery; those remain Phase 12.5 and 12.6 work.
+prove text/audio operation, lifecycle stress, or server-outage recovery.
 
 ## Phase 12.4.2–12.4.3 Configuration And NVS Execution Audit
 
@@ -186,26 +197,76 @@ manual-record-duration override that a `save-defconfig` operation can retain.
 ### NVS and cache-off policy
 
 In pinned `esp_xiaozhi` 0.1.2, the default keystore calls IDF `nvs_*` APIs
-directly in its caller context. The information path opens/writes `board`,
-`mqtt`, and `websocket`; later MQTT/WebSocket start paths open their respective
-namespaces for reads. The component offers an optional NVS-operations callback
-layer, but this phase does not register it or add a project NVS service.
+directly in its caller context. The information path can open/write `board`,
+`mqtt`, and `websocket` because those namespaces are controlled by the external
+component. Project transport start is WebSocket-only and therefore only the
+WebSocket transport path is intentionally exercised by Gateway code.
 
-All project calls to a Xiaozhi lifecycle API that can reach this storage path
-must execute from a task with an **internal-RAM stack**, never from a PSRAM-stack
-task, ISR, or cache-disabled callback. This includes `get_info()` and future
-`init`, `start`, `stop`, and `deinit` flows because their dependent transport
-paths can access `board`, `mqtt`, or `websocket`. The current `xiaozhi_probe`
-worker is created with `xTaskCreate`, so its normal ESP-IDF stack is internal.
-The static Xiaozhi audio worker is also internal under the selected Kconfig.
+All project calls to a Xiaozhi lifecycle API that can reach storage must execute
+from a task with an **internal-RAM stack**, never from a PSRAM-stack task, ISR,
+or cache-disabled callback. This includes `get_info()` and future `init`,
+`start`, `stop`, and `deinit` flows. The current `xiaozhi_probe` worker is created
+with `xTaskCreate`, so its normal ESP-IDF stack is internal. The static Xiaozhi
+audio worker is also internal under the selected Kconfig.
 
 No architecture defect requiring an NVS service was found for this configuration.
 If a future lifecycle caller must use PSRAM stack storage, introduce and validate
 the component NVS-operations service before that caller is allowed to reach a
 Xiaozhi lifecycle API.
 
-## Deferred Work
+## Phase 12.5 — Transport Decision
 
-- Phase 12.5: MQTT+UDP versus WebSocket transport decision and failure behavior.
-- Phase 12.6: init/start/connected/stop/deinit lifecycle matrix and repeated
-  stress/fault testing.
+### Decision
+
+**Selected transport: WebSocket only.**
+
+MQTT+UDP is closed for the current project roadmap and will not be implemented,
+validated further, or used as a runtime fallback.
+
+### Evidence
+
+The MQTT control path repeatedly failed before `CONNECTED` in the Gateway
+integration with the signature:
+
+```text
+esp-x509-crt-bundle: Certificate validated
+mqtt_client: transport_read(): EOF
+mqtt_client: transport_read() error: errno=119
+mqtt_client: mqtt_message_receive() returned -2
+mqtt_client: MQTT connect failed
+```
+
+A separate standalone `xiaozhi_mqtt_test`, derived from the official
+`esp_xiaozhi` flow and independent of Firebase, LVGL, `app_network_coordinator`,
+and `xiaozhi_foundation`, reproduced the same pre-CONNECTED failure. Normal MQTT
+retries also failed to obtain a `CONNECTED` event.
+
+The test is sufficient for the architecture conclusion that the MQTT path is
+not usable in the validated environment. It does **not** claim that the Xiaozhi
+broker itself has been proven defective because broker/server-side logs are not
+available.
+
+### Project API consequence
+
+- `xiaozhi_foundation_info_t` no longer exposes `mqtt_available`.
+- `XIAOZHI_FOUNDATION_TRANSPORT_MQTT` is removed.
+- `AUTO` remains only for caller compatibility and resolves to WebSocket.
+- WebSocket availability remains the only transport capability exposed by the
+  project boundary.
+- The upstream `chat_config.has_mqtt_config` field is explicitly set to `false`
+  before chat init. This is an external-component disable switch, not project
+  MQTT support.
+- No MQTT fallback is allowed.
+
+### Remaining validation
+
+Future Xiaozhi work validates only the selected WebSocket path, including text,
+audio format/PCM integration, reconnect behavior, lifecycle stress, cleanup,
+and resource measurements.
+
+## Deferred / Closed Work
+
+- MQTT+UDP Xiaozhi implementation: **closed / not selected** for the current
+  roadmap.
+- Phase 12.6+: WebSocket init/start/connected/stop/deinit lifecycle matrix and
+  repeated stress/fault testing.
