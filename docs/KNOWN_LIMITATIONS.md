@@ -168,8 +168,13 @@ or reset ownership.
   `esp_xiaozhi` 0.1.2 has no public arbitrary typed-text TX API, so target
   USER/ASSISTANT text evidence is deferred to the supported P2-F audio/STT
   path.
-- Remaining voice validation is WebSocket-only: control, PCM/audio, reconnect,
-  cleanup, stress, and resource measurements.
+- P2-E WebSocket audio-channel lifecycle and the optional P2-F known-audio
+  infrastructure are implemented and build-verified, but neither has target
+  hardware PASS. P2-F requires a legal local raw-Opus packet fixture; it does
+  not accept arbitrary PCM, WAV, Ogg, or fake audio data.
+- Remaining voice validation is WebSocket-only: P2-E/P2-F hardware evidence,
+  reconnect, cleanup, stress, and resource measurements. No production voice
+  assistant, microphone, speaker, or GUI integration is included yet.
 
 ## Deliberately Deferred
 

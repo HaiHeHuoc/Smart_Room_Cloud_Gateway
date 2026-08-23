@@ -1,0 +1,21 @@
+menu "Xiaozhi Phase 12 validation"
+
+config XIAOZHI_FOUNDATION_P2F_EMBED_FIXTURE
+    bool "Embed the optional P2-F known-audio fixture"
+    default n
+    help
+        Embed test_assets/p2f_fixture.bin only for Phase 12.5 P2-F hardware
+        validation. The asset is not a production audio input and is disabled
+        by default. The build fails clearly if this option is enabled without
+        the documented fixture file.
+
+config XIAOZHI_FOUNDATION_P2F_E2E_ONLINE_VALIDATION
+    bool "Run P2-F known-audio E2E instead of default P2-E"
+    depends on XIAOZHI_FOUNDATION_P2F_EMBED_FIXTURE
+    default n
+    help
+        At the next application ONLINE transition, run the independent P2-F
+        WebSocket audio/STT/TTS validation. Leave this disabled to run the
+        default P2-E audio-channel lifecycle validation.
+
+endmenu
