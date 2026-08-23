@@ -2155,6 +2155,7 @@ app_run_one_wifi_provisioning_session(
 
     if (!reset_requested) {
         app_request_xiaozhi_probe_best_effort();
+        xiaozhi_foundation_request_transport_validation(XIAOZHI_FOUNDATION_TRANSPORT_AUTO);
     }
 
     return outcome;
@@ -3385,6 +3386,7 @@ esp_err_t app_network_coordinator_notify_wifi_event(
             !success_dwell_active)
         {
             app_request_xiaozhi_probe_best_effort();
+            xiaozhi_foundation_request_transport_validation(XIAOZHI_FOUNDATION_TRANSPORT_AUTO);
 
             const esp_err_t screen_ret =
                 app_gui_request_screen(

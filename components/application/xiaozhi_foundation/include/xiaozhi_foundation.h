@@ -10,8 +10,8 @@
  */
 
 /* Includes ----------------------------------------------------------------- */
-#include <stdint.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "esp_err.h"
 
@@ -41,6 +41,18 @@ typedef struct {
     bool server_time_available;
     bool new_firmware_available;
 } xiaozhi_foundation_info_t;
+
+/**
+ * @brief Requested transport for a Xiaozhi transport-validation operation.
+ *
+ * This selection contains no credentials, endpoint values, or other
+ * sensitive transport configuration.
+ */
+typedef enum {
+    XIAOZHI_FOUNDATION_TRANSPORT_AUTO = 0,
+    XIAOZHI_FOUNDATION_TRANSPORT_MQTT,
+    XIAOZHI_FOUNDATION_TRANSPORT_WEBSOCKET,
+} xiaozhi_foundation_transport_t;
 
 /* Functions ---------------------------------------------------------------- */
 /**
@@ -74,6 +86,18 @@ esp_err_t xiaozhi_foundation_probe(xiaozhi_foundation_info_t *out_info);
  *      - ESP_ERR_NO_MEM if the worker task could not be created
  */
 esp_err_t xiaozhi_foundation_request_probe(void);
+
+/**
+ * @brief Request validation of a selected Xiaozhi transport.
+ *
+ * @param[in] transport Transport mode to validate.
+ *
+ * This interface is intended for normal task context and is not ISR-safe.
+ * Its blocking, timeout, result, and ownership contract will be defined with
+ * the transport-validation implementation.
+ */
+esp_err_t xiaozhi_foundation_request_transport_validation(
+    xiaozhi_foundation_transport_t transport);
 
 #ifdef __cplusplus
 }
