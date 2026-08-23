@@ -9,6 +9,7 @@ idf_component_register(
         esp_common
 
     PRIV_REQUIRES
+        esp_event
         freertos
         log
         esp_xiaozhi
