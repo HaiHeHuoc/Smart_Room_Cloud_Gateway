@@ -3,10 +3,11 @@
  * @brief Isolated, non-sensitive Xiaozhi service and transport validation.
  *
  * Phase 12.5.2 P1 discovers server transport capabilities and applies the
- * project-side transport selection policy. P2-A additionally validates the
- * local MCP and Xiaozhi chat init/deinit lifecycle. It still does not call
- * chat_start(), establish MQTT/WebSocket connectivity, or open the UDP/audio
- * path.
+ * project-side transport selection policy. P2-A validates local MCP/chat
+ * init/deinit ownership. P2-B additionally starts exactly the selected control
+ * transport, waits for a bounded CONNECTED/DISCONNECTED result, holds a
+ * successful connection briefly, then stops and cleans up. It does not open an
+ * audio channel or validate the MQTT-mode UDP path.
  */
 
 /* Includes ----------------------------------------------------------------- */
@@ -14,12 +15,14 @@
 
 #include <string.h>
 
+#include "esp_event.h"
 #include "esp_log.h"
+#include "esp_mcp_engine.h"
 #include "esp_xiaozhi_chat.h"
 #include "esp_xiaozhi_info.h"
-#include "esp_mcp_engine.h"
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/event_groups.h"
 #include "freertos/task.h"
 
 /* Macros ------------------------------------------------------------------- */
@@ -32,20 +35,34 @@
 #define XIAOZHI_FOUNDATION_PROBE_TASK_PRIORITY \
     4U
 
+#define XIAOZHI_FOUNDATION_EVENT_CONNECTED \
+    BIT0
+
+#define XIAOZHI_FOUNDATION_EVENT_DISCONNECTED \
+    BIT1
+
+#define XIAOZHI_FOUNDATION_CONNECT_TIMEOUT_MS \
+    15000U
+
+#define XIAOZHI_FOUNDATION_CONNECTED_HOLD_MS \
+    2000U
+
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "XIAOZHI_FOUNDATION";
 
 /* Type Definitions --------------------------------------------------------- */
 /**
- * @brief Private state for one transport discovery/selection operation.
+ * @brief Private state for one transport validation operation.
  *
- * Only scalar availability flags are copied from esp_xiaozhi. No endpoint,
- * credential, token, topic, pointer, or Xiaozhi-owned handle is retained.
+ * Only scalar service capability facts and a short-lived EventGroup handle are
+ * retained. No endpoint, credential, token, topic, or Xiaozhi-owned string
+ * pointer is stored here.
  */
 typedef struct {
     xiaozhi_foundation_transport_t requested_transport;
     bool mqtt_available;
     bool websocket_available;
+    EventGroupHandle_t events;
 } xiaozhi_foundation_validation_ctx_t;
 
 /* Static Variables --------------------------------------------------------- */
@@ -57,6 +74,12 @@ static bool s_operation_in_progress = false;
 /* Function Prototypes ------------------------------------------------------ */
 static void xiaozhi_foundation_transport_validation_task(
     void *argument);
+
+static void xiaozhi_foundation_chat_event_handler(
+    void *arg,
+    esp_event_base_t event_base,
+    int32_t event_id,
+    void *event_data);
 
 static esp_err_t xiaozhi_foundation_select_transport(
     const xiaozhi_foundation_validation_ctx_t *ctx,
@@ -94,16 +117,55 @@ static void xiaozhi_foundation_transport_validation_task(
     if (ret != ESP_OK) {
         ESP_LOGE(
             TAG,
-            "Transport init validation failed: %s",
+            "Transport connection validation failed: %s",
             esp_err_to_name(ret));
     } else {
         ESP_LOGI(
             TAG,
-            "Transport init validation completed");
+            "Transport connection validation completed");
     }
 
     xiaozhi_foundation_finish_operation();
     vTaskDelete(NULL);
+}
+
+static void xiaozhi_foundation_chat_event_handler(
+    void *arg,
+    esp_event_base_t event_base,
+    int32_t event_id,
+    void *event_data)
+{
+    (void)event_base;
+    (void)event_data;
+
+    xiaozhi_foundation_validation_ctx_t *ctx =
+        (xiaozhi_foundation_validation_ctx_t *)arg;
+
+    if ((ctx == NULL) || (ctx->events == NULL)) {
+        return;
+    }
+
+    /*
+     * ESP_XIAOZHI_CHAT_EVENTS are delivered from normal ESP event-loop task
+     * context, not an ISR. Keep this callback limited to recording transport
+     * facts; lifecycle, logging decisions, and cleanup remain in the worker.
+     */
+    switch (event_id) {
+    case ESP_XIAOZHI_CHAT_EVENT_CONNECTED:
+        (void)xEventGroupSetBits(
+            ctx->events,
+            XIAOZHI_FOUNDATION_EVENT_CONNECTED);
+        break;
+
+    case ESP_XIAOZHI_CHAT_EVENT_DISCONNECTED:
+        (void)xEventGroupSetBits(
+            ctx->events,
+            XIAOZHI_FOUNDATION_EVENT_DISCONNECTED);
+        break;
+
+    default:
+        break;
+    }
 }
 
 static bool xiaozhi_foundation_try_begin_operation(void)
@@ -141,8 +203,7 @@ static esp_err_t xiaozhi_foundation_select_transport(
     case XIAOZHI_FOUNDATION_TRANSPORT_AUTO:
         /*
          * Pinned esp_xiaozhi 0.1.2 prefers MQTT when both server transport
-         * configurations exist. Keep AUTO aligned with that upstream policy
-         * so Phase 12.5 can compare the component-preferred path first.
+         * configurations exist. Keep AUTO aligned with that upstream policy.
          */
         if (ctx->mqtt_available) {
             *selected_transport =
@@ -239,6 +300,7 @@ static esp_err_t xiaozhi_foundation_validate_transport(
 
     xiaozhi_foundation_validation_ctx_t ctx = {
         .requested_transport = requested,
+        .events = NULL,
     };
 
     esp_xiaozhi_chat_info_t info = {0};
@@ -259,8 +321,8 @@ static esp_err_t xiaozhi_foundation_validate_transport(
 
     /*
      * Copy only the capability facts needed by the project before releasing
-     * esp_xiaozhi-owned response storage. The validation context remains valid
-     * after free_info() because these members are plain booleans.
+     * esp_xiaozhi-owned response storage. These members remain valid after
+     * free_info() because they are plain booleans.
      */
     ctx.mqtt_available =
         info.has_mqtt_config;
@@ -307,13 +369,11 @@ static esp_err_t xiaozhi_foundation_validate_transport(
         xiaozhi_foundation_transport_to_string(
             selected_transport));
 
-    /*
-     * P2-A validates local ownership and init/deinit only. The empty MCP engine
-     * is required by the Xiaozhi chat lifecycle, but no project MCP tools or
-     * resources are registered during Sprint 12.
-     */
     esp_mcp_t *mcp = NULL;
     esp_xiaozhi_chat_handle_t chat = 0;
+    bool chat_started = false;
+    bool event_handler_registered = false;
+    esp_event_handler_instance_t event_handler_instance = NULL;
 
     ret = esp_mcp_create(&mcp);
     if (ret != ESP_OK) {
@@ -337,8 +397,9 @@ static esp_err_t xiaozhi_foundation_validate_transport(
     chat_config.owns_mcp_engine = false;
 
     /*
-     * Configure exactly the selected path. P2-A does not start the transport,
-     * but keeping a single path enabled avoids hiding future fallback behavior.
+     * Enable exactly one transport in the chat config. Therefore an AUTO
+     * request that P1 resolves to MQTT still performs an MQTT-only P2-B run;
+     * WebSocket cannot act as an implicit fallback inside this operation.
      */
     switch (selected_transport) {
     case XIAOZHI_FOUNDATION_TRANSPORT_MQTT:
@@ -370,12 +431,158 @@ static esp_err_t xiaozhi_foundation_validate_transport(
 
     ESP_LOGI(TAG, "chat_init: OK");
 
+    ctx.events = xEventGroupCreate();
+    if (ctx.events == NULL) {
+        ESP_LOGE(TAG, "Failed to create transport EventGroup");
+        ret = ESP_ERR_NO_MEM;
+        goto cleanup;
+    }
+
+    ret = esp_event_handler_instance_register(
+        ESP_XIAOZHI_CHAT_EVENTS,
+        ESP_EVENT_ANY_ID,
+        xiaozhi_foundation_chat_event_handler,
+        &ctx,
+        &event_handler_instance);
+
+    if (ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Failed to register Xiaozhi chat event handler: %s",
+            esp_err_to_name(ret));
+        goto cleanup;
+    }
+
+    event_handler_registered = true;
+
+    ret = esp_xiaozhi_chat_start(chat);
+    if (ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "chat_start failed: %s",
+            esp_err_to_name(ret));
+        goto cleanup;
+    }
+
+    chat_started = true;
+    ESP_LOGI(TAG, "chat_start: OK");
+
+    const EventBits_t initial_bits =
+        xEventGroupWaitBits(
+            ctx.events,
+            XIAOZHI_FOUNDATION_EVENT_CONNECTED |
+                XIAOZHI_FOUNDATION_EVENT_DISCONNECTED,
+            pdTRUE,
+            pdFALSE,
+            pdMS_TO_TICKS(
+                XIAOZHI_FOUNDATION_CONNECT_TIMEOUT_MS));
+
     /*
-     * Intentionally stop here. chat_init() proves only local runtime creation;
-     * it does not prove MQTT/WebSocket connectivity or the MQTT-mode UDP path.
+     * EventGroups preserve facts, not event ordering. If both connection and
+     * disconnection were observed before this worker ran, fail conservatively
+     * instead of declaring a stable connection.
      */
+    if ((initial_bits & XIAOZHI_FOUNDATION_EVENT_DISCONNECTED) != 0U) {
+        ESP_LOGE(
+            TAG,
+            "%s disconnected before a stable CONNECTED state",
+            xiaozhi_foundation_transport_to_string(
+                selected_transport));
+        ret = ESP_FAIL;
+        goto cleanup;
+    }
+
+    if ((initial_bits & XIAOZHI_FOUNDATION_EVENT_CONNECTED) == 0U) {
+        ESP_LOGE(
+            TAG,
+            "Timed out waiting %u ms for %s transport connection",
+            XIAOZHI_FOUNDATION_CONNECT_TIMEOUT_MS,
+            xiaozhi_foundation_transport_to_string(
+                selected_transport));
+        ret = ESP_ERR_TIMEOUT;
+        goto cleanup;
+    }
+
+    ESP_LOGI(TAG, "CONNECTED event received");
+    ESP_LOGI(
+        TAG,
+        "Transport connected: %s",
+        xiaozhi_foundation_transport_to_string(
+            selected_transport));
+
+    const EventBits_t hold_bits =
+        xEventGroupWaitBits(
+            ctx.events,
+            XIAOZHI_FOUNDATION_EVENT_DISCONNECTED,
+            pdTRUE,
+            pdFALSE,
+            pdMS_TO_TICKS(
+                XIAOZHI_FOUNDATION_CONNECTED_HOLD_MS));
+
+    if ((hold_bits & XIAOZHI_FOUNDATION_EVENT_DISCONNECTED) != 0U) {
+        ESP_LOGE(
+            TAG,
+            "%s disconnected during %u ms stability hold",
+            xiaozhi_foundation_transport_to_string(
+                selected_transport),
+            XIAOZHI_FOUNDATION_CONNECTED_HOLD_MS);
+        ret = ESP_FAIL;
+        goto cleanup;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Transport stable for %u ms",
+        XIAOZHI_FOUNDATION_CONNECTED_HOLD_MS);
 
 cleanup:
+    /*
+     * Keep the handler context and EventGroup alive while chat_stop() runs,
+     * because stop may emit DISCONNECTED. Then unregister before deleting the
+     * EventGroup or returning from this stack frame.
+     */
+    if (chat_started) {
+        const esp_err_t stop_ret =
+            esp_xiaozhi_chat_stop(chat);
+
+        if (stop_ret != ESP_OK) {
+            ESP_LOGW(
+                TAG,
+                "chat_stop failed: %s",
+                esp_err_to_name(stop_ret));
+
+            if (ret == ESP_OK) {
+                ret = stop_ret;
+            }
+        } else {
+            ESP_LOGI(TAG, "chat_stop: OK");
+        }
+    }
+
+    if (event_handler_registered) {
+        const esp_err_t unregister_ret =
+            esp_event_handler_instance_unregister(
+                ESP_XIAOZHI_CHAT_EVENTS,
+                ESP_EVENT_ANY_ID,
+                event_handler_instance);
+
+        if (unregister_ret != ESP_OK) {
+            ESP_LOGW(
+                TAG,
+                "Failed to unregister Xiaozhi chat event handler: %s",
+                esp_err_to_name(unregister_ret));
+
+            if (ret == ESP_OK) {
+                ret = unregister_ret;
+            }
+        }
+    }
+
+    if (ctx.events != NULL) {
+        vEventGroupDelete(ctx.events);
+        ctx.events = NULL;
+    }
+
     if (chat != 0) {
         const esp_err_t deinit_ret =
             esp_xiaozhi_chat_deinit(chat);
@@ -547,8 +754,8 @@ esp_err_t xiaozhi_foundation_request_transport_validation(
     }
 
     /*
-     * Keep the service request out of network/event callbacks. xTaskCreate()
-     * also keeps this NVS-capable Xiaozhi path on a normal internal-RAM task
+     * Keep service/chat work out of network/event callbacks. xTaskCreate() also
+     * keeps this NVS-capable Xiaozhi lifecycle on a normal internal-RAM task
      * stack, matching the Phase 12.4 cache-off policy.
      */
     const BaseType_t task_created =
