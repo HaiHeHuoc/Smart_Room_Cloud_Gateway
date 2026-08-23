@@ -10,6 +10,7 @@ idf_component_register(
 
     PRIV_REQUIRES
         esp_event
+        esp_timer
         freertos
         log
         esp_xiaozhi

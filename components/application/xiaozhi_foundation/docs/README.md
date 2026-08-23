@@ -448,6 +448,51 @@ non-zero audio RX counters, `AUDIO_CHANNEL_CLOSED`, successful stop/deinit, and
 text; byte-for-byte ASR/LLM wording is not required. No P2-F hardware PASS is
 claimed without that serial trace.
 
+### P2.1 — Temporary Interaction Status UI
+
+**Implementation status:** build-verified temporary validation presentation.
+**Hardware status:** pending target-LCD and P2-E/P2-F serial evidence.
+
+The foundation adds one optional observer API,
+`xiaozhi_foundation_register_ui_status_callback()`. It is registered once by
+the application composition layer before network orchestration begins and is
+immutable while a probe or transport validation is active. The foundation
+borrows the callback/context for firmware lifetime; the observer must copy the
+borrowed snapshot before returning.
+
+```text
+foundation worker / Xiaozhi event callback
+    -> copied xiaozhi_foundation_ui_status_t
+    -> main copies to ui_xiaozhi_status_t
+    -> app_gui length-one latest-value queue
+    -> app_gui UI task and optional XIAOZHI screen
+```
+
+The snapshot exposes only `DISCONNECTED`, `READY`, `LISTENING`, `PROCESSING`,
+`RESPONDING`, or `ERROR`; monotonic listening start/stop times; a non-sensitive
+`esp_err_t`; and separate copied USER/ASSISTANT text buffers. Each buffer is
+192 bytes including NUL and is copied from the existing P2-D protocol storage.
+It contains no raw audio, endpoint, token, activation material, framework
+pointer, or raw error-source string.
+
+`LISTENING` begins only after the supported P2-F `send_start_listening()` call
+succeeds. The worker records its stop time after supported
+`send_stop_listening()` succeeds and publishes `PROCESSING`; an early
+USER/ASSISTANT/TTS response advances the UI to `RESPONDING`, and TTS stop may
+return it to `READY`. `CONNECTED` publishes `READY`; `DISCONNECTED` publishes
+the safe disconnected state; protocol or lifecycle failure publishes `ERROR`.
+An error is retained through asynchronous disconnect cleanup. The GUI, not the
+foundation, converts the monotonic timestamps to a periodically displayed
+duration.
+
+The observer is a presentation bridge, not a new voice lifecycle. It does not
+change WebSocket selection, MQTT policy, audio-channel ownership, worker
+priority, P2-D receive behavior, P2-E/P2-F validation steps, or cleanup.
+It never calls LVGL, starts a screen, sends per-frame/timer updates, starts a
+FreeRTOS task, or touches hardware. Screen navigation does not start, stop, or
+cancel a validation operation. This temporary UI must not be confused with the
+later project-owned `voice_assistant`/production GUI integration.
+
 ### Callback and cleanup ownership
 
 Both `event_callback` and `audio_callback` receive borrowed source pointers.
@@ -462,8 +507,9 @@ deletion, MCP destruction, and zeroization of copied text before exit.
 
 P2-E/P2-F hardware acceptance, reconnect/failure stress, resource measurement,
 and the later Phase 12.6 lifecycle matrix remain pending. MQTT remains closed;
-no MQTT fallback, production voice assistant, microphone, speaker, or GUI
-integration is part of this validation layer.
+no MQTT fallback, production voice assistant, microphone, speaker, or
+production GUI integration is part of this validation layer. P2.1 is only a
+temporary copied-status display for the existing validation worker.
 
 ## Deferred / Closed Work
 

@@ -19,6 +19,7 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_mcp_engine.h"
+#include "esp_timer.h"
 #include "esp_xiaozhi_chat.h"
 #include "esp_xiaozhi_info.h"
 
@@ -111,6 +112,11 @@
 /* Includes the terminating NUL. P2-F logs a separately bounded safe copy. */
 #define XIAOZHI_FOUNDATION_CHAT_TEXT_BUFFER_SIZE \
     192U
+
+_Static_assert(
+    XIAOZHI_FOUNDATION_CHAT_TEXT_BUFFER_SIZE ==
+        XIAOZHI_FOUNDATION_UI_TEXT_BUFFER_SIZE,
+    "validation UI text buffer must match the copied protocol text bound");
 
 /* Includes the terminating NUL. The component currently reports short hints. */
 #define XIAOZHI_FOUNDATION_CHAT_ERROR_SOURCE_BUFFER_SIZE \
@@ -210,6 +216,20 @@ typedef struct {
 } xiaozhi_foundation_p2f_fixture_t;
 
 /**
+ * @brief State retained by the one-shot validation worker for UI observation.
+ *
+ * This is a copied, non-production presentation model. The foundation still
+ * owns all protocol and lifecycle decisions; a registered observer may only
+ * receive snapshots through the application composition layer.
+ */
+typedef struct {
+    xiaozhi_foundation_ui_state_t state;
+    int64_t listening_started_at_us;
+    int64_t listening_stopped_at_us;
+    esp_err_t last_error;
+} xiaozhi_foundation_ui_model_t;
+
+/**
  * @brief Private state for one WebSocket validation operation.
  *
  * Only the WebSocket service capability fact and a short-lived EventGroup
@@ -223,6 +243,7 @@ typedef struct {
     EventGroupHandle_t events;
     portMUX_TYPE protocol_lock;
     xiaozhi_foundation_protocol_state_t protocol;
+    xiaozhi_foundation_ui_model_t ui;
 } xiaozhi_foundation_validation_ctx_t;
 
 /* Static Variables --------------------------------------------------------- */
@@ -230,6 +251,10 @@ static portMUX_TYPE s_operation_lock =
     portMUX_INITIALIZER_UNLOCKED;
 
 static bool s_operation_in_progress = false;
+
+/* Application composition owns the callback/context lifetime. */
+static xiaozhi_foundation_ui_status_callback_t s_ui_status_callback = NULL;
+static void *s_ui_status_callback_context = NULL;
 
 #if CONFIG_XIAOZHI_FOUNDATION_P2F_EMBED_FIXTURE
 extern const uint8_t xiaozhi_p2f_fixture_start[]
@@ -257,6 +282,14 @@ static void xiaozhi_foundation_audio_callback(
     const uint8_t *data,
     int len,
     void *callback_ctx);
+
+static void xiaozhi_foundation_publish_ui_status(
+    xiaozhi_foundation_validation_ctx_t *ctx);
+
+static void xiaozhi_foundation_set_ui_state(
+    xiaozhi_foundation_validation_ctx_t *ctx,
+    xiaozhi_foundation_ui_state_t state,
+    esp_err_t last_error);
 
 static size_t xiaozhi_foundation_copy_bounded_string(
     char *destination,
@@ -402,12 +435,20 @@ static void xiaozhi_foundation_chat_event_handler(
         (void)xEventGroupSetBits(
             ctx->events,
             XIAOZHI_FOUNDATION_EVENT_CONNECTED);
+        xiaozhi_foundation_set_ui_state(
+            ctx,
+            XIAOZHI_FOUNDATION_UI_READY,
+            ESP_OK);
         break;
 
     case ESP_XIAOZHI_CHAT_EVENT_DISCONNECTED:
         (void)xEventGroupSetBits(
             ctx->events,
             XIAOZHI_FOUNDATION_EVENT_DISCONNECTED);
+        xiaozhi_foundation_set_ui_state(
+            ctx,
+            XIAOZHI_FOUNDATION_UI_DISCONNECTED,
+            ESP_OK);
         break;
 
     case ESP_XIAOZHI_CHAT_EVENT_AUDIO_CHANNEL_OPENED:
@@ -469,6 +510,109 @@ static size_t xiaozhi_foundation_copy_bounded_string(
     }
 
     return length;
+}
+
+static void xiaozhi_foundation_publish_ui_status(
+    xiaozhi_foundation_validation_ctx_t *ctx)
+{
+    if (ctx == NULL) {
+        return;
+    }
+
+    xiaozhi_foundation_ui_status_callback_t callback = NULL;
+    void *callback_context = NULL;
+    xiaozhi_foundation_ui_status_t status = {0};
+
+    /*
+     * The protocol and UI model share one short critical section so an
+     * observer never sees a new state paired with stale transcript bytes.
+     */
+    portENTER_CRITICAL(&ctx->protocol_lock);
+    status.state = ctx->ui.state;
+    status.listening_started_at_us = ctx->ui.listening_started_at_us;
+    status.listening_stopped_at_us = ctx->ui.listening_stopped_at_us;
+    status.last_error = ctx->ui.last_error;
+    status.user_text_truncated = ctx->protocol.user_text.truncated;
+    memcpy(
+        status.user_text,
+        ctx->protocol.user_text.value,
+        sizeof(status.user_text));
+    status.assistant_text_truncated = ctx->protocol.assistant_text.truncated;
+    memcpy(
+        status.assistant_text,
+        ctx->protocol.assistant_text.value,
+        sizeof(status.assistant_text));
+    portEXIT_CRITICAL(&ctx->protocol_lock);
+
+    /* Registration is immutable while an operation is active. */
+    portENTER_CRITICAL(&s_operation_lock);
+    callback = s_ui_status_callback;
+    callback_context = s_ui_status_callback_context;
+    portEXIT_CRITICAL(&s_operation_lock);
+
+    if (callback != NULL) {
+        /* Never invoke application code while holding a foundation lock. */
+        callback(&status, callback_context);
+    }
+
+    memset(&status, 0, sizeof(status));
+}
+
+static void xiaozhi_foundation_set_ui_state(
+    xiaozhi_foundation_validation_ctx_t *ctx,
+    xiaozhi_foundation_ui_state_t state,
+    esp_err_t last_error)
+{
+    if (ctx == NULL) {
+        return;
+    }
+
+    const int64_t now_us = esp_timer_get_time();
+    bool should_publish = false;
+
+    portENTER_CRITICAL(&ctx->protocol_lock);
+
+    /* Keep a protocol failure visible through asynchronous disconnect cleanup. */
+    if ((ctx->ui.state == XIAOZHI_FOUNDATION_UI_ERROR) &&
+        (state != XIAOZHI_FOUNDATION_UI_ERROR)) {
+        portEXIT_CRITICAL(&ctx->protocol_lock);
+        return;
+    }
+
+    /* A fast server reply must not be visually regressed by send-stop return. */
+    if ((ctx->ui.state == XIAOZHI_FOUNDATION_UI_RESPONDING) &&
+        (state == XIAOZHI_FOUNDATION_UI_PROCESSING)) {
+        portEXIT_CRITICAL(&ctx->protocol_lock);
+        return;
+    }
+
+    ctx->ui.state = state;
+    ctx->ui.last_error = (state == XIAOZHI_FOUNDATION_UI_ERROR) ?
+        ((last_error == ESP_OK) ? ESP_FAIL : last_error) : ESP_OK;
+
+    if (state == XIAOZHI_FOUNDATION_UI_LISTENING) {
+        ctx->ui.listening_started_at_us = now_us;
+        ctx->ui.listening_stopped_at_us = 0;
+        memset(&ctx->protocol.user_text, 0, sizeof(ctx->protocol.user_text));
+        memset(
+            &ctx->protocol.assistant_text,
+            0,
+            sizeof(ctx->protocol.assistant_text));
+    } else if (((state == XIAOZHI_FOUNDATION_UI_PROCESSING) ||
+                (state == XIAOZHI_FOUNDATION_UI_RESPONDING) ||
+                (state == XIAOZHI_FOUNDATION_UI_READY) ||
+                (state == XIAOZHI_FOUNDATION_UI_ERROR)) &&
+               (ctx->ui.listening_started_at_us > 0) &&
+               (ctx->ui.listening_stopped_at_us == 0)) {
+        ctx->ui.listening_stopped_at_us = now_us;
+    }
+
+    should_publish = true;
+    portEXIT_CRITICAL(&ctx->protocol_lock);
+
+    if (should_publish) {
+        xiaozhi_foundation_publish_ui_status(ctx);
+    }
 }
 
 static size_t xiaozhi_foundation_get_bounded_string_length(
@@ -562,6 +706,15 @@ static void xiaozhi_foundation_protocol_event_callback(
         }
 
         (void)xEventGroupSetBits(ctx->events, event_bit);
+
+        if (text_data->role == ESP_XIAOZHI_CHAT_TEXT_ROLE_ASSISTANT) {
+            xiaozhi_foundation_set_ui_state(
+                ctx,
+                XIAOZHI_FOUNDATION_UI_RESPONDING,
+                ESP_OK);
+        } else {
+            xiaozhi_foundation_publish_ui_status(ctx);
+        }
         break;
     }
 
@@ -612,6 +765,18 @@ static void xiaozhi_foundation_protocol_event_callback(
         portEXIT_CRITICAL(&ctx->protocol_lock);
 
         (void)xEventGroupSetBits(ctx->events, tts_event_bit);
+
+        if (tts_state->state == ESP_XIAOZHI_CHAT_TTS_STATE_STOP) {
+            xiaozhi_foundation_set_ui_state(
+                ctx,
+                XIAOZHI_FOUNDATION_UI_READY,
+                ESP_OK);
+        } else {
+            xiaozhi_foundation_set_ui_state(
+                ctx,
+                XIAOZHI_FOUNDATION_UI_RESPONDING,
+                ESP_OK);
+        }
         break;
     }
 
@@ -636,6 +801,10 @@ static void xiaozhi_foundation_protocol_event_callback(
         (void)xEventGroupSetBits(
             ctx->events,
             XIAOZHI_FOUNDATION_EVENT_CHAT_ERROR);
+        xiaozhi_foundation_set_ui_state(
+            ctx,
+            XIAOZHI_FOUNDATION_UI_ERROR,
+            error_info->code);
         break;
     }
 
@@ -1499,6 +1668,10 @@ static esp_err_t xiaozhi_foundation_validate_p2f_audio_e2e(
     }
 
     listening_started = true;
+    xiaozhi_foundation_set_ui_state(
+        ctx,
+        XIAOZHI_FOUNDATION_UI_LISTENING,
+        ESP_OK);
     ESP_LOGI(TAG, "start_listening: OK");
     ESP_LOGI(TAG, "Sending known audio");
 
@@ -1521,6 +1694,10 @@ static esp_err_t xiaozhi_foundation_validate_p2f_audio_e2e(
                 ret = stop_ret;
             }
         } else {
+            xiaozhi_foundation_set_ui_state(
+                ctx,
+                XIAOZHI_FOUNDATION_UI_PROCESSING,
+                ESP_OK);
             ESP_LOGI(TAG, "stop_listening: OK");
         }
     }
@@ -1657,7 +1834,13 @@ static esp_err_t xiaozhi_foundation_validate_transport(
         .requested_transport = requested,
         .events = NULL,
         .protocol_lock = portMUX_INITIALIZER_UNLOCKED,
+        .ui = {
+            .state = XIAOZHI_FOUNDATION_UI_DISCONNECTED,
+            .last_error = ESP_OK,
+        },
     };
+
+    xiaozhi_foundation_publish_ui_status(&ctx);
 
     esp_xiaozhi_chat_info_t info = {0};
 
@@ -1672,6 +1855,10 @@ static esp_err_t xiaozhi_foundation_validate_transport(
 
         /* get_info() may have partially allocated response fields. */
         (void)esp_xiaozhi_chat_free_info(&info);
+        xiaozhi_foundation_set_ui_state(
+            &ctx,
+            XIAOZHI_FOUNDATION_UI_ERROR,
+            ret);
         ESP_LOGE(TAG, "%s RESULT: FAIL: %s", checkpoint_name,
                  esp_err_to_name(ret));
         return ret;
@@ -1691,6 +1878,10 @@ static esp_err_t xiaozhi_foundation_validate_transport(
             TAG,
             "Failed to free Xiaozhi service info: %s",
             esp_err_to_name(ret));
+        xiaozhi_foundation_set_ui_state(
+            &ctx,
+            XIAOZHI_FOUNDATION_UI_ERROR,
+            ret);
         ESP_LOGE(TAG, "%s RESULT: FAIL: %s", checkpoint_name,
                  esp_err_to_name(ret));
         return ret;
@@ -1712,6 +1903,10 @@ static esp_err_t xiaozhi_foundation_validate_transport(
             TAG,
             "No usable Xiaozhi WebSocket transport: %s",
             esp_err_to_name(ret));
+        xiaozhi_foundation_set_ui_state(
+            &ctx,
+            XIAOZHI_FOUNDATION_UI_ERROR,
+            ret);
         ESP_LOGE(TAG, "%s RESULT: FAIL: %s", checkpoint_name,
                  esp_err_to_name(ret));
         return ret;
@@ -1736,6 +1931,10 @@ static esp_err_t xiaozhi_foundation_validate_transport(
             TAG,
             "Failed to create MCP engine: %s",
             esp_err_to_name(ret));
+        xiaozhi_foundation_set_ui_state(
+            &ctx,
+            XIAOZHI_FOUNDATION_UI_ERROR,
+            ret);
         ESP_LOGE(TAG, "%s RESULT: FAIL: %s", checkpoint_name,
                  esp_err_to_name(ret));
         return ret;
@@ -1943,14 +2142,6 @@ cleanup:
 
     xiaozhi_foundation_log_protocol_diagnostics(&ctx);
 
-    if (ctx.events != NULL) {
-        vEventGroupDelete(ctx.events);
-        ctx.events = NULL;
-    }
-
-    /* Do not leave copied user/assistant text on this short-lived task stack. */
-    memset(&ctx.protocol, 0, sizeof(ctx.protocol));
-
     if (mcp != NULL) {
         const esp_err_t destroy_ret =
             esp_mcp_destroy(mcp);
@@ -1968,6 +2159,26 @@ cleanup:
             ESP_LOGI(TAG, "MCP engine destroyed");
         }
     }
+
+    if (ret == ESP_OK) {
+        xiaozhi_foundation_set_ui_state(
+            &ctx,
+            XIAOZHI_FOUNDATION_UI_DISCONNECTED,
+            ESP_OK);
+    } else {
+        xiaozhi_foundation_set_ui_state(
+            &ctx,
+            XIAOZHI_FOUNDATION_UI_ERROR,
+            ret);
+    }
+
+    if (ctx.events != NULL) {
+        vEventGroupDelete(ctx.events);
+        ctx.events = NULL;
+    }
+
+    /* Do not leave copied user/assistant text on this short-lived task stack. */
+    memset(&ctx.protocol, 0, sizeof(ctx.protocol));
 
     if (ret == ESP_OK) {
         ESP_LOGI(TAG, "%s RESULT: PASS", checkpoint_name);
@@ -2126,4 +2337,28 @@ esp_err_t xiaozhi_foundation_request_transport_validation(
     }
 
     return ESP_OK;
+}
+
+esp_err_t xiaozhi_foundation_register_ui_status_callback(
+    xiaozhi_foundation_ui_status_callback_t callback,
+    void *user_context)
+{
+    if (callback == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_err_t ret = ESP_OK;
+
+    portENTER_CRITICAL(&s_operation_lock);
+
+    if (s_operation_in_progress) {
+        ret = ESP_ERR_INVALID_STATE;
+    } else {
+        s_ui_status_callback = callback;
+        s_ui_status_callback_context = user_context;
+    }
+
+    portEXIT_CRITICAL(&s_operation_lock);
+
+    return ret;
 }

@@ -173,8 +173,10 @@ or reset ownership.
   hardware PASS. P2-F requires a legal local raw-Opus packet fixture; it does
   not accept arbitrary PCM, WAV, Ogg, or fake audio data.
 - Remaining voice validation is WebSocket-only: P2-E/P2-F hardware evidence,
-  reconnect, cleanup, stress, and resource measurements. No production voice
-  assistant, microphone, speaker, or GUI integration is included yet.
+  reconnect, cleanup, stress, and resource measurements. Phase 12.5 includes
+  only a temporary copied-status screen for that validation worker; no
+  production voice assistant, microphone, speaker, or production GUI
+  integration is included yet.
 
 ## Deliberately Deferred
 
