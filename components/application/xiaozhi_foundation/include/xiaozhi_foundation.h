@@ -63,8 +63,10 @@ typedef enum {
  *                       this storage and no release operation is required.
  *
  * @return ESP_OK when the service information is copied and released;
- *         ESP_ERR_INVALID_ARG when @p out_info is NULL; otherwise an error
- *         from the underlying Xiaozhi get-info or release operation.
+ *         ESP_ERR_INVALID_ARG when @p out_info is NULL;
+ *         ESP_ERR_INVALID_STATE while another foundation operation is active;
+ *         otherwise an error from the underlying Xiaozhi get-info or release
+ *         operation.
  *
  * @pre Network connectivity must already be available. This function does not
  *      start Wi-Fi and does not own its lifecycle.
