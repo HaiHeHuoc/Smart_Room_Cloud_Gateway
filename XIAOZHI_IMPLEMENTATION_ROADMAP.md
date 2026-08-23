@@ -2,7 +2,7 @@
 
 **Status:** Approved syllabus / Not started  
 **Target:** ESP32-S3 N16R8, ESP-IDF 6.0.1  
-**Dependency baseline:** `espressif/esp_xiaozhi: "0.1.1"`  
+**Resolved dependency:** `espressif/esp_xiaozhi: 0.1.2` (manifest constraint: `^0.1.1`)
 **Voice MVP closure:** End of Sprint 15  
 **Advanced voice closure:** End of Sprint 18
 
@@ -425,11 +425,17 @@ SD card
 
 ```text
 get_info()
-    -> WebSocket only: validate WebSocket
-    -> MQTT only: validate MQTT + UDP
-    -> both: validate component-preferred path, then fallback
+    -> WebSocket available: validate WebSocket only
+    -> WebSocket unavailable: report unavailable; no MQTT fallback
 ```
 
+- [x] P1/P2-C: Select and validate only the WebSocket control lifecycle on
+      target hardware; MQTT+UDP is closed/not selected.
+- [x] P2-D: Audit the resolved 0.1.2 public chat API. It has no arbitrary
+      typed-text TX API; `CHAT_TEXT` receive callback plumbing uses bounded
+      copied storage for USER and ASSISTANT roles.
+- [ ] P2-F: Obtain target-hardware USER/ASSISTANT `CHAT_TEXT` evidence through
+      the supported audio/STT path. Do not add a private/raw typed-text path.
 - [ ] Compare connection/reconnect, sockets, heap, CPU, audio loss, cleanup, and
       network failures.
 - [ ] Record the selected MVP transport in an ADR.

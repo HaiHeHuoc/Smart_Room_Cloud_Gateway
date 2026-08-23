@@ -164,8 +164,12 @@ or reset ownership.
 - `esp_xiaozhi` may still contain its own MQTT dependency/private NVS state as
   upstream implementation detail. The Gateway does not read, expose, or start
   that transport.
-- Remaining voice validation is WebSocket-only: control/text, PCM/audio,
-  reconnect, cleanup, stress, and resource measurements.
+- P2-D installs only WebSocket `CHAT_TEXT` receive plumbing. Resolved
+  `esp_xiaozhi` 0.1.2 has no public arbitrary typed-text TX API, so target
+  USER/ASSISTANT text evidence is deferred to the supported P2-F audio/STT
+  path.
+- Remaining voice validation is WebSocket-only: control, PCM/audio, reconnect,
+  cleanup, stress, and resource measurements.
 
 ## Deliberately Deferred
 
