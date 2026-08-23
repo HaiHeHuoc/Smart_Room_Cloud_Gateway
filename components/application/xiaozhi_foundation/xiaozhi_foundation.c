@@ -1,10 +1,12 @@
 /**
  * @file xiaozhi_foundation.c
- * @brief Isolated, non-sensitive Xiaozhi service and transport discovery.
+ * @brief Isolated, non-sensitive Xiaozhi service and transport validation.
  *
- * Phase 12.5.2 P1 stops at transport capability discovery and project-side
- * selection. It does not create a Xiaozhi chat instance, start MQTT/WebSocket,
- * open the UDP audio path, or own network lifecycle.
+ * Phase 12.5.2 P1 discovers server transport capabilities and applies the
+ * project-side transport selection policy. P2-A additionally validates the
+ * local MCP and Xiaozhi chat init/deinit lifecycle. It still does not call
+ * chat_start(), establish MQTT/WebSocket connectivity, or open the UDP/audio
+ * path.
  */
 
 /* Includes ----------------------------------------------------------------- */
@@ -13,7 +15,9 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_xiaozhi_chat.h"
 #include "esp_xiaozhi_info.h"
+#include "esp_mcp_engine.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -90,12 +94,12 @@ static void xiaozhi_foundation_transport_validation_task(
     if (ret != ESP_OK) {
         ESP_LOGE(
             TAG,
-            "Transport selection validation failed: %s",
+            "Transport init validation failed: %s",
             esp_err_to_name(ret));
     } else {
         ESP_LOGI(
             TAG,
-            "Transport selection validation completed");
+            "Transport init validation completed");
     }
 
     xiaozhi_foundation_finish_operation();
@@ -304,11 +308,111 @@ static esp_err_t xiaozhi_foundation_validate_transport(
             selected_transport));
 
     /*
-     * Phase 12.5.2 P1 intentionally ends here. Selection success does not mean
-     * MQTT/WebSocket is connected. P2 will add MCP/chat init/start and a
-     * bounded wait for the real CONNECTED event.
+     * P2-A validates local ownership and init/deinit only. The empty MCP engine
+     * is required by the Xiaozhi chat lifecycle, but no project MCP tools or
+     * resources are registered during Sprint 12.
      */
-    return ESP_OK;
+    esp_mcp_t *mcp = NULL;
+    esp_xiaozhi_chat_handle_t chat = 0;
+
+    ret = esp_mcp_create(&mcp);
+    if (ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Failed to create MCP engine: %s",
+            esp_err_to_name(ret));
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "MCP engine created");
+
+    esp_xiaozhi_chat_config_t chat_config =
+        ESP_XIAOZHI_CHAT_DEFAULT_CONFIG();
+
+    /*
+     * Foundation owns the MCP engine for this one-shot validation. Chat borrows
+     * it, therefore cleanup must deinit chat before destroying MCP.
+     */
+    chat_config.mcp_engine = mcp;
+    chat_config.owns_mcp_engine = false;
+
+    /*
+     * Configure exactly the selected path. P2-A does not start the transport,
+     * but keeping a single path enabled avoids hiding future fallback behavior.
+     */
+    switch (selected_transport) {
+    case XIAOZHI_FOUNDATION_TRANSPORT_MQTT:
+        chat_config.has_mqtt_config = true;
+        chat_config.has_websocket_config = false;
+        break;
+
+    case XIAOZHI_FOUNDATION_TRANSPORT_WEBSOCKET:
+        chat_config.has_mqtt_config = false;
+        chat_config.has_websocket_config = true;
+        break;
+
+    default:
+        ret = ESP_ERR_INVALID_STATE;
+        goto cleanup;
+    }
+
+    ret = esp_xiaozhi_chat_init(
+        &chat_config,
+        &chat);
+
+    if (ret != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "chat_init failed: %s",
+            esp_err_to_name(ret));
+        goto cleanup;
+    }
+
+    ESP_LOGI(TAG, "chat_init: OK");
+
+    /*
+     * Intentionally stop here. chat_init() proves only local runtime creation;
+     * it does not prove MQTT/WebSocket connectivity or the MQTT-mode UDP path.
+     */
+
+cleanup:
+    if (chat != 0) {
+        const esp_err_t deinit_ret =
+            esp_xiaozhi_chat_deinit(chat);
+
+        if (deinit_ret != ESP_OK) {
+            ESP_LOGW(
+                TAG,
+                "chat_deinit failed: %s",
+                esp_err_to_name(deinit_ret));
+
+            if (ret == ESP_OK) {
+                ret = deinit_ret;
+            }
+        } else {
+            ESP_LOGI(TAG, "chat_deinit: OK");
+        }
+    }
+
+    if (mcp != NULL) {
+        const esp_err_t destroy_ret =
+            esp_mcp_destroy(mcp);
+
+        if (destroy_ret != ESP_OK) {
+            ESP_LOGW(
+                TAG,
+                "MCP engine destroy failed: %s",
+                esp_err_to_name(destroy_ret));
+
+            if (ret == ESP_OK) {
+                ret = destroy_ret;
+            }
+        } else {
+            ESP_LOGI(TAG, "MCP engine destroyed");
+        }
+    }
+
+    return ret;
 }
 
 static esp_err_t xiaozhi_foundation_probe_impl(
