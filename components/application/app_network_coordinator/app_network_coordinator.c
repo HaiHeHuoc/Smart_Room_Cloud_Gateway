@@ -3387,15 +3387,21 @@ esp_err_t app_network_coordinator_notify_wifi_event(
         {
             app_request_xiaozhi_validation_best_effort();
 
+            /*
+             * Temporary Phase 12.5 hardware-test route. Keep the Xiaozhi
+             * validation screen active so its copied status can be observed
+             * while the one-shot validation worker runs. This does not alter
+             * the worker, transport, or UI ownership model.
+             */
             const esp_err_t screen_ret =
                 app_gui_request_screen(
-                    APP_GUI_SCREEN_WIFI_STATUS);
+                    APP_GUI_SCREEN_XIAOZHI);
 
             if (screen_ret != ESP_OK)
             {
                 ESP_LOGW(
                     TAG,
-                    "Failed to queue Wi-Fi status screen: %s",
+                    "Failed to queue Xiaozhi validation screen: %s",
                     esp_err_to_name(screen_ret));
             }
         }
