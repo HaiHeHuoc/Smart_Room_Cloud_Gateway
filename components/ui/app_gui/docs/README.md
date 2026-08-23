@@ -204,9 +204,13 @@ GUI/LVGL.
 
 The temporary screen is deliberately separate from provisioning, Wi-Fi status,
 and the sensor dashboard. It uses the existing `app_gui_request_screen()` API;
-there is no new touch/menu/button path and no automatic route caused by a
-Xiaozhi event. Leaving the screen does not stop, cancel, or restart Xiaozhi
-validation. Returning to it renders the latest cached snapshot.
+there is no new touch/menu/button path. The current Phase 12.5 hardware-test
+route is the sole temporary exception: when the network reaches `ONLINE`, the
+coordinator requests `XIAOZHI` instead of `WIFI_STATUS` so copied validation
+status is visible. Remove that route after manual acceptance; ordinary Xiaozhi
+status updates never select a screen. Leaving the screen does not stop, cancel,
+or restart Xiaozhi validation. Returning to it renders the latest cached
+snapshot.
 
 ```text
 xiaozhi_foundation copied validation snapshot
