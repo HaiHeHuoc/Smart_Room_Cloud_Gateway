@@ -462,12 +462,30 @@ get_info()
       network failures.
 - [ ] Record the selected MVP transport in an ADR.
 
-## Phase 12.6 — Lifecycle Matrix
+## Phase 12.6 — Fault Injection + Recovery + Cleanup Validation
 
-- [ ] Validate get_info -> init -> start -> connected -> stop -> deinit.
-- [ ] Run at least 100 lifecycle cycles.
-- [ ] Test Wi-Fi loss, repeated/invalid calls, partial failure, server goodbye,
-      malformed response, and allocation failure.
+- [x] Default-off repeated WebSocket lifecycle matrix: fresh context,
+      EventGroup, handler, chat, MCP, generation, counters, and resource
+      snapshots per cycle. **BUILD VERIFIED / prior target progression 1, 3,
+      10, 20, and 100 recorded.**
+- [x] Default-off controlled fault/recovery selector at safe project-owned
+      continuation boundaries after get-info, MCP, EventGroup, chat init,
+      handler registration, chat start, or audio-channel open. It preserves the
+      first primary error, records cleanup errors separately, uses shared
+      ordered cleanup, then runs a fresh P2-E recovery cycle. **BUILD VERIFIED.**
+- [x] First target controlled fault `AFTER_CHAT_INIT`: expected injection,
+      cleanup, fresh recovery, and aggregate fault summary passed; no captured
+      panic/watchdog/assert/stale-callback or raw payload-tag marker.
+- [ ] Resource-stability acceptance: **BLOCKED.** The previous 100-cycle run
+      and first controlled recovery both showed material Internal free/largest
+      block declines. Perform a repeatable source-specific audit before more
+      fault subset/full matrix stress or any Phase 12.6 close claim.
+- [ ] Real Wi-Fi/AP loss, Internet/DNS/TLS/service loss, server goodbye, remote
+      timeout, malformed response, and allocation-pressure validation: source
+      audited or target-hardware pending. Do not simulate them with Wi-Fi code,
+      private transport calls, raw protocol messages, or unsafe lifecycle use.
+- [ ] P2-F fault coverage: pending a valid lawful fixture and prior P2-F HIL
+      proof; no fixture/audio workaround is authorized here.
 
 ## Acceptance
 

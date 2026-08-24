@@ -153,11 +153,13 @@ esp_err_t xiaozhi_foundation_request_probe(void);
  *
  * The default checkpoint is P2-E: connect, open a WebSocket audio channel,
  * observe the component event, hold briefly, close, stop, and deinitialize.
- * P2-F known-audio E2E and the Phase 12.6 repeated lifecycle matrix are each
- * selected only by their explicit validation-only Kconfig options. The matrix
- * owns a new context and chat handle for every cycle and stops after the first
- * failed cycle. No checkpoint is a production voice API or an audio-hardware
- * integration.
+ * P2-F known-audio E2E, the Phase 12.6 repeated lifecycle matrix, and the
+ * Phase 12.6 controlled fault/recovery matrix are each selected only by
+ * explicit validation-only Kconfig options. The fault path aborts only the
+ * project-owned continuation after a safe public-API boundary, then performs
+ * the normal cleanup and one fresh P2-E recovery cycle. It never changes
+ * private Xiaozhi state or network ownership. No checkpoint is a production
+ * voice API or an audio-hardware integration.
  *
  * This interface is intended for normal task context and is not ISR-safe.
  * Its blocking, timeout, result, and ownership contract are implemented by the
