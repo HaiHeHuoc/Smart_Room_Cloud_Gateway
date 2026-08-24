@@ -17,6 +17,7 @@
 #include <string.h>
 
 #include "esp_event.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_mcp_engine.h"
 #include "esp_timer.h"
@@ -185,21 +186,76 @@ typedef struct {
     bool tts_sentence_start_received;
     bool tts_stop_received;
 
-    size_t audio_rx_callback_count;
-    size_t audio_rx_total_bytes;
     size_t audio_rx_first_packet_size;
     size_t audio_rx_max_packet_size;
 
-    bool error_received;
-    esp_err_t last_error_code;
-    bool last_error_source_truncated;
-    char last_error_source[
+    bool first_error_received;
+    esp_err_t first_error_code;
+    bool first_error_source_truncated;
+    char first_error_source[
         XIAOZHI_FOUNDATION_CHAT_ERROR_SOURCE_BUFFER_SIZE];
 
     bool emoji_received;
     size_t last_emoji_length;
     bool last_emoji_truncated;
 } xiaozhi_foundation_protocol_state_t;
+
+/**
+ * @brief Saturating facts collected only for one validation transaction.
+ *
+ * Callbacks update these fields under protocol_lock. They are scalar evidence,
+ * not a continuous performance monitor or a source of production telemetry.
+ */
+typedef struct {
+    uint32_t validation_attempt_count;
+    uint32_t validation_pass_count;
+    uint32_t validation_fail_count;
+    uint32_t connected_event_count;
+    uint32_t disconnected_event_count;
+    uint32_t audio_channel_opened_count;
+    uint32_t audio_channel_closed_count;
+    uint32_t chat_error_count;
+    uint32_t user_text_event_count;
+    uint32_t assistant_text_event_count;
+    uint32_t conversation_turn_complete_count;
+    uint32_t tts_start_count;
+    uint32_t tts_sentence_start_count;
+    uint32_t tts_stop_count;
+    uint32_t audio_rx_callback_count;
+    uint64_t audio_rx_total_bytes;
+} xiaozhi_foundation_validation_counters_t;
+
+/**
+ * @brief First operation error and first independent cleanup error.
+ *
+ * Cleanup cannot overwrite a meaningful lifecycle or protocol failure. Both
+ * facts are retained for the worker's final deterministic summary.
+ */
+typedef struct {
+    bool primary_error_recorded;
+    esp_err_t primary_error;
+    bool cleanup_error_recorded;
+    esp_err_t cleanup_error;
+} xiaozhi_foundation_validation_result_t;
+
+/**
+ * @brief One synchronous heap/stack observation made by the validation worker.
+ *
+ * DMA-capable memory overlaps some internal memory, so these capability pools
+ * are intentionally reported independently and are never summed.
+ */
+typedef struct {
+    size_t internal_free_bytes;
+    size_t internal_min_free_bytes;
+    size_t internal_largest_block_bytes;
+    size_t dma_free_bytes;
+    size_t dma_min_free_bytes;
+    size_t dma_largest_block_bytes;
+    size_t psram_free_bytes;
+    size_t psram_min_free_bytes;
+    size_t psram_largest_block_bytes;
+    UBaseType_t worker_stack_high_water_words;
+} xiaozhi_foundation_resource_snapshot_t;
 
 typedef enum {
     XIAOZHI_FOUNDATION_VALIDATION_P2E_AUDIO_CHANNEL = 0,
@@ -239,7 +295,8 @@ typedef struct {
  * Only the WebSocket service capability fact and a short-lived EventGroup
  * handle are retained. Protocol callback data is copied into bounded,
  * application-owned state while the worker is live; no Xiaozhi-owned string
- * pointer is stored here.
+ * pointer is stored here. protocol_lock protects protocol, counters, and
+ * result facts as one bounded callback-owned diagnostic domain.
  */
 typedef struct {
     xiaozhi_foundation_transport_t requested_transport;
@@ -247,6 +304,8 @@ typedef struct {
     EventGroupHandle_t events;
     portMUX_TYPE protocol_lock;
     xiaozhi_foundation_protocol_state_t protocol;
+    xiaozhi_foundation_validation_counters_t counters;
+    xiaozhi_foundation_validation_result_t result;
     xiaozhi_foundation_ui_model_t ui;
 } xiaozhi_foundation_validation_ctx_t;
 
@@ -311,6 +370,24 @@ static void xiaozhi_foundation_log_protocol_diagnostics(
 
 static void xiaozhi_foundation_log_p2f_evidence(
     xiaozhi_foundation_validation_ctx_t *ctx);
+
+static void xiaozhi_foundation_capture_resource_snapshot(
+    xiaozhi_foundation_resource_snapshot_t *snapshot,
+    const char *checkpoint);
+
+static esp_err_t xiaozhi_foundation_log_validation_summary(
+    xiaozhi_foundation_validation_ctx_t *ctx,
+    const char *checkpoint_name,
+    const xiaozhi_foundation_resource_snapshot_t *before,
+    const xiaozhi_foundation_resource_snapshot_t *after);
+
+static void xiaozhi_foundation_record_primary_error(
+    xiaozhi_foundation_validation_ctx_t *ctx,
+    esp_err_t error);
+
+static void xiaozhi_foundation_record_cleanup_error(
+    xiaozhi_foundation_validation_ctx_t *ctx,
+    esp_err_t error);
 
 static esp_err_t xiaozhi_foundation_validate_p2e_audio_channel(
     xiaozhi_foundation_validation_ctx_t *ctx,
@@ -436,6 +513,11 @@ static void xiaozhi_foundation_chat_event_handler(
      */
     switch (event_id) {
     case ESP_XIAOZHI_CHAT_EVENT_CONNECTED:
+        portENTER_CRITICAL(&ctx->protocol_lock);
+        if (ctx->counters.connected_event_count < UINT32_MAX) {
+            ++ctx->counters.connected_event_count;
+        }
+        portEXIT_CRITICAL(&ctx->protocol_lock);
         (void)xEventGroupSetBits(
             ctx->events,
             XIAOZHI_FOUNDATION_EVENT_CONNECTED);
@@ -446,6 +528,11 @@ static void xiaozhi_foundation_chat_event_handler(
         break;
 
     case ESP_XIAOZHI_CHAT_EVENT_DISCONNECTED:
+        portENTER_CRITICAL(&ctx->protocol_lock);
+        if (ctx->counters.disconnected_event_count < UINT32_MAX) {
+            ++ctx->counters.disconnected_event_count;
+        }
+        portEXIT_CRITICAL(&ctx->protocol_lock);
         (void)xEventGroupSetBits(
             ctx->events,
             XIAOZHI_FOUNDATION_EVENT_DISCONNECTED);
@@ -456,12 +543,22 @@ static void xiaozhi_foundation_chat_event_handler(
         break;
 
     case ESP_XIAOZHI_CHAT_EVENT_AUDIO_CHANNEL_OPENED:
+        portENTER_CRITICAL(&ctx->protocol_lock);
+        if (ctx->counters.audio_channel_opened_count < UINT32_MAX) {
+            ++ctx->counters.audio_channel_opened_count;
+        }
+        portEXIT_CRITICAL(&ctx->protocol_lock);
         (void)xEventGroupSetBits(
             ctx->events,
             XIAOZHI_FOUNDATION_EVENT_AUDIO_CHANNEL_OPENED);
         break;
 
     case ESP_XIAOZHI_CHAT_EVENT_AUDIO_CHANNEL_CLOSED:
+        portENTER_CRITICAL(&ctx->protocol_lock);
+        if (ctx->counters.audio_channel_closed_count < UINT32_MAX) {
+            ++ctx->counters.audio_channel_closed_count;
+        }
+        portEXIT_CRITICAL(&ctx->protocol_lock);
         (void)xEventGroupSetBits(
             ctx->events,
             XIAOZHI_FOUNDATION_EVENT_AUDIO_CHANNEL_CLOSED);
@@ -652,6 +749,185 @@ static size_t xiaozhi_foundation_get_bounded_string_length(
     return length;
 }
 
+static void xiaozhi_foundation_record_primary_error(
+    xiaozhi_foundation_validation_ctx_t *ctx,
+    esp_err_t error)
+{
+    if ((ctx == NULL) || (error == ESP_OK)) {
+        return;
+    }
+
+    portENTER_CRITICAL(&ctx->protocol_lock);
+    if (!ctx->result.primary_error_recorded) {
+        ctx->result.primary_error_recorded = true;
+        ctx->result.primary_error = error;
+    }
+    portEXIT_CRITICAL(&ctx->protocol_lock);
+}
+
+static void xiaozhi_foundation_record_cleanup_error(
+    xiaozhi_foundation_validation_ctx_t *ctx,
+    esp_err_t error)
+{
+    if ((ctx == NULL) || (error == ESP_OK)) {
+        return;
+    }
+
+    portENTER_CRITICAL(&ctx->protocol_lock);
+    if (!ctx->result.cleanup_error_recorded) {
+        ctx->result.cleanup_error_recorded = true;
+        ctx->result.cleanup_error = error;
+    }
+    portEXIT_CRITICAL(&ctx->protocol_lock);
+}
+
+static void xiaozhi_foundation_capture_resource_snapshot(
+    xiaozhi_foundation_resource_snapshot_t *snapshot,
+    const char *checkpoint)
+{
+    if ((snapshot == NULL) || (checkpoint == NULL)) {
+        return;
+    }
+
+    snapshot->internal_free_bytes = heap_caps_get_free_size(
+        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    snapshot->internal_min_free_bytes = heap_caps_get_minimum_free_size(
+        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    snapshot->internal_largest_block_bytes = heap_caps_get_largest_free_block(
+        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    snapshot->dma_free_bytes = heap_caps_get_free_size(MALLOC_CAP_DMA);
+    snapshot->dma_min_free_bytes = heap_caps_get_minimum_free_size(
+        MALLOC_CAP_DMA);
+    snapshot->dma_largest_block_bytes = heap_caps_get_largest_free_block(
+        MALLOC_CAP_DMA);
+    snapshot->psram_free_bytes = heap_caps_get_free_size(
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    snapshot->psram_min_free_bytes = heap_caps_get_minimum_free_size(
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    snapshot->psram_largest_block_bytes = heap_caps_get_largest_free_block(
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    snapshot->worker_stack_high_water_words =
+        uxTaskGetStackHighWaterMark(NULL);
+
+    ESP_LOGI(
+        TAG,
+        "RESOURCE[%s] internal_free_bytes=%u internal_min_free_bytes=%u "
+        "internal_largest_block_bytes=%u dma_free_bytes=%u "
+        "dma_min_free_bytes=%u dma_largest_block_bytes=%u "
+        "psram_free_bytes=%u psram_min_free_bytes=%u "
+        "psram_largest_block_bytes=%u worker_stack_hwm_words=%u",
+        checkpoint,
+        (unsigned)snapshot->internal_free_bytes,
+        (unsigned)snapshot->internal_min_free_bytes,
+        (unsigned)snapshot->internal_largest_block_bytes,
+        (unsigned)snapshot->dma_free_bytes,
+        (unsigned)snapshot->dma_min_free_bytes,
+        (unsigned)snapshot->dma_largest_block_bytes,
+        (unsigned)snapshot->psram_free_bytes,
+        (unsigned)snapshot->psram_min_free_bytes,
+        (unsigned)snapshot->psram_largest_block_bytes,
+        (unsigned)snapshot->worker_stack_high_water_words);
+}
+
+static esp_err_t xiaozhi_foundation_log_validation_summary(
+    xiaozhi_foundation_validation_ctx_t *ctx,
+    const char *checkpoint_name,
+    const xiaozhi_foundation_resource_snapshot_t *before,
+    const xiaozhi_foundation_resource_snapshot_t *after)
+{
+    if ((ctx == NULL) || (checkpoint_name == NULL) || (before == NULL) ||
+        (after == NULL)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    xiaozhi_foundation_validation_counters_t counters = {0};
+    xiaozhi_foundation_validation_result_t result = {0};
+    esp_err_t final_result = ESP_OK;
+
+    portENTER_CRITICAL(&ctx->protocol_lock);
+    if (ctx->result.primary_error_recorded) {
+        final_result = ctx->result.primary_error;
+    } else if (ctx->result.cleanup_error_recorded) {
+        final_result = ctx->result.cleanup_error;
+    }
+
+    if (final_result == ESP_OK) {
+        if (ctx->counters.validation_pass_count < UINT32_MAX) {
+            ++ctx->counters.validation_pass_count;
+        }
+    } else if (ctx->counters.validation_fail_count < UINT32_MAX) {
+        ++ctx->counters.validation_fail_count;
+    }
+
+    counters = ctx->counters;
+    result = ctx->result;
+    portEXIT_CRITICAL(&ctx->protocol_lock);
+
+    ESP_LOGI(
+        TAG,
+        "VALIDATION SUMMARY checkpoint=%s result=%s primary_error=%s "
+        "cleanup_error=%s",
+        checkpoint_name,
+        (final_result == ESP_OK) ? "PASS" : "FAIL",
+        result.primary_error_recorded ?
+            esp_err_to_name(result.primary_error) : "ESP_OK",
+        result.cleanup_error_recorded ?
+            esp_err_to_name(result.cleanup_error) : "ESP_OK");
+    ESP_LOGI(
+        TAG,
+        "VALIDATION COUNTERS attempts=%u pass=%u fail=%u connected=%u "
+        "disconnected=%u audio_opened=%u audio_closed=%u errors=%u "
+        "user_text=%u assistant_text=%u turns=%u tts_start=%u "
+        "tts_sentence_start=%u tts_stop=%u audio_rx_callbacks=%u "
+        "audio_rx_bytes=%llu",
+        (unsigned)counters.validation_attempt_count,
+        (unsigned)counters.validation_pass_count,
+        (unsigned)counters.validation_fail_count,
+        (unsigned)counters.connected_event_count,
+        (unsigned)counters.disconnected_event_count,
+        (unsigned)counters.audio_channel_opened_count,
+        (unsigned)counters.audio_channel_closed_count,
+        (unsigned)counters.chat_error_count,
+        (unsigned)counters.user_text_event_count,
+        (unsigned)counters.assistant_text_event_count,
+        (unsigned)counters.conversation_turn_complete_count,
+        (unsigned)counters.tts_start_count,
+        (unsigned)counters.tts_sentence_start_count,
+        (unsigned)counters.tts_stop_count,
+        (unsigned)counters.audio_rx_callback_count,
+        (unsigned long long)counters.audio_rx_total_bytes);
+    ESP_LOGI(
+        TAG,
+        "RESOURCE DELTA after_cleanup-before_xiaozhi internal_free_bytes=%lld "
+        "internal_min_free_bytes=%lld internal_largest_block_bytes=%lld "
+        "dma_free_bytes=%lld dma_min_free_bytes=%lld "
+        "dma_largest_block_bytes=%lld psram_free_bytes=%lld "
+        "psram_min_free_bytes=%lld psram_largest_block_bytes=%lld "
+        "worker_stack_hwm_words=%lld",
+        (long long)after->internal_free_bytes -
+            (long long)before->internal_free_bytes,
+        (long long)after->internal_min_free_bytes -
+            (long long)before->internal_min_free_bytes,
+        (long long)after->internal_largest_block_bytes -
+            (long long)before->internal_largest_block_bytes,
+        (long long)after->dma_free_bytes -
+            (long long)before->dma_free_bytes,
+        (long long)after->dma_min_free_bytes -
+            (long long)before->dma_min_free_bytes,
+        (long long)after->dma_largest_block_bytes -
+            (long long)before->dma_largest_block_bytes,
+        (long long)after->psram_free_bytes -
+            (long long)before->psram_free_bytes,
+        (long long)after->psram_min_free_bytes -
+            (long long)before->psram_min_free_bytes,
+        (long long)after->psram_largest_block_bytes -
+            (long long)before->psram_largest_block_bytes,
+        (long long)after->worker_stack_high_water_words -
+            (long long)before->worker_stack_high_water_words);
+
+    return final_result;
+}
+
 static void xiaozhi_foundation_protocol_event_callback(
     esp_xiaozhi_chat_event_t event,
     void *event_data,
@@ -710,6 +986,14 @@ static void xiaozhi_foundation_protocol_event_callback(
         snapshot->received = true;
         non_empty = (snapshot->length > 0U);
 
+        if (text_data->role == ESP_XIAOZHI_CHAT_TEXT_ROLE_USER) {
+            if (ctx->counters.user_text_event_count < UINT32_MAX) {
+                ++ctx->counters.user_text_event_count;
+            }
+        } else if (ctx->counters.assistant_text_event_count < UINT32_MAX) {
+            ++ctx->counters.assistant_text_event_count;
+        }
+
         const bool full_turn_available =
             ctx->protocol.user_text.received &&
             (ctx->protocol.user_text.length > 0U) &&
@@ -720,6 +1004,9 @@ static void xiaozhi_foundation_protocol_event_callback(
             !ctx->protocol.conversation_turn_complete) {
             ctx->protocol.conversation_turn_complete = true;
             conversation_turn_completed_now = true;
+            if (ctx->counters.conversation_turn_complete_count < UINT32_MAX) {
+                ++ctx->counters.conversation_turn_complete_count;
+            }
         }
         portEXIT_CRITICAL(&ctx->protocol_lock);
 
@@ -773,16 +1060,25 @@ static void xiaozhi_foundation_protocol_event_callback(
         switch (tts_state->state) {
         case ESP_XIAOZHI_CHAT_TTS_STATE_START:
             ctx->protocol.tts_start_received = true;
+            if (ctx->counters.tts_start_count < UINT32_MAX) {
+                ++ctx->counters.tts_start_count;
+            }
             tts_event_bit |= XIAOZHI_FOUNDATION_EVENT_CHAT_TTS_START;
             break;
 
         case ESP_XIAOZHI_CHAT_TTS_STATE_SENTENCE_START:
             ctx->protocol.tts_sentence_start_received = true;
+            if (ctx->counters.tts_sentence_start_count < UINT32_MAX) {
+                ++ctx->counters.tts_sentence_start_count;
+            }
             tts_event_bit |= XIAOZHI_FOUNDATION_EVENT_CHAT_TTS_SENTENCE_START;
             break;
 
         case ESP_XIAOZHI_CHAT_TTS_STATE_STOP:
             ctx->protocol.tts_stop_received = true;
+            if (ctx->counters.tts_stop_count < UINT32_MAX) {
+                ++ctx->counters.tts_stop_count;
+            }
             tts_event_bit |= XIAOZHI_FOUNDATION_EVENT_CHAT_TTS_STOP;
             break;
 
@@ -817,14 +1113,21 @@ static void xiaozhi_foundation_protocol_event_callback(
         }
 
         portENTER_CRITICAL(&ctx->protocol_lock);
-        ctx->protocol.last_error_code = error_info->code;
-        (void)xiaozhi_foundation_copy_bounded_string(
-            ctx->protocol.last_error_source,
-            sizeof(ctx->protocol.last_error_source),
-            error_info->source,
-            &ctx->protocol.last_error_source_truncated);
-        ctx->protocol.error_received = true;
+        if (ctx->counters.chat_error_count < UINT32_MAX) {
+            ++ctx->counters.chat_error_count;
+        }
+        if (!ctx->protocol.first_error_received) {
+            ctx->protocol.first_error_code = error_info->code;
+            (void)xiaozhi_foundation_copy_bounded_string(
+                ctx->protocol.first_error_source,
+                sizeof(ctx->protocol.first_error_source),
+                error_info->source,
+                &ctx->protocol.first_error_source_truncated);
+            ctx->protocol.first_error_received = true;
+        }
         portEXIT_CRITICAL(&ctx->protocol_lock);
+
+        xiaozhi_foundation_record_primary_error(ctx, error_info->code);
 
         (void)xEventGroupSetBits(
             ctx->events,
@@ -888,22 +1191,23 @@ static void xiaozhi_foundation_audio_callback(
 
     portENTER_CRITICAL(&ctx->protocol_lock);
 
-    if (ctx->protocol.audio_rx_callback_count == 0U) {
+    if (ctx->counters.audio_rx_callback_count == 0U) {
         ctx->protocol.audio_rx_first_packet_size = packet_size;
     }
 
-    if (ctx->protocol.audio_rx_callback_count < SIZE_MAX) {
-        ++ctx->protocol.audio_rx_callback_count;
+    if (ctx->counters.audio_rx_callback_count < UINT32_MAX) {
+        ++ctx->counters.audio_rx_callback_count;
     }
 
     if (packet_size > ctx->protocol.audio_rx_max_packet_size) {
         ctx->protocol.audio_rx_max_packet_size = packet_size;
     }
 
-    if (packet_size <= (SIZE_MAX - ctx->protocol.audio_rx_total_bytes)) {
-        ctx->protocol.audio_rx_total_bytes += packet_size;
+    if ((uint64_t)packet_size <=
+        (UINT64_MAX - ctx->counters.audio_rx_total_bytes)) {
+        ctx->counters.audio_rx_total_bytes += (uint64_t)packet_size;
     } else {
-        ctx->protocol.audio_rx_total_bytes = SIZE_MAX;
+        ctx->counters.audio_rx_total_bytes = UINT64_MAX;
     }
 
     portEXIT_CRITICAL(&ctx->protocol_lock);
@@ -957,11 +1261,11 @@ static void xiaozhi_foundation_log_protocol_diagnostics(
     bool tts_state_received = false;
     esp_xiaozhi_chat_tts_state_kind_t last_tts_state =
         ESP_XIAOZHI_CHAT_TTS_STATE_START;
-    bool error_received = false;
-    esp_err_t last_error_code = ESP_OK;
-    char last_error_source[
+    bool first_error_received = false;
+    esp_err_t first_error_code = ESP_OK;
+    char first_error_source[
         XIAOZHI_FOUNDATION_CHAT_ERROR_SOURCE_BUFFER_SIZE] = {0};
-    bool last_error_source_truncated = false;
+    bool first_error_source_truncated = false;
     bool emoji_received = false;
     size_t last_emoji_length = 0U;
     bool last_emoji_truncated = false;
@@ -976,14 +1280,14 @@ static void xiaozhi_foundation_log_protocol_diagnostics(
     conversation_turn_complete = ctx->protocol.conversation_turn_complete;
     tts_state_received = ctx->protocol.tts_state_received;
     last_tts_state = ctx->protocol.last_tts_state;
-    error_received = ctx->protocol.error_received;
-    last_error_code = ctx->protocol.last_error_code;
-    last_error_source_truncated =
-        ctx->protocol.last_error_source_truncated;
+    first_error_received = ctx->protocol.first_error_received;
+    first_error_code = ctx->protocol.first_error_code;
+    first_error_source_truncated =
+        ctx->protocol.first_error_source_truncated;
     (void)xiaozhi_foundation_copy_bounded_string(
-        last_error_source,
-        sizeof(last_error_source),
-        ctx->protocol.last_error_source,
+        first_error_source,
+        sizeof(first_error_source),
+        ctx->protocol.first_error_source,
         NULL);
     emoji_received = ctx->protocol.emoji_received;
     last_emoji_length = ctx->protocol.last_emoji_length;
@@ -1022,13 +1326,13 @@ static void xiaozhi_foundation_log_protocol_diagnostics(
     }
 
     if (((protocol_bits & XIAOZHI_FOUNDATION_EVENT_CHAT_ERROR) != 0U) &&
-        error_received) {
+        first_error_received) {
         ESP_LOGW(
             TAG,
-            "CHAT_ERROR code=%s source=%s%s",
-            esp_err_to_name(last_error_code),
-            (last_error_source[0] != '\0') ? last_error_source : "unknown",
-            last_error_source_truncated ? " truncated" : "");
+            "CHAT_ERROR first_code=%s source=%s%s",
+            esp_err_to_name(first_error_code),
+            (first_error_source[0] != '\0') ? first_error_source : "unknown",
+            first_error_source_truncated ? " truncated" : "");
     }
 
     if (((protocol_bits & XIAOZHI_FOUNDATION_EVENT_CHAT_EMOJI) != 0U) &&
@@ -1088,16 +1392,16 @@ static esp_err_t xiaozhi_foundation_get_runtime_error(
         bool error_source_truncated = false;
 
         portENTER_CRITICAL(&ctx->protocol_lock);
-        if (ctx->protocol.error_received &&
-            (ctx->protocol.last_error_code != ESP_OK)) {
-            error_code = ctx->protocol.last_error_code;
+        if (ctx->protocol.first_error_received &&
+            (ctx->protocol.first_error_code != ESP_OK)) {
+            error_code = ctx->protocol.first_error_code;
         }
         error_source_truncated =
-            ctx->protocol.last_error_source_truncated;
+            ctx->protocol.first_error_source_truncated;
         (void)xiaozhi_foundation_copy_bounded_string(
             error_source,
             sizeof(error_source),
-            ctx->protocol.last_error_source,
+            ctx->protocol.first_error_source,
             NULL);
         portEXIT_CRITICAL(&ctx->protocol_lock);
 
@@ -1562,8 +1866,8 @@ static void xiaozhi_foundation_log_p2f_evidence(
     bool tts_start_received = false;
     bool tts_sentence_start_received = false;
     bool tts_stop_received = false;
-    size_t audio_rx_callback_count = 0U;
-    size_t audio_rx_total_bytes = 0U;
+    uint32_t audio_rx_callback_count = 0U;
+    uint64_t audio_rx_total_bytes = 0U;
     size_t audio_rx_first_packet_size = 0U;
     size_t audio_rx_max_packet_size = 0U;
 
@@ -1588,8 +1892,8 @@ static void xiaozhi_foundation_log_p2f_evidence(
     tts_start_received = ctx->protocol.tts_start_received;
     tts_sentence_start_received = ctx->protocol.tts_sentence_start_received;
     tts_stop_received = ctx->protocol.tts_stop_received;
-    audio_rx_callback_count = ctx->protocol.audio_rx_callback_count;
-    audio_rx_total_bytes = ctx->protocol.audio_rx_total_bytes;
+    audio_rx_callback_count = ctx->counters.audio_rx_callback_count;
+    audio_rx_total_bytes = ctx->counters.audio_rx_total_bytes;
     audio_rx_first_packet_size = ctx->protocol.audio_rx_first_packet_size;
     audio_rx_max_packet_size = ctx->protocol.audio_rx_max_packet_size;
     portEXIT_CRITICAL(&ctx->protocol_lock);
@@ -1634,9 +1938,9 @@ static void xiaozhi_foundation_log_p2f_evidence(
         ESP_LOGI(TAG, "TTS state=STOP");
     }
 
-    ESP_LOGI(TAG, "Audio RX packets=%u bytes=%u first=%u max=%u",
-             (unsigned)audio_rx_callback_count,
-             (unsigned)audio_rx_total_bytes,
+    ESP_LOGI(TAG, "Audio RX packets=%u bytes=%llu first=%u max=%u",
+              (unsigned)audio_rx_callback_count,
+              (unsigned long long)audio_rx_total_bytes,
              (unsigned)audio_rx_first_packet_size,
              (unsigned)audio_rx_max_packet_size);
 
@@ -1899,13 +2203,26 @@ static esp_err_t xiaozhi_foundation_validate_transport(
             .last_error = ESP_OK,
         },
     };
+    xiaozhi_foundation_resource_snapshot_t before_xiaozhi = {0};
+    xiaozhi_foundation_resource_snapshot_t after_cleanup = {0};
+    esp_xiaozhi_chat_info_t info = {0};
+    esp_mcp_t *mcp = NULL;
+    esp_xiaozhi_chat_handle_t chat = 0;
+    bool chat_started = false;
+    bool audio_channel_open = false;
+    bool event_handler_registered = false;
+    esp_event_handler_instance_t event_handler_instance = NULL;
+    xiaozhi_foundation_transport_t selected_transport =
+        XIAOZHI_FOUNDATION_TRANSPORT_AUTO;
+    esp_err_t ret = ESP_OK;
 
+    ctx.counters.validation_attempt_count = 1U;
+    xiaozhi_foundation_capture_resource_snapshot(
+        &before_xiaozhi,
+        "BEFORE_XIAOZHI");
     xiaozhi_foundation_publish_ui_status(&ctx);
 
-    esp_xiaozhi_chat_info_t info = {0};
-
-    esp_err_t ret =
-        esp_xiaozhi_chat_get_info(&info);
+    ret = esp_xiaozhi_chat_get_info(&info);
 
     if (ret != ESP_OK) {
         ESP_LOGE(
@@ -1914,14 +2231,13 @@ static esp_err_t xiaozhi_foundation_validate_transport(
             esp_err_to_name(ret));
 
         /* get_info() may have partially allocated response fields. */
-        (void)esp_xiaozhi_chat_free_info(&info);
-        xiaozhi_foundation_set_ui_state(
-            &ctx,
-            XIAOZHI_FOUNDATION_UI_ERROR,
-            ret);
-        ESP_LOGE(TAG, "%s RESULT: FAIL: %s", checkpoint_name,
-                 esp_err_to_name(ret));
-        return ret;
+        const esp_err_t free_info_ret = esp_xiaozhi_chat_free_info(&info);
+        if (free_info_ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to free partial Xiaozhi service info: %s",
+                     esp_err_to_name(free_info_ret));
+            xiaozhi_foundation_record_cleanup_error(&ctx, free_info_ret);
+        }
+        goto cleanup;
     }
 
     /*
@@ -1938,21 +2254,13 @@ static esp_err_t xiaozhi_foundation_validate_transport(
             TAG,
             "Failed to free Xiaozhi service info: %s",
             esp_err_to_name(ret));
-        xiaozhi_foundation_set_ui_state(
-            &ctx,
-            XIAOZHI_FOUNDATION_UI_ERROR,
-            ret);
-        ESP_LOGE(TAG, "%s RESULT: FAIL: %s", checkpoint_name,
-                 esp_err_to_name(ret));
-        return ret;
+        goto cleanup;
     }
 
     ESP_LOGI(
         TAG,
         "WebSocket available: %s",
         ctx.websocket_available ? "yes" : "no");
-
-    xiaozhi_foundation_transport_t selected_transport;
 
     ret = xiaozhi_foundation_select_transport(
         &ctx,
@@ -1963,13 +2271,7 @@ static esp_err_t xiaozhi_foundation_validate_transport(
             TAG,
             "No usable Xiaozhi WebSocket transport: %s",
             esp_err_to_name(ret));
-        xiaozhi_foundation_set_ui_state(
-            &ctx,
-            XIAOZHI_FOUNDATION_UI_ERROR,
-            ret);
-        ESP_LOGE(TAG, "%s RESULT: FAIL: %s", checkpoint_name,
-                 esp_err_to_name(ret));
-        return ret;
+        goto cleanup;
     }
 
     ESP_LOGI(
@@ -1978,26 +2280,13 @@ static esp_err_t xiaozhi_foundation_validate_transport(
         xiaozhi_foundation_transport_to_string(
             selected_transport));
 
-    esp_mcp_t *mcp = NULL;
-    esp_xiaozhi_chat_handle_t chat = 0;
-    bool chat_started = false;
-    bool audio_channel_open = false;
-    bool event_handler_registered = false;
-    esp_event_handler_instance_t event_handler_instance = NULL;
-
     ret = esp_mcp_create(&mcp);
     if (ret != ESP_OK) {
         ESP_LOGE(
             TAG,
             "Failed to create MCP engine: %s",
             esp_err_to_name(ret));
-        xiaozhi_foundation_set_ui_state(
-            &ctx,
-            XIAOZHI_FOUNDATION_UI_ERROR,
-            ret);
-        ESP_LOGE(TAG, "%s RESULT: FAIL: %s", checkpoint_name,
-                 esp_err_to_name(ret));
-        return ret;
+        goto cleanup;
     }
 
     ESP_LOGI(TAG, "MCP engine created");
@@ -2053,6 +2342,9 @@ static esp_err_t xiaozhi_foundation_validate_transport(
     }
 
     ESP_LOGI(TAG, "chat_init: OK");
+    xiaozhi_foundation_capture_resource_snapshot(
+        &(xiaozhi_foundation_resource_snapshot_t){0},
+        "AFTER_CHAT_INIT");
 
     ret = esp_event_handler_instance_register(
         ESP_XIAOZHI_CHAT_EVENTS,
@@ -2101,6 +2393,9 @@ static esp_err_t xiaozhi_foundation_validate_transport(
         xiaozhi_foundation_transport_to_string(
             selected_transport));
     ESP_LOGI(TAG, "WebSocket connected");
+    xiaozhi_foundation_capture_resource_snapshot(
+        &(xiaozhi_foundation_resource_snapshot_t){0},
+        "AFTER_CONNECTED");
 
     if (checkpoint == XIAOZHI_FOUNDATION_VALIDATION_P2E_AUDIO_CHANNEL) {
         ret = xiaozhi_foundation_validate_p2e_audio_channel(
@@ -2128,6 +2423,14 @@ static esp_err_t xiaozhi_foundation_validate_transport(
     }
 
 cleanup:
+    if (ret != ESP_OK) {
+        xiaozhi_foundation_record_primary_error(&ctx, ret);
+    }
+
+    xiaozhi_foundation_capture_resource_snapshot(
+        &(xiaozhi_foundation_resource_snapshot_t){0},
+        "AFTER_VALIDATION");
+
     /*
      * Keep the direct protocol-callback context and EventGroup alive until
      * chat_deinit() returns. The ESP event handler may be unregistered after
@@ -2141,8 +2444,8 @@ cleanup:
             &audio_channel_open,
             true);
 
-        if ((ret == ESP_OK) && (close_ret != ESP_OK)) {
-            ret = close_ret;
+        if (close_ret != ESP_OK) {
+            xiaozhi_foundation_record_cleanup_error(&ctx, close_ret);
         }
     }
 
@@ -2156,9 +2459,7 @@ cleanup:
                 "chat_stop failed: %s",
                 esp_err_to_name(stop_ret));
 
-            if (ret == ESP_OK) {
-                ret = stop_ret;
-            }
+            xiaozhi_foundation_record_cleanup_error(&ctx, stop_ret);
         } else {
             ESP_LOGI(TAG, "chat_stop: OK");
         }
@@ -2177,9 +2478,7 @@ cleanup:
                 "Failed to unregister Xiaozhi chat event handler: %s",
                 esp_err_to_name(unregister_ret));
 
-            if (ret == ESP_OK) {
-                ret = unregister_ret;
-            }
+            xiaozhi_foundation_record_cleanup_error(&ctx, unregister_ret);
         }
     }
 
@@ -2193,9 +2492,7 @@ cleanup:
                 "chat_deinit failed: %s",
                 esp_err_to_name(deinit_ret));
 
-            if (ret == ESP_OK) {
-                ret = deinit_ret;
-            }
+            xiaozhi_foundation_record_cleanup_error(&ctx, deinit_ret);
         } else {
             ESP_LOGI(TAG, "chat_deinit: OK");
         }
@@ -2213,15 +2510,27 @@ cleanup:
                 "MCP engine destroy failed: %s",
                 esp_err_to_name(destroy_ret));
 
-            if (ret == ESP_OK) {
-                ret = destroy_ret;
-            }
+            xiaozhi_foundation_record_cleanup_error(&ctx, destroy_ret);
         } else {
             ESP_LOGI(TAG, "MCP engine destroyed");
         }
     }
 
-    if (ret == ESP_OK) {
+    if (ctx.events != NULL) {
+        vEventGroupDelete(ctx.events);
+        ctx.events = NULL;
+    }
+
+    xiaozhi_foundation_capture_resource_snapshot(
+        &after_cleanup,
+        "AFTER_CLEANUP");
+    const esp_err_t final_ret = xiaozhi_foundation_log_validation_summary(
+        &ctx,
+        checkpoint_name,
+        &before_xiaozhi,
+        &after_cleanup);
+
+    if (final_ret == ESP_OK) {
         xiaozhi_foundation_set_ui_state(
             &ctx,
             XIAOZHI_FOUNDATION_UI_DISCONNECTED,
@@ -2230,25 +2539,22 @@ cleanup:
         xiaozhi_foundation_set_ui_state(
             &ctx,
             XIAOZHI_FOUNDATION_UI_ERROR,
-            ret);
-    }
-
-    if (ctx.events != NULL) {
-        vEventGroupDelete(ctx.events);
-        ctx.events = NULL;
+            final_ret);
     }
 
     /* Do not leave copied user/assistant text on this short-lived task stack. */
     memset(&ctx.protocol, 0, sizeof(ctx.protocol));
+    memset(&ctx.counters, 0, sizeof(ctx.counters));
+    memset(&ctx.result, 0, sizeof(ctx.result));
 
-    if (ret == ESP_OK) {
+    if (final_ret == ESP_OK) {
         ESP_LOGI(TAG, "%s RESULT: PASS", checkpoint_name);
     } else {
         ESP_LOGE(TAG, "%s RESULT: FAIL: %s", checkpoint_name,
-                 esp_err_to_name(ret));
+                 esp_err_to_name(final_ret));
     }
 
-    return ret;
+    return final_ret;
 }
 
 static esp_err_t xiaozhi_foundation_probe_impl(
