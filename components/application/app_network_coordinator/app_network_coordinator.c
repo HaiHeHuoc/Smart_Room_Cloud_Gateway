@@ -15,7 +15,9 @@
 #include "provisioning_manager.h"
 #include "wifi_manager.h"
 
+#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
 #include "xiaozhi_foundation.h"
+#endif
 
 /* Macros ------------------------------------------------------------------- */
 #define APP_NETWORK_COORDINATOR_TASK_NAME \
@@ -335,9 +337,12 @@ static void app_network_coordinator_wait_for_stored_wifi_boot_grace(void);
 static void app_network_coordinator_task(
     void *argument);
 
+#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
 static void app_request_xiaozhi_validation_best_effort(void);
+#endif
 
 /* Static Functions --------------------------------------------------------- */
+#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
 static void app_request_xiaozhi_validation_best_effort(void)
 {
     const esp_err_t ret =
@@ -359,6 +364,7 @@ static void app_request_xiaozhi_validation_best_effort(void)
             esp_err_to_name(ret));
     }
 }
+#endif
 
 
 static void app_network_coordinator_task(
@@ -2154,9 +2160,11 @@ app_run_one_wifi_provisioning_session(
         outcome.error = ESP_OK;
     }
 
+#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
     if (!reset_requested) {
         app_request_xiaozhi_validation_best_effort();
     }
+#endif
 
     return outcome;
 
@@ -3385,6 +3393,7 @@ esp_err_t app_network_coordinator_notify_wifi_event(
             APP_NETWORK_COORDINATOR_STATE_ONLINE &&
             !success_dwell_active)
         {
+#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
             app_request_xiaozhi_validation_best_effort();
 
             /*
@@ -3404,6 +3413,7 @@ esp_err_t app_network_coordinator_notify_wifi_event(
                     "Failed to queue Xiaozhi validation screen: %s",
                     esp_err_to_name(screen_ret));
             }
+#endif
         }
     }
 
