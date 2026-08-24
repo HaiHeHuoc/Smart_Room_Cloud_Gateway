@@ -161,6 +161,11 @@ esp_err_t xiaozhi_foundation_request_probe(void);
  * private Xiaozhi state or network ownership. No checkpoint is a production
  * voice API or an audio-hardware integration.
  *
+ * Phase 12.6 resource diagnostics sample cleanup immediately and after a
+ * bounded five-second settle window. For attributable Gateway measurements,
+ * the application composition layer must request this worker only after its
+ * long-lived network, audio, cloud, and validation-UI state is stable.
+ *
  * This interface is intended for normal task context and is not ISR-safe.
  * Its blocking, timeout, result, and ownership contract are implemented by the
  * foundation worker task, which uses a normal internal-RAM task stack.
