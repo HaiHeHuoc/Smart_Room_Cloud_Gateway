@@ -1206,19 +1206,20 @@ and final README media links.
 ## Proposed Voice Assistant Extension — New
 
 The following Sprints 10-18 are an optional post-MVP syllabus. They do not
-change the scope, status, ordering, or priority of Sprints 0-9. Existing
-unfinished acceptance work remains higher priority.
+change the scope, ordering, or priority of Sprints 0-9. Existing unfinished
+acceptance work remains higher priority; Sprint 12 status is maintained in its
+current section below.
 
 Feasibility assessment as of 2026-08-01:
 
 - The extension is feasible on ESP32-S3, subject to audio-hardware and resource
   validation.
-- The reviewed baseline is exact component version
-  `espressif/esp_xiaozhi: "0.1.1"`. This release supports ESP-IDF 5.5 and 6.0+
-  and provides WebSocket/MQTT+UDP transport, PCM/OPUS/G.711 audio, and MCP.
-- Re-verify the official registry, changelog, API, license, service behavior,
-  and transitive dependency lock before Sprint 12 begins. Do not silently
-  float to a newer version.
+- The current resolved Phase 12 dependency is exact component version
+  `espressif/esp_xiaozhi: "0.1.2"`. The live lockfile, managed source, and
+  Sprint 12 section are the source of truth; do not silently float it.
+- The 2026-08-01 v0.1.1 notes below are retained as historical planning
+  references only and do not describe the current selected transport or public
+  audio contract.
 - Current firmware targets ESP-IDF 6.0.1 on an N16R8 board with 8 MiB Octal
   PSRAM enabled. The network fix reserves its explicit external allocation for
   NimBLE dynamic pools; future audio work must remeasure PSRAM and internal/DMA
@@ -1232,7 +1233,7 @@ Feasibility assessment as of 2026-08-01:
   existing application lifecycle, NVS schema, provisioning, cloud, or future
   project-owned OTA policy.
 
-Official planning references reviewed on 2026-08-01:
+Historical planning references reviewed on 2026-08-01:
 
 - Component v0.1.1 README:
   <https://components.espressif.com/components/espressif/esp_xiaozhi/versions/0.1.1/readme?language=en>
@@ -1454,9 +1455,16 @@ future audio changes require renewed target regression testing.
 
 ---
 
-## Sprint 12 — Xiaozhi Build And Transport Validation — New / Not Started
+## Sprint 12 — Xiaozhi Build And Transport Validation — In Progress
 
-**Goal:** Pin and validate `esp_xiaozhi` in isolation without full voice UX.
+**Goal:** Validate the pinned `esp_xiaozhi` WebSocket path without full voice
+UX or production audio ownership.
+
+**Current status:** Phase 12.3–12.5 have a pinned WebSocket-only validation
+boundary, temporary default-off feature gate, P2-E/P2-F test infrastructure,
+and bounded resource/lifecycle diagnostics. Phase 12 itself is **not complete**:
+P2-E/P2-F target-hardware evidence and Phase 12.6 repeated lifecycle/fault
+acceptance remain pending.
 
 ### Placement And Dependencies
 
@@ -1465,22 +1473,28 @@ future audio changes require renewed target regression testing.
 
 ### Scope
 
-- Re-check the official registry and pin the reviewed exact version. Current
-  planning baseline:
+- The resolved reviewed component is `espressif/esp_xiaozhi: "0.1.2"` in the
+  lockfile; preserve that exact dependency evidence while validating it against
+  ESP-IDF 6.0.1:
 
   ```yaml
   dependencies:
-    espressif/esp_xiaozhi: "0.1.1"
+    espressif/esp_xiaozhi: "0.1.2"
   ```
 
 - Record the component hash, license, ESP-IDF range, changelog, Kconfig, and
   resolved lockfile versions for `cmake_utilities`, `cjson`,
   `esp_websocket_client`, `mcp-c-sdk`, and managed `mqtt`.
-- Build an isolated transport test against ESP-IDF 6.0.1.
-- Validate init/start/connection/disconnection/stop/deinit, service activation,
-  WebSocket first, and MQTT+UDP only after the simpler transport is stable.
-- Measure TLS/transport heap, stacks, flash, reconnect behavior, and repeated
-  session cleanup.
+- The selected transport is WebSocket only; see
+  `docs/ADR_XIAOZHI_WEBSOCKET_TRANSPORT.md`. MQTT+UDP is not a fallback.
+- Validate init/start/connection/disconnection/stop/deinit and service
+  activation through the gated P2-E/P2-F WebSocket worker.
+- Capture bounded Internal/DMA/PSRAM heap, worker stack, event counters, and
+  cleanup delta at lifecycle checkpoints. Do not sum overlapping Internal and
+  DMA heap figures or infer unavailable CPU/socket/TLS/packet-loss metrics.
+- Defer repeated session cleanup, Wi-Fi loss/recovery, and fault injection to
+  Phase 12.6 with the data contract in
+  `docs/XIAOZHI_HARDWARE_ACCEPTANCE.md`.
 - Treat server-provided system commands and OTA information as untrusted facts;
   do not execute them in this sprint.
 
@@ -1507,12 +1521,17 @@ future audio changes require renewed target regression testing.
 
 ### Test Plan And Acceptance
 
-- [ ] Clean build resolves the exact reviewed dependency on ESP-IDF 6.0.1.
-- [ ] Connect/disconnect and start/stop/deinit pass at least 100 cycles.
-- [ ] Wi-Fi loss and recovery are tested during idle transport operation.
+- [x] Build both default feature-off and master-gate/P2-E configurations against
+      the exact lockfile dependency on ESP-IDF 6.0.1.
+- [ ] Capture P2-E WebSocket audio-channel lifecycle target serial evidence.
+- [ ] Capture P2-F lawful-fixture serial conversation/audio and audible target
+      proof.
+- [ ] Connect/disconnect and start/stop/deinit pass repeated Phase 12.6 cycles.
+- [ ] Wi-Fi loss and recovery are tested during idle and open-channel operation.
 - [ ] No credential, token, server secret, audio, or private payload is logged.
-- [ ] Baseline and peak heap/PSRAM/DMA/flash/task measurements are recorded.
-- [ ] Removing or disabling the dependency restores the pre-voice build.
+- [ ] Baseline/cleanup heap, stack, event-counter, and delta samples are
+      recorded on target hardware.
+- [ ] The default master gate leaves normal Gateway runtime unchanged.
 
 ### Main Risks And Rollback
 
@@ -1524,8 +1543,8 @@ future audio changes require renewed target regression testing.
 
 ### Learning Topics
 
-- Component Manager locks, dependency audits, WebSocket, MQTT+UDP, TLS memory,
-  and external service lifecycle testing.
+- Component Manager locks, dependency audits, WebSocket lifecycle, TLS memory,
+  heap-capability interpretation, and external service lifecycle testing.
 
 ---
 
@@ -2022,7 +2041,7 @@ Use this section to track daily/weekly progress.
 | 9 | Portfolio polish | In progress | 2026-08-02 |  | Documentation and secret cleanup implemented; real photos/screenshots and demo video pending. |
 | 10 | Audio hardware validation | In progress; 10.4 complete |  |  | Hardware and GPIO gate remains; only RX/TX coexistence stress checkpoint is complete. |
 | 11 | Production audio manager | Done | 2026-08-16 | 2026-08-16 | User-confirmed Phase 11 closure after Phase 11.5 stress/lifecycle acceptance. Production IDLE task, copied WAV request, cooperative cancel/stop/restart, bounded two-slot SD/WAV prefetch, one bounded fresh-file SD resume, and public-API stress are accepted. Continuous stress is Kconfig-gated and disabled in normal startup. |
-| 12 | Xiaozhi build + transport | Proposed / Not started |  |  | Re-verify and exactly pin the reviewed dependency before implementation. |
+| 12 | Xiaozhi build + transport | In progress |  |  | WebSocket-only Phase 12.3–12.5 implementation exists; default-off/P2-E host builds and P2-E/P2-F target evidence plus Phase 12.6 remain. |
 | 13 | Voice assistant adapter | Proposed / Not started |  |  | Only adapter may depend directly on `esp_xiaozhi`. |
 | 14 | Push-to-talk voice MVP | Proposed / Not started |  |  | Wake word intentionally deferred. |
 | 15 | GUI voice integration | Proposed / Not started |  |  | Queue-driven LVGL updates only. |

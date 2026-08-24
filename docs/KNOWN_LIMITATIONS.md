@@ -172,11 +172,20 @@ or reset ownership.
   infrastructure are implemented and build-verified, but neither has target
   hardware PASS. P2-F requires a legal local raw-Opus packet fixture; it does
   not accept arbitrary PCM, WAV, Ogg, or fake audio data.
+- The gated validation worker now emits bounded Internal/DMA/PSRAM heap and
+  worker-stack snapshots plus lifecycle counters and an after-cleanup delta.
+  Internal and DMA totals overlap and are never summed. A single delta is not
+  leak proof; CPU, socket, TLS-allocation, and packet-loss metrics are not
+  directly observable from this one-shot diagnostic.
+- The selected transport rationale is recorded in
+  [the WebSocket ADR](ADR_XIAOZHI_WEBSOCKET_TRANSPORT.md), and required serial,
+  audible, lifecycle, fault, and resource capture is defined in
+  [the Xiaozhi hardware acceptance data contract](XIAOZHI_HARDWARE_ACCEPTANCE.md).
 - Remaining voice validation is WebSocket-only: P2-E/P2-F hardware evidence,
-  reconnect, cleanup, stress, and resource measurements. Phase 12.5 includes
-  only a temporary copied-status screen for that validation worker; no
-  production voice assistant, microphone, speaker, or production GUI
-  integration is included yet.
+  reconnect, cleanup, stress, and repeated resource measurements. Phase 12.5
+  includes only a temporary copied-status screen and gated diagnostics for that
+  validation worker; no production voice assistant, microphone, speaker, or
+  production GUI integration is included yet.
 
 ## Deliberately Deferred
 

@@ -536,11 +536,54 @@ retain text/audio/error pointers. The worker owns all waits, logging,
 open/close/start/stop/deinit decisions, handler unregistration, EventGroup
 deletion, MCP destruction, and zeroization of copied text before exit.
 
+### P2.3 — Bounded Resource And Lifecycle Diagnostics
+
+**Implementation status:** default-off and master-gate/P2-E host builds pass
+on ESP-IDF 6.0.1.
+**Hardware status:** no P2-E/P2-F resource or lifecycle result is claimed.
+
+When `CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE` is enabled, the one-shot
+validation worker captures low-frequency snapshots at `BEFORE_XIAOZHI`, after a
+successful `chat_init`, after `CONNECTED`, `AFTER_VALIDATION`, and
+`AFTER_CLEANUP`. It uses the established ESP-IDF heap-capability APIs:
+
+- `heap_caps_get_free_size()`;
+- `heap_caps_get_minimum_free_size()`;
+- `heap_caps_get_largest_free_block()`.
+
+Each snapshot separately reports Internal (`MALLOC_CAP_INTERNAL |
+MALLOC_CAP_8BIT`), DMA-capable (`MALLOC_CAP_DMA`), and PSRAM
+(`MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT`) free/minimum/largest-block bytes plus
+the worker's `uxTaskGetStackHighWaterMark(NULL)` result in FreeRTOS words.
+DMA-capable memory overlaps Internal memory on this target, so the two values
+are never added together. Minimum free is the capability pool's boot-lifetime
+low-water mark; it is not an interval-only measurement.
+
+The final worker summary reports `AFTER_CLEANUP - BEFORE_XIAOZHI`, saturating
+per-operation lifecycle/protocol counters, the selected P2-E/P2-F result, and
+separate first primary and cleanup error codes. A negative free-byte delta is a
+signal to investigate across repeated cycles; one transaction cannot prove a
+memory leak. CPU utilization, socket count, TLS allocation size, and packet
+loss are not directly observable from this bounded snapshot and are not
+invented.
+
+Counter updates remain callback-safe: callbacks only make bounded copies or
+saturating scalar updates under the existing short `portMUX` critical section,
+then set EventGroup facts. The worker alone prints snapshots and summaries; no
+diagnostic task, timer, per-audio-frame log, or production telemetry is added.
+With the master gate disabled, the application makes no validation request, so
+this diagnostic has no runtime execution or background overhead.
+
+The transport decision is recorded in
+[the WebSocket ADR](../../../../docs/ADR_XIAOZHI_WEBSOCKET_TRANSPORT.md).
+Required target evidence is defined by the
+[hardware acceptance data contract](../../../../docs/XIAOZHI_HARDWARE_ACCEPTANCE.md).
+
 ### Remaining validation
 
 P2-E/P2-F hardware acceptance, feature-off target-hardware observation,
-reconnect/failure stress, resource measurement, and the later Phase 12.6
-lifecycle matrix remain pending. MQTT remains closed; no MQTT fallback,
+reconnect/failure stress, repeated resource measurement, and the later Phase
+12.6 lifecycle matrix remain pending. MQTT remains closed; no MQTT fallback,
 production voice assistant, microphone, speaker, or production GUI integration
 is part of this validation layer. P2.1 is only a temporary copied-status
 display for the existing validation worker.
