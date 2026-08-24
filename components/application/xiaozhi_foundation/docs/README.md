@@ -6,9 +6,10 @@ Phase 12.3 validates the Xiaozhi service-information and activation path without
 starting the chat/audio lifecycle. Phase 12.4 audits configuration, NVS, stack,
 and cache-off behavior. Phase 12.5 records the transport decision: the project
 uses **WebSocket only** for Xiaozhi and does not implement MQTT+UDP.
-Phase 12.6 adds a default-off, project-owned controlled fault/recovery matrix
-at safe public-API lifecycle boundaries. It is validation infrastructure, not
-a voice feature or a substitute for real network/service fault evidence.
+Phase 12.6 adds default-off steady-state resource attribution, repeated
+lifecycle, and project-owned controlled fault/recovery matrices at safe public
+API boundaries. It is validation infrastructure, not a voice feature or a
+substitute for real network/service fault evidence.
 
 The project keeps the external component behind the `xiaozhi_foundation`
 boundary and exposes only copied, non-sensitive scalar state.
@@ -27,6 +28,8 @@ Xiaozhi validation runtime` controls every automatic Phase 12 validation hook:
 | `CONFIG_XIAOZHI_FOUNDATION_P26_LIFECYCLE_CYCLE_COUNT` | `1` | Available only with the P2.6 matrix; requests 1-100 cycles and never starts a stress run during default boot. |
 | `CONFIG_XIAOZHI_FOUNDATION_P26_FAULT_MATRIX` | `n` | Available only with the master gate enabled while P2-F and the repeated lifecycle matrix are unselected; enables the controlled P2.6 fault/recovery selector. |
 | `CONFIG_XIAOZHI_FOUNDATION_P26_FAULT_SELECTOR_*` | `NONE` | Selects one safe project-owned abort boundary or `ALL_SUPPORTED`. `NONE` performs no injection and leaves the regular P2-E checkpoint selected. |
+| `CONFIG_XIAOZHI_FOUNDATION_P26_RESOURCE_ATTRIBUTION_MATRIX` | `n` | Runs three supported iterations of get-info, MCP, chat-init, WebSocket, and P2-E layers with bounded settle samples. |
+| `CONFIG_XIAOZHI_FOUNDATION_P26_WEBSOCKET_HEAP_TRACE` | `n` | With standalone IDF heap tracing explicitly enabled, traces only attribution Stage D. It is a diagnostic, not a production option. |
 
 This is temporary Phase 12 infrastructure, not a production voice-assistant
 switch. With the master gate disabled, boot, stored-Wi-Fi recovery,
@@ -42,9 +45,10 @@ select exactly one boundary. Progress to individually selected further cases
 or `ALL_SUPPORTED` only after the preceding target result is clean. The
 validation implementation and public `xiaozhi_foundation` APIs remain compiled
 for this project; the application composition layer simply makes no automatic
-request while the gate is off. `app_network_coordinator` intentionally retains
-its `xiaozhi_foundation` build dependency so feature-on composition remains
-simple and reviewable; this dependency creates no feature-off runtime call.
+request while the gate is off. `app_network_coordinator` has no
+`xiaozhi_foundation` dependency or validation trigger. Only `main`, after all
+long-lived managers are started and observed through public snapshots, owns
+the temporary feature-on timing decision.
 
 ## Runtime Flow
 
@@ -55,7 +59,8 @@ boot -> existing application init -> Wi-Fi ONLINE
     -> no Xiaozhi validation worker or automatic Xiaozhi screen
 
 Master gate enabled:
-Wi-Fi ONLINE -> app_network_coordinator
+Wi-Fi ONLINE -> main starts cloud/audio and routes the validation GUI
+    -> 5000 ms uninterrupted steady-state window
     -> xiaozhi_foundation_request_transport_validation()
     -> P2-E by default, P2-F with its fixture gate, repeated P2.6,
        or one explicitly selected P2.6 fault/recovery matrix
@@ -369,7 +374,7 @@ lifecycle and no secret logging.
 ### P2-E - WebSocket Audio-Channel Lifecycle
 
 **Implementation status:** implemented and ESP-IDF 6.0.1 build-verified.
-**Hardware status:** pending real serial evidence.
+**Hardware status:** PASS on the ESP32-S3 target (2026-08-25).
 
 When the master validation gate is enabled and P2-F is not selected, the
 validation requested after the coordinator reaches `ONLINE` is P2-E:
@@ -416,9 +421,11 @@ chat_deinit: OK
 P2-E RESULT: PASS
 ```
 
-Hardware PASS requires the complete trace above, no disconnect/protocol error,
-no crash/watchdog, and no reconnect/session activity after complete deinit.
-No P2-E hardware pass is claimed until that trace is supplied.
+The target trace contained the complete sequence above, WebSocket selection,
+stable resource cleanup, and `P2-E RESULT: PASS`, with no disconnect/protocol
+error, crash, watchdog, or post-deinit session activity. This accepts only the
+public audio-channel lifecycle; it does not claim audio TX/RX, STT/TTS, or
+audible playback.
 
 ### P2-F - Known-Audio WebSocket E2E
 
@@ -492,6 +499,14 @@ non-zero audio RX counters, `AUDIO_CHANNEL_CLOSED`, successful stop/deinit, and
 text; byte-for-byte ASR/LLM wording is not required. No P2-F hardware PASS is
 claimed without that serial trace.
 
+Audible TTS is a **SOURCE / ARCHITECTURE ACCEPTED LIMITATION** for Phase 12:
+the callback exposes borrowed encoded server bytes, while this validation
+boundary intentionally does not decode them or take `audio_manager`/speaker
+ownership. Adding audible playback would cross into the later project-owned
+voice/audio adapter scope. This classification does not replace the serial
+P2-F TX/STT/text/audio-RX requirements, which remain blocked by the missing
+lawful fixture.
+
 ### P2.1 — Temporary Interaction Status UI
 
 **Implementation status:** build-verified temporary validation presentation.
@@ -550,9 +565,10 @@ deletion, MCP destruction, and zeroization of copied text before exit.
 
 ### P2.3 — Bounded Resource And Lifecycle Diagnostics
 
-**Implementation status:** default-off and master-gate/P2-E host builds pass
-on ESP-IDF 6.0.1.
-**Hardware status:** no P2-E/P2-F resource or lifecycle result is claimed.
+**Implementation status:** default-off and validation configurations build on
+ESP-IDF 6.0.1.
+**Hardware status:** P2-E and repeated lifecycle/resource acceptance PASS;
+P2-F remains blocked by the absent lawful fixture.
 
 When `CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE` is enabled, the one-shot
 validation worker captures low-frequency snapshots at `BEFORE_XIAOZHI`, after a
@@ -599,19 +615,36 @@ continuation at a safe public-API boundary with `ESP_ERR_INVALID_STATE`; it
 does not force an upstream allocation, mutate a private `esp_xiaozhi` object,
 or simulate a network outage.
 
-The earlier repeated-lifecycle progression reached 1/1, 3/3, 10/10, 20/20, and
-100/100 passed cycles with no captured panic/watchdog/assert or raw payload-tag
-output. Its 100-cycle post-cleanup Internal free/largest-block decline remains
-an investigation signal and blocks resource-stability acceptance. The first
-controlled HIL run, `AFTER_CHAT_INIT`, correctly emitted one each of
-`XZ_FAULT_BEGIN`, `XZ_FAULT_INJECT`, `XZ_FAULT_EXPECTED`, successful cleanup,
-fresh recovery, successful end, and `=== XIAOZHI FAULT SUMMARY ===`. It had no
-captured panic/watchdog/assert/stale-callback marker or upstream raw-payload
-tag. Its recovery-after-cleanup boundary was nevertheless 21,420 bytes lower
-in Internal free and 32,768 bytes lower in largest Internal block than the
-fault-before boundary. That consistent resource trend is **BLOCKED** pending a
-repeatable source-specific audit; no further subset/full fault escalation is
-claimed and no project memory leak is asserted.
+The old Wi-Fi-ONLINE baseline preceded deferred audio, cloud/Firebase TLS, and
+validation-GUI startup, so its -21,420 Internal/-32,768 largest-block result is
+retained as `CONTAMINATED_BASELINE`, not attributed to Xiaozhi. `main` now
+requests validation only after those long-lived managers and the validation
+screen remain ready for 5000 ms. Cleanup captures t+0, 250, 1000, 3000, and
+5000 ms samples; attribution adds a 125-second sample only after a material
+decline.
+
+The A-E attribution matrix isolated get-info/free-info, MCP create/destroy,
+chat init/deinit, WebSocket connect/stop/deinit, and P2-E. Get-info showed only
+a first-cycle largest-block plateau; MCP/chat/P2-E had no post-warm-up slope.
+A focused Stage-D heap trace found nine retained cross-signed certificate-name
+allocations per handshake inside ESP-IDF 6.0.1 `esp_crt_ca_cb_callback()` /
+`esp_crt_copy_asn1()`. Disabling cross-signed verification broke Firebase TLS,
+so the project keeps it enabled and applies the upstream-compatible reference
+lifetime fix through a source-hash-gated build shim. The installed SDK and
+managed components remain untouched, and configure fails on source drift.
+
+Root cause is `G. MIXED_CAUSE`: contaminated baseline, one-time fragmentation
+warm-up, and a proven upstream ESP-IDF certificate-bundle leak. Project-owned
+get-info, MCP, EventGroup, handler, chat, callback/context, copied payload, and
+task lifetimes remained symmetric.
+
+After the fix, 1/1, 3/3, 10/10, 20/20, and 100/100 target cycles passed. The
+100-cycle run ended with +6392 Internal bytes and zero largest-block change
+versus the first settled sample, 100/100 connected/disconnected, zero errors,
+and worker HWM 2976 words. `ALL_SUPPORTED` then passed seven expected faults,
+seven ordered cleanups, and seven fresh P2-E recoveries with zero unexpected
+results. **Repeated lifecycle, resource stability, and controlled
+fault/recovery: HARDWARE PASS (2026-08-25).**
 
 Enable the master gate and select either the repeated lifecycle matrix or the
 fault matrix; P2-F and those two P2.6 modes are mutually exclusive. The fault
@@ -697,20 +730,21 @@ be used until an equally secret-safe logging boundary is provided.
 
 ### Remaining validation
 
-P2-E/P2-F hardware acceptance, feature-off target-hardware observation, the
-source-specific explanation of the observed P2.6 resource trend, controlled
-fault subset/full HIL escalation, and real Wi-Fi/AP, Internet, DNS/TLS, and
-service-fault evidence remain pending. MQTT remains closed; no MQTT fallback,
-production voice assistant, microphone, speaker, or production GUI integration
-is part of this validation layer. P2.1 is only a temporary copied-status
-display for the existing validation worker.
+P2-E, repeated lifecycle/resource stability, `ALL_SUPPORTED`, and a 120-second
+feature-off target boot are accepted. P2-F remains blocked by the absent lawful
+fixture. Real Wi-Fi/AP, Internet, and remote-service loss remain target-HIL
+pending; DNS/TLS/server-goodbye/timeout/malformed-response/allocation-pressure
+paths are source-audited accepted limitations because this layer cannot safely
+mutate private transport/resolver/server/allocator state. MQTT remains closed;
+no MQTT fallback, production voice assistant, microphone, speaker, or
+production GUI integration is part of this validation layer. P2.1 remains a
+temporary copied-status display.
 
 ## Deferred / Closed Work
 
 - MQTT+UDP Xiaozhi implementation: **closed / not selected** for the current
   roadmap.
-- Phase 12.6 target HIL: resource-stability audit before any more fault-matrix
-  escalation or phase-close claim.
+- Phase 12.6 lifecycle/resource/fault HIL: **accepted 2026-08-25**.
 - Separate hardware scope: real Wi-Fi/AP loss, Internet/DNS/TLS/service loss,
   server goodbye, malformed remote response, and timeout evidence. None is
   replaced by a project-owned fake transport fault.

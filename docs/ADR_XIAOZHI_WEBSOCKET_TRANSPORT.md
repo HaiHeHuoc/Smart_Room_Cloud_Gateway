@@ -22,9 +22,10 @@ that a remote MQTT broker is defective: broker-side logs and server ownership
 were not available to this project.
 
 WebSocket is the selected path because it is available through the pinned
-public `esp_xiaozhi` API and has an explicit Phase 12 validation path. This is
-an architectural scope decision, not a claim that every WebSocket lifecycle or
-audio interaction has passed target-hardware acceptance.
+public `esp_xiaozhi` API and has an explicit Phase 12 validation path. P2-E,
+post-fix repeated lifecycle/resource stability, and controlled fault/recovery
+have now passed on target hardware. P2-F media/conversation evidence remains
+blocked by the absent lawful fixture.
 
 ## Decision
 
@@ -43,8 +44,9 @@ The Gateway selects **WebSocket only** for Xiaozhi.
 ## Consequences
 
 - Phase 12 evidence and resource diagnostics are intentionally WebSocket-only.
-- P2-E verifies the WebSocket audio-channel lifecycle only when its complete
-  target serial trace is captured.
+- P2-E target evidence verifies the WebSocket audio-channel lifecycle through
+  clean stop/deinit/destroy and stable cleanup. It does not prove STT/TTS or
+  media playback.
 - P2-F remains gated by a lawful local raw-Opus fixture and requires both
   serial conversation/audio evidence and audible target proof.
 - Phase 12.6 owns staged repeated WebSocket lifecycle/cleanup/resource
@@ -57,10 +59,16 @@ The Gateway selects **WebSocket only** for Xiaozhi.
   project transport fault and do not authorize a transport fallback.
 - This decision does not add production voice-assistant behavior, microphone
   capture, speaker playback, MQTT+UDP, or a production GUI feature.
+- ESP-IDF 6.0.1 cross-signed certificate verification retained name buffers
+  per TLS handshake. The project keeps cross-signed verification enabled
+  because disabling it broke Firebase TLS, and applies only the audited
+  upstream-compatible lifetime repair through a SHA-256-gated CMake shim. The
+  shim does not change this transport decision and must be removed or
+  re-audited on an IDF upgrade.
 
 ## Evidence Boundary
 
 The MQTT reproduction is sufficient to keep MQTT outside the project-selected
-architecture. It is not remote-service diagnosis. The next hardware target is
-P2-C/P2-E/P2-F WebSocket evidence on the ESP32-S3, collected according to
+architecture. It is not remote-service diagnosis. Current P2-E/resource/fault
+results and the remaining P2-F/external-fault gates are recorded in
 [Xiaozhi hardware acceptance data](XIAOZHI_HARDWARE_ACCEPTANCE.md).
