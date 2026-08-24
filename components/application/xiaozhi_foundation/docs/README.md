@@ -20,6 +20,8 @@ Xiaozhi validation runtime` controls every automatic Phase 12 validation hook:
 | `CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE` | `n` | Keeps normal Gateway startup and Wi-Fi routing free of temporary Xiaozhi validation. |
 | `CONFIG_XIAOZHI_FOUNDATION_P2F_EMBED_FIXTURE` | `n` | Available only when the master gate is enabled; embeds the lawful local P2-F fixture. |
 | `CONFIG_XIAOZHI_FOUNDATION_P2F_E2E_ONLINE_VALIDATION` | `n` | Available only when the master gate and fixture option are enabled; selects P2-F instead of P2-E. |
+| `CONFIG_XIAOZHI_FOUNDATION_P26_LIFECYCLE_MATRIX` | `n` | Available only when the master gate is enabled and P2-F is not selected; runs the isolated repeated P2.6 matrix instead of P2-E. |
+| `CONFIG_XIAOZHI_FOUNDATION_P26_LIFECYCLE_CYCLE_COUNT` | `1` | Available only with the P2.6 matrix; requests 1-100 cycles and never starts a stress run during default boot. |
 
 This is temporary Phase 12 infrastructure, not a production voice-assistant
 switch. With the master gate disabled, boot, stored-Wi-Fi recovery,
@@ -46,7 +48,7 @@ boot -> existing application init -> Wi-Fi ONLINE
 Master gate enabled:
 Wi-Fi ONLINE -> app_network_coordinator
     -> xiaozhi_foundation_request_transport_validation()
-    -> P2-E by default, or P2-F when explicitly selected
+    -> P2-E by default, P2-F with its fixture gate, or P2.6 when explicitly selected
     -> optional copied-status observer and temporary Xiaozhi screen
 ```
 
@@ -579,11 +581,91 @@ The transport decision is recorded in
 Required target evidence is defined by the
 [hardware acceptance data contract](../../../../docs/XIAOZHI_HARDWARE_ACCEPTANCE.md).
 
+### P2.6 - WebSocket Lifecycle Matrix
+
+**Implementation scope:** a default-off, validation-only runner for repeated
+WebSocket lifecycle evidence. **Hardware status:** pending target serial
+evidence; this implementation alone is not a hardware pass.
+
+The initial target progression reached lifecycle summaries of 1/1, 3/3, 10/10,
+20/20, and 100/100 passed cycles with no captured panic/watchdog/assert and no
+raw payload-tag output. The 100-cycle run nevertheless showed a substantial
+post-cleanup Internal free/largest-block decline between captured boundary
+samples. That is an investigation signal, not proof of a project leak, but it
+blocks Phase 12.6 resource-stability acceptance until a source-specific,
+repeatable trend audit explains it. No production feature or transport fallback
+is authorized by the lifecycle-only pass.
+
+Enable the master gate, select `Run Phase 12.6 repeated lifecycle matrix`, and
+set `Phase 12.6 lifecycle matrix cycle count`. P2-F selection and P2.6 are
+mutually exclusive so the fixture/STT/TTS flow remains unchanged. The runner
+starts with one requested cycle by default; the HIL progression is 1, 3, 10,
+20, then 100 only after the preceding target trace is clean. It stops at the
+first failed cycle and does not retry, reconnect Wi-Fi, or fall back to MQTT.
+
+Each full P2.6 cycle owns and releases a fresh validation context, EventGroup,
+event-handler instance, chat handle, MCP engine, callback counters, error
+state, and before/after resource snapshots. No previous-cycle EventGroup bit,
+chat handle, callback context, or pointer may satisfy a later cycle. The
+per-cycle runtime is the established P2-E sequence:
+
+```text
+get_info -> WebSocket-only init -> start -> CONNECTED
+    -> open audio -> AUDIO_CHANNEL_OPENED -> bounded hold
+    -> close audio -> AUDIO_CHANNEL_CLOSED -> stop -> deinit -> destroy MCP
+```
+
+The runner emits `XZ_LC_BEGIN cycle=<n> generation=<n>` and a matching
+`XZ_LC_END` result for each full cycle, plus the existing low-frequency
+`BEFORE_XIAOZHI` and `AFTER_CLEANUP` resource samples. Its final bounded
+`=== XIAOZHI LIFECYCLE SUMMARY ===` contains requested/completed/passed/failed
+cycles, first failed cycle/error, the expected duplicate-request result,
+aggregate connected/disconnected/error/open/close counters, and minima across
+cycle boundary snapshots for Internal, DMA-capable, PSRAM free/largest-block,
+and worker stack high-water. Internal and DMA-capable values still overlap and
+are never added. Heap samples remain an investigation indicator, not leak,
+CPU, socket, TLS-allocation, or packet-loss proof.
+
+#### Pinned API safety classification
+
+This matrix audits the resolved public `esp_xiaozhi` 0.1.2 contract and uses
+only the following categories:
+
+| API or operation | Classification | P2.6 action |
+|---|---|---|
+| `esp_xiaozhi_chat_init()` with a new config/handle | SAFE_AND_DEFINED | One new chat instance per cycle. The upstream single-instance check is not raced or bypassed. |
+| `esp_xiaozhi_chat_start()` after valid init/MCP configuration | SAFE_AND_DEFINED | One start per new chat instance. |
+| `ESP_XIAOZHI_CHAT_EVENTS` handler register/wait/unregister | SAFE_AND_DEFINED | New EventGroup and handler registration per cycle; callback context remains live through `chat_deinit()`. |
+| `esp_xiaozhi_chat_open_audio_channel()` / close after successful connection | SAFE_AND_DEFINED | Reuses the bounded P2-E lifecycle exactly once per cycle. |
+| `esp_xiaozhi_chat_stop()` then `esp_xiaozhi_chat_deinit()` | SAFE_AND_DEFINED | One ordered cleanup per cycle; P2.6 does not restart a stopped handle. |
+| `xiaozhi_foundation_request_transport_validation()` while its worker is active | SAFE_EXPECTED_ERROR | Exactly one project-gate test; expected `ESP_ERR_INVALID_STATE`, with no second worker created. |
+| listening start/stop | SAFE_AND_DEFINED only in its established open P2-F session | Not exercised by P2.6 because no fixture/audio conversation is introduced. |
+| double close, double deinit, use-after-deinit, start-after-stop, forced free, or private transport APIs | UNSAFE_OR_UNDEFINED | Never tested. |
+
+The duplicate-request check is the matrix's only deliberate expected-error
+case. It exercises the project operation gate without creating a competing
+chat instance or relying on upstream undefined behavior. P2.6 does not add
+fault injection, Wi-Fi-loss simulation, raw protocol messages, production
+microphone/speaker wiring, typed-text send, or a production voice state
+machine.
+
+#### Runtime payload-log containment
+
+Pinned upstream chat/MCP tags can emit raw incoming protocol payloads at
+runtime. While a temporary validation cycle is active, the foundation saves
+the configured levels and sets `ESP_XIAOZHI_CHAT`, `esp_mcp_mgr`, and
+`esp_mcp_engine` to `ESP_LOG_NONE`. The worker's own `XIAOZHI_FOUNDATION`
+logs retain lifecycle stage, safe error code, bounded counters, and resource
+facts. After chat deinit/MCP cleanup, the original upstream tag levels are
+restored. This uses the project's enabled `CONFIG_LOG_DYNAMIC_LEVEL_CONTROL`;
+if a future configuration disables that ESP-IDF feature, validation must not
+be used until an equally secret-safe logging boundary is provided.
+
 ### Remaining validation
 
 P2-E/P2-F hardware acceptance, feature-off target-hardware observation,
-reconnect/failure stress, repeated resource measurement, and the later Phase
-12.6 lifecycle matrix remain pending. MQTT remains closed; no MQTT fallback,
+P2.6 staged repeated resource measurement, and separate future network-fault
+testing remain pending. MQTT remains closed; no MQTT fallback,
 production voice assistant, microphone, speaker, or production GUI integration
 is part of this validation layer. P2.1 is only a temporary copied-status
 display for the existing validation worker.
@@ -592,5 +674,5 @@ display for the existing validation worker.
 
 - MQTT+UDP Xiaozhi implementation: **closed / not selected** for the current
   roadmap.
-- Phase 12.6+: WebSocket init/start/connected/stop/deinit lifecycle matrix and
-  repeated stress/fault testing.
+- Phase 12.6 target HIL: staged WebSocket lifecycle/resource acceptance.
+- Separate future scope: Wi-Fi-loss, server-fault, and timeout injection.
