@@ -1,4 +1,4 @@
-# Xiaozhi Foundation — Phases 12.3–12.5
+# Xiaozhi Foundation — Phases 12.3–12.6
 
 ## Goal
 
@@ -6,6 +6,9 @@ Phase 12.3 validates the Xiaozhi service-information and activation path without
 starting the chat/audio lifecycle. Phase 12.4 audits configuration, NVS, stack,
 and cache-off behavior. Phase 12.5 records the transport decision: the project
 uses **WebSocket only** for Xiaozhi and does not implement MQTT+UDP.
+Phase 12.6 adds a default-off, project-owned controlled fault/recovery matrix
+at safe public-API lifecycle boundaries. It is validation infrastructure, not
+a voice feature or a substitute for real network/service fault evidence.
 
 The project keeps the external component behind the `xiaozhi_foundation`
 boundary and exposes only copied, non-sensitive scalar state.
@@ -22,6 +25,8 @@ Xiaozhi validation runtime` controls every automatic Phase 12 validation hook:
 | `CONFIG_XIAOZHI_FOUNDATION_P2F_E2E_ONLINE_VALIDATION` | `n` | Available only when the master gate and fixture option are enabled; selects P2-F instead of P2-E. |
 | `CONFIG_XIAOZHI_FOUNDATION_P26_LIFECYCLE_MATRIX` | `n` | Available only when the master gate is enabled and P2-F is not selected; runs the isolated repeated P2.6 matrix instead of P2-E. |
 | `CONFIG_XIAOZHI_FOUNDATION_P26_LIFECYCLE_CYCLE_COUNT` | `1` | Available only with the P2.6 matrix; requests 1-100 cycles and never starts a stress run during default boot. |
+| `CONFIG_XIAOZHI_FOUNDATION_P26_FAULT_MATRIX` | `n` | Available only with the master gate enabled while P2-F and the repeated lifecycle matrix are unselected; enables the controlled P2.6 fault/recovery selector. |
+| `CONFIG_XIAOZHI_FOUNDATION_P26_FAULT_SELECTOR_*` | `NONE` | Selects one safe project-owned abort boundary or `ALL_SUPPORTED`. `NONE` performs no injection and leaves the regular P2-E checkpoint selected. |
 
 This is temporary Phase 12 infrastructure, not a production voice-assistant
 switch. With the master gate disabled, boot, stored-Wi-Fi recovery,
@@ -30,7 +35,11 @@ pre-Xiaozhi application routes: no validation worker, service probe, observer
 registration, or automatic `XIAOZHI` screen is requested.
 
 To run P2-E, enable only the master gate. To run P2-F, enable the master gate,
-provide the documented lawful fixture, then enable both P2-F sub-options. The
+provide the documented lawful fixture, then enable both P2-F sub-options. To
+run a controlled P2.6 fault case, enable the master gate and fault-matrix
+option while leaving P2-F and the repeated lifecycle matrix unselected, then
+select exactly one boundary. Progress to individually selected further cases
+or `ALL_SUPPORTED` only after the preceding target result is clean. The
 validation implementation and public `xiaozhi_foundation` APIs remain compiled
 for this project; the application composition layer simply makes no automatic
 request while the gate is off. `app_network_coordinator` intentionally retains
@@ -48,7 +57,8 @@ boot -> existing application init -> Wi-Fi ONLINE
 Master gate enabled:
 Wi-Fi ONLINE -> app_network_coordinator
     -> xiaozhi_foundation_request_transport_validation()
-    -> P2-E by default, P2-F with its fixture gate, or P2.6 when explicitly selected
+    -> P2-E by default, P2-F with its fixture gate, repeated P2.6,
+       or one explicitly selected P2.6 fault/recovery matrix
     -> optional copied-status observer and temporary Xiaozhi screen
 ```
 
@@ -581,33 +591,45 @@ The transport decision is recorded in
 Required target evidence is defined by the
 [hardware acceptance data contract](../../../../docs/XIAOZHI_HARDWARE_ACCEPTANCE.md).
 
-### P2.6 - WebSocket Lifecycle Matrix
+### P2.6 - WebSocket Lifecycle And Controlled Fault/Recovery Matrix
 
-**Implementation scope:** a default-off, validation-only runner for repeated
-WebSocket lifecycle evidence. **Hardware status:** pending target serial
-evidence; this implementation alone is not a hardware pass.
+**Implementation scope:** default-off, validation-only WebSocket lifecycle and
+controlled recovery evidence. The fault matrix aborts only the project's own
+continuation at a safe public-API boundary with `ESP_ERR_INVALID_STATE`; it
+does not force an upstream allocation, mutate a private `esp_xiaozhi` object,
+or simulate a network outage.
 
-The initial target progression reached lifecycle summaries of 1/1, 3/3, 10/10,
-20/20, and 100/100 passed cycles with no captured panic/watchdog/assert and no
-raw payload-tag output. The 100-cycle run nevertheless showed a substantial
-post-cleanup Internal free/largest-block decline between captured boundary
-samples. That is an investigation signal, not proof of a project leak, but it
-blocks Phase 12.6 resource-stability acceptance until a source-specific,
-repeatable trend audit explains it. No production feature or transport fallback
-is authorized by the lifecycle-only pass.
+The earlier repeated-lifecycle progression reached 1/1, 3/3, 10/10, 20/20, and
+100/100 passed cycles with no captured panic/watchdog/assert or raw payload-tag
+output. Its 100-cycle post-cleanup Internal free/largest-block decline remains
+an investigation signal and blocks resource-stability acceptance. The first
+controlled HIL run, `AFTER_CHAT_INIT`, correctly emitted one each of
+`XZ_FAULT_BEGIN`, `XZ_FAULT_INJECT`, `XZ_FAULT_EXPECTED`, successful cleanup,
+fresh recovery, successful end, and `=== XIAOZHI FAULT SUMMARY ===`. It had no
+captured panic/watchdog/assert/stale-callback marker or upstream raw-payload
+tag. Its recovery-after-cleanup boundary was nevertheless 21,420 bytes lower
+in Internal free and 32,768 bytes lower in largest Internal block than the
+fault-before boundary. That consistent resource trend is **BLOCKED** pending a
+repeatable source-specific audit; no further subset/full fault escalation is
+claimed and no project memory leak is asserted.
 
-Enable the master gate, select `Run Phase 12.6 repeated lifecycle matrix`, and
-set `Phase 12.6 lifecycle matrix cycle count`. P2-F selection and P2.6 are
-mutually exclusive so the fixture/STT/TTS flow remains unchanged. The runner
-starts with one requested cycle by default; the HIL progression is 1, 3, 10,
-20, then 100 only after the preceding target trace is clean. It stops at the
-first failed cycle and does not retry, reconnect Wi-Fi, or fall back to MQTT.
+Enable the master gate and select either the repeated lifecycle matrix or the
+fault matrix; P2-F and those two P2.6 modes are mutually exclusive. The fault
+selector defaults to `NONE`, which injects nothing and leaves P2-E selected.
+For any actual selected case, run exactly one fault lifecycle, inspect its
+cleanup, then run one fresh normal P2-E recovery lifecycle. The runner stops
+on the first unexpected result or failed recovery; it does not retry, reconnect
+Wi-Fi, or fall back to MQTT.
 
-Each full P2.6 cycle owns and releases a fresh validation context, EventGroup,
-event-handler instance, chat handle, MCP engine, callback counters, error
-state, and before/after resource snapshots. No previous-cycle EventGroup bit,
-chat handle, callback context, or pointer may satisfy a later cycle. The
-per-cycle runtime is the established P2-E sequence:
+Each cycle owns a fresh validation context, EventGroup, event-handler instance,
+chat handle, MCP engine, callback counters, error state, generation value, and
+resource snapshots. A context remains valid through handler unregistration and
+`chat_deinit()`; the handler is unregistered before deinit, then no old event
+group, handle, callback storage, or generation is reused by recovery. This
+uses the pinned public lifetime contract rather than retaining a callback after
+its owning context has been destroyed.
+
+The normal P2-E path is:
 
 ```text
 get_info -> WebSocket-only init -> start -> CONNECTED
@@ -615,16 +637,27 @@ get_info -> WebSocket-only init -> start -> CONNECTED
     -> close audio -> AUDIO_CHANNEL_CLOSED -> stop -> deinit -> destroy MCP
 ```
 
-The runner emits `XZ_LC_BEGIN cycle=<n> generation=<n>` and a matching
-`XZ_LC_END` result for each full cycle, plus the existing low-frequency
-`BEFORE_XIAOZHI` and `AFTER_CLEANUP` resource samples. Its final bounded
-`=== XIAOZHI LIFECYCLE SUMMARY ===` contains requested/completed/passed/failed
-cycles, first failed cycle/error, the expected duplicate-request result,
-aggregate connected/disconnected/error/open/close counters, and minima across
-cycle boundary snapshots for Internal, DMA-capable, PSRAM free/largest-block,
-and worker stack high-water. Internal and DMA-capable values still overlap and
-are never added. Heap samples remain an investigation indicator, not leak,
-CPU, socket, TLS-allocation, or packet-loss proof.
+The controlled cases deliberately return at these project-owned continuation
+boundaries after the preceding acquisition succeeded:
+
+| Selector | Shared cleanup ownership after injected return |
+|---|---|
+| `AFTER_GET_INFO` | `esp_xiaozhi_chat_free_info()` releases potentially partial info. |
+| `AFTER_MCP_CREATE` | Destroy the new MCP engine. |
+| `AFTER_EVENT_GROUP_CREATE` | Delete the EventGroup, then destroy MCP. |
+| `AFTER_CHAT_INIT` | Deinit chat, destroy MCP, delete EventGroup. |
+| `AFTER_EVENT_HANDLER_REGISTER` | Unregister handler before chat deinit, then destroy/delete. |
+| `AFTER_CHAT_START` | Stop, unregister, deinit, destroy, then delete. |
+| `AFTER_AUDIO_CHANNEL_OPEN` | Close the observed audio channel first, then the ordered stop/unregister/deinit/destroy/delete cleanup. |
+
+The first primary error is retained as the root cause. A cleanup failure is
+recorded separately and never overwrites it. Each selected case logs
+`XZ_FAULT_BEGIN`, `XZ_FAULT_INJECT`, expected/unexpected result,
+`XZ_FAULT_CLEANUP`, `XZ_FAULT_RECOVERY`, `XZ_FAULT_END`, resource samples, and
+the bounded aggregate `=== XIAOZHI FAULT SUMMARY ===` / `XZ_FAULT_RESULT`.
+Internal and DMA-capable pools overlap and are never added; heap snapshots are
+an investigation indicator rather than leak, CPU, socket, TLS-allocation, or
+packet-loss proof.
 
 #### Pinned API safety classification
 
@@ -636,18 +669,19 @@ only the following categories:
 | `esp_xiaozhi_chat_init()` with a new config/handle | SAFE_AND_DEFINED | One new chat instance per cycle. The upstream single-instance check is not raced or bypassed. |
 | `esp_xiaozhi_chat_start()` after valid init/MCP configuration | SAFE_AND_DEFINED | One start per new chat instance. |
 | `ESP_XIAOZHI_CHAT_EVENTS` handler register/wait/unregister | SAFE_AND_DEFINED | New EventGroup and handler registration per cycle; callback context remains live through `chat_deinit()`. |
-| `esp_xiaozhi_chat_open_audio_channel()` / close after successful connection | SAFE_AND_DEFINED | Reuses the bounded P2-E lifecycle exactly once per cycle. |
-| `esp_xiaozhi_chat_stop()` then `esp_xiaozhi_chat_deinit()` | SAFE_AND_DEFINED | One ordered cleanup per cycle; P2.6 does not restart a stopped handle. |
-| `xiaozhi_foundation_request_transport_validation()` while its worker is active | SAFE_EXPECTED_ERROR | Exactly one project-gate test; expected `ESP_ERR_INVALID_STATE`, with no second worker created. |
-| listening start/stop | SAFE_AND_DEFINED only in its established open P2-F session | Not exercised by P2.6 because no fixture/audio conversation is introduced. |
-| double close, double deinit, use-after-deinit, start-after-stop, forced free, or private transport APIs | UNSAFE_OR_UNDEFINED | Never tested. |
+| `esp_xiaozhi_chat_open_audio_channel()` / close after successful connection | SAFE_AND_DEFINED | Reuses the bounded P2-E lifecycle exactly once per normal or recovery cycle. |
+| `esp_xiaozhi_chat_stop()` then `esp_xiaozhi_chat_deinit()` | SAFE_AND_DEFINED | One ordered cleanup per cycle; no stopped handle is restarted. |
+| Project continuation after the safe selector boundaries above | SAFE_EXPECTED_ERROR | Deterministic `ESP_ERR_INVALID_STATE`; shared cleanup must succeed before fresh recovery. |
+| `ESP_XIAOZHI_CHAT_EVENT_SERVER_GOODBYE` | SOURCE_AUDITED | Public event is made a sticky runtime failure that wakes bounded waits; no fake goodbye is generated. |
+| `get_info()` malformed response / upstream allocation failure | SOURCE_AUDITED | Public errors and project allocation checks are preserved; no global heap exhaustion or private allocator hook is forced. |
+| Real Wi-Fi/AP loss, DNS/TLS/server loss, or server timeout | EXTERNAL_HARDWARE_REQUIRED | Not simulated by project code and not given to Wi-Fi/provisioning ownership. |
+| listening start/stop | SAFE_AND_DEFINED only in its established open P2-F session | Not exercised because P2-F fixture/audible proof remains pending. |
+| double close, double deinit, use-after-deinit, start-after-stop, forced free, private transport APIs, raw protocol messages | UNSAFE_OR_UNDEFINED | Never tested. |
 
-The duplicate-request check is the matrix's only deliberate expected-error
-case. It exercises the project operation gate without creating a competing
-chat instance or relying on upstream undefined behavior. P2.6 does not add
-fault injection, Wi-Fi-loss simulation, raw protocol messages, production
-microphone/speaker wiring, typed-text send, or a production voice state
-machine.
+The duplicate-validation-request check remains a separate project-gate
+expected-error case. P2.6 does not add Wi-Fi-loss simulation, raw protocol
+messages, production microphone/speaker wiring, typed-text send, a production
+voice state machine, or a transport fallback.
 
 #### Runtime payload-log containment
 
@@ -663,9 +697,10 @@ be used until an equally secret-safe logging boundary is provided.
 
 ### Remaining validation
 
-P2-E/P2-F hardware acceptance, feature-off target-hardware observation,
-P2.6 staged repeated resource measurement, and separate future network-fault
-testing remain pending. MQTT remains closed; no MQTT fallback,
+P2-E/P2-F hardware acceptance, feature-off target-hardware observation, the
+source-specific explanation of the observed P2.6 resource trend, controlled
+fault subset/full HIL escalation, and real Wi-Fi/AP, Internet, DNS/TLS, and
+service-fault evidence remain pending. MQTT remains closed; no MQTT fallback,
 production voice assistant, microphone, speaker, or production GUI integration
 is part of this validation layer. P2.1 is only a temporary copied-status
 display for the existing validation worker.
@@ -674,5 +709,8 @@ display for the existing validation worker.
 
 - MQTT+UDP Xiaozhi implementation: **closed / not selected** for the current
   roadmap.
-- Phase 12.6 target HIL: staged WebSocket lifecycle/resource acceptance.
-- Separate future scope: Wi-Fi-loss, server-fault, and timeout injection.
+- Phase 12.6 target HIL: resource-stability audit before any more fault-matrix
+  escalation or phase-close claim.
+- Separate hardware scope: real Wi-Fi/AP loss, Internet/DNS/TLS/service loss,
+  server goodbye, malformed remote response, and timeout evidence. None is
+  replaced by a project-owned fake transport fault.

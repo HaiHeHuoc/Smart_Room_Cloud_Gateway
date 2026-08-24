@@ -54,4 +54,55 @@ config XIAOZHI_FOUNDATION_P26_LIFECYCLE_CYCLE_COUNT
         progress through 3, 10, 20, and 100 only after target evidence is
         clean. The worker stops at the first failed cycle.
 
+config XIAOZHI_FOUNDATION_P26_FAULT_MATRIX
+    bool "Run Phase 12.6 controlled fault/recovery matrix"
+    depends on XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+    depends on !XIAOZHI_FOUNDATION_P2F_E2E_ONLINE_VALIDATION
+    depends on !XIAOZHI_FOUNDATION_P26_LIFECYCLE_MATRIX
+    default n
+    help
+        Run one explicitly selected, project-controlled lifecycle abort followed
+        by one clean P2-E recovery lifecycle. The injection never changes
+        private esp_xiaozhi state, Wi-Fi ownership, provisioning, NVS, cloud,
+        LVGL, or audio hardware. This is validation-only infrastructure and is
+        disabled in normal Gateway operation.
+
+choice XIAOZHI_FOUNDATION_P26_FAULT_SELECTOR
+    prompt "Phase 12.6 controlled fault selector"
+    depends on XIAOZHI_FOUNDATION_P26_FAULT_MATRIX
+    default XIAOZHI_FOUNDATION_P26_FAULT_SELECTOR_NONE
+    help
+        Select a deterministic project-owned lifecycle boundary. NONE leaves
+        injection disabled. ALL_SUPPORTED runs each safe boundary serially and
+        stops after the first unexpected result or failed recovery.
+
+config XIAOZHI_FOUNDATION_P26_FAULT_SELECTOR_NONE
+    bool "None (do not inject a fault)"
+
+config XIAOZHI_FOUNDATION_P26_FAULT_SELECTOR_AFTER_GET_INFO
+    bool "Abort after Xiaozhi service info acquisition"
+
+config XIAOZHI_FOUNDATION_P26_FAULT_SELECTOR_AFTER_MCP_CREATE
+    bool "Abort after MCP engine creation"
+
+config XIAOZHI_FOUNDATION_P26_FAULT_SELECTOR_AFTER_EVENT_GROUP_CREATE
+    bool "Abort after validation EventGroup creation"
+
+config XIAOZHI_FOUNDATION_P26_FAULT_SELECTOR_AFTER_CHAT_INIT
+    bool "Abort after chat initialization"
+
+config XIAOZHI_FOUNDATION_P26_FAULT_SELECTOR_AFTER_EVENT_HANDLER_REGISTER
+    bool "Abort after ESP event-handler registration"
+
+config XIAOZHI_FOUNDATION_P26_FAULT_SELECTOR_AFTER_CHAT_START
+    bool "Abort after chat start"
+
+config XIAOZHI_FOUNDATION_P26_FAULT_SELECTOR_AFTER_AUDIO_CHANNEL_OPEN
+    bool "Abort after P2-E audio-channel open"
+
+config XIAOZHI_FOUNDATION_P26_FAULT_SELECTOR_ALL_SUPPORTED
+    bool "Run all supported controlled fault cases"
+
+endchoice
+
 endmenu

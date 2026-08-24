@@ -3,8 +3,9 @@
 ## Status
 
 This document is a data-capture contract, not an acceptance claim. Phase 12 is
-not complete. P2-E/P2-F target-hardware evidence and P2.6 staged repeated
-lifecycle evidence remain required.
+not complete. P2-E/P2-F evidence, feature-off observation, real external-fault
+evidence, and a source-specific explanation of the P2.6 resource trend remain
+required.
 
 All collection below uses the temporary master gate:
 
@@ -94,13 +95,14 @@ Collect both kinds of target evidence:
 The serial trace proves protocol-side evidence; audible proof is a separate
 physical-output observation. Neither can replace the other for P2-F.
 
-## Phase 12.6 Repeated Lifecycle And Fault Matrix
+## Phase 12.6 Repeated Lifecycle And Controlled Fault/Recovery Matrix
 
-Enable the master gate and `Run Phase 12.6 repeated lifecycle matrix`; P2-F
-must remain unselected. Set the cycle count progressively to **1, 3, 10, 20,
-then 100**, proceeding only after the preceding target run is clean. The
-runner intentionally stops after the first failing cycle; do not hide a failed
-stage by immediately increasing the count.
+Enable the master gate and select exactly one P2.6 mode while P2-F remains
+unselected. The repeated lifecycle mode uses the 1, 3, 10, 20, then 100
+progression. The controlled fault mode defaults to `None`; select one boundary
+first, inspect it, then select further individual cases or `ALL_SUPPORTED`
+only after a clean target result. The runner stops after the first unexpected
+result or failed recovery; do not hide a failure by increasing the matrix.
 
 For each run capture the complete non-sensitive `XIAOZHI_FOUNDATION` segment,
 including:
@@ -115,6 +117,18 @@ including:
    completed, passed, failed, first-failure/error, aggregate lifecycle
    counters, and aggregate resource minima.
 
+For an actual controlled fault case, capture the complete safe segment with:
+
+1. `XZ_FAULT_BEGIN`, `XZ_FAULT_INJECT`, and `XZ_FAULT_EXPECTED` for the
+   selected safe project-owned boundary and expected `ESP_ERR_INVALID_STATE`.
+2. `XZ_FAULT_CLEANUP result=PASS`, then a separate-generation
+   `XZ_FAULT_RECOVERY result=PASS` from a fresh normal P2-E lifecycle.
+3. `XZ_FAULT_END result=PASS`, every `XZ_FAULT_RESOURCE` boundary, and the
+   aggregate `=== XIAOZHI FAULT SUMMARY ===` plus `XZ_FAULT_RESULT result=PASS`.
+4. Absence of panic, abort, assert, watchdog, backtrace, stale-callback, raw
+   upstream payload-tag, cleanup-error, overlapping-worker, and MQTT-fallback
+   evidence.
+
 The expected full cycle is WebSocket info/init/start/`CONNECTED`, one P2-E
 audio open/close, then stop/deinit/destroy MCP. A later cycle must use fresh
 context/EventGroup/handler/chat/MCP storage; a stale event, handle, or callback
@@ -122,21 +136,38 @@ pointer satisfying a later cycle is a failure. There must be no unexpected
 worker overlap, MQTT fallback, secret exposure, crash, watchdog, task/stack
 warning, or cleanup error.
 
+The fault selector does not alter private Xiaozhi state, force an upstream
+allocation failure, invoke an undefined lifecycle sequence, send raw protocol
+data, call LVGL, or take Wi-Fi/provisioning/NVS/cloud/audio-hardware ownership.
+It returns from a project continuation only after a safe public boundary; the
+shared cleanup retains the primary injected error while separately recording a
+cleanup error. A fresh context/EventGroup/handler/chat/MCP storage set is
+required for recovery.
+
 Investigate before advancing if free-byte values show a persistent negative
 post-cleanup trend, largest blocks decrease, or the aggregate worker
 high-water mark shrinks unexpectedly. Internal and DMA-capable pools overlap
 and must not be summed. The diagnostic does not establish CPU utilization,
-socket count, TLS allocation size, or packet-loss rate. Wi-Fi-loss, service
-fault, and timeout injection are deliberately separate future validation work;
-P2.6 does not simulate them or take Wi-Fi reconnect ownership.
+socket count, TLS allocation size, or packet-loss rate. Real Wi-Fi/AP,
+Internet/DNS/TLS/service loss, remote timeout, server goodbye, malformed
+remote response, and allocation-pressure evidence remain external or
+source-audited validation; P2.6 does not simulate them or take Wi-Fi reconnect
+ownership.
 
 ### Current P2.6 HIL Boundary
 
-The target completed the progressive lifecycle summaries 1/1, 3/3, 10/10,
-20/20, and 100/100 with expected duplicate-request rejection and no captured
-panic/watchdog/assert or raw payload-tag output. The 100-cycle captured
-post-cleanup boundaries nevertheless showed a material Internal free/largest
-block decline. Treat this as a resource-stability **BLOCKED** result pending a
-repeatable source-specific audit; it is not evidence sufficient to assert a
-project memory leak, nor does it authorize continued stress or a phase-close
-claim.
+The target completed the repeated lifecycle summaries 1/1, 3/3, 10/10, 20/20,
+and 100/100 with expected duplicate-request rejection and no captured
+panic/watchdog/assert or raw payload-tag output. The 100-cycle post-cleanup
+boundaries nevertheless showed a material Internal free/largest-block decline.
+
+The first controlled HIL case, `AFTER_CHAT_INIT`, was built, flashed, and
+captured on the target. It produced one expected injection, clean cleanup,
+fresh normal P2-E recovery, successful end, and a passing aggregate fault
+summary; no captured panic/watchdog/assert/stale-callback or raw payload-tag
+marker appeared. Its Internal recovery-after-cleanup snapshot was 21,420 bytes
+below its fault-before free value and its largest block was 32,768 bytes lower.
+The fault subset and `ALL_SUPPORTED` matrix were therefore not run. Treat both
+observations as a resource-stability **BLOCKED** result pending a repeatable
+source-specific audit. They do not prove a project memory leak and do not
+authorize continued stress or a phase-close claim.

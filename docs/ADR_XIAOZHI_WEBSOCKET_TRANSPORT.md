@@ -47,9 +47,14 @@ The Gateway selects **WebSocket only** for Xiaozhi.
   target serial trace is captured.
 - P2-F remains gated by a lawful local raw-Opus fixture and requires both
   serial conversation/audio evidence and audible target proof.
-- Phase 12.6 owns only the staged repeated WebSocket lifecycle/cleanup/resource
-  evidence. Wi-Fi-loss and service-fault injection remain separately scoped
-  future validation and do not authorize a transport fallback.
+- Phase 12.6 owns staged repeated WebSocket lifecycle/cleanup/resource
+  evidence and default-off, project-owned controlled abort/recovery checks at
+  safe public-API boundaries. They do not mutate private transport state or
+  authorize an MQTT fallback.
+- Real Wi-Fi/AP, Internet/DNS/TLS/service loss, server goodbye, remote timeout,
+  malformed remote response, and allocation-pressure evidence remain separate
+  source-audited or target-hardware work. They are not replaced by a fake
+  project transport fault and do not authorize a transport fallback.
 - This decision does not add production voice-assistant behavior, microphone
   capture, speaker playback, MQTT+UDP, or a production GUI feature.
 
