@@ -10,22 +10,51 @@ uses **WebSocket only** for Xiaozhi and does not implement MQTT+UDP.
 The project keeps the external component behind the `xiaozhi_foundation`
 boundary and exposes only copied, non-sensitive scalar state.
 
+## Temporary Validation Feature Gate
+
+`Component config -> Xiaozhi Phase 12 validation -> Enable temporary Phase 12
+Xiaozhi validation runtime` controls every automatic Phase 12 validation hook:
+
+| Kconfig symbol | Default | Effect |
+|---|---|---|
+| `CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE` | `n` | Keeps normal Gateway startup and Wi-Fi routing free of temporary Xiaozhi validation. |
+| `CONFIG_XIAOZHI_FOUNDATION_P2F_EMBED_FIXTURE` | `n` | Available only when the master gate is enabled; embeds the lawful local P2-F fixture. |
+| `CONFIG_XIAOZHI_FOUNDATION_P2F_E2E_ONLINE_VALIDATION` | `n` | Available only when the master gate and fixture option are enabled; selects P2-F instead of P2-E. |
+
+This is temporary Phase 12 infrastructure, not a production voice-assistant
+switch. With the master gate disabled, boot, stored-Wi-Fi recovery,
+provisioning completion, and later `OFFLINE -> ONLINE` transitions retain the
+pre-Xiaozhi application routes: no validation worker, service probe, observer
+registration, or automatic `XIAOZHI` screen is requested.
+
+To run P2-E, enable only the master gate. To run P2-F, enable the master gate,
+provide the documented lawful fixture, then enable both P2-F sub-options. The
+validation implementation and public `xiaozhi_foundation` APIs remain compiled
+for this project; the application composition layer simply makes no automatic
+request while the gate is off. `app_network_coordinator` intentionally retains
+its `xiaozhi_foundation` build dependency so feature-on composition remains
+simple and reviewable; this dependency creates no feature-off runtime call.
+
 ## Runtime Flow
 
 ```text
-Wi-Fi ONLINE
-    -> app_network_coordinator
-    -> xiaozhi_foundation_request_probe()
-    -> private worker task
-    -> esp_xiaozhi_chat_get_info()
-    -> copy project-used non-sensitive flags
-    -> esp_xiaozhi_chat_free_info()
+Master gate disabled (default):
+boot -> existing application init -> Wi-Fi ONLINE
+    -> existing cloud/network/sensor/audio behavior
+    -> no Xiaozhi validation worker or automatic Xiaozhi screen
+
+Master gate enabled:
+Wi-Fi ONLINE -> app_network_coordinator
+    -> xiaozhi_foundation_request_transport_validation()
+    -> P2-E by default, or P2-F when explicitly selected
+    -> optional copied-status observer and temporary Xiaozhi screen
 ```
 
-`xiaozhi_foundation_request_probe()` is intentionally non-blocking because the
-underlying information request performs HTTP/TLS work and can wait up to the
-component-configured timeout. Wi-Fi callbacks and coordinator event paths only
-schedule the worker and do not execute the HTTP request directly.
+`xiaozhi_foundation_request_probe()` remains a non-blocking public diagnostic
+API, but Gateway composition does not automatically call it. Its worker may
+perform HTTP/TLS work and can wait up to the component-configured timeout, so
+future explicit callers must schedule it instead of executing it in Wi-Fi
+callbacks or coordinator event paths.
 
 ## Endpoint And Device Identity
 
@@ -330,7 +359,8 @@ lifecycle and no secret logging.
 **Implementation status:** implemented and ESP-IDF 6.0.1 build-verified.
 **Hardware status:** pending real serial evidence.
 
-The default validation requested after the coordinator reaches `ONLINE` is:
+When the master validation gate is enabled and P2-F is not selected, the
+validation requested after the coordinator reaches `ONLINE` is P2-E:
 
 ```text
 CONNECTED
@@ -387,10 +417,12 @@ fixture and real serial evidence.
 No reusable speech asset exists in this repository. P2-F therefore does not
 invent PCM, random bytes, or a copyrighted sample. It is disabled by default
 and has no production dependency. To enable it, place a lawful, non-sensitive
-local fixture at `test_assets/p2f_fixture.bin`, then enable both menuconfig
-options under `Component config -> Xiaozhi Phase 12 validation`:
+local fixture at `test_assets/p2f_fixture.bin`, then enable the master option
+and both P2-F menuconfig options under `Component config -> Xiaozhi Phase 12
+validation`:
 
 ```text
+Enable temporary Phase 12 Xiaozhi validation runtime = y
 Embed the optional P2-F known-audio fixture = y
 Run P2-F known-audio E2E instead of default P2-E = y
 ```
@@ -454,11 +486,12 @@ claimed without that serial trace.
 **Hardware status:** pending target-LCD and P2-E/P2-F serial evidence.
 
 The foundation adds one optional observer API,
-`xiaozhi_foundation_register_ui_status_callback()`. It is registered once by
-the application composition layer before network orchestration begins and is
-immutable while a probe or transport validation is active. The foundation
-borrows the callback/context for firmware lifetime; the observer must copy the
-borrowed snapshot before returning.
+`xiaozhi_foundation_register_ui_status_callback()`. The application composition
+layer registers it once before network orchestration only when the master
+validation gate is enabled; it is immutable while a probe or transport
+validation is active. With the gate disabled, no observer is registered. The
+foundation borrows the callback/context for firmware lifetime; the observer
+must copy the borrowed snapshot before returning.
 
 ```text
 foundation worker / Xiaozhi event callback
@@ -505,11 +538,12 @@ deletion, MCP destruction, and zeroization of copied text before exit.
 
 ### Remaining validation
 
-P2-E/P2-F hardware acceptance, reconnect/failure stress, resource measurement,
-and the later Phase 12.6 lifecycle matrix remain pending. MQTT remains closed;
-no MQTT fallback, production voice assistant, microphone, speaker, or
-production GUI integration is part of this validation layer. P2.1 is only a
-temporary copied-status display for the existing validation worker.
+P2-E/P2-F hardware acceptance, feature-off target-hardware observation,
+reconnect/failure stress, resource measurement, and the later Phase 12.6
+lifecycle matrix remain pending. MQTT remains closed; no MQTT fallback,
+production voice assistant, microphone, speaker, or production GUI integration
+is part of this validation layer. P2.1 is only a temporary copied-status
+display for the existing validation worker.
 
 ## Deferred / Closed Work
 

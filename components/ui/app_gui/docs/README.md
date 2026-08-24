@@ -38,7 +38,7 @@ assistant, microphone, speaker, or independent GUI task.
 | `APP_GUI_SCREEN_PROVISIONING` | Stable provisioning layout with a scannable QR code, instruction/status labels, and state indicator. |
 | `APP_GUI_SCREEN_WIFI_STATUS` | Existing Wi-Fi mode, SSID, and IPv4 screen. |
 | `APP_GUI_SCREEN_SENSOR_DASHBOARD` | Sensor dashboard with synchronized local time/date in its left header, temperature/humidity below, and Wi-Fi, cloud, sensor, and audio summaries in the right status column. |
-| `APP_GUI_SCREEN_XIAOZHI` | Temporary Phase 12.5 WebSocket validation state, listening duration, and bounded USER/ASSISTANT transcript. It is entered only through the existing explicit screen-request API. |
+| `APP_GUI_SCREEN_XIAOZHI` | Temporary Phase 12.5 WebSocket validation state, listening duration, and bounded USER/ASSISTANT transcript. It is entered only through the existing explicit screen-request API; coordinator auto-routing is compiled only with `CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE=y`. |
 | `APP_GUI_SCREEN_RESET_RESULT` | Factory-reset success or failure result; entered only through `app_gui_show_reset_result()`. |
 
 The old `APP_GUI_SCREEN_WIFI` and `APP_GUI_SCREEN_SENSOR` identifiers were
@@ -494,14 +494,18 @@ BLE cleanup, and connection adoption, the coordinator posts `SUCCESS`, waits
 ESP_ERROR_CHECK(ui_manager_lvgl_init(&display_handle));
 ESP_ERROR_CHECK(app_gui_init());
 ESP_ERROR_CHECK(app_gui_start_ui_task());
+#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
 /* Register the temporary Xiaozhi observer; failure is logged but non-fatal. */
 xiaozhi_foundation_register_ui_status_callback(...);
+#endif
 ESP_ERROR_CHECK(app_network_coordinator_init(&network_config));
 ESP_ERROR_CHECK(app_network_coordinator_start());
 ```
 
 `main` does not create an initial screen directly. The coordinator requests the
-initial screen only after resolving the final configuration state.
+initial screen only after resolving the final configuration state. With the
+temporary Phase 12 validation gate at its default `n`, the observer is not
+registered and an `ONLINE` transition does not request `APP_GUI_SCREEN_XIAOZHI`.
 
 ## Phase 6.4.1 Historical Checkpoint
 

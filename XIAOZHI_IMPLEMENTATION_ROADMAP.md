@@ -439,6 +439,16 @@ get_info()
       `RESPONDING`, and `ERROR`. The existing GUI task owns the 100 ms local
       duration timer and cached transcript rendering; build is verified while
       LCD/P2-E/P2-F hardware acceptance remains pending.
+- [x] Phase 12 validation master feature gate: implemented with default `n`.
+      It guards temporary ONLINE validation routing, Xiaozhi UI observer
+      registration, and automatic `XIAOZHI` screen routing; P2-F sub-options
+      depend on it. **IMPLEMENTED / BUILD VERIFIED.**
+- [x] Feature-off compile regression: **BUILD VERIFIED.** With the master gate
+      disabled, application composition makes no automatic Xiaozhi validation
+      request, service probe, observer registration, or screen route.
+- [ ] Feature-off target-hardware behavior: **HARDWARE PENDING.** Confirm the
+      normal pre-Xiaozhi application routes on boot, recovery, provisioning,
+      and reset paths.
 - [ ] P2-E hardware acceptance: the temporary WebSocket-only worker now
       implements `CONNECTED -> open audio -> observed OPENED -> bounded hold ->
       close -> observed CLOSED -> stop -> deinit`; ESP-IDF build is verified,

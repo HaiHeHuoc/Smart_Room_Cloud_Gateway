@@ -1,7 +1,18 @@
 menu "Xiaozhi Phase 12 validation"
 
+config XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+    bool "Enable temporary Phase 12 Xiaozhi validation runtime"
+    default n
+    help
+        Enable the temporary Phase 12 Xiaozhi validation runtime. This is not
+        the future production voice assistant. When disabled, normal Gateway
+        startup and network routing do not automatically start Xiaozhi
+        validation. P2-E and P2-F options are meaningful only while this
+        validation gate is enabled.
+
 config XIAOZHI_FOUNDATION_P2F_EMBED_FIXTURE
     bool "Embed the optional P2-F known-audio fixture"
+    depends on XIAOZHI_FOUNDATION_VALIDATION_ENABLE
     default n
     help
         Embed test_assets/p2f_fixture.bin only for Phase 12.5 P2-F hardware
@@ -11,6 +22,7 @@ config XIAOZHI_FOUNDATION_P2F_EMBED_FIXTURE
 
 config XIAOZHI_FOUNDATION_P2F_E2E_ONLINE_VALIDATION
     bool "Run P2-F known-audio E2E instead of default P2-E"
+    depends on XIAOZHI_FOUNDATION_VALIDATION_ENABLE
     depends on XIAOZHI_FOUNDATION_P2F_EMBED_FIXTURE
     default n
     help

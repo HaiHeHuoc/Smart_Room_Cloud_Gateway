@@ -55,7 +55,9 @@
 #include "app_network_coordinator.h"
 
 /* Xiaozhi validation foundation ------------------------------------------- */
+#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
 #include "xiaozhi_foundation.h"
+#endif
 
 /* app reset coordinator --------------------------------------------------- */
 #include "app_reset_coordinator.h"
@@ -203,6 +205,7 @@ static void app_cloud_status_callback(
     const cloud_manager_status_t *status,
     void *user_context);
 
+#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
 /** @brief Map a foundation validation state to its GUI equivalent. */
 static ui_xiaozhi_state_t app_map_xiaozhi_state(
     xiaozhi_foundation_ui_state_t state);
@@ -211,6 +214,7 @@ static ui_xiaozhi_state_t app_map_xiaozhi_state(
 static void app_xiaozhi_ui_status_callback(
     const xiaozhi_foundation_ui_status_t *status,
     void *user_context);
+#endif
 
 /**
  * @brief Convert one Wi-Fi manager snapshot into a coordinator runtime event.
@@ -388,6 +392,7 @@ void app_main(void)
         return;
     }
 
+#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
     /*
      * The foundation borrows this callback for application lifetime. It only
      * copies bounded status into app_gui; it cannot route screens or access
@@ -405,6 +410,7 @@ void app_main(void)
             "Xiaozhi validation UI observer unavailable: %s",
             esp_err_to_name(xiaozhi_ui_ret));
     }
+#endif
 
     ESP_LOGI(TAG, "LVGL display initialized successfully");
 
@@ -1256,6 +1262,7 @@ static ui_cloud_state_t app_map_cloud_state(
     }
 }
 
+#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
 static ui_xiaozhi_state_t app_map_xiaozhi_state(
     xiaozhi_foundation_ui_state_t state)
 {
@@ -1337,6 +1344,7 @@ static void app_xiaozhi_ui_status_callback(
             esp_err_to_name(ret));
     }
 }
+#endif
 
 static void app_cloud_status_callback(
     const cloud_manager_status_t *status,
