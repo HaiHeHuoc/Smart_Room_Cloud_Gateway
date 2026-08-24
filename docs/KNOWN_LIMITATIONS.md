@@ -168,24 +168,34 @@ or reset ownership.
   `esp_xiaozhi` 0.1.2 has no public arbitrary typed-text TX API, so target
   USER/ASSISTANT text evidence is deferred to the supported P2-F audio/STT
   path.
-- P2-E WebSocket audio-channel lifecycle and the optional P2-F known-audio
-  infrastructure are implemented and build-verified, but neither has target
-  hardware PASS. P2-F requires a legal local raw-Opus packet fixture; it does
-  not accept arbitrary PCM, WAV, Ogg, or fake audio data.
-- The gated validation worker now emits bounded Internal/DMA/PSRAM heap and
-  worker-stack snapshots plus lifecycle counters and an after-cleanup delta.
-  Internal and DMA totals overlap and are never summed. A single delta is not
-  leak proof; CPU, socket, TLS-allocation, and packet-loss metrics are not
-  directly observable from this one-shot diagnostic.
+- P2-E WebSocket audio-channel lifecycle has target-hardware PASS. P2-F
+  requires a legal local raw-Opus packet fixture; none exists in the checkout,
+  and arbitrary PCM, WAV, Ogg, or fabricated audio is not accepted.
+- Audible P2-F playback is a Phase 12 source/architecture accepted limitation:
+  the validation callback receives encoded server bytes but deliberately does
+  not decode them or take `audio_manager`/speaker ownership. The serial P2-F
+  TX/STT/text/audio-RX contract remains required and pending.
+- The gated validation worker records steady-state Internal/DMA/PSRAM,
+  t+0/250/1000/3000/5000 cleanup, bounded cycle trends, attribution, and worker
+  HWM. Internal and DMA totals overlap and are never summed.
+- The old -21,420 Internal/-32,768 largest-block result used a baseline before
+  deferred Gateway managers started. Attribution classified the overall cause
+  as mixed: contaminated baseline, one-time fragmentation, and an ESP-IDF
+  6.0.1 cross-signed certificate-bundle leak. A source-hash-gated
+  upstream-compatible build shim fixes the proven TLS leak while preserving
+  Firebase-required cross-signed verification.
+- Post-fix 1/3/10/20/100 lifecycle runs, all seven supported fault/recovery
+  cases, and the clean feature-off target regression pass. Real Wi-Fi/AP,
+  Internet, and service-loss HIL remains pending; private/raw fault simulation
+  is not an acceptable substitute.
 - The selected transport rationale is recorded in
   [the WebSocket ADR](ADR_XIAOZHI_WEBSOCKET_TRANSPORT.md), and required serial,
   audible, lifecycle, fault, and resource capture is defined in
   [the Xiaozhi hardware acceptance data contract](XIAOZHI_HARDWARE_ACCEPTANCE.md).
-- Remaining voice validation is WebSocket-only: P2-E/P2-F hardware evidence,
-  reconnect, cleanup, stress, and repeated resource measurements. Phase 12.5
-  includes only a temporary copied-status screen and gated diagnostics for that
-  validation worker; no production voice assistant, microphone, speaker, or
-  production GUI integration is included yet.
+- Remaining Phase 12 validation is WebSocket-only: lawful-fixture P2-F plus
+  real Wi-Fi/AP, Internet, and service-loss HIL. Phase 12.5 includes only a
+  temporary copied-status screen and gated diagnostics; no production voice
+  assistant, microphone, speaker, or production GUI integration is included.
 
 ## Deliberately Deferred
 

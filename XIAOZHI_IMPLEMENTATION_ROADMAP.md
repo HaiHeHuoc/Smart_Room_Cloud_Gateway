@@ -438,7 +438,8 @@ get_info()
       screen for `DISCONNECTED`, `READY`, `LISTENING`, `PROCESSING`,
       `RESPONDING`, and `ERROR`. The existing GUI task owns the 100 ms local
       duration timer and cached transcript rendering; build is verified while
-      LCD/P2-E/P2-F hardware acceptance remains pending.
+      LCD/P2-F interaction acceptance remains pending (P2-E serial lifecycle
+      is accepted separately).
 - [x] Phase 12 validation master feature gate: implemented with default `n`.
       It guards temporary ONLINE validation routing, Xiaozhi UI observer
       registration, and automatic `XIAOZHI` screen routing; P2-F sub-options
@@ -446,13 +447,13 @@ get_info()
 - [x] Feature-off compile regression: **BUILD VERIFIED.** With the master gate
       disabled, application composition makes no automatic Xiaozhi validation
       request, service probe, observer registration, or screen route.
-- [ ] Feature-off target-hardware behavior: **HARDWARE PENDING.** Confirm the
-      normal pre-Xiaozhi application routes on boot, recovery, provisioning,
-      and reset paths.
-- [ ] P2-E hardware acceptance: the temporary WebSocket-only worker now
-      implements `CONNECTED -> open audio -> observed OPENED -> bounded hold ->
-      close -> observed CLOSED -> stop -> deinit`; ESP-IDF build is verified,
-      but target serial evidence is still required.
+- [x] Feature-off target-hardware behavior: **HARDWARE PASS 2026-08-25.** A
+      clean gate-off image booted normal network/UI/cloud/audio services and
+      Firebase for 120 seconds with no Xiaozhi worker, screen route,
+      lifecycle/fault/P2 marker, panic, assert, or watchdog.
+- [x] P2-E hardware acceptance: WebSocket `CONNECTED -> open -> observed
+      OPENED -> bounded hold -> close -> observed CLOSED -> stop -> deinit ->
+      MCP destroy`, stable cleanup, and `P2-E RESULT: PASS` captured on target.
 - [ ] P2-F hardware acceptance: validation-only, fixed 16 kHz mono 60 ms Opus
       fixture infrastructure streams one embedded packet per send and records
       bounded USER/ASSISTANT text plus audio callback evidence. A lawful local
@@ -460,7 +461,7 @@ get_info()
       private/raw typed-text path.
 - [ ] Compare connection/reconnect, sockets, heap, CPU, audio loss, cleanup, and
       network failures.
-- [ ] Record the selected MVP transport in an ADR.
+- [x] Record the selected MVP transport in an ADR.
 
 ## Phase 12.6 — Fault Injection + Recovery + Cleanup Validation
 
@@ -476,10 +477,18 @@ get_info()
 - [x] First target controlled fault `AFTER_CHAT_INIT`: expected injection,
       cleanup, fresh recovery, and aggregate fault summary passed; no captured
       panic/watchdog/assert/stale-callback or raw payload-tag marker.
-- [ ] Resource-stability acceptance: **BLOCKED.** The previous 100-cycle run
-      and first controlled recovery both showed material Internal free/largest
-      block declines. Perform a repeatable source-specific audit before more
-      fault subset/full matrix stress or any Phase 12.6 close claim.
+- [x] Root-cause/resource acceptance: **HARDWARE PASS 2026-08-25.** The old
+      sample was a contaminated pre-manager baseline. A-E attribution also
+      found one-time fragmentation and a repeated ESP-IDF 6.0.1 cross-signed
+      certificate-bundle leak. A source-hash-gated upstream-compatible build
+      backport removed the Stage-D slope without disabling Firebase-required
+      cross-signed verification. Post-fix 1/3/10/20/100 runs passed; cycle 100
+      retained the 81920-byte largest-block plateau and ended +6392 Internal
+      bytes versus the first settled sample.
+- [x] Full controlled fault/recovery acceptance: `ALL_SUPPORTED` passed all
+      seven safe boundaries with seven expected failures, seven cleanups,
+      seven fresh P2-E recoveries, zero unexpected results, and stable t+5000
+      resources.
 - [ ] Real Wi-Fi/AP loss, Internet/DNS/TLS/service loss, server goodbye, remote
       timeout, malformed response, and allocation-pressure validation: source
       audited or target-hardware pending. Do not simulate them with Wi-Fi code,
@@ -491,8 +500,9 @@ get_info()
 
 - [ ] Pinned component builds on ESP-IDF 6.0.1 and target hardware.
 - [ ] Activation, storage, transport, and side effects are documented.
-- [ ] No lifecycle leak trend or duplicate resources.
-- [ ] Feature-off restores pre-Xiaozhi behavior.
+- [x] No post-warm-up lifecycle leak/fragmentation trend or duplicate
+      resources across 100 target cycles after the proven upstream fix.
+- [x] Feature-off restores pre-Xiaozhi behavior on target hardware.
 
 ---
 

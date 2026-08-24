@@ -2,10 +2,12 @@
 
 ## Status
 
-This document is a data-capture contract, not an acceptance claim. Phase 12 is
-not complete. P2-E/P2-F evidence, feature-off observation, real external-fault
-evidence, and a source-specific explanation of the P2.6 resource trend remain
-required.
+This document contains both the capture contract and the non-sensitive target
+evidence collected on 2026-08-25. P2-E, repeated lifecycle/resource stability,
+all seven supported controlled fault/recovery cases, and feature-off behavior
+are accepted. Phase 12 remains **not complete** because no lawful local P2-F
+fixture exists and real Wi-Fi/AP, Internet, and service-loss HIL is still
+pending.
 
 All collection below uses the temporary master gate:
 
@@ -31,7 +33,10 @@ the required evidence is the safe `XIAOZHI_FOUNDATION` segment and its final
 summary.
 
 The worker emits these low-frequency resource checkpoints when the master gate
-runs a validation:
+runs a validation. The application composition layer now waits for network
+ONLINE, audio IDLE with no active I2S, a post-startup cloud state, the Xiaozhi
+validation screen, and an uninterrupted 5000 ms quiescence window before the
+first steady-state sample:
 
 ```text
 RESOURCE[BEFORE_XIAOZHI]
@@ -39,6 +44,11 @@ RESOURCE[AFTER_CHAT_INIT]        # only after chat_init succeeds
 RESOURCE[AFTER_CONNECTED]        # only after CONNECTED is received
 RESOURCE[AFTER_VALIDATION]
 RESOURCE[AFTER_CLEANUP]
+RESOURCE[CLEANUP_T+0_MS]
+RESOURCE[CLEANUP_T+250_MS]
+RESOURCE[CLEANUP_T+1000_MS]
+RESOURCE[CLEANUP_T+3000_MS]
+RESOURCE[CLEANUP_T+5000_MS]
 VALIDATION SUMMARY
 VALIDATION COUNTERS
 RESOURCE DELTA after_cleanup-before_xiaozhi
@@ -77,23 +87,35 @@ Enable only the master validation gate. Capture:
 P2-E passes only with the complete target serial trace above. A host build or
 an isolated individual log line is not P2-E hardware acceptance.
 
+### Current P2-E Evidence
+
+The ESP32-S3 target produced the complete WebSocket-selected P2-E sequence:
+`CONNECTED`, `AUDIO_CHANNEL_OPENED`, bounded hold,
+`AUDIO_CHANNEL_CLOSED`, successful `chat_stop`, successful `chat_deinit`, MCP
+destroy, stable cleanup, and `P2-E RESULT: PASS`. Firebase authentication also
+succeeded in the same boot and no panic, assert, watchdog, or MQTT fallback
+was captured. **P2-E hardware result: PASS.** This proves the public
+audio-channel lifecycle, not audio TX/RX or audible playback.
+
 ## P2-F Known-Audio WebSocket E2E
 
 Use a lawful local `XZF1` raw-Opus fixture only. Enable the master gate,
 fixture embedding, and P2-F selection. Do not substitute PCM, WAV, Ogg, WebM,
 or fabricated audio data.
 
-Collect both kinds of target evidence:
+Collect serial evidence for `start_listening: OK`, non-zero TX frame/byte
+counters, successful `stop_listening`, non-empty USER and ASSISTANT
+`CHAT_TEXT`, conversation completion, non-zero audio RX callback/byte
+counters, channel close, final cleanup, resource samples, and
+`P2-F RESULT: PASS`.
 
-1. Serial: `start_listening: OK`, non-zero TX frame/byte counters, successful
-   `stop_listening`, non-empty USER and ASSISTANT `CHAT_TEXT` evidence,
-   conversation completion, non-zero audio RX callback/byte counters, channel
-   close, final cleanup, resource samples/delta, and `P2-F RESULT: PASS`.
-2. Audible: an observer confirms audible server TTS on the intended target
-   output path, with run timestamp and non-sensitive test description.
-
-The serial trace proves protocol-side evidence; audible proof is a separate
-physical-output observation. Neither can replace the other for P2-F.
+Audible server-TTS playback is classified **SOURCE / ARCHITECTURE ACCEPTED
+LIMITATION** for Phase 12. The validation boundary receives borrowed raw Opus
+bytes only; it deliberately does not decode them or take `audio_manager`/
+speaker ownership. Requiring audible playback here would introduce the
+production adapter/audio path reserved for later sprints. This does not waive
+the P2-F protocol evidence above. No lawful `p2f_fixture.bin` is present, so
+**P2-F remains NOT RUN / BLOCKED** and no fixture was fabricated.
 
 ## Phase 12.6 Repeated Lifecycle And Controlled Fault/Recovery Matrix
 
@@ -154,20 +176,89 @@ remote response, and allocation-pressure evidence remain external or
 source-audited validation; P2.6 does not simulate them or take Wi-Fi reconnect
 ownership.
 
-### Current P2.6 HIL Boundary
+### Root-Cause Investigation And Current P2.6 Evidence
 
-The target completed the repeated lifecycle summaries 1/1, 3/3, 10/10, 20/20,
-and 100/100 with expected duplicate-request rejection and no captured
-panic/watchdog/assert or raw payload-tag output. The 100-cycle post-cleanup
-boundaries nevertheless showed a material Internal free/largest-block decline.
+The old `BEFORE_XIAOZHI` sample was captured immediately after Wi-Fi became
+ONLINE, before deferred `audio_manager`, `cloud_manager`/Firebase TLS, and the
+validation GUI had reached comparable long-lived states. The later cleanup
+sample included those allocations. The earlier -21,420 byte Internal and
+-32,768 byte largest-block comparison is therefore retained but classified
+`CONTAMINATED_BASELINE`; it cannot attribute the whole delta to Xiaozhi.
 
-The first controlled HIL case, `AFTER_CHAT_INIT`, was built, flashed, and
-captured on the target. It produced one expected injection, clean cleanup,
-fresh normal P2-E recovery, successful end, and a passing aggregate fault
-summary; no captured panic/watchdog/assert/stale-callback or raw payload-tag
-marker appeared. Its Internal recovery-after-cleanup snapshot was 21,420 bytes
-below its fault-before free value and its largest block was 32,768 bytes lower.
-The fault subset and `ALL_SUPPORTED` matrix were therefore not run. Treat both
-observations as a resource-stability **BLOCKED** result pending a repeatable
-source-specific audit. They do not prove a project memory leak and do not
-authorize continued stress or a phase-close claim.
+The source-specific three-repeat matrix produced:
+
+| Stage | Public lifecycle | Target result |
+|---|---|---|
+| A | `get_info/free_info` | First pass -128 Internal and -8192 largest block; later passes flat. At 125 s, Internal was +6272 versus the first baseline while largest stayed at 81920: one-time fragmentation plateau. |
+| B | MCP create/destroy | First pass +36 Internal, then flat. |
+| C | MCP + chat init/deinit, no start | No post-warm-up Internal or largest-block slope. |
+| D | WebSocket connect/stop/deinit | Before the fix, retained TLS allocations repeated per handshake. After the fix, first pass +40 Internal and later passes 0; largest block remained 77824 in the focused run. |
+| E | Normal P2-E | Three cycles returned to 170727 Internal and 81920 largest block with no slope. |
+
+The focused heap trace before the fix found nine retained allocations per TLS
+handshake, with requested sizes `99+3+2+3+12+3+16+3+23 = 164` bytes. Their
+call stacks converged on ESP-IDF 6.0.1
+`esp_crt_ca_cb_callback()`/`esp_crt_copy_asn1()`: cross-signed certificate
+verification copied `subject_raw` and issuer OID/value buffers, while the
+temporary certificate cleanup did not own/free those copied buffers. Waiting
+125 seconds (longer than two configured 60-second TCP MSL intervals) did not
+release them. Disabling cross-signed verification removed the WebSocket trend
+but caused Firebase TLS connection failure, so it was rejected.
+
+The project now applies the upstream-compatible reference-lifetime repair only
+to the audited ESP-IDF 6.0.1 source. CMake verifies SHA-256
+`e44d1e0a42a9d33cfc072ea005e93c8a0337c5ebcbfb9a1cf1554930f4f2816f`,
+generates the patched translation unit in the build directory, replaces only
+the original mbedTLS target source, and fails configuration on source drift.
+Managed components and the installed SDK are not modified. Remove/re-audit the
+shim when upgrading to an IDF release that contains the upstream fix.
+
+Upstream references: [ESP-IDF issue #18550](https://github.com/espressif/esp-idf/issues/18550),
+[cross-signed compatibility issue #18512](https://github.com/espressif/esp-idf/issues/18512),
+and the [current upstream certificate-bundle source](https://github.com/espressif/esp-idf/blob/master/components/mbedtls/esp_crt_bundle/esp_crt_bundle.c).
+
+Root-cause classification is **G. MIXED_CAUSE**:
+
+- baseline contamination from concurrent Gateway startup;
+- one-time allocator fragmentation/warm-up that reaches a stable plateau;
+- a proven upstream ESP-IDF 6.0.1 cross-signed certificate-bundle leak;
+- no retained project-owned Xiaozhi object was found.
+
+After the repair, the staged lifecycle progression passed 1/1, 3/3, 10/10,
+20/20, and 100/100. The 100-cycle aggregate recorded 100 connected, 100
+disconnected, 100 audio-opened, 200 audio-closed, zero chat errors, minimum
+Internal 164263 bytes, minimum largest Internal block 81920 bytes, minimum
+DMA 156475 bytes, minimum PSRAM 6223540 bytes, and worker HWM 2976 words.
+The final t+5000 sample was 170691 Internal and 81920 largest block: +6392
+Internal and zero largest-block change versus the first t+5000 sample. There
+was no monotonic loss trend. **Resource stability: PASS.**
+
+`ALL_SUPPORTED` then passed all seven controlled boundaries. It observed seven
+expected injected errors, seven cleanups, seven fresh-generation P2-E
+recoveries, zero unexpected results, and no panic/assert/watchdog/stale
+callback/MQTT fallback. In the audio-open case, Internal recovered from 166339
+at t+0 to 170719 at t+5000, directly demonstrating bounded deferred cleanup.
+**Controlled fault/recovery: PASS.**
+
+### External Fault Classification
+
+| Case | Classification | Evidence boundary |
+|---|---|---|
+| Wi-Fi/AP loss | `STILL_PENDING` | Requires a real AP outage while preserving `wifi_manager` reconnect ownership. |
+| Internet loss | `STILL_PENDING` | No controllable external network outage was available. |
+| DNS failure | `SOURCE_AUDITED / ACCEPTED_LIMITATION` | Public start/error paths and bounded waits preserve the primary error; no private resolver injection is used. |
+| TLS failure | `SOURCE_AUDITED / ACCEPTED_LIMITATION` | Public transport errors are propagated and cleanup is ordered; unsafe certificate/private transport mutation is prohibited. |
+| Service loss | `STILL_PENDING` | Requires a real remote outage or server-controlled evidence. |
+| Server goodbye | `SOURCE_AUDITED / ACCEPTED_LIMITATION` | Public goodbye event becomes a sticky runtime failure and wakes bounded waits; it is not fabricated. |
+| Remote timeout | `SOURCE_AUDITED / ACCEPTED_LIMITATION` | Connection/audio/conversation waits are finite and clean up through the public lifecycle. |
+| Malformed response | `SOURCE_AUDITED / ACCEPTED_LIMITATION` | `get_info`/chat public errors are retained and partial info is freed; raw responses are not injected. |
+| Allocation pressure | `SOURCE_AUDITED / ACCEPTED_LIMITATION` | Project/upstream allocation returns are checked; forced global exhaustion is intentionally unsafe and not run. |
+
+### Feature-Off Regression
+
+After `idf.py fullclean`, `idf.py reconfigure`, and `idf.py build` with the
+master gate and heap tracing off, the image built at `0x1c7ad0` bytes. The
+target booted normal network/UI/cloud/audio services, entered audio ready, and
+completed Firebase sign-in. Across a 120-second filtered observation there was
+no Xiaozhi worker, validation screen route, lifecycle/fault/P2 marker, panic,
+assert, or watchdog. **Feature-off target regression: PASS.**

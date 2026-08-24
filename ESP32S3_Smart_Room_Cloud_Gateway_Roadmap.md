@@ -1460,11 +1460,12 @@ future audio changes require renewed target regression testing.
 **Goal:** Validate the pinned `esp_xiaozhi` WebSocket path without full voice
 UX or production audio ownership.
 
-**Current status:** Phase 12.3–12.5 have a pinned WebSocket-only validation
-boundary, temporary default-off feature gate, P2-E/P2-F test infrastructure,
-and bounded resource/lifecycle diagnostics. Phase 12 itself is **not complete**:
-P2-E/P2-F target-hardware evidence and Phase 12.6 repeated lifecycle/fault
-acceptance remain pending.
+**Current status:** The pinned WebSocket-only boundary, P2-E target lifecycle,
+Phase 12.6 steady-state attribution, post-fix 1/3/10/20/100 lifecycle matrix,
+all seven controlled fault/recovery cases, and feature-off target regression
+are accepted. Phase 12 itself remains **not complete**: P2-F cannot run without
+a lawful local raw-Opus fixture, and real Wi-Fi/AP, Internet, and service-loss
+HIL remains pending.
 
 ### Placement And Dependencies
 
@@ -1492,9 +1493,9 @@ acceptance remain pending.
 - Capture bounded Internal/DMA/PSRAM heap, worker stack, event counters, and
   cleanup delta at lifecycle checkpoints. Do not sum overlapping Internal and
   DMA heap figures or infer unavailable CPU/socket/TLS/packet-loss metrics.
-- Defer repeated session cleanup, Wi-Fi loss/recovery, and fault injection to
-  Phase 12.6 with the data contract in
-  `docs/XIAOZHI_HARDWARE_ACCEPTANCE.md`.
+- Phase 12.6 repeated cleanup/resource/fault evidence is recorded in
+  `docs/XIAOZHI_HARDWARE_ACCEPTANCE.md`; real Wi-Fi/AP and remote outage tests
+  remain external HIL and preserve `wifi_manager` ownership.
 - Treat server-provided system commands and OTA information as untrusted facts;
   do not execute them in this sprint.
 
@@ -1523,15 +1524,20 @@ acceptance remain pending.
 
 - [x] Build both default feature-off and master-gate/P2-E configurations against
       the exact lockfile dependency on ESP-IDF 6.0.1.
-- [ ] Capture P2-E WebSocket audio-channel lifecycle target serial evidence.
+- [x] Capture P2-E WebSocket audio-channel lifecycle target serial evidence.
 - [ ] Capture P2-F lawful-fixture serial conversation/audio and audible target
-      proof.
-- [ ] Connect/disconnect and start/stop/deinit pass repeated Phase 12.6 cycles.
+      proof. The serial protocol gate remains blocked by the absent fixture;
+      audible playback is a source/architecture accepted limitation because
+      Phase 12 does not own an Opus decoder or speaker path.
+- [x] Connect/disconnect and start/stop/deinit pass repeated Phase 12.6 cycles
+      at 1, 3, 10, 20, and 100 iterations after the TLS lifetime repair.
 - [ ] Wi-Fi loss and recovery are tested during idle and open-channel operation.
 - [ ] No credential, token, server secret, audio, or private payload is logged.
-- [ ] Baseline/cleanup heap, stack, event-counter, and delta samples are
+- [x] Steady-state baseline, t+0/250/1000/3000/5000 cleanup, heap-capability,
+      stack, event-counter, attribution, and aggregate trend samples are
       recorded on target hardware.
-- [ ] The default master gate leaves normal Gateway runtime unchanged.
+- [x] The default master gate leaves normal Gateway runtime unchanged on a
+      clean target boot.
 
 ### Main Risks And Rollback
 
@@ -2041,7 +2047,7 @@ Use this section to track daily/weekly progress.
 | 9 | Portfolio polish | In progress | 2026-08-02 |  | Documentation and secret cleanup implemented; real photos/screenshots and demo video pending. |
 | 10 | Audio hardware validation | In progress; 10.4 complete |  |  | Hardware and GPIO gate remains; only RX/TX coexistence stress checkpoint is complete. |
 | 11 | Production audio manager | Done | 2026-08-16 | 2026-08-16 | User-confirmed Phase 11 closure after Phase 11.5 stress/lifecycle acceptance. Production IDLE task, copied WAV request, cooperative cancel/stop/restart, bounded two-slot SD/WAV prefetch, one bounded fresh-file SD resume, and public-API stress are accepted. Continuous stress is Kconfig-gated and disabled in normal startup. |
-| 12 | Xiaozhi build + transport | In progress |  |  | WebSocket-only Phase 12.3–12.5 implementation exists; default-off/P2-E host builds and P2-E/P2-F target evidence plus Phase 12.6 remain. |
+| 12 | Xiaozhi build + transport | In progress |  |  | WebSocket/P2-E, lifecycle/resource/fault matrices, and feature-off HIL pass; P2-F lawful-fixture evidence plus real Wi-Fi/AP, Internet, and service-loss HIL remain. |
 | 13 | Voice assistant adapter | Proposed / Not started |  |  | Only adapter may depend directly on `esp_xiaozhi`. |
 | 14 | Push-to-talk voice MVP | Proposed / Not started |  |  | Wake word intentionally deferred. |
 | 15 | GUI voice integration | Proposed / Not started |  |  | Queue-driven LVGL updates only. |
