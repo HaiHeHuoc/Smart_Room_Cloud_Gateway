@@ -146,16 +146,18 @@ esp_err_t xiaozhi_foundation_probe(xiaozhi_foundation_info_t *out_info);
 esp_err_t xiaozhi_foundation_request_probe(void);
 
 /**
- * @brief Request one temporary Phase 12.5 WebSocket validation checkpoint.
+ * @brief Request one temporary Phase 12 WebSocket validation checkpoint.
  *
  * @param[in] transport AUTO or WebSocket. AUTO resolves to WebSocket because
  *                       MQTT is intentionally not supported by the project.
  *
  * The default checkpoint is P2-E: connect, open a WebSocket audio channel,
  * observe the component event, hold briefly, close, stop, and deinitialize.
- * P2-F known-audio E2E is selected only with its explicit validation-only
- * Kconfig options and an embedded local fixture. Neither checkpoint is a
- * production voice API or an audio-hardware integration.
+ * P2-F known-audio E2E and the Phase 12.6 repeated lifecycle matrix are each
+ * selected only by their explicit validation-only Kconfig options. The matrix
+ * owns a new context and chat handle for every cycle and stops after the first
+ * failed cycle. No checkpoint is a production voice API or an audio-hardware
+ * integration.
  *
  * This interface is intended for normal task context and is not ISR-safe.
  * Its blocking, timeout, result, and ownership contract are implemented by the

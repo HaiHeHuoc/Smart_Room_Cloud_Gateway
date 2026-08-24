@@ -7,7 +7,8 @@
  * official-flow esp_xiaozhi test. The foundation therefore exposes and
  * validates WebSocket only. P2-E validates the WebSocket audio-channel
  * lifecycle; an explicitly enabled P2-F test can stream one embedded,
- * validation-only Opus fixture. Neither path owns production audio hardware.
+ * validation-only Opus fixture; P2.6 repeats complete isolated P2-E-style
+ * lifecycles. None of these paths owns production audio hardware.
  */
 
 /* Includes ----------------------------------------------------------------- */
@@ -100,6 +101,25 @@
 
 #define XIAOZHI_FOUNDATION_P2F_RESPONSE_TIMEOUT_MS \
     30000U
+
+#if CONFIG_XIAOZHI_FOUNDATION_P26_LIFECYCLE_MATRIX
+#define XIAOZHI_FOUNDATION_P26_CONFIGURED_CYCLE_COUNT \
+    CONFIG_XIAOZHI_FOUNDATION_P26_LIFECYCLE_CYCLE_COUNT
+#else
+/* Keep the always-compiled validator independent of a disabled int Kconfig. */
+#define XIAOZHI_FOUNDATION_P26_CONFIGURED_CYCLE_COUNT \
+    1U
+#endif
+
+/* These upstream INFO tags can print raw protocol payloads. */
+#define XIAOZHI_FOUNDATION_UPSTREAM_CHAT_LOG_TAG \
+    "ESP_XIAOZHI_CHAT"
+
+#define XIAOZHI_FOUNDATION_UPSTREAM_MCP_MANAGER_LOG_TAG \
+    "esp_mcp_mgr"
+
+#define XIAOZHI_FOUNDATION_UPSTREAM_MCP_ENGINE_LOG_TAG \
+    "esp_mcp_engine"
 
 #define XIAOZHI_FOUNDATION_AUDIO_FORMAT \
     "opus"
@@ -257,10 +277,69 @@ typedef struct {
     UBaseType_t worker_stack_high_water_words;
 } xiaozhi_foundation_resource_snapshot_t;
 
+/**
+ * @brief Original levels for upstream tags that can emit raw protocol data.
+ *
+ * The validation worker restores these levels only after all chat callbacks
+ * have stopped and chat deinitialization has completed.
+ */
+typedef struct {
+    bool active;
+    esp_log_level_t chat_level;
+    esp_log_level_t mcp_manager_level;
+    esp_log_level_t mcp_engine_level;
+} xiaozhi_foundation_upstream_log_guard_t;
+
 typedef enum {
     XIAOZHI_FOUNDATION_VALIDATION_P2E_AUDIO_CHANNEL = 0,
     XIAOZHI_FOUNDATION_VALIDATION_P2F_AUDIO_E2E,
+    XIAOZHI_FOUNDATION_VALIDATION_P26_LIFECYCLE_MATRIX,
 } xiaozhi_foundation_validation_checkpoint_t;
+
+/**
+ * @brief Final evidence copied from exactly one fully isolated lifecycle.
+ *
+ * This structure never owns a Xiaozhi handle, callback pointer, EventGroup, or
+ * event handler. It is copied only after chat deinitialization and before the
+ * short-lived cycle context is cleared.
+ */
+typedef struct {
+    esp_err_t final_result;
+    xiaozhi_foundation_validation_counters_t counters;
+    xiaozhi_foundation_validation_result_t errors;
+    xiaozhi_foundation_resource_snapshot_t before_xiaozhi;
+    xiaozhi_foundation_resource_snapshot_t after_cleanup;
+} xiaozhi_foundation_lifecycle_cycle_result_t;
+
+/**
+ * @brief Bounded Phase 12.6 aggregate; no per-cycle history is retained.
+ */
+typedef struct {
+    uint32_t requested_cycles;
+    uint32_t completed_cycles;
+    uint32_t passed_cycles;
+    uint32_t failed_cycles;
+    uint32_t first_failed_cycle;
+    esp_err_t first_failure_error;
+
+    bool duplicate_request_checked;
+    esp_err_t duplicate_request_result;
+
+    uint32_t connected_event_count;
+    uint32_t disconnected_event_count;
+    uint32_t audio_channel_opened_count;
+    uint32_t audio_channel_closed_count;
+    uint32_t chat_error_count;
+
+    bool resource_minimums_valid;
+    size_t minimum_internal_free_bytes;
+    size_t minimum_internal_largest_block_bytes;
+    size_t minimum_dma_free_bytes;
+    size_t minimum_dma_largest_block_bytes;
+    size_t minimum_psram_free_bytes;
+    size_t minimum_psram_largest_block_bytes;
+    UBaseType_t minimum_worker_stack_high_water_words;
+} xiaozhi_foundation_lifecycle_aggregate_t;
 
 /**
  * @brief Parsed, application-owned view of a validation-only fixture.
@@ -307,6 +386,7 @@ typedef struct {
     xiaozhi_foundation_validation_counters_t counters;
     xiaozhi_foundation_validation_result_t result;
     xiaozhi_foundation_ui_model_t ui;
+    xiaozhi_foundation_upstream_log_guard_t upstream_log_guard;
 } xiaozhi_foundation_validation_ctx_t;
 
 /* Static Variables --------------------------------------------------------- */
@@ -314,6 +394,9 @@ static portMUX_TYPE s_operation_lock =
     portMUX_INITIALIZER_UNLOCKED;
 
 static bool s_operation_in_progress = false;
+
+/* Serialized by s_operation_lock; generation identifies a fresh P2.6 cycle. */
+static uint32_t s_lifecycle_generation = 0U;
 
 /* Application composition owns the callback/context lifetime. */
 static xiaozhi_foundation_ui_status_callback_t s_ui_status_callback = NULL;
@@ -379,7 +462,8 @@ static esp_err_t xiaozhi_foundation_log_validation_summary(
     xiaozhi_foundation_validation_ctx_t *ctx,
     const char *checkpoint_name,
     const xiaozhi_foundation_resource_snapshot_t *before,
-    const xiaozhi_foundation_resource_snapshot_t *after);
+    const xiaozhi_foundation_resource_snapshot_t *after,
+    xiaozhi_foundation_lifecycle_cycle_result_t *out_cycle_result);
 
 static void xiaozhi_foundation_record_primary_error(
     xiaozhi_foundation_validation_ctx_t *ctx,
@@ -388,6 +472,12 @@ static void xiaozhi_foundation_record_primary_error(
 static void xiaozhi_foundation_record_cleanup_error(
     xiaozhi_foundation_validation_ctx_t *ctx,
     esp_err_t error);
+
+static void xiaozhi_foundation_suppress_upstream_payload_logs(
+    xiaozhi_foundation_validation_ctx_t *ctx);
+
+static void xiaozhi_foundation_restore_upstream_payload_logs(
+    xiaozhi_foundation_validation_ctx_t *ctx);
 
 static esp_err_t xiaozhi_foundation_validate_p2e_audio_channel(
     xiaozhi_foundation_validation_ctx_t *ctx,
@@ -457,6 +547,26 @@ static const char *xiaozhi_foundation_transport_to_string(
 
 static esp_err_t xiaozhi_foundation_validate_transport(
     xiaozhi_foundation_transport_t requested);
+
+static esp_err_t xiaozhi_foundation_validate_transport_cycle(
+    xiaozhi_foundation_transport_t requested,
+    xiaozhi_foundation_validation_checkpoint_t checkpoint,
+    uint32_t cycle,
+    uint32_t generation,
+    xiaozhi_foundation_lifecycle_cycle_result_t *out_cycle_result);
+
+static esp_err_t xiaozhi_foundation_validate_lifecycle_matrix(
+    xiaozhi_foundation_transport_t requested);
+
+static uint32_t xiaozhi_foundation_next_lifecycle_generation(void);
+
+static void xiaozhi_foundation_record_lifecycle_cycle(
+    xiaozhi_foundation_lifecycle_aggregate_t *aggregate,
+    uint32_t cycle,
+    const xiaozhi_foundation_lifecycle_cycle_result_t *cycle_result);
+
+static void xiaozhi_foundation_log_lifecycle_summary(
+    const xiaozhi_foundation_lifecycle_aggregate_t *aggregate);
 
 static esp_err_t xiaozhi_foundation_probe_impl(
     xiaozhi_foundation_info_t *out_info);
@@ -781,6 +891,59 @@ static void xiaozhi_foundation_record_cleanup_error(
     portEXIT_CRITICAL(&ctx->protocol_lock);
 }
 
+static void xiaozhi_foundation_suppress_upstream_payload_logs(
+    xiaozhi_foundation_validation_ctx_t *ctx)
+{
+    if ((ctx == NULL) || ctx->upstream_log_guard.active) {
+        return;
+    }
+
+#if CONFIG_LOG_DYNAMIC_LEVEL_CONTROL
+    ctx->upstream_log_guard.chat_level = esp_log_level_get(
+        XIAOZHI_FOUNDATION_UPSTREAM_CHAT_LOG_TAG);
+    ctx->upstream_log_guard.mcp_manager_level = esp_log_level_get(
+        XIAOZHI_FOUNDATION_UPSTREAM_MCP_MANAGER_LOG_TAG);
+    ctx->upstream_log_guard.mcp_engine_level = esp_log_level_get(
+        XIAOZHI_FOUNDATION_UPSTREAM_MCP_ENGINE_LOG_TAG);
+
+    /* Project diagnostics retain safe error codes; these tags may log raw data. */
+    esp_log_level_set(
+        XIAOZHI_FOUNDATION_UPSTREAM_CHAT_LOG_TAG,
+        ESP_LOG_NONE);
+    esp_log_level_set(
+        XIAOZHI_FOUNDATION_UPSTREAM_MCP_MANAGER_LOG_TAG,
+        ESP_LOG_NONE);
+    esp_log_level_set(
+        XIAOZHI_FOUNDATION_UPSTREAM_MCP_ENGINE_LOG_TAG,
+        ESP_LOG_NONE);
+    ctx->upstream_log_guard.active = true;
+#else
+    /* This target enables dynamic tag levels; do not claim suppression if not. */
+    ESP_LOGW(TAG, "Upstream payload INFO log suppression is unavailable");
+#endif
+}
+
+static void xiaozhi_foundation_restore_upstream_payload_logs(
+    xiaozhi_foundation_validation_ctx_t *ctx)
+{
+    if ((ctx == NULL) || !ctx->upstream_log_guard.active) {
+        return;
+    }
+
+#if CONFIG_LOG_DYNAMIC_LEVEL_CONTROL
+    esp_log_level_set(
+        XIAOZHI_FOUNDATION_UPSTREAM_CHAT_LOG_TAG,
+        ctx->upstream_log_guard.chat_level);
+    esp_log_level_set(
+        XIAOZHI_FOUNDATION_UPSTREAM_MCP_MANAGER_LOG_TAG,
+        ctx->upstream_log_guard.mcp_manager_level);
+    esp_log_level_set(
+        XIAOZHI_FOUNDATION_UPSTREAM_MCP_ENGINE_LOG_TAG,
+        ctx->upstream_log_guard.mcp_engine_level);
+#endif
+    memset(&ctx->upstream_log_guard, 0, sizeof(ctx->upstream_log_guard));
+}
+
 static void xiaozhi_foundation_capture_resource_snapshot(
     xiaozhi_foundation_resource_snapshot_t *snapshot,
     const char *checkpoint)
@@ -833,7 +996,8 @@ static esp_err_t xiaozhi_foundation_log_validation_summary(
     xiaozhi_foundation_validation_ctx_t *ctx,
     const char *checkpoint_name,
     const xiaozhi_foundation_resource_snapshot_t *before,
-    const xiaozhi_foundation_resource_snapshot_t *after)
+    const xiaozhi_foundation_resource_snapshot_t *after,
+    xiaozhi_foundation_lifecycle_cycle_result_t *out_cycle_result)
 {
     if ((ctx == NULL) || (checkpoint_name == NULL) || (before == NULL) ||
         (after == NULL)) {
@@ -862,6 +1026,14 @@ static esp_err_t xiaozhi_foundation_log_validation_summary(
     counters = ctx->counters;
     result = ctx->result;
     portEXIT_CRITICAL(&ctx->protocol_lock);
+
+    if (out_cycle_result != NULL) {
+        out_cycle_result->final_result = final_result;
+        out_cycle_result->counters = counters;
+        out_cycle_result->errors = result;
+        out_cycle_result->before_xiaozhi = *before;
+        out_cycle_result->after_cleanup = *after;
+    }
 
     ESP_LOGI(
         TAG,
@@ -1348,7 +1520,9 @@ static void xiaozhi_foundation_log_protocol_diagnostics(
 static xiaozhi_foundation_validation_checkpoint_t
 xiaozhi_foundation_get_validation_checkpoint(void)
 {
-#if CONFIG_XIAOZHI_FOUNDATION_P2F_E2E_ONLINE_VALIDATION
+#if CONFIG_XIAOZHI_FOUNDATION_P26_LIFECYCLE_MATRIX
+    return XIAOZHI_FOUNDATION_VALIDATION_P26_LIFECYCLE_MATRIX;
+#elif CONFIG_XIAOZHI_FOUNDATION_P2F_E2E_ONLINE_VALIDATION
     return XIAOZHI_FOUNDATION_VALIDATION_P2F_AUDIO_E2E;
 #else
     return XIAOZHI_FOUNDATION_VALIDATION_P2E_AUDIO_CHANNEL;
@@ -1364,6 +1538,9 @@ static const char *xiaozhi_foundation_validation_checkpoint_to_string(
 
     case XIAOZHI_FOUNDATION_VALIDATION_P2F_AUDIO_E2E:
         return "P2-F";
+
+    case XIAOZHI_FOUNDATION_VALIDATION_P26_LIFECYCLE_MATRIX:
+        return "P2.6";
 
     default:
         return "UNKNOWN";
@@ -2175,18 +2352,32 @@ static void xiaozhi_foundation_probe_task(void *argument)
     vTaskDelete(NULL);
 }
 
-static esp_err_t xiaozhi_foundation_validate_transport(
-    xiaozhi_foundation_transport_t requested)
+static esp_err_t xiaozhi_foundation_validate_transport_cycle(
+    xiaozhi_foundation_transport_t requested,
+    xiaozhi_foundation_validation_checkpoint_t checkpoint,
+    uint32_t cycle,
+    uint32_t generation,
+    xiaozhi_foundation_lifecycle_cycle_result_t *out_cycle_result)
 {
+    if (out_cycle_result != NULL) {
+        memset(out_cycle_result, 0, sizeof(*out_cycle_result));
+    }
+
     if ((requested < XIAOZHI_FOUNDATION_TRANSPORT_AUTO) ||
         (requested > XIAOZHI_FOUNDATION_TRANSPORT_WEBSOCKET)) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    const xiaozhi_foundation_validation_checkpoint_t checkpoint =
-        xiaozhi_foundation_get_validation_checkpoint();
     const char *const checkpoint_name =
         xiaozhi_foundation_validation_checkpoint_to_string(checkpoint);
+
+    if (cycle != 0U) {
+        ESP_LOGI(
+            TAG,
+            "XZ_LC_BEGIN cycle=%u generation=%u",
+            (unsigned)cycle,
+            (unsigned)generation);
+    }
 
     ESP_LOGI(
         TAG,
@@ -2217,6 +2408,14 @@ static esp_err_t xiaozhi_foundation_validate_transport(
     esp_err_t ret = ESP_OK;
 
     ctx.counters.validation_attempt_count = 1U;
+    xiaozhi_foundation_suppress_upstream_payload_logs(&ctx);
+    if (ctx.upstream_log_guard.active) {
+        ESP_LOGI(TAG, "Upstream raw-payload log tags: SUPPRESSED");
+    }
+    if (cycle != 0U) {
+        ESP_LOGI(TAG, "XZ_LC_RESOURCE cycle=%u phase=BEFORE_XIAOZHI",
+                 (unsigned)cycle);
+    }
     xiaozhi_foundation_capture_resource_snapshot(
         &before_xiaozhi,
         "BEFORE_XIAOZHI");
@@ -2397,7 +2596,7 @@ static esp_err_t xiaozhi_foundation_validate_transport(
         &(xiaozhi_foundation_resource_snapshot_t){0},
         "AFTER_CONNECTED");
 
-    if (checkpoint == XIAOZHI_FOUNDATION_VALIDATION_P2E_AUDIO_CHANNEL) {
+    if (checkpoint != XIAOZHI_FOUNDATION_VALIDATION_P2F_AUDIO_E2E) {
         ret = xiaozhi_foundation_validate_p2e_audio_channel(
             &ctx,
             chat,
@@ -2521,6 +2720,10 @@ cleanup:
         ctx.events = NULL;
     }
 
+    if (cycle != 0U) {
+        ESP_LOGI(TAG, "XZ_LC_RESOURCE cycle=%u phase=AFTER_CLEANUP",
+                 (unsigned)cycle);
+    }
     xiaozhi_foundation_capture_resource_snapshot(
         &after_cleanup,
         "AFTER_CLEANUP");
@@ -2528,7 +2731,10 @@ cleanup:
         &ctx,
         checkpoint_name,
         &before_xiaozhi,
-        &after_cleanup);
+        &after_cleanup,
+        out_cycle_result);
+
+    xiaozhi_foundation_restore_upstream_payload_logs(&ctx);
 
     if (final_ret == ESP_OK) {
         xiaozhi_foundation_set_ui_state(
@@ -2554,7 +2760,306 @@ cleanup:
                  esp_err_to_name(final_ret));
     }
 
+    if (cycle != 0U) {
+        if (final_ret == ESP_OK) {
+            ESP_LOGI(TAG, "XZ_LC_END cycle=%u result=PASS",
+                     (unsigned)cycle);
+        } else {
+            ESP_LOGE(TAG,
+                     "XZ_LC_END cycle=%u result=FAIL error=%s",
+                     (unsigned)cycle,
+                     esp_err_to_name(final_ret));
+        }
+    }
+
     return final_ret;
+}
+
+static uint32_t xiaozhi_foundation_saturating_add_u32(
+    uint32_t current,
+    uint32_t increment)
+{
+    if (UINT32_MAX - current < increment) {
+        return UINT32_MAX;
+    }
+
+    return current + increment;
+}
+
+static size_t xiaozhi_foundation_minimum_size(
+    size_t current,
+    size_t candidate)
+{
+    return (candidate < current) ? candidate : current;
+}
+
+static UBaseType_t xiaozhi_foundation_minimum_stack_high_water(
+    UBaseType_t current,
+    UBaseType_t candidate)
+{
+    return (candidate < current) ? candidate : current;
+}
+
+static void xiaozhi_foundation_record_lifecycle_resources(
+    xiaozhi_foundation_lifecycle_aggregate_t *aggregate,
+    const xiaozhi_foundation_resource_snapshot_t *snapshot)
+{
+    if ((aggregate == NULL) || (snapshot == NULL)) {
+        return;
+    }
+
+    if (!aggregate->resource_minimums_valid) {
+        aggregate->minimum_internal_free_bytes = snapshot->internal_free_bytes;
+        aggregate->minimum_internal_largest_block_bytes =
+            snapshot->internal_largest_block_bytes;
+        aggregate->minimum_dma_free_bytes = snapshot->dma_free_bytes;
+        aggregate->minimum_dma_largest_block_bytes =
+            snapshot->dma_largest_block_bytes;
+        aggregate->minimum_psram_free_bytes = snapshot->psram_free_bytes;
+        aggregate->minimum_psram_largest_block_bytes =
+            snapshot->psram_largest_block_bytes;
+        aggregate->minimum_worker_stack_high_water_words =
+            snapshot->worker_stack_high_water_words;
+        aggregate->resource_minimums_valid = true;
+        return;
+    }
+
+    aggregate->minimum_internal_free_bytes = xiaozhi_foundation_minimum_size(
+        aggregate->minimum_internal_free_bytes,
+        snapshot->internal_free_bytes);
+    aggregate->minimum_internal_largest_block_bytes =
+        xiaozhi_foundation_minimum_size(
+            aggregate->minimum_internal_largest_block_bytes,
+            snapshot->internal_largest_block_bytes);
+    aggregate->minimum_dma_free_bytes = xiaozhi_foundation_minimum_size(
+        aggregate->minimum_dma_free_bytes,
+        snapshot->dma_free_bytes);
+    aggregate->minimum_dma_largest_block_bytes =
+        xiaozhi_foundation_minimum_size(
+            aggregate->minimum_dma_largest_block_bytes,
+            snapshot->dma_largest_block_bytes);
+    aggregate->minimum_psram_free_bytes = xiaozhi_foundation_minimum_size(
+        aggregate->minimum_psram_free_bytes,
+        snapshot->psram_free_bytes);
+    aggregate->minimum_psram_largest_block_bytes =
+        xiaozhi_foundation_minimum_size(
+            aggregate->minimum_psram_largest_block_bytes,
+            snapshot->psram_largest_block_bytes);
+    aggregate->minimum_worker_stack_high_water_words =
+        xiaozhi_foundation_minimum_stack_high_water(
+            aggregate->minimum_worker_stack_high_water_words,
+            snapshot->worker_stack_high_water_words);
+}
+
+static uint32_t xiaozhi_foundation_next_lifecycle_generation(void)
+{
+    uint32_t generation = 0U;
+
+    portENTER_CRITICAL(&s_operation_lock);
+    s_lifecycle_generation = (s_lifecycle_generation == UINT32_MAX) ?
+        1U : s_lifecycle_generation + 1U;
+    generation = s_lifecycle_generation;
+    portEXIT_CRITICAL(&s_operation_lock);
+
+    return generation;
+}
+
+static void xiaozhi_foundation_record_lifecycle_cycle(
+    xiaozhi_foundation_lifecycle_aggregate_t *aggregate,
+    uint32_t cycle,
+    const xiaozhi_foundation_lifecycle_cycle_result_t *cycle_result)
+{
+    if ((aggregate == NULL) || (cycle_result == NULL)) {
+        return;
+    }
+
+    aggregate->completed_cycles = xiaozhi_foundation_saturating_add_u32(
+        aggregate->completed_cycles,
+        1U);
+    aggregate->connected_event_count = xiaozhi_foundation_saturating_add_u32(
+        aggregate->connected_event_count,
+        cycle_result->counters.connected_event_count);
+    aggregate->disconnected_event_count =
+        xiaozhi_foundation_saturating_add_u32(
+            aggregate->disconnected_event_count,
+            cycle_result->counters.disconnected_event_count);
+    aggregate->audio_channel_opened_count =
+        xiaozhi_foundation_saturating_add_u32(
+            aggregate->audio_channel_opened_count,
+            cycle_result->counters.audio_channel_opened_count);
+    aggregate->audio_channel_closed_count =
+        xiaozhi_foundation_saturating_add_u32(
+            aggregate->audio_channel_closed_count,
+            cycle_result->counters.audio_channel_closed_count);
+    aggregate->chat_error_count = xiaozhi_foundation_saturating_add_u32(
+        aggregate->chat_error_count,
+        cycle_result->counters.chat_error_count);
+
+    xiaozhi_foundation_record_lifecycle_resources(
+        aggregate,
+        &cycle_result->before_xiaozhi);
+    xiaozhi_foundation_record_lifecycle_resources(
+        aggregate,
+        &cycle_result->after_cleanup);
+
+    if (cycle_result->final_result == ESP_OK) {
+        aggregate->passed_cycles = xiaozhi_foundation_saturating_add_u32(
+            aggregate->passed_cycles,
+            1U);
+        return;
+    }
+
+    aggregate->failed_cycles = xiaozhi_foundation_saturating_add_u32(
+        aggregate->failed_cycles,
+        1U);
+
+    if (aggregate->first_failed_cycle == 0U) {
+        aggregate->first_failed_cycle = cycle;
+        aggregate->first_failure_error = cycle_result->final_result;
+    }
+}
+
+static void xiaozhi_foundation_log_lifecycle_summary(
+    const xiaozhi_foundation_lifecycle_aggregate_t *aggregate)
+{
+    if (aggregate == NULL) {
+        return;
+    }
+
+    const bool passed =
+        aggregate->duplicate_request_checked &&
+        (aggregate->duplicate_request_result == ESP_ERR_INVALID_STATE) &&
+        (aggregate->failed_cycles == 0U) &&
+        (aggregate->completed_cycles == aggregate->requested_cycles);
+
+    ESP_LOGI(TAG, "=== XIAOZHI LIFECYCLE SUMMARY ===");
+    ESP_LOGI(
+        TAG,
+        "XZ_LC_RESULT result=%s cycles_requested=%u cycles_completed=%u "
+        "cycles_passed=%u cycles_failed=%u first_failed_cycle=%u "
+        "first_failure_error=%s",
+        passed ? "PASS" : "FAIL",
+        (unsigned)aggregate->requested_cycles,
+        (unsigned)aggregate->completed_cycles,
+        (unsigned)aggregate->passed_cycles,
+        (unsigned)aggregate->failed_cycles,
+        (unsigned)aggregate->first_failed_cycle,
+        (aggregate->first_failure_error != ESP_OK) ?
+            esp_err_to_name(aggregate->first_failure_error) : "ESP_OK");
+    ESP_LOGI(
+        TAG,
+        "XZ_LC_DUPLICATE_REQUEST expected=ESP_ERR_INVALID_STATE actual=%s "
+        "result=%s",
+        aggregate->duplicate_request_checked ?
+            esp_err_to_name(aggregate->duplicate_request_result) : "NOT_RUN",
+        (aggregate->duplicate_request_checked &&
+         (aggregate->duplicate_request_result == ESP_ERR_INVALID_STATE)) ?
+            "PASS" : "FAIL");
+    ESP_LOGI(
+        TAG,
+        "XZ_LC_AGGREGATE_COUNTERS connected=%u disconnected=%u errors=%u "
+        "audio_opened=%u audio_closed=%u",
+        (unsigned)aggregate->connected_event_count,
+        (unsigned)aggregate->disconnected_event_count,
+        (unsigned)aggregate->chat_error_count,
+        (unsigned)aggregate->audio_channel_opened_count,
+        (unsigned)aggregate->audio_channel_closed_count);
+    ESP_LOGI(
+        TAG,
+        "XZ_LC_RESOURCE_MIN internal_free_bytes=%u "
+        "internal_largest_block_bytes=%u dma_free_bytes=%u "
+        "dma_largest_block_bytes=%u psram_free_bytes=%u "
+        "psram_largest_block_bytes=%u worker_stack_hwm_words=%u",
+        (unsigned)aggregate->minimum_internal_free_bytes,
+        (unsigned)aggregate->minimum_internal_largest_block_bytes,
+        (unsigned)aggregate->minimum_dma_free_bytes,
+        (unsigned)aggregate->minimum_dma_largest_block_bytes,
+        (unsigned)aggregate->minimum_psram_free_bytes,
+        (unsigned)aggregate->minimum_psram_largest_block_bytes,
+        (unsigned)aggregate->minimum_worker_stack_high_water_words);
+}
+
+static esp_err_t xiaozhi_foundation_validate_lifecycle_matrix(
+    xiaozhi_foundation_transport_t requested)
+{
+    xiaozhi_foundation_lifecycle_aggregate_t aggregate = {
+        .requested_cycles = XIAOZHI_FOUNDATION_P26_CONFIGURED_CYCLE_COUNT,
+        .first_failure_error = ESP_OK,
+    };
+
+    ESP_LOGI(TAG,
+             "XZ_LC_CASE normal_chat_lifecycle classification=SAFE_AND_DEFINED "
+             "coverage=per_cycle");
+    ESP_LOGI(TAG,
+             "XZ_LC_CASE audio_channel_lifecycle classification=SAFE_AND_DEFINED "
+             "coverage=P2E_per_cycle");
+    ESP_LOGI(TAG,
+             "XZ_LC_CASE repeated_full_lifecycle requested_cycles=%u",
+             (unsigned)aggregate.requested_cycles);
+
+    /* The public project gate is the only repeated-operation test in P2.6. */
+    aggregate.duplicate_request_checked = true;
+    aggregate.duplicate_request_result =
+        xiaozhi_foundation_request_transport_validation(requested);
+    ESP_LOGI(TAG,
+             "XZ_LC_CASE duplicate_validation_request expected=ESP_ERR_INVALID_STATE "
+             "actual=%s",
+             esp_err_to_name(aggregate.duplicate_request_result));
+
+    if (aggregate.duplicate_request_result != ESP_ERR_INVALID_STATE) {
+        aggregate.first_failure_error =
+            (aggregate.duplicate_request_result == ESP_OK) ? ESP_FAIL :
+            aggregate.duplicate_request_result;
+        xiaozhi_foundation_log_lifecycle_summary(&aggregate);
+        return aggregate.first_failure_error;
+    }
+
+    for (uint32_t cycle = 1U;
+         cycle <= aggregate.requested_cycles;
+         ++cycle) {
+        xiaozhi_foundation_lifecycle_cycle_result_t cycle_result = {0};
+        const uint32_t generation =
+            xiaozhi_foundation_next_lifecycle_generation();
+        const esp_err_t cycle_ret =
+            xiaozhi_foundation_validate_transport_cycle(
+                requested,
+                XIAOZHI_FOUNDATION_VALIDATION_P26_LIFECYCLE_MATRIX,
+                cycle,
+                generation,
+                &cycle_result);
+
+        xiaozhi_foundation_record_lifecycle_cycle(
+            &aggregate,
+            cycle,
+            &cycle_result);
+        memset(&cycle_result, 0, sizeof(cycle_result));
+
+        if (cycle_ret != ESP_OK) {
+            xiaozhi_foundation_log_lifecycle_summary(&aggregate);
+            return cycle_ret;
+        }
+    }
+
+    xiaozhi_foundation_log_lifecycle_summary(&aggregate);
+    return ESP_OK;
+}
+
+static esp_err_t xiaozhi_foundation_validate_transport(
+    xiaozhi_foundation_transport_t requested)
+{
+    const xiaozhi_foundation_validation_checkpoint_t checkpoint =
+        xiaozhi_foundation_get_validation_checkpoint();
+
+    if (checkpoint == XIAOZHI_FOUNDATION_VALIDATION_P26_LIFECYCLE_MATRIX) {
+        return xiaozhi_foundation_validate_lifecycle_matrix(requested);
+    }
+
+    return xiaozhi_foundation_validate_transport_cycle(
+        requested,
+        checkpoint,
+        0U,
+        0U,
+        NULL);
 }
 
 static esp_err_t xiaozhi_foundation_probe_impl(

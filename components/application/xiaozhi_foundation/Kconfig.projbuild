@@ -30,4 +30,28 @@ config XIAOZHI_FOUNDATION_P2F_E2E_ONLINE_VALIDATION
         WebSocket audio/STT/TTS validation. Leave this disabled to run the
         default P2-E audio-channel lifecycle validation.
 
+config XIAOZHI_FOUNDATION_P26_LIFECYCLE_MATRIX
+    bool "Run Phase 12.6 repeated lifecycle matrix"
+    depends on XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+    depends on !XIAOZHI_FOUNDATION_P2F_E2E_ONLINE_VALIDATION
+    default n
+    help
+        Run the Phase 12.6 WebSocket lifecycle matrix after the next
+        application ONLINE transition. Each cycle owns a new Xiaozhi context,
+        EventGroup, event handler, chat handle, MCP engine, counters, and
+        resource snapshots. The matrix uses the P2-E audio-channel lifecycle
+        for every cycle and stops after the first failure. It is validation
+        infrastructure only; it does not enable a production voice feature.
+
+config XIAOZHI_FOUNDATION_P26_LIFECYCLE_CYCLE_COUNT
+    int "Phase 12.6 lifecycle matrix cycle count"
+    depends on XIAOZHI_FOUNDATION_P26_LIFECYCLE_MATRIX
+    range 1 100
+    default 1
+    help
+        Number of full WebSocket init/start/connected/open-close/stop/deinit
+        cycles requested for one explicit Phase 12.6 run. Start with 1, then
+        progress through 3, 10, 20, and 100 only after target evidence is
+        clean. The worker stops at the first failed cycle.
+
 endmenu
