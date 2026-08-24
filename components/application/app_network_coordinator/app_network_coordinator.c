@@ -15,10 +15,6 @@
 #include "provisioning_manager.h"
 #include "wifi_manager.h"
 
-#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
-#include "xiaozhi_foundation.h"
-#endif
-
 /* Macros ------------------------------------------------------------------- */
 #define APP_NETWORK_COORDINATOR_TASK_NAME \
     "app_net_coord"
@@ -337,34 +333,7 @@ static void app_network_coordinator_wait_for_stored_wifi_boot_grace(void);
 static void app_network_coordinator_task(
     void *argument);
 
-#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
-static void app_request_xiaozhi_validation_best_effort(void);
-#endif
-
 /* Static Functions --------------------------------------------------------- */
-#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
-static void app_request_xiaozhi_validation_best_effort(void)
-{
-    const esp_err_t ret =
-        xiaozhi_foundation_request_transport_validation(
-            XIAOZHI_FOUNDATION_TRANSPORT_AUTO);
-
-    if (ret == ESP_ERR_INVALID_STATE) {
-        /*
-         * A Xiaozhi probe or validation is already running.
-         * This is not an application error.
-         */
-        return;
-    }
-
-    if (ret != ESP_OK) {
-        ESP_LOGW(
-            TAG,
-            "Failed to request Xiaozhi transport validation: %s",
-            esp_err_to_name(ret));
-    }
-}
-#endif
 
 
 static void app_network_coordinator_task(
@@ -2160,12 +2129,6 @@ app_run_one_wifi_provisioning_session(
         outcome.error = ESP_OK;
     }
 
-#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
-    if (!reset_requested) {
-        app_request_xiaozhi_validation_best_effort();
-    }
-#endif
-
     return outcome;
 
 release_handoff:
@@ -3289,7 +3252,6 @@ esp_err_t app_network_coordinator_notify_wifi_event(
     app_network_coordinator_state_t previous_state;
     bool state_changed = false;
     bool provisioning_active = false;
-    bool success_dwell_active = false;
     bool reset_requested = false;
     uint32_t provisioning_generation = 0U;
 
@@ -3299,8 +3261,6 @@ esp_err_t app_network_coordinator_notify_wifi_event(
     provisioning_active =
         (s_state ==
          APP_NETWORK_COORDINATOR_STATE_PROVISIONING);
-    success_dwell_active =
-        s_provisioning_success_dwell_active;
     provisioning_generation =
         s_active_provisioning_generation;
 
@@ -3389,32 +3349,6 @@ esp_err_t app_network_coordinator_notify_wifi_event(
             app_network_coordinator_state_to_string(
                 next_state));
 
-        if (next_state ==
-            APP_NETWORK_COORDINATOR_STATE_ONLINE &&
-            !success_dwell_active)
-        {
-#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
-            app_request_xiaozhi_validation_best_effort();
-
-            /*
-             * Temporary Phase 12.5 hardware-test route. Keep the Xiaozhi
-             * validation screen active so its copied status can be observed
-             * while the one-shot validation worker runs. This does not alter
-             * the worker, transport, or UI ownership model.
-             */
-            const esp_err_t screen_ret =
-                app_gui_request_screen(
-                    APP_GUI_SCREEN_XIAOZHI);
-
-            if (screen_ret != ESP_OK)
-            {
-                ESP_LOGW(
-                    TAG,
-                    "Failed to queue Xiaozhi validation screen: %s",
-                    esp_err_to_name(screen_ret));
-            }
-#endif
-        }
     }
 
     return ESP_OK;

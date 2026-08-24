@@ -17,9 +17,15 @@
 
 #include <stdint.h>
 #include <string.h>
+#if CONFIG_XIAOZHI_FOUNDATION_P26_WEBSOCKET_HEAP_TRACE
+#include <stdio.h>
+#endif
 
 #include "esp_event.h"
 #include "esp_heap_caps.h"
+#if CONFIG_XIAOZHI_FOUNDATION_P26_WEBSOCKET_HEAP_TRACE
+#include "esp_heap_trace.h"
+#endif
 #include "esp_log.h"
 #include "esp_mcp_engine.h"
 #include "esp_timer.h"
@@ -110,6 +116,95 @@
 
 #define XIAOZHI_FOUNDATION_P2F_RESPONSE_TIMEOUT_MS \
     30000U
+
+#define XIAOZHI_FOUNDATION_CLEANUP_SETTLE_T250_MS \
+    250U
+
+#define XIAOZHI_FOUNDATION_CLEANUP_SETTLE_T1000_MS \
+    1000U
+
+#define XIAOZHI_FOUNDATION_CLEANUP_SETTLE_T3000_MS \
+    3000U
+
+#define XIAOZHI_FOUNDATION_CLEANUP_SETTLE_T5000_MS \
+    5000U
+
+#define XIAOZHI_FOUNDATION_ATTRIBUTION_REPEAT_COUNT \
+    3U
+
+/*
+ * sdkconfig pins CONFIG_LWIP_TCP_MSL=60000 ms. lwIP releases TIME_WAIT PCBs
+ * after two MSL intervals, so this bounded diagnostic sample adds scheduler
+ * margin without changing production transport behavior.
+ */
+#define XIAOZHI_FOUNDATION_ATTRIBUTION_LONG_SETTLE_MS \
+    125000U
+
+#define XIAOZHI_FOUNDATION_ATTRIBUTION_MATERIAL_INTERNAL_BYTES \
+    256U
+
+#define XIAOZHI_FOUNDATION_ATTRIBUTION_MATERIAL_LARGEST_BYTES \
+    4096U
+
+static const char *const TAG = "XIAOZHI_FOUNDATION";
+
+#if CONFIG_XIAOZHI_FOUNDATION_P26_WEBSOCKET_HEAP_TRACE
+#define XIAOZHI_FOUNDATION_ATTRIBUTION_HEAP_TRACE_RECORD_COUNT \
+    128U
+
+static heap_trace_record_t s_xiaozhi_foundation_heap_trace_records[
+    XIAOZHI_FOUNDATION_ATTRIBUTION_HEAP_TRACE_RECORD_COUNT];
+
+static esp_err_t xiaozhi_foundation_log_heap_trace_records(size_t count)
+{
+    for (size_t index = 0U; index < count; ++index) {
+        heap_trace_record_t record = {0};
+        const esp_err_t get_ret = heap_trace_get(index, &record);
+        if (get_ret != ESP_OK) {
+            ESP_LOGE(
+                TAG,
+                "XZ_ATTR_HEAP_RECORD result=FAIL index=%u error=%s",
+                (unsigned)index,
+                esp_err_to_name(get_ret));
+            return get_ret;
+        }
+
+        char callers[384] = {0};
+        size_t offset = 0U;
+        for (size_t depth = 0U;
+             depth < CONFIG_HEAP_TRACING_STACK_DEPTH;
+             ++depth) {
+            const int written = snprintf(
+                &callers[offset],
+                sizeof(callers) - offset,
+                "%s%p",
+                (depth == 0U) ? "" : ":",
+                record.alloced_by[depth]);
+            if ((written < 0) || ((size_t)written >=
+                                  (sizeof(callers) - offset))) {
+                callers[sizeof(callers) - 1U] = '\0';
+                break;
+            }
+            offset += (size_t)written;
+        }
+
+        ESP_LOGI(
+            TAG,
+            "XZ_ATTR_HEAP_RECORD result=RETAINED index=%u size=%u "
+            "address=%p callers=%s",
+            (unsigned)index,
+            (unsigned)record.size,
+            record.address,
+            callers);
+
+        /* Yield between records; the stock bulk dump logs while holding the
+         * trace lock and can exceed the Interrupt WDT window on a slow UART. */
+        vTaskDelay(1U);
+    }
+
+    return ESP_OK;
+}
+#endif
 
 #if CONFIG_XIAOZHI_FOUNDATION_P26_LIFECYCLE_MATRIX
 #define XIAOZHI_FOUNDATION_P26_CONFIGURED_CYCLE_COUNT \
@@ -242,9 +337,6 @@ _Static_assert(
 /* Includes the terminating NUL and excludes untrusted control characters. */
 #define XIAOZHI_FOUNDATION_P2F_LOG_TEXT_BUFFER_SIZE \
     97U
-
-/* Constants ---------------------------------------------------------------- */
-static const char *const TAG = "XIAOZHI_FOUNDATION";
 
 /* Type Definitions --------------------------------------------------------- */
 /**
@@ -384,10 +476,21 @@ typedef enum {
 } xiaozhi_foundation_fault_case_t;
 
 typedef enum {
+    XIAOZHI_FOUNDATION_ATTRIBUTION_FULL_LIFECYCLE = 0,
+    XIAOZHI_FOUNDATION_ATTRIBUTION_GET_INFO,
+    XIAOZHI_FOUNDATION_ATTRIBUTION_MCP,
+    XIAOZHI_FOUNDATION_ATTRIBUTION_CHAT_INIT,
+    XIAOZHI_FOUNDATION_ATTRIBUTION_WEBSOCKET,
+    XIAOZHI_FOUNDATION_ATTRIBUTION_P2E,
+    XIAOZHI_FOUNDATION_ATTRIBUTION_COUNT,
+} xiaozhi_foundation_attribution_stage_t;
+
+typedef enum {
     XIAOZHI_FOUNDATION_VALIDATION_P2E_AUDIO_CHANNEL = 0,
     XIAOZHI_FOUNDATION_VALIDATION_P2F_AUDIO_E2E,
     XIAOZHI_FOUNDATION_VALIDATION_P26_LIFECYCLE_MATRIX,
     XIAOZHI_FOUNDATION_VALIDATION_P26_FAULT_MATRIX,
+    XIAOZHI_FOUNDATION_VALIDATION_P26_RESOURCE_ATTRIBUTION,
 } xiaozhi_foundation_validation_checkpoint_t;
 
 /**
@@ -403,8 +506,9 @@ typedef struct {
     bool fault_injected;
     xiaozhi_foundation_validation_counters_t counters;
     xiaozhi_foundation_validation_result_t errors;
-    xiaozhi_foundation_resource_snapshot_t before_xiaozhi;
-    xiaozhi_foundation_resource_snapshot_t after_cleanup;
+    xiaozhi_foundation_resource_snapshot_t steady_state_baseline;
+    xiaozhi_foundation_resource_snapshot_t cleanup_t0;
+    xiaozhi_foundation_resource_snapshot_t cleanup_t5000;
 } xiaozhi_foundation_lifecycle_cycle_result_t;
 
 /**
@@ -429,6 +533,10 @@ typedef struct {
     uint32_t chat_error_count;
 
     xiaozhi_foundation_resource_minimums_t resource_minimums;
+    bool resource_trend_valid;
+    xiaozhi_foundation_resource_snapshot_t first_steady_state_baseline;
+    xiaozhi_foundation_resource_snapshot_t first_cleanup_t5000;
+    xiaozhi_foundation_resource_snapshot_t last_cleanup_t5000;
 } xiaozhi_foundation_lifecycle_aggregate_t;
 
 /** @brief Bounded aggregate for selected Phase 12.6 fault/recovery cases. */
@@ -562,13 +670,41 @@ static void xiaozhi_foundation_log_p2f_evidence(
 
 static void xiaozhi_foundation_capture_resource_snapshot(
     xiaozhi_foundation_resource_snapshot_t *snapshot,
-    const char *checkpoint);
+    const char *checkpoint,
+    bool log_snapshot);
+
+static bool xiaozhi_foundation_should_log_cycle_resources(
+    uint32_t cycle);
+
+static void xiaozhi_foundation_capture_cleanup_settle_samples(
+    uint32_t cycle,
+    bool log_snapshots,
+    xiaozhi_foundation_resource_snapshot_t *cleanup_t0,
+    xiaozhi_foundation_resource_snapshot_t *cleanup_t5000);
+
+static void xiaozhi_foundation_log_resource_delta(
+    const char *label,
+    const xiaozhi_foundation_resource_snapshot_t *before,
+    const xiaozhi_foundation_resource_snapshot_t *after);
+
+static void xiaozhi_foundation_log_cycle_resource_trend(
+    uint32_t cycle,
+    const xiaozhi_foundation_resource_snapshot_t *baseline,
+    const xiaozhi_foundation_resource_snapshot_t *cleanup_t0,
+    const xiaozhi_foundation_resource_snapshot_t *cleanup_t5000);
+
+static void xiaozhi_foundation_log_intercycle_resource_trend(
+    uint32_t cycle,
+    const xiaozhi_foundation_resource_snapshot_t *previous_cleanup_t5000,
+    const xiaozhi_foundation_resource_snapshot_t *current_baseline);
 
 static esp_err_t xiaozhi_foundation_log_validation_summary(
     xiaozhi_foundation_validation_ctx_t *ctx,
     const char *checkpoint_name,
     const xiaozhi_foundation_resource_snapshot_t *before,
-    const xiaozhi_foundation_resource_snapshot_t *after,
+    const xiaozhi_foundation_resource_snapshot_t *cleanup_t0,
+    const xiaozhi_foundation_resource_snapshot_t *cleanup_t5000,
+    bool log_resources,
     xiaozhi_foundation_lifecycle_cycle_result_t *out_cycle_result);
 
 static void xiaozhi_foundation_record_primary_error(
@@ -648,6 +784,9 @@ static const char *xiaozhi_foundation_validation_checkpoint_to_string(
 static const char *xiaozhi_foundation_fault_case_to_string(
     xiaozhi_foundation_fault_case_t fault_case);
 
+static const char *xiaozhi_foundation_attribution_stage_to_string(
+    xiaozhi_foundation_attribution_stage_t stage);
+
 static const char *xiaozhi_foundation_tts_state_to_string(
     esp_xiaozhi_chat_tts_state_kind_t state);
 
@@ -664,6 +803,7 @@ static esp_err_t xiaozhi_foundation_validate_transport(
 static esp_err_t xiaozhi_foundation_validate_transport_cycle(
     xiaozhi_foundation_transport_t requested,
     xiaozhi_foundation_validation_checkpoint_t checkpoint,
+    xiaozhi_foundation_attribution_stage_t attribution_stage,
     xiaozhi_foundation_fault_case_t fault_case,
     uint32_t cycle,
     uint32_t generation,
@@ -673,6 +813,9 @@ static esp_err_t xiaozhi_foundation_validate_lifecycle_matrix(
     xiaozhi_foundation_transport_t requested);
 
 static esp_err_t xiaozhi_foundation_validate_fault_matrix(
+    xiaozhi_foundation_transport_t requested);
+
+static esp_err_t xiaozhi_foundation_validate_resource_attribution_matrix(
     xiaozhi_foundation_transport_t requested);
 
 static uint32_t xiaozhi_foundation_next_lifecycle_generation(void);
@@ -1108,7 +1251,8 @@ static esp_err_t xiaozhi_foundation_maybe_inject_fault(
 
 static void xiaozhi_foundation_capture_resource_snapshot(
     xiaozhi_foundation_resource_snapshot_t *snapshot,
-    const char *checkpoint)
+    const char *checkpoint,
+    bool log_snapshot)
 {
     if ((snapshot == NULL) || (checkpoint == NULL)) {
         return;
@@ -1134,6 +1278,10 @@ static void xiaozhi_foundation_capture_resource_snapshot(
     snapshot->worker_stack_high_water_words =
         uxTaskGetStackHighWaterMark(NULL);
 
+    if (!log_snapshot) {
+        return;
+    }
+
     ESP_LOGI(
         TAG,
         "RESOURCE[%s] internal_free_bytes=%u internal_min_free_bytes=%u "
@@ -1154,15 +1302,208 @@ static void xiaozhi_foundation_capture_resource_snapshot(
         (unsigned)snapshot->worker_stack_high_water_words);
 }
 
+static bool xiaozhi_foundation_should_log_cycle_resources(
+    uint32_t cycle)
+{
+    return (cycle == 0U) ||
+           (cycle <= 20U) ||
+           ((cycle % 10U) == 0U) ||
+           (cycle == XIAOZHI_FOUNDATION_P26_CONFIGURED_CYCLE_COUNT);
+}
+
+static void xiaozhi_foundation_capture_cleanup_settle_samples(
+    uint32_t cycle,
+    bool log_snapshots,
+    xiaozhi_foundation_resource_snapshot_t *cleanup_t0,
+    xiaozhi_foundation_resource_snapshot_t *cleanup_t5000)
+{
+    if ((cleanup_t0 == NULL) || (cleanup_t5000 == NULL)) {
+        return;
+    }
+
+    xiaozhi_foundation_resource_snapshot_t intermediate = {0};
+
+    if (log_snapshots && (cycle != 0U)) {
+        ESP_LOGI(TAG, "XZ_LC_RESOURCE cycle=%u phase=CLEANUP_T+0_MS",
+                 (unsigned)cycle);
+    }
+    xiaozhi_foundation_capture_resource_snapshot(
+        cleanup_t0,
+        "CLEANUP_T+0_MS",
+        log_snapshots);
+
+    vTaskDelay(pdMS_TO_TICKS(XIAOZHI_FOUNDATION_CLEANUP_SETTLE_T250_MS));
+    if (log_snapshots && (cycle != 0U)) {
+        ESP_LOGI(TAG, "XZ_LC_RESOURCE cycle=%u phase=CLEANUP_T+250_MS",
+                 (unsigned)cycle);
+    }
+    xiaozhi_foundation_capture_resource_snapshot(
+        &intermediate,
+        "CLEANUP_T+250_MS",
+        log_snapshots);
+
+    vTaskDelay(pdMS_TO_TICKS(
+        XIAOZHI_FOUNDATION_CLEANUP_SETTLE_T1000_MS -
+        XIAOZHI_FOUNDATION_CLEANUP_SETTLE_T250_MS));
+    if (log_snapshots && (cycle != 0U)) {
+        ESP_LOGI(TAG, "XZ_LC_RESOURCE cycle=%u phase=CLEANUP_T+1000_MS",
+                 (unsigned)cycle);
+    }
+    xiaozhi_foundation_capture_resource_snapshot(
+        &intermediate,
+        "CLEANUP_T+1000_MS",
+        log_snapshots);
+
+    vTaskDelay(pdMS_TO_TICKS(
+        XIAOZHI_FOUNDATION_CLEANUP_SETTLE_T3000_MS -
+        XIAOZHI_FOUNDATION_CLEANUP_SETTLE_T1000_MS));
+    if (log_snapshots && (cycle != 0U)) {
+        ESP_LOGI(TAG, "XZ_LC_RESOURCE cycle=%u phase=CLEANUP_T+3000_MS",
+                 (unsigned)cycle);
+    }
+    xiaozhi_foundation_capture_resource_snapshot(
+        &intermediate,
+        "CLEANUP_T+3000_MS",
+        log_snapshots);
+
+    vTaskDelay(pdMS_TO_TICKS(
+        XIAOZHI_FOUNDATION_CLEANUP_SETTLE_T5000_MS -
+        XIAOZHI_FOUNDATION_CLEANUP_SETTLE_T3000_MS));
+    if (log_snapshots && (cycle != 0U)) {
+        ESP_LOGI(TAG, "XZ_LC_RESOURCE cycle=%u phase=CLEANUP_T+5000_MS",
+                 (unsigned)cycle);
+    }
+    xiaozhi_foundation_capture_resource_snapshot(
+        cleanup_t5000,
+        "CLEANUP_T+5000_MS",
+        log_snapshots);
+}
+
+static void xiaozhi_foundation_log_resource_delta(
+    const char *label,
+    const xiaozhi_foundation_resource_snapshot_t *before,
+    const xiaozhi_foundation_resource_snapshot_t *after)
+{
+    if ((label == NULL) || (before == NULL) || (after == NULL)) {
+        return;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "RESOURCE DELTA %s internal_free_bytes=%lld "
+        "internal_min_free_bytes=%lld internal_largest_block_bytes=%lld "
+        "dma_free_bytes=%lld dma_min_free_bytes=%lld "
+        "dma_largest_block_bytes=%lld psram_free_bytes=%lld "
+        "psram_min_free_bytes=%lld psram_largest_block_bytes=%lld "
+        "worker_stack_hwm_words=%lld",
+        label,
+        (long long)after->internal_free_bytes -
+            (long long)before->internal_free_bytes,
+        (long long)after->internal_min_free_bytes -
+            (long long)before->internal_min_free_bytes,
+        (long long)after->internal_largest_block_bytes -
+            (long long)before->internal_largest_block_bytes,
+        (long long)after->dma_free_bytes -
+            (long long)before->dma_free_bytes,
+        (long long)after->dma_min_free_bytes -
+            (long long)before->dma_min_free_bytes,
+        (long long)after->dma_largest_block_bytes -
+            (long long)before->dma_largest_block_bytes,
+        (long long)after->psram_free_bytes -
+            (long long)before->psram_free_bytes,
+        (long long)after->psram_min_free_bytes -
+            (long long)before->psram_min_free_bytes,
+        (long long)after->psram_largest_block_bytes -
+            (long long)before->psram_largest_block_bytes,
+        (long long)after->worker_stack_high_water_words -
+            (long long)before->worker_stack_high_water_words);
+}
+
+static void xiaozhi_foundation_log_cycle_resource_trend(
+    uint32_t cycle,
+    const xiaozhi_foundation_resource_snapshot_t *baseline,
+    const xiaozhi_foundation_resource_snapshot_t *cleanup_t0,
+    const xiaozhi_foundation_resource_snapshot_t *cleanup_t5000)
+{
+    if ((baseline == NULL) || (cleanup_t0 == NULL) ||
+        (cleanup_t5000 == NULL) ||
+        !xiaozhi_foundation_should_log_cycle_resources(cycle)) {
+        return;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "XZ_LC_TREND cycle=%u internal_baseline=%u internal_t0=%u "
+        "internal_t5000=%u internal_delta_t0=%lld "
+        "internal_delta_t5000=%lld largest_baseline=%u largest_t0=%u "
+        "largest_t5000=%u largest_delta_t0=%lld largest_delta_t5000=%lld "
+        "dma_baseline=%u dma_t0=%u dma_t5000=%u "
+        "psram_baseline=%u psram_t0=%u psram_t5000=%u",
+        (unsigned)cycle,
+        (unsigned)baseline->internal_free_bytes,
+        (unsigned)cleanup_t0->internal_free_bytes,
+        (unsigned)cleanup_t5000->internal_free_bytes,
+        (long long)cleanup_t0->internal_free_bytes -
+            (long long)baseline->internal_free_bytes,
+        (long long)cleanup_t5000->internal_free_bytes -
+            (long long)baseline->internal_free_bytes,
+        (unsigned)baseline->internal_largest_block_bytes,
+        (unsigned)cleanup_t0->internal_largest_block_bytes,
+        (unsigned)cleanup_t5000->internal_largest_block_bytes,
+        (long long)cleanup_t0->internal_largest_block_bytes -
+            (long long)baseline->internal_largest_block_bytes,
+        (long long)cleanup_t5000->internal_largest_block_bytes -
+            (long long)baseline->internal_largest_block_bytes,
+        (unsigned)baseline->dma_free_bytes,
+        (unsigned)cleanup_t0->dma_free_bytes,
+        (unsigned)cleanup_t5000->dma_free_bytes,
+        (unsigned)baseline->psram_free_bytes,
+        (unsigned)cleanup_t0->psram_free_bytes,
+        (unsigned)cleanup_t5000->psram_free_bytes);
+}
+
+static void xiaozhi_foundation_log_intercycle_resource_trend(
+    uint32_t cycle,
+    const xiaozhi_foundation_resource_snapshot_t *previous_cleanup_t5000,
+    const xiaozhi_foundation_resource_snapshot_t *current_baseline)
+{
+    if ((previous_cleanup_t5000 == NULL) || (current_baseline == NULL) ||
+        !xiaozhi_foundation_should_log_cycle_resources(cycle)) {
+        return;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "XZ_LC_INTERCYCLE cycle=%u baseline_minus_previous_t5000 "
+        "internal_free_bytes=%lld internal_largest_block_bytes=%lld "
+        "dma_free_bytes=%lld dma_largest_block_bytes=%lld "
+        "psram_free_bytes=%lld psram_largest_block_bytes=%lld",
+        (unsigned)cycle,
+        (long long)current_baseline->internal_free_bytes -
+            (long long)previous_cleanup_t5000->internal_free_bytes,
+        (long long)current_baseline->internal_largest_block_bytes -
+            (long long)previous_cleanup_t5000->internal_largest_block_bytes,
+        (long long)current_baseline->dma_free_bytes -
+            (long long)previous_cleanup_t5000->dma_free_bytes,
+        (long long)current_baseline->dma_largest_block_bytes -
+            (long long)previous_cleanup_t5000->dma_largest_block_bytes,
+        (long long)current_baseline->psram_free_bytes -
+            (long long)previous_cleanup_t5000->psram_free_bytes,
+        (long long)current_baseline->psram_largest_block_bytes -
+            (long long)previous_cleanup_t5000->psram_largest_block_bytes);
+}
+
 static esp_err_t xiaozhi_foundation_log_validation_summary(
     xiaozhi_foundation_validation_ctx_t *ctx,
     const char *checkpoint_name,
     const xiaozhi_foundation_resource_snapshot_t *before,
-    const xiaozhi_foundation_resource_snapshot_t *after,
+    const xiaozhi_foundation_resource_snapshot_t *cleanup_t0,
+    const xiaozhi_foundation_resource_snapshot_t *cleanup_t5000,
+    bool log_resources,
     xiaozhi_foundation_lifecycle_cycle_result_t *out_cycle_result)
 {
     if ((ctx == NULL) || (checkpoint_name == NULL) || (before == NULL) ||
-        (after == NULL)) {
+        (cleanup_t0 == NULL) || (cleanup_t5000 == NULL)) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -1195,8 +1536,9 @@ static esp_err_t xiaozhi_foundation_log_validation_summary(
         out_cycle_result->fault_injected = ctx->fault_injected;
         out_cycle_result->counters = counters;
         out_cycle_result->errors = result;
-        out_cycle_result->before_xiaozhi = *before;
-        out_cycle_result->after_cleanup = *after;
+        out_cycle_result->steady_state_baseline = *before;
+        out_cycle_result->cleanup_t0 = *cleanup_t0;
+        out_cycle_result->cleanup_t5000 = *cleanup_t5000;
     }
 
     ESP_LOGI(
@@ -1235,34 +1577,16 @@ static esp_err_t xiaozhi_foundation_log_validation_summary(
         (unsigned)counters.tts_stop_count,
         (unsigned)counters.audio_rx_callback_count,
         (unsigned long long)counters.audio_rx_total_bytes);
-    ESP_LOGI(
-        TAG,
-        "RESOURCE DELTA after_cleanup-before_xiaozhi internal_free_bytes=%lld "
-        "internal_min_free_bytes=%lld internal_largest_block_bytes=%lld "
-        "dma_free_bytes=%lld dma_min_free_bytes=%lld "
-        "dma_largest_block_bytes=%lld psram_free_bytes=%lld "
-        "psram_min_free_bytes=%lld psram_largest_block_bytes=%lld "
-        "worker_stack_hwm_words=%lld",
-        (long long)after->internal_free_bytes -
-            (long long)before->internal_free_bytes,
-        (long long)after->internal_min_free_bytes -
-            (long long)before->internal_min_free_bytes,
-        (long long)after->internal_largest_block_bytes -
-            (long long)before->internal_largest_block_bytes,
-        (long long)after->dma_free_bytes -
-            (long long)before->dma_free_bytes,
-        (long long)after->dma_min_free_bytes -
-            (long long)before->dma_min_free_bytes,
-        (long long)after->dma_largest_block_bytes -
-            (long long)before->dma_largest_block_bytes,
-        (long long)after->psram_free_bytes -
-            (long long)before->psram_free_bytes,
-        (long long)after->psram_min_free_bytes -
-            (long long)before->psram_min_free_bytes,
-        (long long)after->psram_largest_block_bytes -
-            (long long)before->psram_largest_block_bytes,
-        (long long)after->worker_stack_high_water_words -
-            (long long)before->worker_stack_high_water_words);
+    if (log_resources) {
+        xiaozhi_foundation_log_resource_delta(
+            "cleanup_t0-steady_state_baseline",
+            before,
+            cleanup_t0);
+        xiaozhi_foundation_log_resource_delta(
+            "cleanup_t5000-steady_state_baseline",
+            before,
+            cleanup_t5000);
+    }
 
     return final_result;
 }
@@ -1692,7 +2016,9 @@ static void xiaozhi_foundation_log_protocol_diagnostics(
 static xiaozhi_foundation_validation_checkpoint_t
 xiaozhi_foundation_get_validation_checkpoint(void)
 {
-#if XIAOZHI_FOUNDATION_P26_FAULT_MATRIX_ACTIVE
+#if CONFIG_XIAOZHI_FOUNDATION_P26_RESOURCE_ATTRIBUTION_MATRIX
+    return XIAOZHI_FOUNDATION_VALIDATION_P26_RESOURCE_ATTRIBUTION;
+#elif XIAOZHI_FOUNDATION_P26_FAULT_MATRIX_ACTIVE
     return XIAOZHI_FOUNDATION_VALIDATION_P26_FAULT_MATRIX;
 #elif CONFIG_XIAOZHI_FOUNDATION_P26_LIFECYCLE_MATRIX
     return XIAOZHI_FOUNDATION_VALIDATION_P26_LIFECYCLE_MATRIX;
@@ -1718,6 +2044,9 @@ static const char *xiaozhi_foundation_validation_checkpoint_to_string(
 
     case XIAOZHI_FOUNDATION_VALIDATION_P26_FAULT_MATRIX:
         return "P2.6-FAULT";
+
+    case XIAOZHI_FOUNDATION_VALIDATION_P26_RESOURCE_ATTRIBUTION:
+        return "P2.6-ATTR";
 
     default:
         return "UNKNOWN";
@@ -2539,6 +2868,7 @@ static void xiaozhi_foundation_probe_task(void *argument)
 static esp_err_t xiaozhi_foundation_validate_transport_cycle(
     xiaozhi_foundation_transport_t requested,
     xiaozhi_foundation_validation_checkpoint_t checkpoint,
+    xiaozhi_foundation_attribution_stage_t attribution_stage,
     xiaozhi_foundation_fault_case_t fault_case,
     uint32_t cycle,
     uint32_t generation,
@@ -2552,14 +2882,45 @@ static esp_err_t xiaozhi_foundation_validate_transport_cycle(
         (requested > XIAOZHI_FOUNDATION_TRANSPORT_WEBSOCKET)) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (attribution_stage >= XIAOZHI_FOUNDATION_ATTRIBUTION_COUNT) {
+        return ESP_ERR_INVALID_ARG;
+    }
 
     const char *const checkpoint_name =
         xiaozhi_foundation_validation_checkpoint_to_string(checkpoint);
+    const bool full_lifecycle =
+        (attribution_stage ==
+         XIAOZHI_FOUNDATION_ATTRIBUTION_FULL_LIFECYCLE);
+    const bool needs_get_info =
+        full_lifecycle ||
+        (attribution_stage == XIAOZHI_FOUNDATION_ATTRIBUTION_GET_INFO);
+    const bool needs_mcp =
+        full_lifecycle ||
+        (attribution_stage >= XIAOZHI_FOUNDATION_ATTRIBUTION_MCP);
+    const bool needs_chat_init =
+        full_lifecycle ||
+        (attribution_stage >= XIAOZHI_FOUNDATION_ATTRIBUTION_CHAT_INIT);
+    const bool needs_websocket =
+        full_lifecycle ||
+        (attribution_stage >= XIAOZHI_FOUNDATION_ATTRIBUTION_WEBSOCKET);
+    const bool needs_p2e =
+        full_lifecycle ||
+        (attribution_stage == XIAOZHI_FOUNDATION_ATTRIBUTION_P2E);
+    const bool log_resource_snapshots =
+        xiaozhi_foundation_should_log_cycle_resources(cycle);
 
-    if (cycle != 0U) {
+    if ((cycle != 0U) && full_lifecycle) {
         ESP_LOGI(
             TAG,
             "XZ_LC_BEGIN cycle=%u generation=%u",
+            (unsigned)cycle,
+            (unsigned)generation);
+    } else if ((cycle != 0U) && !full_lifecycle) {
+        ESP_LOGI(
+            TAG,
+            "XZ_ATTR_CYCLE_BEGIN stage=%s cycle=%u generation=%u",
+            xiaozhi_foundation_attribution_stage_to_string(
+                attribution_stage),
             (unsigned)cycle,
             (unsigned)generation);
     }
@@ -2581,8 +2942,9 @@ static esp_err_t xiaozhi_foundation_validate_transport_cycle(
             .last_error = ESP_OK,
         },
     };
-    xiaozhi_foundation_resource_snapshot_t before_xiaozhi = {0};
-    xiaozhi_foundation_resource_snapshot_t after_cleanup = {0};
+    xiaozhi_foundation_resource_snapshot_t steady_state_baseline = {0};
+    xiaozhi_foundation_resource_snapshot_t cleanup_t0 = {0};
+    xiaozhi_foundation_resource_snapshot_t cleanup_t5000 = {0};
     esp_xiaozhi_chat_info_t info = {0};
     bool info_release_required = false;
     esp_mcp_t *mcp = NULL;
@@ -2600,75 +2962,92 @@ static esp_err_t xiaozhi_foundation_validate_transport_cycle(
     if (ctx.upstream_log_guard.active) {
         ESP_LOGI(TAG, "Upstream raw-payload log tags: SUPPRESSED");
     }
-    if (cycle != 0U) {
-        ESP_LOGI(TAG, "XZ_LC_RESOURCE cycle=%u phase=BEFORE_XIAOZHI",
+    if (log_resource_snapshots && (cycle != 0U)) {
+        ESP_LOGI(TAG, "XZ_LC_RESOURCE cycle=%u phase=STEADY_STATE_BASELINE",
                  (unsigned)cycle);
     }
     xiaozhi_foundation_capture_resource_snapshot(
-        &before_xiaozhi,
-        "BEFORE_XIAOZHI");
+        &steady_state_baseline,
+        "STEADY_STATE_BASELINE",
+        log_resource_snapshots);
     xiaozhi_foundation_publish_ui_status(&ctx);
 
-    ret = esp_xiaozhi_chat_get_info(&info);
-    /* The public API can allocate partial response fields even on failure. */
-    info_release_required = true;
+    if (needs_get_info) {
+        ret = esp_xiaozhi_chat_get_info(&info);
+        /* The public API can allocate partial response fields on failure. */
+        info_release_required = true;
 
-    if (ret != ESP_OK) {
-        ESP_LOGE(
+        if (ret != ESP_OK) {
+            ESP_LOGE(
+                TAG,
+                "Failed to get Xiaozhi service info: %s",
+                esp_err_to_name(ret));
+            goto cleanup;
+        }
+
+        /*
+         * The project deliberately ignores server-provided MQTT capability.
+         * Copy only the WebSocket fact needed by the selected architecture.
+         */
+        ctx.websocket_available =
+            info.has_websocket_config;
+
+        ret = xiaozhi_foundation_maybe_inject_fault(
+            &ctx,
+            XIAOZHI_FOUNDATION_FAULT_AFTER_GET_INFO);
+        if (ret != ESP_OK) {
+            goto cleanup;
+        }
+
+        ret = esp_xiaozhi_chat_free_info(&info);
+        info_release_required = false;
+        memset(&info, 0, sizeof(info));
+        if (ret != ESP_OK) {
+            ESP_LOGW(
+                TAG,
+                "Failed to free Xiaozhi service info: %s",
+                esp_err_to_name(ret));
+            goto cleanup;
+        }
+
+        ESP_LOGI(
             TAG,
-            "Failed to get Xiaozhi service info: %s",
-            esp_err_to_name(ret));
-        goto cleanup;
+            "WebSocket available: %s",
+            ctx.websocket_available ? "yes" : "no");
+
+        if (!needs_mcp) {
+            goto cleanup;
+        }
     }
 
-    /*
-     * The project deliberately ignores server-provided MQTT capability. Copy
-     * only the WebSocket fact needed by the selected architecture before
-     * releasing esp_xiaozhi-owned response storage.
-     */
-    ctx.websocket_available =
-        info.has_websocket_config;
+    if (needs_websocket) {
+        /*
+         * Attribution stages D/E reuse the WebSocket configuration persisted
+         * by Stage A. This avoids folding a fresh HTTP/TLS get_info lifecycle
+         * into their resource delta.
+         */
+        if (!needs_get_info) {
+            ctx.websocket_available = true;
+        }
 
-    ret = xiaozhi_foundation_maybe_inject_fault(
-        &ctx,
-        XIAOZHI_FOUNDATION_FAULT_AFTER_GET_INFO);
-    if (ret != ESP_OK) {
-        goto cleanup;
-    }
+        ret = xiaozhi_foundation_select_transport(
+            &ctx,
+            &selected_transport);
 
-    ret = esp_xiaozhi_chat_free_info(&info);
-    info_release_required = false;
-    memset(&info, 0, sizeof(info));
-    if (ret != ESP_OK) {
-        ESP_LOGW(
+        if (ret != ESP_OK) {
+            ESP_LOGE(
+                TAG,
+                "No usable Xiaozhi WebSocket transport: %s",
+                esp_err_to_name(ret));
+            goto cleanup;
+        }
+
+        ESP_LOGI(
             TAG,
-            "Failed to free Xiaozhi service info: %s",
-            esp_err_to_name(ret));
-        goto cleanup;
+            "Transport selected: %s",
+            xiaozhi_foundation_transport_to_string(
+                selected_transport));
     }
-
-    ESP_LOGI(
-        TAG,
-        "WebSocket available: %s",
-        ctx.websocket_available ? "yes" : "no");
-
-    ret = xiaozhi_foundation_select_transport(
-        &ctx,
-        &selected_transport);
-
-    if (ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
-            "No usable Xiaozhi WebSocket transport: %s",
-            esp_err_to_name(ret));
-        goto cleanup;
-    }
-
-    ESP_LOGI(
-        TAG,
-        "Transport selected: %s",
-        xiaozhi_foundation_transport_to_string(
-            selected_transport));
 
     ret = esp_mcp_create(&mcp);
     if (ret != ESP_OK) {
@@ -2685,6 +3064,10 @@ static esp_err_t xiaozhi_foundation_validate_transport_cycle(
         &ctx,
         XIAOZHI_FOUNDATION_FAULT_AFTER_MCP_CREATE);
     if (ret != ESP_OK) {
+        goto cleanup;
+    }
+
+    if (!needs_chat_init) {
         goto cleanup;
     }
 
@@ -2748,12 +3131,17 @@ static esp_err_t xiaozhi_foundation_validate_transport_cycle(
     ESP_LOGI(TAG, "chat_init: OK");
     xiaozhi_foundation_capture_resource_snapshot(
         &(xiaozhi_foundation_resource_snapshot_t){0},
-        "AFTER_CHAT_INIT");
+        "AFTER_CHAT_INIT",
+        log_resource_snapshots);
 
     ret = xiaozhi_foundation_maybe_inject_fault(
         &ctx,
         XIAOZHI_FOUNDATION_FAULT_AFTER_CHAT_INIT);
     if (ret != ESP_OK) {
+        goto cleanup;
+    }
+
+    if (!needs_websocket) {
         goto cleanup;
     }
 
@@ -2821,7 +3209,12 @@ static esp_err_t xiaozhi_foundation_validate_transport_cycle(
     ESP_LOGI(TAG, "WebSocket connected");
     xiaozhi_foundation_capture_resource_snapshot(
         &(xiaozhi_foundation_resource_snapshot_t){0},
-        "AFTER_CONNECTED");
+        "AFTER_CONNECTED",
+        log_resource_snapshots);
+
+    if (!needs_p2e) {
+        goto cleanup;
+    }
 
     if (checkpoint != XIAOZHI_FOUNDATION_VALIDATION_P2F_AUDIO_E2E) {
         ret = xiaozhi_foundation_validate_p2e_audio_channel(
@@ -2867,7 +3260,8 @@ cleanup:
 
     xiaozhi_foundation_capture_resource_snapshot(
         &(xiaozhi_foundation_resource_snapshot_t){0},
-        "AFTER_VALIDATION");
+        "AFTER_VALIDATION",
+        log_resource_snapshots);
 
     /*
      * Keep the direct protocol-callback context and EventGroup alive until
@@ -2959,18 +3353,23 @@ cleanup:
         ctx.events = NULL;
     }
 
-    if (cycle != 0U) {
-        ESP_LOGI(TAG, "XZ_LC_RESOURCE cycle=%u phase=AFTER_CLEANUP",
-                 (unsigned)cycle);
-    }
-    xiaozhi_foundation_capture_resource_snapshot(
-        &after_cleanup,
-        "AFTER_CLEANUP");
+    xiaozhi_foundation_capture_cleanup_settle_samples(
+        cycle,
+        log_resource_snapshots,
+        &cleanup_t0,
+        &cleanup_t5000);
+    xiaozhi_foundation_log_cycle_resource_trend(
+        cycle,
+        &steady_state_baseline,
+        &cleanup_t0,
+        &cleanup_t5000);
     const esp_err_t final_ret = xiaozhi_foundation_log_validation_summary(
         &ctx,
         checkpoint_name,
-        &before_xiaozhi,
-        &after_cleanup,
+        &steady_state_baseline,
+        &cleanup_t0,
+        &cleanup_t5000,
+        log_resource_snapshots,
         out_cycle_result);
 
     xiaozhi_foundation_restore_upstream_payload_logs(&ctx);
@@ -2999,7 +3398,7 @@ cleanup:
                  esp_err_to_name(final_ret));
     }
 
-    if (cycle != 0U) {
+    if ((cycle != 0U) && full_lifecycle) {
         if (final_ret == ESP_OK) {
             ESP_LOGI(TAG, "XZ_LC_END cycle=%u result=PASS",
                      (unsigned)cycle);
@@ -3008,6 +3407,23 @@ cleanup:
                      "XZ_LC_END cycle=%u result=FAIL error=%s",
                      (unsigned)cycle,
                      esp_err_to_name(final_ret));
+        }
+    } else if ((cycle != 0U) && !full_lifecycle) {
+        if (final_ret == ESP_OK) {
+            ESP_LOGI(
+                TAG,
+                "XZ_ATTR_CYCLE_END stage=%s cycle=%u result=PASS",
+                xiaozhi_foundation_attribution_stage_to_string(
+                    attribution_stage),
+                (unsigned)cycle);
+        } else {
+            ESP_LOGE(
+                TAG,
+                "XZ_ATTR_CYCLE_END stage=%s cycle=%u result=FAIL error=%s",
+                xiaozhi_foundation_attribution_stage_to_string(
+                    attribution_stage),
+                (unsigned)cycle,
+                esp_err_to_name(final_ret));
         }
     }
 
@@ -3140,10 +3556,21 @@ static void xiaozhi_foundation_record_lifecycle_cycle(
 
     xiaozhi_foundation_record_resource_minimums(
         &aggregate->resource_minimums,
-        &cycle_result->before_xiaozhi);
+        &cycle_result->steady_state_baseline);
     xiaozhi_foundation_record_resource_minimums(
         &aggregate->resource_minimums,
-        &cycle_result->after_cleanup);
+        &cycle_result->cleanup_t0);
+    xiaozhi_foundation_record_resource_minimums(
+        &aggregate->resource_minimums,
+        &cycle_result->cleanup_t5000);
+
+    if (!aggregate->resource_trend_valid) {
+        aggregate->first_steady_state_baseline =
+            cycle_result->steady_state_baseline;
+        aggregate->first_cleanup_t5000 = cycle_result->cleanup_t5000;
+        aggregate->resource_trend_valid = true;
+    }
+    aggregate->last_cleanup_t5000 = cycle_result->cleanup_t5000;
 
     if (cycle_result->final_result == ESP_OK) {
         aggregate->passed_cycles = xiaozhi_foundation_saturating_add_u32(
@@ -3159,6 +3586,33 @@ static void xiaozhi_foundation_record_lifecycle_cycle(
     if (aggregate->first_failed_cycle == 0U) {
         aggregate->first_failed_cycle = cycle;
         aggregate->first_failure_error = cycle_result->final_result;
+    }
+}
+
+static const char *xiaozhi_foundation_attribution_stage_to_string(
+    xiaozhi_foundation_attribution_stage_t stage)
+{
+    switch (stage) {
+    case XIAOZHI_FOUNDATION_ATTRIBUTION_FULL_LIFECYCLE:
+        return "FULL";
+
+    case XIAOZHI_FOUNDATION_ATTRIBUTION_GET_INFO:
+        return "A_GET_INFO";
+
+    case XIAOZHI_FOUNDATION_ATTRIBUTION_MCP:
+        return "B_MCP";
+
+    case XIAOZHI_FOUNDATION_ATTRIBUTION_CHAT_INIT:
+        return "C_CHAT_INIT";
+
+    case XIAOZHI_FOUNDATION_ATTRIBUTION_WEBSOCKET:
+        return "D_WEBSOCKET";
+
+    case XIAOZHI_FOUNDATION_ATTRIBUTION_P2E:
+        return "E_P2E";
+
+    default:
+        return "UNKNOWN";
     }
 }
 
@@ -3241,6 +3695,12 @@ static void xiaozhi_foundation_log_lifecycle_summary(
         (unsigned)aggregate->chat_error_count,
         (unsigned)aggregate->audio_channel_opened_count,
         (unsigned)aggregate->audio_channel_closed_count);
+    if (!aggregate->resource_minimums.valid ||
+        !aggregate->resource_trend_valid) {
+        ESP_LOGW(TAG, "XZ_LC_RESOURCE result=NOT_AVAILABLE");
+        return;
+    }
+
     ESP_LOGI(
         TAG,
         "XZ_LC_RESOURCE_MIN internal_free_bytes=%u "
@@ -3254,6 +3714,34 @@ static void xiaozhi_foundation_log_lifecycle_summary(
         (unsigned)aggregate->resource_minimums.psram_free_bytes,
         (unsigned)aggregate->resource_minimums.psram_largest_block_bytes,
         (unsigned)aggregate->resource_minimums.worker_stack_high_water_words);
+    ESP_LOGI(
+        TAG,
+        "XZ_LC_RESOURCE_TREND_SUMMARY first_baseline_internal=%u "
+        "first_t5000_internal=%u last_t5000_internal=%u "
+        "last_minus_first_t5000_internal=%lld "
+        "first_baseline_largest=%u first_t5000_largest=%u "
+        "last_t5000_largest=%u last_minus_first_t5000_largest=%lld "
+        "last_minus_first_t5000_dma=%lld "
+        "last_minus_first_t5000_psram=%lld",
+        (unsigned)aggregate->first_steady_state_baseline.internal_free_bytes,
+        (unsigned)aggregate->first_cleanup_t5000.internal_free_bytes,
+        (unsigned)aggregate->last_cleanup_t5000.internal_free_bytes,
+        (long long)aggregate->last_cleanup_t5000.internal_free_bytes -
+            (long long)aggregate->first_cleanup_t5000.internal_free_bytes,
+        (unsigned)aggregate->first_steady_state_baseline
+            .internal_largest_block_bytes,
+        (unsigned)aggregate->first_cleanup_t5000
+            .internal_largest_block_bytes,
+        (unsigned)aggregate->last_cleanup_t5000
+            .internal_largest_block_bytes,
+        (long long)aggregate->last_cleanup_t5000
+            .internal_largest_block_bytes -
+            (long long)aggregate->first_cleanup_t5000
+                .internal_largest_block_bytes,
+        (long long)aggregate->last_cleanup_t5000.dma_free_bytes -
+            (long long)aggregate->first_cleanup_t5000.dma_free_bytes,
+        (long long)aggregate->last_cleanup_t5000.psram_free_bytes -
+            (long long)aggregate->first_cleanup_t5000.psram_free_bytes);
 }
 
 static esp_err_t xiaozhi_foundation_validate_lifecycle_matrix(
@@ -3291,6 +3779,9 @@ static esp_err_t xiaozhi_foundation_validate_lifecycle_matrix(
         return aggregate.first_failure_error;
     }
 
+    bool previous_cleanup_valid = false;
+    xiaozhi_foundation_resource_snapshot_t previous_cleanup_t5000 = {0};
+
     for (uint32_t cycle = 1U;
          cycle <= aggregate.requested_cycles;
          ++cycle) {
@@ -3301,10 +3792,20 @@ static esp_err_t xiaozhi_foundation_validate_lifecycle_matrix(
             xiaozhi_foundation_validate_transport_cycle(
                 requested,
                 XIAOZHI_FOUNDATION_VALIDATION_P26_LIFECYCLE_MATRIX,
+                XIAOZHI_FOUNDATION_ATTRIBUTION_FULL_LIFECYCLE,
                 XIAOZHI_FOUNDATION_FAULT_NONE,
                 cycle,
                 generation,
                 &cycle_result);
+
+        if (previous_cleanup_valid) {
+            xiaozhi_foundation_log_intercycle_resource_trend(
+                cycle,
+                &previous_cleanup_t5000,
+                &cycle_result.steady_state_baseline);
+        }
+        previous_cleanup_t5000 = cycle_result.cleanup_t5000;
+        previous_cleanup_valid = true;
 
         xiaozhi_foundation_record_lifecycle_cycle(
             &aggregate,
@@ -3350,16 +3851,21 @@ static void xiaozhi_foundation_log_fault_resource(
     ESP_LOGI(
         TAG,
         "XZ_FAULT_RESOURCE case=%s phase=%s internal_free_bytes=%u "
-        "internal_largest_block_bytes=%u dma_free_bytes=%u "
+        "internal_min_free_bytes=%u internal_largest_block_bytes=%u "
+        "dma_free_bytes=%u dma_min_free_bytes=%u "
         "dma_largest_block_bytes=%u psram_free_bytes=%u "
-        "psram_largest_block_bytes=%u worker_stack_hwm_words=%u",
+        "psram_min_free_bytes=%u psram_largest_block_bytes=%u "
+        "worker_stack_hwm_words=%u",
         xiaozhi_foundation_fault_case_to_string(fault_case),
         phase,
         (unsigned)snapshot->internal_free_bytes,
+        (unsigned)snapshot->internal_min_free_bytes,
         (unsigned)snapshot->internal_largest_block_bytes,
         (unsigned)snapshot->dma_free_bytes,
+        (unsigned)snapshot->dma_min_free_bytes,
         (unsigned)snapshot->dma_largest_block_bytes,
         (unsigned)snapshot->psram_free_bytes,
+        (unsigned)snapshot->psram_min_free_bytes,
         (unsigned)snapshot->psram_largest_block_bytes,
         (unsigned)snapshot->worker_stack_high_water_words);
 }
@@ -3474,6 +3980,7 @@ static esp_err_t xiaozhi_foundation_validate_fault_matrix(
             xiaozhi_foundation_validate_transport_cycle(
                 requested,
                 XIAOZHI_FOUNDATION_VALIDATION_P26_FAULT_MATRIX,
+                XIAOZHI_FOUNDATION_ATTRIBUTION_FULL_LIFECYCLE,
                 fault_case,
                 0U,
                 fault_generation,
@@ -3481,18 +3988,25 @@ static esp_err_t xiaozhi_foundation_validate_fault_matrix(
 
         xiaozhi_foundation_record_resource_minimums(
             &aggregate.resource_minimums,
-            &fault_result.before_xiaozhi);
+            &fault_result.steady_state_baseline);
         xiaozhi_foundation_record_resource_minimums(
             &aggregate.resource_minimums,
-            &fault_result.after_cleanup);
+            &fault_result.cleanup_t0);
+        xiaozhi_foundation_record_resource_minimums(
+            &aggregate.resource_minimums,
+            &fault_result.cleanup_t5000);
         xiaozhi_foundation_log_fault_resource(
             fault_case,
-            "FAULT_BEFORE",
-            &fault_result.before_xiaozhi);
+            "FAULT_STEADY_STATE_BASELINE",
+            &fault_result.steady_state_baseline);
         xiaozhi_foundation_log_fault_resource(
             fault_case,
-            "FAULT_AFTER_CLEANUP",
-            &fault_result.after_cleanup);
+            "FAULT_CLEANUP_T+0_MS",
+            &fault_result.cleanup_t0);
+        xiaozhi_foundation_log_fault_resource(
+            fault_case,
+            "FAULT_CLEANUP_T+5000_MS",
+            &fault_result.cleanup_t5000);
 
         const bool expected_failure =
             (fault_ret == XIAOZHI_FOUNDATION_FAULT_INJECTED_ERROR) &&
@@ -3555,6 +4069,7 @@ static esp_err_t xiaozhi_foundation_validate_fault_matrix(
                 xiaozhi_foundation_validate_transport_cycle(
                     requested,
                     XIAOZHI_FOUNDATION_VALIDATION_P26_FAULT_MATRIX,
+                    XIAOZHI_FOUNDATION_ATTRIBUTION_FULL_LIFECYCLE,
                     XIAOZHI_FOUNDATION_FAULT_NONE,
                     0U,
                     recovery_generation,
@@ -3562,18 +4077,25 @@ static esp_err_t xiaozhi_foundation_validate_fault_matrix(
 
             xiaozhi_foundation_record_resource_minimums(
                 &aggregate.resource_minimums,
-                &recovery_result.before_xiaozhi);
+                &recovery_result.steady_state_baseline);
             xiaozhi_foundation_record_resource_minimums(
                 &aggregate.resource_minimums,
-                &recovery_result.after_cleanup);
+                &recovery_result.cleanup_t0);
+            xiaozhi_foundation_record_resource_minimums(
+                &aggregate.resource_minimums,
+                &recovery_result.cleanup_t5000);
             xiaozhi_foundation_log_fault_resource(
                 fault_case,
-                "RECOVERY_BEFORE",
-                &recovery_result.before_xiaozhi);
+                "RECOVERY_STEADY_STATE_BASELINE",
+                &recovery_result.steady_state_baseline);
             xiaozhi_foundation_log_fault_resource(
                 fault_case,
-                "RECOVERY_AFTER_CLEANUP",
-                &recovery_result.after_cleanup);
+                "RECOVERY_CLEANUP_T+0_MS",
+                &recovery_result.cleanup_t0);
+            xiaozhi_foundation_log_fault_resource(
+                fault_case,
+                "RECOVERY_CLEANUP_T+5000_MS",
+                &recovery_result.cleanup_t5000);
 
             recovery_passed = (recovery_ret == ESP_OK);
             if (recovery_passed) {
@@ -3639,6 +4161,318 @@ static esp_err_t xiaozhi_foundation_validate_fault_matrix(
     return ESP_OK;
 }
 
+static esp_err_t xiaozhi_foundation_validate_resource_attribution_matrix(
+    xiaozhi_foundation_transport_t requested)
+{
+#if CONFIG_XIAOZHI_FOUNDATION_P26_WEBSOCKET_HEAP_TRACE
+    /* Keep the expensive leak-trace run source-specific and bounded. */
+    static const xiaozhi_foundation_attribution_stage_t stages[] = {
+        XIAOZHI_FOUNDATION_ATTRIBUTION_WEBSOCKET,
+    };
+#else
+    static const xiaozhi_foundation_attribution_stage_t stages[] = {
+        XIAOZHI_FOUNDATION_ATTRIBUTION_GET_INFO,
+        XIAOZHI_FOUNDATION_ATTRIBUTION_MCP,
+        XIAOZHI_FOUNDATION_ATTRIBUTION_CHAT_INIT,
+        XIAOZHI_FOUNDATION_ATTRIBUTION_WEBSOCKET,
+        XIAOZHI_FOUNDATION_ATTRIBUTION_P2E,
+    };
+#endif
+    bool resource_stability_passed = true;
+
+    ESP_LOGI(TAG, "=== XIAOZHI RESOURCE ATTRIBUTION MATRIX ===");
+    ESP_LOGI(
+        TAG,
+        "XZ_ATTR_CONFIG repeats=%u cleanup_settle_ms=%u "
+        "long_settle_ms=%u lwip_tcp_msl_ms=60000",
+        (unsigned)XIAOZHI_FOUNDATION_ATTRIBUTION_REPEAT_COUNT,
+        (unsigned)XIAOZHI_FOUNDATION_CLEANUP_SETTLE_T5000_MS,
+        (unsigned)XIAOZHI_FOUNDATION_ATTRIBUTION_LONG_SETTLE_MS);
+
+    for (size_t stage_index = 0U;
+         stage_index < (sizeof(stages) / sizeof(stages[0]));
+         ++stage_index) {
+        const xiaozhi_foundation_attribution_stage_t stage =
+            stages[stage_index];
+        const char *const stage_name =
+            xiaozhi_foundation_attribution_stage_to_string(stage);
+        xiaozhi_foundation_resource_snapshot_t first_baseline = {0};
+        xiaozhi_foundation_resource_snapshot_t first_cleanup_t5000 = {0};
+        xiaozhi_foundation_resource_snapshot_t last_cleanup_t5000 = {0};
+#if CONFIG_XIAOZHI_FOUNDATION_P26_WEBSOCKET_HEAP_TRACE
+        bool heap_trace_started = false;
+#endif
+
+        ESP_LOGI(
+            TAG,
+            "XZ_ATTR_STAGE_BEGIN stage=%s repeats=%u",
+            stage_name,
+            (unsigned)XIAOZHI_FOUNDATION_ATTRIBUTION_REPEAT_COUNT);
+
+#if CONFIG_XIAOZHI_FOUNDATION_P26_WEBSOCKET_HEAP_TRACE
+        if (stage == XIAOZHI_FOUNDATION_ATTRIBUTION_WEBSOCKET) {
+            esp_err_t trace_ret = heap_trace_init_standalone(
+                s_xiaozhi_foundation_heap_trace_records,
+                XIAOZHI_FOUNDATION_ATTRIBUTION_HEAP_TRACE_RECORD_COUNT);
+            if (trace_ret == ESP_OK) {
+                trace_ret = heap_trace_start(HEAP_TRACE_LEAKS);
+            }
+
+            if (trace_ret != ESP_OK) {
+                ESP_LOGE(
+                    TAG,
+                    "XZ_ATTR_HEAP_TRACE result=FAIL operation=start error=%s",
+                    esp_err_to_name(trace_ret));
+                (void)heap_trace_init_standalone(NULL, 0U);
+                return trace_ret;
+            }
+
+            heap_trace_started = true;
+            ESP_LOGI(
+                TAG,
+                "XZ_ATTR_HEAP_TRACE result=STARTED stage=%s capacity=%u",
+                stage_name,
+                (unsigned)
+                    XIAOZHI_FOUNDATION_ATTRIBUTION_HEAP_TRACE_RECORD_COUNT);
+        }
+#endif
+
+        for (uint32_t cycle = 1U;
+             cycle <= XIAOZHI_FOUNDATION_ATTRIBUTION_REPEAT_COUNT;
+             ++cycle) {
+            xiaozhi_foundation_lifecycle_cycle_result_t cycle_result = {0};
+            const uint32_t generation =
+                xiaozhi_foundation_next_lifecycle_generation();
+            const esp_err_t cycle_ret =
+                xiaozhi_foundation_validate_transport_cycle(
+                    requested,
+                    XIAOZHI_FOUNDATION_VALIDATION_P26_RESOURCE_ATTRIBUTION,
+                    stage,
+                    XIAOZHI_FOUNDATION_FAULT_NONE,
+                    cycle,
+                    generation,
+                    &cycle_result);
+
+            if (cycle == 1U) {
+                first_baseline = cycle_result.steady_state_baseline;
+                first_cleanup_t5000 = cycle_result.cleanup_t5000;
+            }
+            last_cleanup_t5000 = cycle_result.cleanup_t5000;
+
+            ESP_LOGI(
+                TAG,
+                "XZ_ATTR_TREND stage=%s cycle=%u "
+                "baseline_internal=%u t5000_internal=%u "
+                "delta_internal=%lld baseline_largest=%u "
+                "t5000_largest=%u delta_largest=%lld "
+                "baseline_dma=%u t5000_dma=%u baseline_psram=%u "
+                "t5000_psram=%u",
+                stage_name,
+                (unsigned)cycle,
+                (unsigned)cycle_result.steady_state_baseline
+                    .internal_free_bytes,
+                (unsigned)cycle_result.cleanup_t5000.internal_free_bytes,
+                (long long)cycle_result.cleanup_t5000.internal_free_bytes -
+                    (long long)cycle_result.steady_state_baseline
+                        .internal_free_bytes,
+                (unsigned)cycle_result.steady_state_baseline
+                    .internal_largest_block_bytes,
+                (unsigned)cycle_result.cleanup_t5000
+                    .internal_largest_block_bytes,
+                (long long)cycle_result.cleanup_t5000
+                    .internal_largest_block_bytes -
+                    (long long)cycle_result.steady_state_baseline
+                        .internal_largest_block_bytes,
+                (unsigned)cycle_result.steady_state_baseline.dma_free_bytes,
+                (unsigned)cycle_result.cleanup_t5000.dma_free_bytes,
+                (unsigned)cycle_result.steady_state_baseline.psram_free_bytes,
+                (unsigned)cycle_result.cleanup_t5000.psram_free_bytes);
+
+            if (cycle_ret != ESP_OK) {
+#if CONFIG_XIAOZHI_FOUNDATION_P26_WEBSOCKET_HEAP_TRACE
+                if (heap_trace_started) {
+                    (void)heap_trace_stop();
+                    (void)heap_trace_init_standalone(NULL, 0U);
+                    heap_trace_started = false;
+                }
+#endif
+                ESP_LOGE(
+                    TAG,
+                    "XZ_ATTR_STAGE_RESULT stage=%s result=FAIL cycle=%u "
+                    "error=%s",
+                    stage_name,
+                    (unsigned)cycle,
+                    esp_err_to_name(cycle_ret));
+                memset(&cycle_result, 0, sizeof(cycle_result));
+                return cycle_ret;
+            }
+
+            memset(&cycle_result, 0, sizeof(cycle_result));
+        }
+
+        const int64_t settled_internal_delta =
+            (int64_t)last_cleanup_t5000.internal_free_bytes -
+            (int64_t)first_baseline.internal_free_bytes;
+        const int64_t settled_largest_delta =
+            (int64_t)last_cleanup_t5000.internal_largest_block_bytes -
+            (int64_t)first_baseline.internal_largest_block_bytes;
+        const bool material_decline =
+            (settled_internal_delta <=
+             -(int64_t)
+                 XIAOZHI_FOUNDATION_ATTRIBUTION_MATERIAL_INTERNAL_BYTES) ||
+            (settled_largest_delta <=
+             -(int64_t)
+                 XIAOZHI_FOUNDATION_ATTRIBUTION_MATERIAL_LARGEST_BYTES);
+
+        xiaozhi_foundation_resource_snapshot_t long_settle =
+            last_cleanup_t5000;
+        if (material_decline) {
+            ESP_LOGI(
+                TAG,
+                "XZ_ATTR_LONG_SETTLE_BEGIN stage=%s wait_ms=%u "
+                "reason=material_settled_decline",
+                stage_name,
+                (unsigned)
+                    XIAOZHI_FOUNDATION_ATTRIBUTION_LONG_SETTLE_MS);
+            vTaskDelay(pdMS_TO_TICKS(
+                XIAOZHI_FOUNDATION_ATTRIBUTION_LONG_SETTLE_MS));
+            xiaozhi_foundation_capture_resource_snapshot(
+                &long_settle,
+                "ATTR_LONG_SETTLE_T+125000_MS",
+                true);
+        }
+
+#if CONFIG_XIAOZHI_FOUNDATION_P26_WEBSOCKET_HEAP_TRACE
+        if (heap_trace_started) {
+            heap_trace_summary_t trace_summary = {0};
+            const esp_err_t trace_stop_ret = heap_trace_stop();
+            const esp_err_t trace_summary_ret =
+                heap_trace_summary(&trace_summary);
+            const esp_err_t trace_log_ret =
+                ((trace_stop_ret == ESP_OK) &&
+                 (trace_summary_ret == ESP_OK)) ?
+                    xiaozhi_foundation_log_heap_trace_records(
+                        trace_summary.count) :
+                    ESP_ERR_INVALID_STATE;
+
+            ESP_LOGI(
+                TAG,
+                "XZ_ATTR_HEAP_TRACE result=%s operation=stop "
+                "records=%u capacity=%u high_water=%u overflow=%s "
+                "allocations=%u frees=%u",
+                (trace_stop_ret == ESP_OK) &&
+                        (trace_summary_ret == ESP_OK) &&
+                        (trace_log_ret == ESP_OK) &&
+                        !trace_summary.has_overflowed ?
+                    "PASS" : "FAIL",
+                (unsigned)trace_summary.count,
+                (unsigned)trace_summary.capacity,
+                (unsigned)trace_summary.high_water_mark,
+                trace_summary.has_overflowed ? "yes" : "no",
+                (unsigned)trace_summary.total_allocations,
+                (unsigned)trace_summary.total_frees);
+            (void)heap_trace_init_standalone(NULL, 0U);
+            heap_trace_started = false;
+
+            if ((trace_stop_ret != ESP_OK) ||
+                (trace_summary_ret != ESP_OK) ||
+                (trace_log_ret != ESP_OK) ||
+                trace_summary.has_overflowed) {
+                return (trace_stop_ret != ESP_OK) ?
+                    trace_stop_ret :
+                    (trace_summary_ret != ESP_OK) ?
+                        trace_summary_ret :
+                        (trace_log_ret != ESP_OK) ?
+                            trace_log_ret : ESP_ERR_INVALID_SIZE;
+            }
+        }
+#endif
+
+        const int64_t long_internal_delta =
+            (int64_t)long_settle.internal_free_bytes -
+            (int64_t)first_baseline.internal_free_bytes;
+        const int64_t long_largest_delta =
+            (int64_t)long_settle.internal_largest_block_bytes -
+            (int64_t)first_baseline.internal_largest_block_bytes;
+        const int64_t post_warmup_internal_delta =
+            (int64_t)last_cleanup_t5000.internal_free_bytes -
+            (int64_t)first_cleanup_t5000.internal_free_bytes;
+        const int64_t post_warmup_largest_delta =
+            (int64_t)last_cleanup_t5000.internal_largest_block_bytes -
+            (int64_t)first_cleanup_t5000.internal_largest_block_bytes;
+        const bool persistent_internal_decline =
+            post_warmup_internal_delta <=
+            -(int64_t)
+                XIAOZHI_FOUNDATION_ATTRIBUTION_MATERIAL_INTERNAL_BYTES;
+        const bool persistent_largest_decline =
+            post_warmup_largest_delta <=
+            -(int64_t)
+                XIAOZHI_FOUNDATION_ATTRIBUTION_MATERIAL_LARGEST_BYTES;
+        const bool stage_resource_stable =
+            !persistent_internal_decline && !persistent_largest_decline;
+        const char *const resource_classification =
+            persistent_internal_decline ?
+                "PERSISTENT_INTERNAL_DECLINE" :
+            persistent_largest_decline ?
+                "CONTINUING_FRAGMENTATION" :
+            (long_largest_delta <=
+             -(int64_t)
+                 XIAOZHI_FOUNDATION_ATTRIBUTION_MATERIAL_LARGEST_BYTES) ?
+                "ONE_TIME_FRAGMENTATION_PLATEAU" :
+            material_decline ?
+                "DEFERRED_CLEANUP" : "STABLE";
+        if (!stage_resource_stable) {
+            resource_stability_passed = false;
+        }
+
+        ESP_LOGI(
+            TAG,
+            "XZ_ATTR_STAGE_RESULT stage=%s execution_result=PASS "
+            "resource_stability=%s classification=%s "
+            "first_baseline_internal=%u first_t5000_internal=%u "
+            "last_t5000_internal=%u settled_internal_delta=%lld "
+            "post_warmup_internal_delta=%lld "
+            "long_settle_internal=%u long_minus_baseline_internal=%lld "
+            "first_baseline_largest=%u last_t5000_largest=%u "
+            "settled_largest_delta=%lld post_warmup_largest_delta=%lld "
+            "long_settle_largest=%u "
+            "long_minus_baseline_largest=%lld material_decline=%s "
+            "long_settle_sampled=%s",
+            stage_name,
+            stage_resource_stable ? "PASS" : "FAIL",
+            resource_classification,
+            (unsigned)first_baseline.internal_free_bytes,
+            (unsigned)first_cleanup_t5000.internal_free_bytes,
+            (unsigned)last_cleanup_t5000.internal_free_bytes,
+            (long long)settled_internal_delta,
+            (long long)post_warmup_internal_delta,
+            (unsigned)long_settle.internal_free_bytes,
+            (long long)long_internal_delta,
+            (unsigned)first_baseline.internal_largest_block_bytes,
+            (unsigned)last_cleanup_t5000.internal_largest_block_bytes,
+            (long long)settled_largest_delta,
+            (long long)post_warmup_largest_delta,
+            (unsigned)long_settle.internal_largest_block_bytes,
+            (long long)long_largest_delta,
+            material_decline ? "yes" : "no",
+            material_decline ? "yes" : "no");
+    }
+
+    if (!resource_stability_passed) {
+        ESP_LOGE(
+            TAG,
+            "XZ_ATTR_MATRIX_RESULT execution_result=PASS "
+            "resource_stability=FAIL result=FAIL");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "XZ_ATTR_MATRIX_RESULT execution_result=PASS "
+        "resource_stability=PASS result=PASS");
+    return ESP_OK;
+}
+
 static esp_err_t xiaozhi_foundation_validate_transport(
     xiaozhi_foundation_transport_t requested)
 {
@@ -3653,9 +4487,17 @@ static esp_err_t xiaozhi_foundation_validate_transport(
         return xiaozhi_foundation_validate_fault_matrix(requested);
     }
 
+    if (checkpoint ==
+        XIAOZHI_FOUNDATION_VALIDATION_P26_RESOURCE_ATTRIBUTION) {
+        return
+            xiaozhi_foundation_validate_resource_attribution_matrix(
+                requested);
+    }
+
     return xiaozhi_foundation_validate_transport_cycle(
         requested,
         checkpoint,
+        XIAOZHI_FOUNDATION_ATTRIBUTION_FULL_LIFECYCLE,
         XIAOZHI_FOUNDATION_FAULT_NONE,
         0U,
         0U,

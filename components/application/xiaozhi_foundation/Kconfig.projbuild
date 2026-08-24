@@ -26,9 +26,10 @@ config XIAOZHI_FOUNDATION_P2F_E2E_ONLINE_VALIDATION
     depends on XIAOZHI_FOUNDATION_P2F_EMBED_FIXTURE
     default n
     help
-        At the next application ONLINE transition, run the independent P2-F
-        WebSocket audio/STT/TTS validation. Leave this disabled to run the
-        default P2-E audio-channel lifecycle validation.
+        After the application composition layer observes network, audio,
+        cloud, and the validation GUI in a bounded steady state, run the
+        independent P2-F WebSocket audio/STT/TTS validation. Leave this
+        disabled to run the default P2-E audio-channel lifecycle validation.
 
 config XIAOZHI_FOUNDATION_P26_LIFECYCLE_MATRIX
     bool "Run Phase 12.6 repeated lifecycle matrix"
@@ -36,12 +37,14 @@ config XIAOZHI_FOUNDATION_P26_LIFECYCLE_MATRIX
     depends on !XIAOZHI_FOUNDATION_P2F_E2E_ONLINE_VALIDATION
     default n
     help
-        Run the Phase 12.6 WebSocket lifecycle matrix after the next
-        application ONLINE transition. Each cycle owns a new Xiaozhi context,
-        EventGroup, event handler, chat handle, MCP engine, counters, and
-        resource snapshots. The matrix uses the P2-E audio-channel lifecycle
-        for every cycle and stops after the first failure. It is validation
-        infrastructure only; it does not enable a production voice feature.
+        Run the Phase 12.6 WebSocket lifecycle matrix only after the
+        application composition layer establishes a bounded steady state.
+        Each cycle owns a new Xiaozhi context, EventGroup, event handler, chat
+        handle, MCP engine, counters, and resource snapshots. Cleanup is
+        sampled at 0, 250, 1000, 3000, and 5000 ms. The matrix uses the P2-E
+        audio-channel lifecycle for every cycle and stops after the first
+        failure. It is validation infrastructure only; it does not enable a
+        production voice feature.
 
 config XIAOZHI_FOUNDATION_P26_LIFECYCLE_CYCLE_COUNT
     int "Phase 12.6 lifecycle matrix cycle count"
@@ -104,5 +107,31 @@ config XIAOZHI_FOUNDATION_P26_FAULT_SELECTOR_ALL_SUPPORTED
     bool "Run all supported controlled fault cases"
 
 endchoice
+
+config XIAOZHI_FOUNDATION_P26_RESOURCE_ATTRIBUTION_MATRIX
+    bool "Run Phase 12.6 source-specific resource attribution"
+    depends on XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+    depends on !XIAOZHI_FOUNDATION_P2F_E2E_ONLINE_VALIDATION
+    depends on !XIAOZHI_FOUNDATION_P26_LIFECYCLE_MATRIX
+    depends on !XIAOZHI_FOUNDATION_P26_FAULT_MATRIX
+    default n
+    help
+        Run three iterations of each public, supported lifecycle layer:
+        get_info/free_info, MCP create/destroy, chat init/deinit without start,
+        WebSocket connect/stop/deinit without audio, and normal P2-E. Stages
+        with material settled Internal-RAM decline receive a bounded 125-second
+        follow-up sample, matching the configured lwIP two-MSL TIME_WAIT
+        lifetime. This diagnostic path is not a production feature.
+
+config XIAOZHI_FOUNDATION_P26_WEBSOCKET_HEAP_TRACE
+    bool "Trace retained WebSocket allocations during attribution"
+    depends on XIAOZHI_FOUNDATION_P26_RESOURCE_ATTRIBUTION_MATRIX
+    depends on HEAP_TRACING_STANDALONE
+    default n
+    help
+        Record a bounded standalone leak trace around attribution Stage D,
+        including its long-settle sample. This is a source-attribution aid,
+        not an acceptance workaround. It increases diagnostic image/RAM cost
+        and remains disabled unless standalone heap tracing is also selected.
 
 endmenu
