@@ -49,7 +49,7 @@ The public boundary exposes copied, non-sensitive project-owned state rather tha
 
 When the gate is disabled, normal Gateway application composition must not automatically request Xiaozhi validation, route the temporary Xiaozhi UI screen, or register its validation observer.
 
-Temporary P2-F, lifecycle matrix, fault matrix, resource-attribution matrix, and heap-trace options are subordinate validation-only options and are not production voice-assistant features.
+Temporary P2-F, lifecycle matrix, fault matrix, resource-attribution matrix, heap-trace options, and the new SD-fixture loader are subordinate validation-only options and are not production voice-assistant features.
 
 ### CONFIRMED — Phase 12.5
 
@@ -61,11 +61,16 @@ Temporary P2-F, lifecycle matrix, fault matrix, resource-attribution matrix, and
 - Feature-off target behavior passed on 2026-08-25 for a 120-second normal Gateway run with no Xiaozhi validation activity or watchdog/panic/assert evidence.
 - P2-E target hardware acceptance passed: WebSocket CONNECTED -> open -> OPENED -> bounded hold -> close -> CLOSED -> stop -> deinit -> MCP destroy.
 - MVP transport recorded in an ADR according to the roadmap.
+- A project-generated lawful P2-F known-audio fixture now exists at `components/application/xiaozhi_foundation/test_assets/p2f_fixture.xzf` for the spoken phrase `What is two plus two?`.
+- The fixture is a 6030-byte XZF1 stream with 33 Opus packets; local libopus verification confirmed 960 samples per packet at 16 kHz (60 ms).
+- Validation-only SD fixture infrastructure now loads `/sdcard/xiaozhi/p2f_fixture.xzf` through the existing `sd_card_manager` lease before the existing P2-F worker runs.
+- Dedicated hardware-test branch: `test/xiaozhi-p2f-known-audio-e2e`.
 
 ### PENDING — Phase 12.5
 
-- P2-F known-audio E2E hardware acceptance still requires a lawful local 16 kHz mono / 60 ms Opus fixture and target serial evidence.
-- Do not create a private/raw typed-text workaround to bypass the missing public TX API.
+- P2-F known-audio E2E **target hardware acceptance is still pending**. The fixture/infrastructure now exist, but the new SD loader/test branch has not yet been ESP-IDF build-verified or run on target.
+- Required P2-F target evidence remains: fixture READY, 33/33 TX packets, semantically correct USER transcript, non-empty ASSISTANT transcript, completed turn, server audio RX, clean transport teardown, and no panic/assert/WDT/resource regression.
+- Do not create a private/raw typed-text workaround to bypass the supported audio/STT path.
 - Remaining transport-comparison evidence includes connection/reconnect, sockets, heap, CPU, audio loss, cleanup, and network-failure behavior where not already covered by later Phase 12.6 evidence.
 
 ### CONFIRMED — Phase 12.6 evidence already present on this branch
@@ -85,7 +90,7 @@ Although the active branch name is Phase 12.5 cleanup, canonical roadmap/docs al
 - Internet/DNS/TLS/service loss;
 - server goodbye / remote timeout / malformed response;
 - allocation-pressure validation;
-- P2-F fault coverage after lawful fixture and prior P2-F HIL proof.
+- P2-F fault coverage after P2-F HIL proof.
 
 Do not simulate these with private transport calls, raw protocol messages, unsafe lifecycle manipulation, or unrelated Wi-Fi ownership changes.
 
@@ -103,6 +108,11 @@ The temporary UI status contains bounded copied transcripts and scalar state onl
 
 Callbacks must remain short and must not call LVGL directly.
 
+## Current Debug/HIL Handoffs
+
+- `AI_Stored_Data/BOOT_STARTING_DEBUG.md`: startup `Starting...` mitigation and later target-debug plan.
+- `AI_Stored_Data/P2F_KNOWN_AUDIO_HIL.md`: P2-F SD fixture facts, expected logs, test procedure, and acceptance contract.
+
 ## Next-work guidance
 
 Before implementing the next requested step:
@@ -112,7 +122,8 @@ Before implementing the next requested step:
 3. Determine whether the request is cleanup/validation of existing infrastructure or truly belongs to the next phase.
 4. Preserve WebSocket-only scope and validation-gate isolation.
 5. Do not implement production `voice_assistant` Phase 13 behavior unless explicitly requested.
-6. Update this snapshot after material acceptance or architecture changes.
+6. For P2-F target work, start from `test/xiaozhi-p2f-known-audio-e2e` and `AI_Stored_Data/P2F_KNOWN_AUDIO_HIL.md`.
+7. Update this snapshot after material acceptance or architecture changes.
 
 ## Repository-local AI handoff rule
 
