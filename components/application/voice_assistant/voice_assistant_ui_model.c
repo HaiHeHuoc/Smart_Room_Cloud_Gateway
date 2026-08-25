@@ -5,6 +5,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "xiaozhi_foundation.h"
 
 #define VOICE_UI_LOCK_TIMEOUT_MS 100U
 
@@ -147,6 +148,27 @@ static esp_err_t ui_copy_text(
     return ESP_OK;
 }
 
+static void ui_semantic_text_callback(
+    const xiaozhi_foundation_text_event_t *event,
+    void *user_context)
+{
+    (void)user_context;
+    if ((event == NULL) ||
+        (event->role != XIAOZHI_FOUNDATION_TEXT_ROLE_USER)) {
+        return;
+    }
+
+    const esp_err_t ret = voice_assistant_ui_model_post_user_text(
+        event->client_generation,
+        event->text);
+    if ((ret != ESP_OK) && (ret != ESP_ERR_INVALID_STATE)) {
+        ESP_LOGW(TAG,
+                 "USER transcript dropped generation=%u error=%s",
+                 (unsigned)event->client_generation,
+                 esp_err_to_name(ret));
+    }
+}
+
 esp_err_t voice_assistant_ui_model_init(void)
 {
     if (s_lock != NULL) {
@@ -179,23 +201,32 @@ esp_err_t voice_assistant_ui_model_start(void)
         return ESP_OK;
     }
 
-    const esp_err_t ret = voice_assistant_register_status_callback(
+    esp_err_t ret = voice_assistant_register_status_callback(
         ui_voice_status_callback,
         NULL);
     if (ret != ESP_OK) {
         return ret;
     }
 
+    ret = xiaozhi_foundation_text_register_callback(
+        ui_semantic_text_callback,
+        NULL);
+    if (ret != ESP_OK) {
+        (void)voice_assistant_register_status_callback(NULL, NULL);
+        return ret;
+    }
+
     voice_assistant_status_t status = {0};
     const esp_err_t get_ret = voice_assistant_get_status(&status);
     if (get_ret != ESP_OK) {
+        (void)xiaozhi_foundation_text_register_callback(NULL, NULL);
         (void)voice_assistant_register_status_callback(NULL, NULL);
         return get_ret;
     }
 
     s_started = true;
     ui_voice_status_callback(&status, NULL);
-    ESP_LOGI(TAG, "production voice UI model started");
+    ESP_LOGI(TAG, "production voice UI model started with USER transcript observer");
     return ESP_OK;
 }
 
