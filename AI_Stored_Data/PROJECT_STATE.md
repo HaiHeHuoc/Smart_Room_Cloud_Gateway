@@ -19,10 +19,12 @@ Sprint 12  Software complete / selected HIL deferred
 Sprint 13  Software complete / HIL deferred
 Sprint 14  Software complete / Build + HIL pending
 Sprint 15  Software complete / Build + HIL pending
-Sprint 16  IN PROGRESS / 16-C complete / 16-D next
+Sprint 16  SOFTWARE COMPLETE / STATIC REVIEW COMPLETE / Build + HIL pending
+Major feature-coding stage through Phase 16  COMPLETE
 ```
 
-Authoritative Phase-16 progress: `AI_Stored_Data/PHASE16_PROGRESS.md`.
+Authoritative Phase-16 closure: `AI_Stored_Data/PHASE16_PROGRESS.md`.
+Phase-16 HIL plan: `AI_Stored_Data/PHASE16_HIL_TEST_PLAN.md`.
 
 ## Deferred HIL routing
 
@@ -31,111 +33,158 @@ RUN PHASE 12 HIL -> test/xiaozhi-p2f-known-audio-e2e
 RUN PHASE 13 HIL -> test/phase13-voice-assistant-hil
 RUN PHASE 14 HIL -> test/phase14-ptt-voice-e2e-hil   # verify/create prerequisite
 RUN PHASE 15 HIL -> test/phase15-voice-ui-hil
+RUN PHASE 16 HIL -> test/phase16-audio-arbitration-hil   # recommended branch, create/populate before execution
 ```
 
-Codex may receive these commands while standing on the latest branch, but must inspect git status and checkout the dedicated test branch before running HIL. Never silently test an older phase with Phase-16 production source.
+Codex may receive HIL commands while standing on the latest branch, but must inspect git status and route to the dedicated test branch before executing an older-phase HIL. Never silently test older acceptance against arbitrary latest production source.
 
-## Established ownership through Phase 15
+## Established system ownership
 
 - `audio_manager`: sole microphone/speaker/I2S/DMA owner.
 - `xiaozhi_foundation`: sole direct `esp_xiaozhi`/MCP/audio-channel boundary.
 - `voice_assistant`: long-lived session/recovery orchestration.
 - `voice_assistant_ptt`: PTT authorization policy.
+- `voice_assistant_ui_model` + adapter: copied voice presentation path.
 - `app_gui` / `ui_manager_lvgl`: LVGL owner.
 - `sd_card_manager`: SD lifecycle/lease owner.
 - GPIO9: factory reset only.
-- GPIO5: temporary Phase-14 PTT input, internal pull-down, active-high.
+- GPIO5: temporary PTT input, internal pull-down, active-high.
 
-Phase-14 voice path remains PTT -> INMP441 -> copied PCM16 -> Xiaozhi uplink -> response -> SD-backed WAV -> `audio_manager` -> MAX98357. Phase-15 adds copied lifecycle/USER/ASSISTANT presentation through `voice_assistant_ui_model` -> GUI adapter -> `app_gui` UI task.
+## Phase 14/15 voice path
 
-## Phase 16 — Audio Arbitration & Multi-Client Audio Policy
+```text
+PTT
+-> Xiaozhi READY
+-> INMP441 / audio_manager capture
+-> copied PCM16 uplink
+-> Xiaozhi response
+-> bounded downlink aggregation
+-> SD-backed WAV
+-> audio_manager playback
+-> MAX98357
+```
 
-Reason: sole I2S ownership prevents hardware conflicts but does not decide policy between legitimate clients such as Xiaozhi, notifications, alarms or another recorder.
+Phase 15 adds copied lifecycle + USER/ASSISTANT text presentation through the UI task. Exact backend state remains richer than the reused legacy GUI enum for CONNECTING/THINKING/RECOVERING.
 
-### 16-A — request model complete
+## Phase 16 — final audio arbitration architecture
 
-`audio_manager_request_t` contains request ID, logical client, CAPTURE/PLAYBACK resource, priority, `REJECT/QUEUE/PREEMPT_LOWER_PRIORITY` busy policy and interruptibility.
+Logical audio clients now request resources through project-owned metadata:
 
-### 16-B — playback arbitration runtime complete
+```text
+audio_manager_request_t
+├── request_id
+├── client
+├── resource = CAPTURE / PLAYBACK
+├── priority
+├── busy_policy = REJECT / QUEUE / PREEMPT_LOWER_PRIORITY
+└── interruptible
+```
+
+Known clients include SYSTEM, XIAOZHI, NOTIFICATION, ALARM, RECORDER, UI and TEST.
+
+### Playback
 
 ```text
 client
--> audio_manager_playback_arbiter
+-> playback arbiter
 -> public audio_manager playback control
--> audio_manager task
--> sole I2S TX owner
+-> manager task
+-> sole I2S TX
 ```
 
-The runtime stores one current + one pending WAV request, uses real PLAYBACK evidence before ACTIVE, and preempts only known interruptible lower-priority arbiter-owned playback through cooperative `audio_manager_stop_playback()`.
+One current + one pending WAV request only. ACTIVE requires real PLAYBACK evidence, not command acceptance. Known interruptible lower-priority playback can be cooperatively stopped through `audio_manager_stop_playback()`.
 
-### 16-C — capture arbitration runtime complete
+### Capture
 
 ```text
 client
--> audio_manager_capture_arbiter
+-> capture arbiter
 -> audio_manager_start_recording()
--> audio_manager task
--> sole I2S RX owner
+-> manager task
+-> sole I2S RX
 ```
 
-Capture state:
+One current + one pending request only. ACTIVE requires real RECORDING evidence. PROCESSING is allowed to finish naturally before pending promotion. Cooperative stop uses `audio_manager_stop_recording()`.
+
+### Deterministic policy
 
 ```text
-IDLE -> STARTING -> ACTIVE(RECORDING) -> FINISHING(PROCESSING) -> IDLE
-                         |
-                         -> PREEMPTING via cooperative stop
+no known owner -> GRANT
+REJECT -> REJECT
+QUEUE -> WAIT
+PREEMPT_LOWER_PRIORITY -> PREEMPT only when incoming priority is strictly higher and current owner is interruptible
+same/lower priority -> never preempt
 ```
 
-The capture runtime stores one current + one pending request. Cancel/preempt before actual RECORDING does not touch hardware. Preemption during RECORDING requests cooperative stop. Once manager enters PROCESSING, arbiter waits for natural DSP cleanup/IDLE before promoting pending work.
+Unknown legacy/external manager activity is never preempted because trusted client metadata is absent.
 
-Unknown legacy Phase-14 capture/playback remains external busy and is never preempted until trusted client migration occurs in 16-E.
+### Xiaozhi integration
 
-### Production startup
+Capture:
 
 ```text
-audio_manager READY
--> playback arbiter READY
--> capture arbiter READY
--> voice/UI/PTT/uplink/downlink stack
+XIAOZHI priority=70
+CAPTURE
+busy_policy=REJECT
+interruptible=true
 ```
 
-## Current Phase-16 policy gap
-
-Playback and capture arbiters now exist separately, but `audio_manager` still has one shared operation state. 16-D must define deterministic cross-resource behavior when capture and playback requests compete, plus fairness/equal-priority/pending replacement/cancellation diagnostics.
-
-No new client receives I2S/DMA/file/raw-buffer ownership.
-
-## Cross-system concurrency rule
-
-Sensor, Firebase/cloud, GUI and normal FreeRTOS tasks may continue while voice/audio runs. Do not globally pause unrelated work as a substitute for resource arbitration.
+Playback:
 
 ```text
-CPU/task interleaving                       allowed
-Firebase + Xiaozhi network coexistence      allowed; measure on HIL
-multiple direct I2S owners                  forbidden
-multiple legitimate audio-manager clients  centrally arbitrated
+XIAOZHI priority=70
+PLAYBACK
+busy_policy=QUEUE
+interruptible=true
 ```
 
-## Known acceptance/build risks
+The Phase-14 downlink still waits for manager IDLE before submitting Xiaozhi playback, so queue-behind-current-playback is not exploited at that call site. This is accepted MVP behavior and should be optimized only after HIL evidence.
 
-1. Phase-14/15 target build/HIL still pending.
-2. Actual Xiaozhi response codec still needs target proof; Opus evidence requires decoder work.
+### Notification / alarm helpers
+
+```text
+NOTIFICATION priority=50 QUEUE interruptible=true
+ALARM        priority=100 PREEMPT_LOWER_PRIORITY interruptible=false
+```
+
+A critical alarm may cooperatively preempt active Xiaozhi playback. A notification may not preempt Xiaozhi and only uses the bounded pending slot if available.
+
+## Cross-resource rule
+
+Capture and playback arbiters are separate but share one `audio_manager` operation state. Only manager IDLE permits a new hardware operation. If both race for IDLE, manager serialization remains the final hardware gate. Hardware safety is preserved; global cross-resource fairness is not guaranteed.
+
+If HIL proves sustained starvation, the evidence-based next architecture is a unified audio scheduler. Do not introduce unbounded fairness queues preemptively.
+
+## Concurrency rule
+
+Sensor, Firebase/cloud, Wi-Fi, GUI, SD, performance monitor and Xiaozhi transport tasks may continue during voice/audio. Phase 16 arbitrates audio resources only.
+
+Do not pause unrelated subsystems as a substitute for ownership/arbitration without target evidence.
+
+## Known pending acceptance / technical debt
+
+1. Phase-14/15/16 target build/HIL still pending.
+2. Actual Xiaozhi response codec must still be proven; Opus requires decoder work.
 3. Phase-14 downlink remains PSRAM/SD-backed rather than low-latency streaming.
-4. GPIO5 is temporary.
+4. GPIO5 PTT is temporary.
 5. Firebase + Xiaozhi simultaneous load remains unmeasured.
-6. Phase-15 semantic bridge needs real build evidence against pinned `esp_xiaozhi` 0.1.2.
-7. Phase-16 playback/capture arbiters have static review only; no build/HIL evidence.
-8. Arbiter stop/deinit lifecycle APIs are not implemented yet.
-9. Xiaozhi/notification/alarm clients are not migrated until 16-E.
+6. Phase-15 semantic bridge and Phase-16 source-local CMake bridges require real build evidence.
+7. playback/capture arbiters have no dedicated stop/deinit lifecycle API yet.
+8. global cross-resource fairness is not guaranteed.
+9. recorded-audio playback is not migrated to arbitration.
+10. Phase-14 Xiaozhi downlink pre-waits for IDLE before arbitration submit.
+11. notification/alarm policy needs target instrumentation/HIL evidence.
 
 ## Next-work guidance
 
 When asked **"hiện tại nên làm gì tiếp theo?"**:
 
-1. surface Phase-12/13 deferred Codex-ready HIL;
-2. mention Phase-14 dedicated test-branch prerequisite;
-3. mention Phase-15 test branch/HIL deferred;
-4. Phase 16 is active: 16-A, 16-B and 16-C complete;
-5. next software checkpoint is **16-D — Priority / Preemption / Queue Policy Hardening**, only after explicit `tiếp tục`.
+1. surface deferred HIL Phase 12 first;
+2. Phase 13 HIL;
+3. Phase 14 PTT voice HIL/test-branch prerequisite;
+4. Phase 15 voice UI HIL;
+5. Phase 16 audio-arbitration HIL plan/test-branch prerequisite;
+6. do **not** automatically start Phase 17;
+7. after independent acceptance, move into full Gateway/Firebase integration regression, bug fixing, hardening, performance/resource validation, documentation and release/portfolio closure.
 
-When hardware returns, recommended acceptance order remains Phase 12 -> Phase 13 -> Phase 14 -> Phase 15 -> later Phase-16 arbitration HIL -> full Gateway/Firebase regression using production history only.
+Phase 16 is the end of the planned **major feature-coding stage**. Future coding should primarily be evidence-driven fixes/hardening unless Hải explicitly expands product scope.
