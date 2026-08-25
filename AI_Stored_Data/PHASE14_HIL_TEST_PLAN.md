@@ -1,0 +1,244 @@
+# Phase 14 HIL Test Plan — Push-To-Talk Voice MVP
+
+Updated: 2026-08-25
+Production branch: `phase/14-ptt-voice-mvp`
+Status: **READY FOR LATER TEST-BRANCH IMPLEMENTATION / TARGET EVIDENCE PENDING**
+
+## Goal
+
+Validate the complete Phase-14 production path on ESP32-S3 hardware without weakening ownership or inferring PASS from build/static review.
+
+```text
+GPIO5 PTT (temporary)
+-> PTT authorization
+-> Xiaozhi READY
+-> INMP441 capture
+-> PCM16 uplink
+-> server response
+-> bounded downlink
+-> SD-backed WAV handoff
+-> audio_manager playback
+-> MAX98357 speaker
+-> next turn allowed only after cleanup
+```
+
+## Temporary PTT wiring
+
+Current Phase-14 board reservation:
+
+```text
+3V3 ---- push button ---- GPIO5
+                         |
+                    internal pull-down
+
+released = LOW
+pressed  = HIGH
+```
+
+GPIO5 is temporary and Hải intends to replace it later. HIL evidence must record the actual GPIO used for the run.
+
+## Mandatory preflight
+
+1. Confirm exact production/test branch and HEAD SHA.
+2. Confirm `CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE=n` for production-voice testing.
+3. Build the exact firmware with the target ESP-IDF environment.
+4. Confirm ESP32-S3 serial port and flash from the built image.
+5. Verify INMP441, MAX98357/speaker, SD card, Wi-Fi/Internet and temporary PTT button are connected.
+6. Capture serial log from reset.
+7. Never classify target behavior PASS from expected logs alone.
+
+## Expected boot/composition evidence
+
+After network handoff and audio startup, expected Phase-14 markers include:
+
+```text
+VOICE_ASSISTANT: ... IDLE
+VOICE_PTT: ... IDLE
+VOICE_UPLINK: coordinator started
+VOICE_DOWNLINK: coordinator started ...
+VOICE_PTT_GPIO: initialized gpio=5 active_level=1 poll=10ms debounce=40ms
+VOICE_PTT_GPIO: started gpio=5 active_level=1 pull=down initial=released
+PH14_COMPOSE: Phase-14 voice stack READY ptt_gpio=5 active_level=1 pull=down
+```
+
+Acceptance:
+
+- no Phase-12 transport validator auto-run;
+- no panic/assert/WDT/Guru Meditation;
+- factory-reset GPIO9 remains independently functional;
+- audio manager reaches normal IDLE before PTT voice stack is used.
+
+## Case 1 — First PTT uplink
+
+Action:
+
+1. Hold PTT.
+2. Speak one short known phrase.
+3. Keep holding until real READY/LISTENING/capture evidence appears.
+4. Release PTT.
+
+Expected logical sequence:
+
+```text
+VOICE_PTT_GPIO: edge=PRESS
+VOICE_PTT: ... -> ARMING_SESSION
+VOICE_ASSISTANT: IDLE -> CONNECTING
+XZ_SESSION: ... READY
+VOICE_ASSISTANT: CONNECTING -> READY
+VOICE_PTT: ... -> AUTHORIZED ... authorized=yes
+VOICE_UPLINK: turn START generation=N
+AUDIO_MANAGER: ... RECORDING
+XZ_SESSION: audio uplink READY generation=N format=pcm rate=16000 channels=1 frame_ms=16
+...
+VOICE_PTT_GPIO: edge=RELEASE
+VOICE_PTT: ... -> RELEASED ... authorized=no
+VOICE_UPLINK: turn STOP generation=N result=ESP_OK
+```
+
+Required evidence:
+
+- mic/I2S capture starts only after authorization;
+- uplink frame/byte counters increase;
+- no queue-full trend severe enough to destroy the utterance;
+- release revokes capture and does not close the response channel prematurely.
+
+## Case 2 — Server response + speaker
+
+After Case 1 release, expect server response activity:
+
+```text
+VOICE_DOWNLINK: response START generation=N
+... response audio chunks ...
+VOICE_DOWNLINK: response PLAYBACK_REQUESTED generation=N ...
+AUDIO_MANAGER: ... WAV PLAYBACK ...
+VOICE_DOWNLINK: response PLAYBACK_COMPLETE generation=N
+```
+
+Physical acceptance:
+
+- speaker produces an intelligible server response;
+- playback finishes and audio manager returns IDLE;
+- no simultaneous mic capture and speaker I2S ownership;
+- `responses_completed` increments only after actual playback completion.
+
+Critical codec acceptance:
+
+The Phase-14 MVP currently assumes the negotiated downlink callback payload is PCM16. If the target proves the callback is Opus or another codec, mark this case **FAIL** and preserve the raw evidence. Do not wrap compressed bytes in a PCM WAV or weaken acceptance.
+
+## Case 3 — Repeated turns
+
+Run at least 3 complete PTT turns:
+
+```text
+PRESS -> uplink -> RELEASE -> response -> speaker -> IDLE
+```
+
+Acceptance:
+
+- each next turn begins only after prior downlink/playback is no longer busy;
+- no stale response from the previous turn is played as the new turn;
+- no `ESP_ERR_INVALID_STATE` loop;
+- no monotonic resource loss that clearly grows per completed turn;
+- no I2S ownership conflict.
+
+## Case 4 — Release before READY
+
+1. Press PTT while a new session must connect.
+2. Release quickly before READY.
+
+Expected:
+
+```text
+ARMING_SESSION
+-> CANCEL_PENDING
+capture_authorized=false
+-> bounded connection resolution
+-> cleanup
+-> IDLE
+```
+
+Acceptance: microphone transmission must never become authorized after the early release.
+
+## Case 5 — Missing/stalled response
+
+Inject or naturally reproduce a server/network condition where TTS response stalls after response collection starts.
+
+Expected after 15 seconds of inactivity:
+
+```text
+VOICE_DOWNLINK: response ABORT generation=N timeout=yes error=ESP_ERR_TIMEOUT
+```
+
+Acceptance:
+
+- audio channel closes best effort;
+- response state clears;
+- later PTT turn remains possible after recovery;
+- no infinite `collecting=true` state.
+
+## Case 6 — Network loss during turn
+
+Externally remove AP/Internet/service during an active turn. Do not simulate with private Xiaozhi APIs.
+
+Expected ownership:
+
+- Xiaozhi/session reports transport failure;
+- uplink/downlink stop using the failed session;
+- Phase-13 voice-assistant recovery remains the session-recovery owner;
+- no automatic unbounded reconnect loop;
+- no stuck I2S capture/playback.
+
+After restoring network, exercise explicit recovery according to the production/test harness and verify a new PTT turn can complete.
+
+## Case 7 — SD unavailable during response
+
+Remove/unavailable SD before downlink finalization only when safe to do so for the board/test setup.
+
+Expected:
+
+- response WAV handoff fails cleanly;
+- `sd_card_manager` owns/report recovery;
+- `audio_manager` is not bypassed;
+- downlink clears turn state;
+- response is FAIL, not PASS/SKIP.
+
+## Case 8 — Queue pressure / corrupt-response protection
+
+If downlink callback queue-full is observed:
+
+- `chunks_dropped_queue_full` increments;
+- current response becomes tainted;
+- truncated response must not be played as successful audio;
+- finalization should fail with invalid-response semantics.
+
+## Resource checkpoints
+
+Capture before first turn and after each completed turn when system has returned to IDLE:
+
+- internal free heap;
+- largest internal block;
+- PSRAM free/largest block;
+- task stack high-water where available;
+- audio RX/TX timeout/overflow counters;
+- uplink queue-full/stale drops;
+- downlink queue-full/stale drops/timeouts.
+
+Do not require byte-identical free heap. Investigate monotonic degradation correlated with each equivalent completed turn.
+
+## PASS / FAIL rule
+
+Phase-14 HIL PASS requires all mandatory golden-path cases plus repeated-turn acceptance and no critical ownership/crash regression. Manual fault cases may be recorded independently, but missing mandatory audio E2E evidence is not PASS.
+
+Use only:
+
+- `PASS` — direct target evidence satisfies criteria;
+- `FAIL` — evidence violates criteria;
+- `SKIP` — test not performed; never equivalent to PASS.
+
+## Future dedicated test branch
+
+When hardware test automation is requested, create a dedicated branch from this production branch, recommended name:
+
+`test/phase14-ptt-voice-e2e-hil`
+
+The test branch may add deterministic markers/supervisor logic, but production bugs must be fixed on `phase/14-ptt-voice-mvp` and then propagated into the test branch.
