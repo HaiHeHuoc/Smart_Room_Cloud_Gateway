@@ -21,6 +21,8 @@ typedef struct {
     uint64_t response_bytes_buffered;
     uint32_t chunks_queued;
     uint32_t chunks_dropped_queue_full;
+    uint32_t chunks_dropped_stale;
+    uint32_t response_timeouts;
     uint32_t responses_completed;
     uint32_t responses_failed;
     esp_err_t last_error;
@@ -35,6 +37,14 @@ esp_err_t voice_assistant_downlink_start(void);
 /** Copy current scalar diagnostics. */
 esp_err_t voice_assistant_downlink_get_status(
     voice_assistant_downlink_status_t *status);
+
+/**
+ * @brief True while a prior PTT turn is still receiving or playing a response.
+ *
+ * Higher-level turn coordination uses this to serialize repeated turns. This
+ * function only reads copied project state; it never touches Xiaozhi or I2S.
+ */
+bool voice_assistant_downlink_is_busy(void);
 
 #ifdef __cplusplus
 }
