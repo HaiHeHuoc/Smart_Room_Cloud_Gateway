@@ -39,6 +39,8 @@ static xiaozhi_foundation_audio_uplink_status_t s_uplink = {
 };
 static xiaozhi_foundation_session_status_callback_t s_status_callback = NULL;
 static void *s_status_callback_context = NULL;
+static xiaozhi_foundation_response_callback_t s_response_callback = NULL;
+static void *s_response_callback_context = NULL;
 static bool s_lifecycle_busy = false;
 static bool s_intentional_stop = false;
 
@@ -71,6 +73,36 @@ static void xiaozhi_session_publish_status(void)
     if (callback != NULL) {
         callback(&snapshot, callback_context);
     }
+}
+
+static void xiaozhi_session_publish_response(
+    xiaozhi_foundation_response_event_kind_t kind,
+    const uint8_t *data,
+    size_t data_len,
+    esp_err_t error)
+{
+    xiaozhi_foundation_response_callback_t callback = NULL;
+    void *callback_context = NULL;
+    uint32_t generation = 0U;
+
+    portENTER_CRITICAL(&s_lock);
+    callback = s_response_callback;
+    callback_context = s_response_callback_context;
+    generation = s_status.client_generation;
+    portEXIT_CRITICAL(&s_lock);
+
+    if (callback == NULL) {
+        return;
+    }
+
+    const xiaozhi_foundation_response_event_t event = {
+        .kind = kind,
+        .client_generation = generation,
+        .data = data,
+        .data_len = data_len,
+        .error = error,
+    };
+    callback(&event, callback_context);
 }
 
 static void xiaozhi_session_set_status(
@@ -113,10 +145,39 @@ static void xiaozhi_session_protocol_callback(
     void *event_data,
     void *ctx)
 {
-    (void)event;
-    (void)event_data;
     (void)ctx;
-    /* Text/TTS promotion is completed in the downlink/presentation checkpoint. */
+
+    if (event == ESP_XIAOZHI_CHAT_EVENT_CHAT_TTS_STATE) {
+        const esp_xiaozhi_chat_tts_state_t *const tts =
+            (const esp_xiaozhi_chat_tts_state_t *)event_data;
+        if (tts == NULL) {
+            return;
+        }
+        if (tts->state == ESP_XIAOZHI_CHAT_TTS_STATE_START) {
+            xiaozhi_session_publish_response(
+                XIAOZHI_FOUNDATION_RESPONSE_TTS_START,
+                NULL,
+                0U,
+                ESP_OK);
+        } else if (tts->state == ESP_XIAOZHI_CHAT_TTS_STATE_STOP) {
+            xiaozhi_session_publish_response(
+                XIAOZHI_FOUNDATION_RESPONSE_TTS_STOP,
+                NULL,
+                0U,
+                ESP_OK);
+        }
+        return;
+    }
+
+    if (event == ESP_XIAOZHI_CHAT_EVENT_CHAT_ERROR) {
+        const esp_xiaozhi_chat_error_info_t *const info =
+            (const esp_xiaozhi_chat_error_info_t *)event_data;
+        xiaozhi_session_publish_response(
+            XIAOZHI_FOUNDATION_RESPONSE_ERROR,
+            NULL,
+            0U,
+            (info != NULL && info->code != ESP_OK) ? info->code : ESP_FAIL);
+    }
 }
 
 static void xiaozhi_session_audio_callback(
@@ -124,10 +185,15 @@ static void xiaozhi_session_audio_callback(
     int len,
     void *ctx)
 {
-    (void)data;
-    (void)len;
     (void)ctx;
-    /* Phase 14-D will copy server response audio into the speaker boundary. */
+    if ((data == NULL) || (len <= 0)) {
+        return;
+    }
+    xiaozhi_session_publish_response(
+        XIAOZHI_FOUNDATION_RESPONSE_AUDIO,
+        data,
+        (size_t)len,
+        ESP_OK);
 }
 
 static void xiaozhi_session_event_handler(
@@ -344,6 +410,17 @@ esp_err_t xiaozhi_foundation_session_register_status_callback(
     }
     s_status_callback = callback;
     s_status_callback_context = user_context;
+    portEXIT_CRITICAL(&s_lock);
+    return ESP_OK;
+}
+
+esp_err_t xiaozhi_foundation_response_register_callback(
+    xiaozhi_foundation_response_callback_t callback,
+    void *user_context)
+{
+    portENTER_CRITICAL(&s_lock);
+    s_response_callback = callback;
+    s_response_callback_context = user_context;
     portEXIT_CRITICAL(&s_lock);
     return ESP_OK;
 }
@@ -567,7 +644,7 @@ esp_err_t xiaozhi_foundation_audio_uplink_start(uint32_t client_generation)
     s_uplink.client_generation = client_generation;
     s_uplink.last_error = ESP_OK;
     portEXIT_CRITICAL(&s_lock);
-    ESP_LOGI(TAG, "audio uplink READY generation=%u format=pcm rate=%u channels=1 frame_ms=16",
+    ESP_LOGI(TAG, "audio channel READY generation=%u format=pcm rate=%u channels=1 frame_ms=16",
              (unsigned)client_generation,
              (unsigned)XIAOZHI_FOUNDATION_UPLINK_SAMPLE_RATE_HZ);
     return ESP_OK;
@@ -632,11 +709,47 @@ esp_err_t xiaozhi_foundation_audio_uplink_stop(uint32_t client_generation)
     if (client_generation == 0U) {
         return ESP_ERR_INVALID_ARG;
     }
+
+    esp_xiaozhi_chat_handle_t chat = 0;
     portENTER_CRITICAL(&s_lock);
     const bool valid =
         (s_status.client_generation == client_generation) &&
         (s_uplink.client_generation == client_generation) &&
-        (s_uplink.audio_channel_open || s_uplink.listening);
+        s_uplink.audio_channel_open && s_uplink.listening &&
+        (s_chat != 0);
+    chat = s_chat;
+    portEXIT_CRITICAL(&s_lock);
+    if (!valid) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const esp_err_t ret = esp_xiaozhi_chat_send_stop_listening(chat);
+    portENTER_CRITICAL(&s_lock);
+    if (s_uplink.client_generation == client_generation) {
+        if (ret == ESP_OK) {
+            s_uplink.listening = false;
+        }
+        s_uplink.last_error = ret;
+    }
+    portEXIT_CRITICAL(&s_lock);
+
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "listening STOP generation=%u; response channel retained",
+                 (unsigned)client_generation);
+    }
+    return ret;
+}
+
+esp_err_t xiaozhi_foundation_audio_channel_close(uint32_t client_generation)
+{
+    if (client_generation == 0U) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    portENTER_CRITICAL(&s_lock);
+    const bool valid =
+        (s_status.client_generation == client_generation) &&
+        (s_uplink.client_generation == client_generation) &&
+        s_uplink.audio_channel_open;
     portEXIT_CRITICAL(&s_lock);
     if (!valid) {
         return ESP_ERR_INVALID_STATE;
