@@ -2,7 +2,7 @@
 
 #include <stdbool.h>
 
-#include "audio_manager_request.h"
+#include "audio_manager_arbitration.h"
 #include "esp_err.h"
 
 #ifdef __cplusplus
