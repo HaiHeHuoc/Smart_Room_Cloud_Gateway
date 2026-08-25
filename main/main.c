@@ -167,6 +167,18 @@ static const firebase_auth_config_t FIREBASE_AUTH_CONFIG =
 static esp_err_t network_platform_init(void);
 
 /**
+ * @brief Best-effort route away from BOOT before a fatal startup return.
+ *
+ * The helper never changes manager state and never overrides an explicit
+ * provisioning, reset, or other application screen that has already replaced
+ * BOOT. It exists only to prevent a stale "Starting..." screen from surviving
+ * after app_main has abandoned startup.
+ */
+static void app_route_boot_failure_to_wifi_status(
+    const char *stage,
+    esp_err_t error);
+
+/**
  * @brief Forward one button-manager event to the reset coordinator queue.
  *
  * Runs in button task context and must not directly access storage or LVGL.
@@ -567,7 +579,9 @@ void app_main(void)
             TAG,
             "Failed to initialize Wi-Fi manager: %s",
             esp_err_to_name(wifi_ret));
-
+        app_route_boot_failure_to_wifi_status(
+            "wifi_manager_init",
+            wifi_ret);
         return;
     }
 
@@ -586,7 +600,9 @@ void app_main(void)
             TAG,
             "Failed to register Wi-Fi status callback: %s",
             esp_err_to_name(callback_ret));
-
+        app_route_boot_failure_to_wifi_status(
+            "wifi_manager_register_status_callback",
+            callback_ret);
         return;
     }
 
@@ -600,7 +616,9 @@ void app_main(void)
             TAG,
             "Failed to initialize network coordinator: %s",
             esp_err_to_name(coordinator_ret));
-
+        app_route_boot_failure_to_wifi_status(
+            "app_network_coordinator_init",
+            coordinator_ret);
         return;
     }
 
@@ -619,6 +637,9 @@ void app_main(void)
             TAG,
             "Failed to initialize Firebase Authentication: %s",
             esp_err_to_name(service_ret));
+        app_route_boot_failure_to_wifi_status(
+            "firebase_auth_init",
+            service_ret);
         return;
     }
 
@@ -632,6 +653,9 @@ void app_main(void)
             TAG,
             "Failed to initialize cloud manager: %s",
             esp_err_to_name(service_ret));
+        app_route_boot_failure_to_wifi_status(
+            "cloud_manager_init",
+            service_ret);
         return;
     }
 
@@ -646,6 +670,9 @@ void app_main(void)
             TAG,
             "Failed to register cloud manager status callback: %s",
             esp_err_to_name(service_ret));
+        app_route_boot_failure_to_wifi_status(
+            "cloud_manager_register_status_callback",
+            service_ret);
         return;
     }
 
@@ -663,6 +690,9 @@ void app_main(void)
             TAG,
             "Failed to initialize sensor manager: %s",
             esp_err_to_name(service_ret));
+        app_route_boot_failure_to_wifi_status(
+            "sensor_manager_init",
+            service_ret);
         return;
     }
 
@@ -677,6 +707,9 @@ void app_main(void)
             TAG,
             "Failed to register sensor callback: %s",
             esp_err_to_name(service_ret));
+        app_route_boot_failure_to_wifi_status(
+            "sensor_manager_register_callback",
+            service_ret);
         return;
     }
 
@@ -688,6 +721,9 @@ void app_main(void)
             TAG,
             "Failed to start sensor manager: %s",
             esp_err_to_name(service_ret));
+        app_route_boot_failure_to_wifi_status(
+            "sensor_manager_start",
+            service_ret);
         return;
     }
 
@@ -705,25 +741,9 @@ void app_main(void)
             TAG,
             "Failed to start network coordinator: %s",
             esp_err_to_name(coordinator_ret));
-
-        const esp_err_t screen_ret =
-            app_gui_request_screen(
-                APP_GUI_SCREEN_WIFI_STATUS);
-
-        if (screen_ret != ESP_OK)
-        {
-            ESP_LOGW(
-                TAG,
-                "Failed to leave BOOT screen after coordinator start failure: %s",
-                esp_err_to_name(screen_ret));
-        }
-        else
-        {
-            ESP_LOGW(
-                TAG,
-                "Coordinator did not start; WIFI_STATUS queued instead of leaving BOOT Starting indefinitely");
-        }
-
+        app_route_boot_failure_to_wifi_status(
+            "app_network_coordinator_start",
+            coordinator_ret);
         return;
     }
 
@@ -887,6 +907,60 @@ void app_main(void)
 }
 
 /* Static Functions --------------------------------------------------------- */
+static void app_route_boot_failure_to_wifi_status(
+    const char *stage,
+    esp_err_t error)
+{
+    const char *const safe_stage =
+        (stage != NULL) ? stage : "unknown";
+    app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
+    const esp_err_t screen_state_ret =
+        app_gui_get_screen_id(&screen_id);
+
+    if (screen_state_ret != ESP_OK)
+    {
+        ESP_LOGW(
+            TAG,
+            "Startup failure stage=%s error=%s; unable to inspect active screen: %s",
+            safe_stage,
+            esp_err_to_name(error),
+            esp_err_to_name(screen_state_ret));
+        return;
+    }
+
+    if (screen_id != APP_GUI_SCREEN_BOOT)
+    {
+        ESP_LOGW(
+            TAG,
+            "Startup failure stage=%s error=%s; preserving active screen=%d",
+            safe_stage,
+            esp_err_to_name(error),
+            (int)screen_id);
+        return;
+    }
+
+    const esp_err_t screen_ret =
+        app_gui_request_screen(
+            APP_GUI_SCREEN_WIFI_STATUS);
+
+    if (screen_ret != ESP_OK)
+    {
+        ESP_LOGW(
+            TAG,
+            "Startup failure stage=%s error=%s; failed to leave BOOT screen: %s",
+            safe_stage,
+            esp_err_to_name(error),
+            esp_err_to_name(screen_ret));
+        return;
+    }
+
+    ESP_LOGW(
+        TAG,
+        "Startup failure stage=%s error=%s; WIFI_STATUS queued to prevent an indefinite BOOT Starting screen",
+        safe_stage,
+        esp_err_to_name(error));
+}
+
 static esp_err_t network_platform_init(void)
 {
     esp_err_t ret = nvs_flash_init();
