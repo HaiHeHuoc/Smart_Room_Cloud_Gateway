@@ -2,8 +2,8 @@
 
 Updated: 2026-08-25
 Branch: `phase/14-ptt-voice-mvp`
-Current checkpoint: **14-A — PTT Trigger + Authorization State**
-Status: **IMPLEMENTED / STATIC REVIEW COMPLETE / BUILD + HIL NOT CLAIMED**
+Current checkpoint: **14-B — Microphone / Public Streaming Contract**
+Status: **CONTRACT IMPLEMENTED / PRODUCER HOOK + BUILD + HIL NOT CLAIMED**
 
 ## Collaboration rule
 
@@ -13,164 +13,147 @@ Planned checkpoints:
 
 1. 14-A — PTT trigger + authorization state.
 2. 14-B — microphone/public streaming contract.
-3. 14-C — Xiaozhi audio uplink.
+3. 14-C — Xiaozhi audio uplink + connect audio-manager producer hook.
 4. 14-D — response downlink + speaker playback.
 5. 14-E — cancel/recovery/repeated-turn robustness.
 6. 14-F — FINAL Phase-14 review/docs/deferred HIL.
 
 When 14-F is reached, explicitly notify Hải that it is the final Phase-14 prompt before software closure.
 
-## 14-A — implemented
+## 14-A — completed
 
-Added the project-owned PTT policy surface inside `voice_assistant`:
+- Added `voice_assistant_ptt` policy task and press/release/cancel API.
+- `capture_authorized=true` requires real `voice_assistant` READY evidence.
+- Release-before-READY becomes `CANCEL_PENDING` and cannot authorize capture later.
+- Temporary dedicated PTT pin reserved as GPIO5, active-high with internal pull-down. This assignment is explicitly temporary and will be changed by Hải later.
 
-- `include/voice_assistant_ptt.h`;
-- `voice_assistant_ptt.c`;
-- bounded PTT task/queue/mutex;
-- `voice_assistant_ptt_press()`;
-- `voice_assistant_ptt_release()`;
-- `voice_assistant_ptt_cancel()`;
-- copied PTT status observer/getter;
-- independent non-zero PTT generation;
-- copied voice-session generation tracking;
-- explicit `capture_authorized` boolean.
+## 14-B — contract implemented
 
-### PTT states
+### Existing capture path reviewed
+
+`audio_manager` already owns the complete INMP441 path:
 
 ```text
-UNINITIALIZED
-IDLE
-ARMING_SESSION
-AUTHORIZED
-RELEASED
-CANCEL_PENDING
-ERROR
+I2S RX
+-> 256 stereo-slot frames/block
+-> startup discard
+-> microphone slot detection
+-> selected mono PCM24 conversion
+-> manager-owned PSRAM retained recording
+-> DSP / playback
 ```
 
-### Authorization rule
+The safe Phase-14 publication point is after selected-slot conversion inside the audio-manager task. No I2S/DMA/private PSRAM pointer should cross the public boundary.
 
-Microphone transmission authorization is never granted merely because a button/command was pressed.
+### Added public stream contract
+
+New public header:
+
+`components/audio/audio_manager/include/audio_manager_stream.h`
+
+Contract baseline:
 
 ```text
-PTT press
--> if voice session IDLE: request begin_session()
--> ARMING_SESSION, authorized=false
--> wait asynchronously for real voice_assistant READY
--> only while press is still held: AUTHORIZED, authorized=true
+sample rate : 16000 Hz
+channels    : mono
+format      : signed PCM16
+granularity : up to 256 samples/frame
+ownership   : borrowed callback frame only
 ```
 
-If PTT is released before READY:
+`audio_manager_stream_frame_t` carries:
 
-```text
-ARMING_SESSION
--> release
--> CANCEL_PENDING, authorized=false
--> wait for bounded transport start to resolve
--> if READY appears, immediately request end_session()
--> IDLE after cleanup
-```
+- borrowed `const int16_t *samples`;
+- `sample_count`;
+- sample rate / channel count;
+- higher-level `stream_generation`;
+- monotonic `frame_sequence` within the generation.
 
-This prevents microphone authorization after a release that occurred during connection setup.
+Consumers must copy/enqueue before callback return. They must never retain the pointer or perform blocking network/LVGL/I2S lifecycle work in the callback.
 
-If PTT is released after authorization:
+### Stream lifecycle API
 
-```text
-AUTHORIZED
--> RELEASED
-capture_authorized=false
-```
-
-14-A deliberately does not start or stop microphone capture. Phase 14-B will consume this authorization contract.
-
-### Cancel rule
-
-Explicit cancel always revokes authorization. If the Xiaozhi start operation is still CONNECTING, cancel remains pending instead of attempting an unsafe/preemptive upstream teardown. Once READY/IDLE/error becomes observable, the policy reconciles deterministically.
-
-### Temporary physical PTT GPIO reservation
-
-`board_config.h` now reserves **GPIO5** as the temporary dedicated PTT input for Phase 14.
-
-Temporary wiring/polarity:
-
-```text
-GPIO5 ---- push button ---- 3V3
-```
-
-The future input implementation must configure the ESP32-S3 internal **pull-down**:
-
-```text
-released = LOW
-pressed  = HIGH
-```
-
-Board macros:
+Added:
 
 ```c
-#define PTT_BUTTON_GPIO                  GPIO_NUM_5
-#define PTT_BUTTON_ACTIVE_LEVEL          1
-#define PTT_BUTTON_USE_INTERNAL_PULLDOWN 1
-#define PTT_BUTTON_POLL_PERIOD_MS        10U
-#define PTT_BUTTON_DEBOUNCE_MS           40U
+audio_manager_stream_register_callback(...);
+audio_manager_stream_arm(generation);
+audio_manager_stream_disarm(generation);
+audio_manager_stream_get_status(...);
 ```
 
-**GPIO5 is temporary.** Hải explicitly plans to change the final PTT GPIO later. Re-check the complete hardware/pin map before considering the hardware assignment stable. The current change only reserves/configures the board-level contract; no GPIO driver is bound to `voice_assistant_ptt` yet.
+Arming/disarming controls **publication authorization only**. It does not start/stop I2S; capture lifecycle remains owned by:
 
-### Input ownership decision
+```c
+audio_manager_start_recording();
+audio_manager_stop_recording();
+```
 
-The existing physical `button_manager` is already the factory-reset input and supports one application callback. Sprint 14 roadmap also requires that PTT not overload the factory-reset long press.
+The stream generation is non-zero and supplied by the higher-level voice transaction so late frames can be rejected downstream.
 
-Therefore 14-A does **not** bind PTT to the current reset button. The PTT API is input-source agnostic; a later dedicated physical/button/UI trigger may call it through application composition without moving reset ownership.
+### Internal producer boundary
 
-### Ownership preserved
+Added private helper:
 
-- `button_manager`: reset-button sampling only; no PTT ownership added.
-- `audio_manager`: sole I2S/DMA/PCM owner; untouched in 14-A.
-- `xiaozhi_foundation`: Xiaozhi transport/session boundary; untouched in 14-A.
-- `voice_assistant`: session orchestration from Phase 13.
-- `voice_assistant_ptt`: user authorization policy only; no GPIO/I2S/LVGL ownership.
+`audio_manager_stream_publish_internal()`
 
-### Timing / bounded behavior
+in:
 
-- PTT task stack: 4096 bytes.
-- PTT task priority: 4.
-- queue length: 6.
-- lock wait: 100 ms.
-- task-start wait: 2 s.
-- asynchronous session arming timeout: 20 s.
-- reconciliation poll: 50 ms.
-- one public PTT command pending at a time.
+- `audio_manager_stream.c`
+- `audio_manager_stream_internal.h`
 
-## Not implemented in 14-A
+It accepts a temporary manager-owned PCM16 block and invokes the borrowed callback only after leaving its short metadata critical section.
 
-- no PTT GPIO driver/binding yet (GPIO5 is only reserved in board config);
-- no factory-reset button reuse;
-- no microphone capture;
-- no live PCM frame/ring export;
-- no Opus/audio-channel uplink;
-- no response audio playback;
-- no automatic LISTENING/THINKING/SPEAKING transition;
-- no production `main.c` PTT trigger;
-- no hardware/build acceptance.
+Stream metadata uses a static `portMUX_TYPE`; no lazy mutex allocation or extra lifecycle init is required.
 
-## Static review notes
+### Important deliberate boundary
 
-1. `capture_authorized=true` requires real `voice_assistant` READY evidence.
-2. release-before-READY was hardened to `CANCEL_PENDING`; it cannot later authorize capture.
-3. callback publication occurs after the PTT mutex is released.
-4. PTT task never calls GPIO, I2S, LVGL, or private Xiaozhi APIs.
-5. a press from `RELEASED` may authorize a later turn on an already-READY session; bounded multi-turn policy is finalized later in Phase 14.
-6. GPIO5 is a temporary reservation and must be replaceable without changing PTT policy code.
-7. no ESP-IDF build/HIL PASS is claimed in this session.
+14-B establishes the public contract and safe publisher implementation, but **does not yet connect the existing PCM24 record loop to the publisher**. That source call-site is intentionally grouped with 14-C Xiaozhi uplink so the following can be reviewed as one complete data path:
+
+```text
+selected INMP441 PCM24 block
+-> bounded PCM24 -> PCM16 conversion
+-> audio_manager_stream_publish_internal()
+-> voice transport queue / generation check
+-> Opus/Xiaozhi uplink
+```
+
+Therefore current 14-B status is **contract implemented**, not live-microphone streaming PASS.
+
+This is intentionally not implemented by exposing `s_runtime.recording_pcm24`, `s_rx_block`, I2S handles, or by creating a second I2S reader.
+
+### Build graph
+
+`audio_manager_stream.c` has been added to the `audio_manager` component CMake sources.
+
+## Ownership preserved
+
+- `audio_manager`: sole I2S/RX/DMA/PCM producer owner.
+- `audio_manager_stream`: bounded project-owned publication metadata only.
+- `voice_assistant_ptt`: authorization policy only.
+- future 14-C transport consumer: must copy/enqueue and return quickly.
+
+## Static review findings
+
+1. No private I2S/DMA/PSRAM pointer is exposed publicly.
+2. Stream callback executes outside the stream metadata critical section.
+3. Generation is explicit and non-zero at arm time.
+4. Duplicate arm is rejected; mismatched disarm is rejected.
+5. No dynamic lock allocation remains in the stream registry.
+6. The producer hook is deliberately not called yet, so no claim is made that live PCM frames are currently emitted.
+7. No ESP-IDF build or target HIL PASS is claimed.
 
 ## Next checkpoint — only after user says `tiếp tục`
 
-**14-B — Microphone / Public Streaming Contract**
+**14-C — Xiaozhi Audio Uplink + Live Producer Hook**
 
 Planned scope:
 
-1. inspect current `audio_manager` capture internals and accepted ownership boundaries;
-2. add a bounded public live PCM delivery contract without exposing I2S/DMA/private buffers;
-3. start capture only while PTT `capture_authorized=true`;
-4. revoke/stop capture on release/cancel/error;
-5. preserve 16-kHz mono PCM baseline and audio-manager sole I2S ownership;
-6. do not yet implement Xiaozhi Opus uplink unless the contract boundary is complete.
+1. connect selected microphone samples inside `audio_manager` to the PCM16 stream publisher;
+2. arm/start capture only after PTT authorization;
+3. add a bounded copied transport queue between audio callback and Xiaozhi work;
+4. encode/send audio through the supported Xiaozhi public audio-channel API;
+5. stop/disarm on PTT release/cancel/error;
+6. use generation checks to reject stale frames;
+7. keep callbacks non-blocking and `audio_manager` as sole I2S owner;
+8. do not implement speaker/downlink playback until 14-D.
