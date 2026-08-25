@@ -11,7 +11,7 @@ Phase 12 SW -> COMPLETE / selected HIL deferred
 Phase 13 SW -> COMPLETE / HIL deferred
 Phase 14 SW -> COMPLETE / Build + HIL pending
 Phase 15 SW -> COMPLETE / Build + HIL pending
-Phase 16 SW -> IN PROGRESS / 16-C complete
+Phase 16 SW -> IN PROGRESS / 16-D complete
 ```
 
 Continue Phase 16 one checkpoint at a time and only after Hải says `tiếp tục`.
@@ -51,23 +51,23 @@ Current checkpoint:
 16-A Audio client/request model                 COMPLETE
 16-B Playback arbitration runtime               COMPLETE
 16-C Capture arbitration runtime                COMPLETE
-16-D Priority/preemption/queue hardening        NEXT
-16-E Xiaozhi + notification/alarm integration   pending
+16-D Priority/preemption/queue hardening        COMPLETE
+16-E Xiaozhi + notification/alarm integration   NEXT
 16-F Final review/HIL plan                      pending
 ```
 
-Playback arbiter: one current + one pending WAV request; command acceptance is separated from real PLAYBACK evidence; known interruptible lower-priority playback can be cooperatively preempted.
+16-D adds a shared deterministic decision contract (`GRANT / WAIT / REJECT / PREEMPT`). Equal-priority requests never preempt; preemption requires strictly higher priority plus an interruptible known owner. Each resource remains bounded to one current + one pending request; occupied pending slots are not silently replaced.
 
-Capture arbiter: one current + one pending manual-capture request; STARTING is separated from real RECORDING evidence; RECORDING may be cooperatively stopped, PROCESSING is allowed to finish naturally, and pre-start cancel/preempt does not touch hardware.
+Capture and playback arbiters still sit above one `audio_manager` operation state. Only copied manager `IDLE` permits hardware submission. If both arbiters race for IDLE, `audio_manager` serialization is the final gate and the losing request waits/retries. This is safe but global cross-resource fairness is not claimed. A unified scheduler is deferred unless HIL proves starvation.
 
-Legacy Xiaozhi/notification/alarm callers are intentionally not migrated yet. Unknown legacy capture/playback is never preempted because client/interruptibility metadata is unavailable. Client migration is deferred to 16-E.
+Unknown legacy capture/playback remains non-preemptible until callers are migrated because trusted client/interruptibility metadata is unavailable.
 
 Known follow-ups before Phase-16 closure:
 
+- migrate Xiaozhi capture/playback through arbitration in 16-E;
+- add minimal notification/alarm request integration/stubs in 16-E;
 - playback/capture arbiter stop/deinit lifecycle APIs are not implemented yet;
-- capture/playback arbiters still need shared cross-resource policy hardening because `audio_manager` has one operation state;
-- fairness/equal-priority/pending replacement behavior must be finalized in 16-D;
-- recorded-audio playback is not promoted into request arbitration yet;
+- recorded-audio playback is not promoted into request arbitration;
 - no build/HIL evidence yet.
 
 ## What to answer when asked "làm gì tiếp theo?"
@@ -78,8 +78,8 @@ If hardware is unavailable, answer in this order:
 2. Phase 13 HIL deferred / Codex-ready.
 3. Phase 14 HIL deferred / dedicated test-branch prerequisite.
 4. Phase 15 HIL deferred / test branch ready.
-5. Phase 16 active: 16-A, 16-B and 16-C complete.
-6. Next software checkpoint: **16-D — Priority / Preemption / Queue Policy Hardening**, only after explicit `tiếp tục`.
+5. Phase 16 active: 16-A through 16-D complete.
+6. Next software checkpoint: **16-E — Xiaozhi + Notification/Alarm Integration and Concurrency Review**, only after explicit `tiếp tục`.
 
 Concise state:
 
@@ -88,8 +88,8 @@ P12 HIL -> DEFERRED
 P13 HIL -> DEFERRED
 P14 HIL -> DEFERRED / branch prerequisite
 P15 HIL -> DEFERRED / test branch ready
-P16 SW  -> 16-C COMPLETE
-Next SW -> 16-D after `tiếp tục`
+P16 SW  -> 16-D COMPLETE
+Next SW -> 16-E after `tiếp tục`
 ```
 
 ## Production-vs-test fix policy
