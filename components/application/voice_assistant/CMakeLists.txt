@@ -2,6 +2,7 @@ idf_component_register(
     SRCS
         "voice_assistant.c"
         "voice_assistant_audio_adapter.c"
+        "voice_assistant_ui_model.c"
         "voice_assistant_ptt.c"
         "voice_assistant_ptt_gpio.c"
         "voice_assistant_uplink.c"
