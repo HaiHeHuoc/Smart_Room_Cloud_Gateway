@@ -9,6 +9,7 @@
 #include "voice_assistant_downlink.h"
 #include "voice_assistant_ptt.h"
 #include "voice_assistant_ptt_gpio.h"
+#include "voice_assistant_ui_gui_adapter.h"
 #include "voice_assistant_ui_model.h"
 #include "voice_assistant_uplink.h"
 #endif
@@ -94,6 +95,16 @@ static esp_err_t phase14_start_voice_stack(void)
         return ret;
     }
 
+    ret = voice_assistant_ui_gui_adapter_init();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    ret = voice_assistant_ui_gui_adapter_start();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
     ret = voice_assistant_ptt_init();
     if (ret != ESP_OK) {
         return ret;
@@ -143,7 +154,7 @@ static esp_err_t phase14_start_voice_stack(void)
 
     s_voice_started = true;
     ESP_LOGI(TAG,
-             "Phase-15 voice stack READY ui_model=yes ptt_gpio=%d active_level=%u pull=down",
+             "Phase-15 voice stack READY ui_model=yes gui_adapter=yes ptt_gpio=%d active_level=%u pull=down",
              (int)PTT_BUTTON_GPIO,
              (unsigned)PTT_BUTTON_ACTIVE_LEVEL);
     return ESP_OK;
