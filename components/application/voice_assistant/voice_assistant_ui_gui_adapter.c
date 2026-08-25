@@ -1,5 +1,6 @@
 #include "voice_assistant_ui_gui_adapter.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "app_gui.h"
