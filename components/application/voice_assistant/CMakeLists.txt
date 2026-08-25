@@ -7,6 +7,7 @@ idf_component_register(
 
     REQUIRES
         esp_common
+        xiaozhi_foundation
 
     PRIV_REQUIRES
         freertos
