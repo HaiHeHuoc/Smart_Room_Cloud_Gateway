@@ -1,4 +1,5 @@
 #include "audio_manager.h"
+#include "audio_manager_capture_arbiter.h"
 #include "audio_manager_playback_arbiter.h"
 #include "board_config.h"
 #include "esp_log.h"
@@ -179,7 +180,18 @@ esp_err_t app_phase14_audio_manager_start(void)
                  esp_err_to_name(arbiter_ret));
         return arbiter_ret;
     }
-    ESP_LOGI(TAG, "Phase-16 playback arbiter READY");
+
+    arbiter_ret = audio_manager_capture_arbiter_init();
+    if (arbiter_ret == ESP_OK) {
+        arbiter_ret = audio_manager_capture_arbiter_start();
+    }
+    if (arbiter_ret != ESP_OK) {
+        ESP_LOGE(TAG,
+                 "Phase-16 capture arbiter startup failed after audio READY: %s",
+                 esp_err_to_name(arbiter_ret));
+        return arbiter_ret;
+    }
+    ESP_LOGI(TAG, "Phase-16 audio arbiters READY playback=yes capture=yes");
 
     const esp_err_t voice_ret = phase14_start_voice_stack();
     if (voice_ret != ESP_OK) {
