@@ -2,12 +2,29 @@
 
 Updated: 2026-08-25
 Base branch: `phase/12.5-transport-validation-clean`
-Status: **FIXTURE + SD TEST INFRASTRUCTURE IMPLEMENTED / BUILD + HIL PENDING**
+Status: **DEFERRED HIL — NO HARDWARE AVAILABLE / SOFTWARE INFRASTRUCTURE READY**
+
+## Current decision
+
+Target hardware is currently unavailable. Do **not** block ongoing software work on P2-F or other hardware-only acceptance items, and do not repeatedly speculate/debug these items without new target evidence.
+
+When asked **"hiện tại nên làm gì tiếp theo trên Codex?"**, treat the hardware-only items in this document as **deferred backlog** and recommend the next software-only Phase 12 task instead. Resume this backlog only when hardware is explicitly available.
+
+## Deferred HIL backlog
+
+When hardware becomes available, resume in this order:
+
+1. Build/flash the dedicated P2-F branch and verify the new SD wrapper on the ESP-IDF target toolchain.
+2. Run the BOOT `Starting...` regression matrix and capture complete serial logs.
+3. Run P2-F known-audio E2E from SD and preserve complete logs through cleanup.
+4. Run real AP/Wi-Fi/Internet/DNS/TLS/service-loss recovery tests.
+5. Capture equivalent-state resource measurements after the above tests.
+
+Until hardware is available, these items are **DEFERRED**, not FAILED and not accepted.
 
 ## Goal
 
-Close Phase 12 P2-F with one deterministic known-audio transaction without
-using production microphone/speaker ownership.
+Close Phase 12 P2-F with one deterministic known-audio transaction without using production microphone/speaker ownership.
 
 Known phrase:
 
@@ -36,14 +53,11 @@ which mounts on target as:
 - XZF1 total size: 6030 bytes;
 - SHA-256: `e3cda4c2dbbfe2ff8acd06f4f1f7cfc1645cfe6d7e0a86c6bcd99d44f1a2b5d3`.
 
-Local fixture verification used libopus
-`opus_packet_get_nb_samples(packet, packet_size, 16000)` and every packet
-returned 960 samples, proving the intended 60 ms packet duration at 16 kHz.
+Local fixture verification used libopus `opus_packet_get_nb_samples(packet, packet_size, 16000)` and every packet returned 960 samples, proving the intended 60 ms packet duration at 16 kHz.
 
 ## Implementation
 
-Validation-only/default-OFF infrastructure was added to the Phase 12 base
-branch:
+Validation-only/default-OFF infrastructure was added to the Phase 12 base branch:
 
 - `CONFIG_XIAOZHI_FOUNDATION_P2F_SD_FIXTURE`;
 - SD loader using the existing `sd_card_manager` mounted-VFS lease;
@@ -52,8 +66,11 @@ branch:
 - exact file-size/header validation before the existing Xiaozhi P2-F worker runs;
 - no microphone, speaker, I2S, production `audio_manager`, Wi-Fi ownership, or provisioning ownership changes.
 
-The SD loader is intentionally used only when P2-F E2E validation is selected.
-Normal Gateway builds remain default-OFF.
+The SD loader is intentionally used only when P2-F E2E validation is selected. Normal Gateway builds remain default-OFF.
+
+Dedicated HIL branch:
+
+`test/xiaozhi-p2f-known-audio-e2e`
 
 ## Expected test flow
 
@@ -77,8 +94,7 @@ boot Gateway
 
 ## Expected log
 
-Timestamps and exact assistant wording may vary. Acceptance requires the
-following semantic order/markers:
+Timestamps and exact assistant wording may vary. Acceptance requires the following semantic order/markers:
 
 ```text
 I (...) XZ_P2F_SD: P2F_SD_FIXTURE result=READY path=/sdcard/xiaozhi/p2f_fixture.xzf bytes=6030 frames=33 frame_ms=60 sample_rate=16000 channels=1
@@ -94,10 +110,7 @@ I (...) XIAOZHI_FOUNDATION: ... audio_rx_callback_count=... audio_rx_total_bytes
 I (...) XIAOZHI_FOUNDATION: VALIDATION SUMMARY checkpoint=P2-F_AUDIO_E2E result=PASS ...
 ```
 
-The USER transcript may differ in punctuation/case or represent the phrase as
-`2 plus 2`; it must still clearly match the known semantic content. Assistant
-text must be non-empty. Received server audio and completed-turn evidence are
-required by the existing P2-F contract.
+The USER transcript may differ in punctuation/case or represent the phrase as `2 plus 2`; it must still clearly match the known semantic content. Assistant text must be non-empty. Received server audio and completed-turn evidence are required by the existing P2-F contract.
 
 ## Important failure markers
 
@@ -110,10 +123,9 @@ P2-F response timeout ...
 VALIDATION SUMMARY checkpoint=P2-F_AUDIO_E2E result=FAIL ...
 ```
 
-A failure is evidence to debug, not permission to bypass the public Xiaozhi
-flow with private/raw protocol messages.
+A failure is evidence to debug, not permission to bypass the public Xiaozhi flow with private/raw protocol messages.
 
-## Hardware procedure
+## Hardware procedure — run only when hardware is available
 
 1. Checkout `test/xiaozhi-p2f-known-audio-e2e`.
 2. Ensure the normal project Wi-Fi/Firebase development configuration needed by the Gateway is available locally.
@@ -150,11 +162,13 @@ Confirmed without target hardware:
 - SD path matches the project `/sdcard` mount contract;
 - test remains validation-only/default-OFF in the base Phase 12 branch.
 
-Not confirmed yet:
+Not confirmed yet and intentionally deferred until hardware is available:
 
-- ESP-IDF compile/link of the new SD wrapper on the project toolchain;
+- ESP-IDF compile/link of the new SD wrapper on the project target environment;
 - real SD read on ESP32-S3;
+- BOOT `Starting...` mitigation acceptance;
 - Xiaozhi server STT/TTS response to this fixture;
-- hardware resource behavior.
+- real network-loss recovery behavior;
+- final target resource behavior.
 
-Therefore current status is **READY FOR BUILD/HIL**, not hardware PASS.
+Therefore current status is **DEFERRED HIL / READY TO RESUME WHEN HARDWARE IS AVAILABLE**, not hardware PASS.
