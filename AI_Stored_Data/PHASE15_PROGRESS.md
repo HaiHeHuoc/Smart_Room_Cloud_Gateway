@@ -53,6 +53,8 @@ ERROR
 
 15-A maps these from the existing `voice_assistant_state_t`. It does not invent new transport ownership and does not call LVGL.
 
+Important current boundary: Phase 14 does not yet drive all of `LISTENING / THINKING / SPEAKING` directly through `voice_assistant_state_t`; PTT/uplink/downlink still own part of that transaction state. Therefore 15-A does not synthesize those states from READY or audio activity. Later Phase-15 checkpoints must promote real semantic/transaction events explicitly.
+
 ### Text contract
 
 Production UI text is project-owned and bounded:
@@ -69,6 +71,8 @@ voice_assistant_ui_model_post_assistant_text(generation, text);
 ```
 
 The caller keeps ownership of the input string; the model copies it before returning. Text from a stale or mismatched session generation is rejected.
+
+Text inspection is bounded with `strnlen(..., 192)`. The model never performs an unbounded `strlen()` over a borrowed production text pointer; input that has no NUL within the model capacity is safely truncated to 191 bytes plus NUL and marked truncated.
 
 ### Why this is not the old Phase-12 UI model
 
@@ -90,27 +94,25 @@ audio_manager READY
 
 The model currently observes copied `voice_assistant` lifecycle state through the existing status callback. No GUI adapter is registered yet; that is 15-B.
 
-## Upstream Xiaozhi semantic evidence
+## Production text ingress evidence boundary
 
-The pinned/current `esp_xiaozhi` protocol API exposes `ESP_XIAOZHI_CHAT_EVENT_CHAT_TEXT` with `esp_xiaozhi_chat_text_data_t { role, text }`, where role distinguishes USER and ASSISTANT. The production `xiaozhi_session.c` currently promotes TTS/audio/error events but not CHAT_TEXT.
+The existing Phase-12 validation path already proves that user/assistant text can exist in the Xiaozhi integration and temporary validation UI. However, the Phase-15 production path does not yet promote a verified semantic text event into `voice_assistant_ui_model`.
 
-Therefore Phase 15 will wire text in two dedicated checkpoints instead of reusing/parsing validation logs:
+Do not assume or document a specific upstream production `CHAT_TEXT` event/type until the pinned `esp_xiaozhi` API used by this branch is inspected in 15-C/15-D. Those checkpoints must verify the exact event, role semantics, pointer lifetime and string termination before wiring production USER/ASSISTANT text.
 
-- 15-C: CHAT_TEXT role USER -> `voice_assistant_ui_model_post_user_text()`;
-- 15-D: CHAT_TEXT role ASSISTANT -> `voice_assistant_ui_model_post_assistant_text()`.
-
-No semantic text is claimed to reach the production UI yet.
+Therefore no semantic text is claimed to reach the production UI yet.
 
 ## Static review notes
 
 1. UI model callback is invoked after releasing its mutex.
 2. No LVGL API is called from `voice_assistant_ui_model`.
 3. Text buffers are always null terminated.
-4. text >= 192 bytes is truncated with an explicit flag.
+4. text with no NUL inside the 192-byte inspection bound is truncated safely with an explicit flag.
 5. stale generation text is rejected.
 6. new session generation clears old user/assistant text to prevent stale conversation display.
-7. `AI_Stored_Data` remains documentation-only and is not a firmware dependency.
-8. No ESP-IDF build or HIL PASS is claimed.
+7. model startup consumes the existing single `voice_assistant` status-observer slot; Phase-15 composition must not register a second direct observer without adding an explicit fan-out boundary.
+8. `AI_Stored_Data` remains documentation-only and is not a firmware dependency.
+9. No ESP-IDF build or HIL PASS is claimed.
 
 ## Not implemented in 15-A
 
