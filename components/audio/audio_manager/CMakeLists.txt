@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "audio_manager.c"
+        "audio_manager_arbitration.c"
         "audio_manager_stream.c"
         "audio_manager_stream_tap.c"
         "audio_api_test_task.c"
