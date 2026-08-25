@@ -1,6 +1,7 @@
 set(xiaozhi_foundation_sources
     "xiaozhi_foundation.c"
-    "xiaozhi_session.c")
+    "xiaozhi_session.c"
+    "xiaozhi_text_bridge.c")
 
 set(xiaozhi_foundation_private_requires
     esp_event
@@ -32,6 +33,15 @@ idf_component_register(
     PRIV_REQUIRES
         ${xiaozhi_foundation_private_requires}
 )
+
+# Phase 15: only the production session source is redirected through the
+# semantic-text init bridge. The bridge calls the real esp_xiaozhi_chat_init()
+# from its own translation unit, so transport behavior remains unchanged.
+set_source_files_properties(
+    xiaozhi_session.c
+    PROPERTIES
+    COMPILE_DEFINITIONS
+        "esp_xiaozhi_chat_init=xiaozhi_foundation_chat_init_bridge")
 
 if(CONFIG_XIAOZHI_FOUNDATION_P2F_SD_FIXTURE)
     # The validation-only wrapper loads the SD fixture immediately before the
