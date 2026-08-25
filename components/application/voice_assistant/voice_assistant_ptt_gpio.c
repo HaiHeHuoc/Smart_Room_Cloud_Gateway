@@ -1,7 +1,6 @@
 #include "voice_assistant_ptt_gpio.h"
 
 #include <stdbool.h>
-#include <string.h>
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -83,14 +82,14 @@ esp_err_t voice_assistant_ptt_gpio_init(
         return ESP_ERR_INVALID_ARG;
     }
 
-    const gpio_config_t gpio_config = {
+    const gpio_config_t io_config = {
         .pin_bit_mask = 1ULL << (uint32_t)config->gpio_num,
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_ENABLE,
         .intr_type = GPIO_INTR_DISABLE,
     };
-    const esp_err_t ret = gpio_config(&gpio_config);
+    const esp_err_t ret = gpio_config(&io_config);
     if (ret != ESP_OK) {
         return ret;
     }
