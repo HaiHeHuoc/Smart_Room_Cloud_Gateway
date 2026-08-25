@@ -2,12 +2,16 @@
 #include "audio_manager_stream.h"
 #include "board_config.h"
 #include "esp_log.h"
+#include "sdkconfig.h"
 #include "voice_assistant.h"
 #include "voice_assistant_audio_adapter.h"
 #include "voice_assistant_downlink.h"
 #include "voice_assistant_ptt.h"
 #include "voice_assistant_ptt_gpio.h"
 #include "voice_assistant_uplink.h"
+
+_Static_assert(PTT_BUTTON_USE_INTERNAL_PULLDOWN == 1,
+               "Phase-14 PTT GPIO contract requires internal pull-down");
 
 static const char *const TAG = "PH14_COMPOSE";
 
@@ -29,6 +33,7 @@ static void phase14_audio_status_fanout(
         s_app_audio_callback(status, s_app_audio_callback_context);
     }
 
+#if !CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
     const esp_err_t voice_ret =
         voice_assistant_audio_adapter_post(status);
     if ((voice_ret != ESP_OK) &&
@@ -38,6 +43,7 @@ static void phase14_audio_status_fanout(
                  "voice audio-status fanout dropped: %s",
                  esp_err_to_name(voice_ret));
     }
+#endif
 }
 
 esp_err_t app_phase14_audio_manager_register_status_callback(
@@ -54,6 +60,11 @@ esp_err_t app_phase14_audio_manager_register_status_callback(
 
 static esp_err_t phase14_start_voice_stack(void)
 {
+#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+    ESP_LOGW(TAG,
+             "Phase-14 production voice stack suppressed because Phase-12 Xiaozhi validation mode is enabled");
+    return ESP_OK;
+#else
     if (s_voice_started) {
         return ESP_OK;
     }
@@ -121,6 +132,7 @@ static esp_err_t phase14_start_voice_stack(void)
              (int)PTT_BUTTON_GPIO,
              (unsigned)PTT_BUTTON_ACTIVE_LEVEL);
     return ESP_OK;
+#endif
 }
 
 esp_err_t app_phase14_audio_manager_start(void)
