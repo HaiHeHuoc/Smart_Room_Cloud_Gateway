@@ -6,7 +6,7 @@ Purpose: cross-session/Codex routing for **"hiện tại nên làm gì tiếp th
 
 ## Routing rule
 
-Always surface the deferred HIL backlog before recommending new coding work. Hardware-unavailable HIL must remain visible but must not block software development.
+Always surface the deferred HIL backlog before recommending new coding work. Hardware-unavailable HIL remains visible but does not block software development.
 
 Current software state:
 
@@ -14,10 +14,11 @@ Current software state:
 Phase 12 SW -> COMPLETE / selected HIL deferred
 Phase 13 SW -> COMPLETE / HIL deferred
 Phase 14 SW -> COMPLETE / Build + HIL pending
-Phase 15 SW -> IN PROGRESS / 15-A complete
+Phase 15 SW -> COMPLETE / Build + HIL pending
+Phase 16    -> NOT STARTED
 ```
 
-Phase 15 was explicitly started by Hải from `phase/14-ptt-voice-mvp`. Continue Phase 15 only one checkpoint at a time and only after Hải says `tiếp tục`.
+Do not start Phase 16 automatically. Only start it after explicit user direction.
 
 ---
 
@@ -29,7 +30,12 @@ Primary runbook: `AI_Stored_Data/CODEX_HIL_RUNBOOK.md`
 
 Activation label: `RUN PHASE 12 HIL`
 
-Backlog includes P2-F known-audio E2E, BOOT `Starting...` regression, real AP/Internet/service loss and resource/cleanup baseline.
+Backlog includes:
+
+- P2-F known-audio E2E;
+- BOOT `Starting...` regression;
+- real AP/Internet/service loss;
+- resource/cleanup baseline.
 
 When hardware is unavailable: **DEFERRED**.
 
@@ -43,48 +49,109 @@ Primary runbook: `AI_Stored_Data/CODEX_HIL_RUNBOOK.md`
 
 Activation label: `RUN PHASE 13 HIL`
 
-Backlog includes repeated production session start/stop, duplicate command rejection, audio-status coalescing, real network-loss recovery, stale/late event handling and resource trend.
+Backlog includes:
+
+- repeated production session start/stop;
+- duplicate command rejection;
+- audio-status coalescing;
+- real network-loss recovery;
+- stale/late event handling;
+- resource trend.
 
 When hardware is unavailable: **DEFERRED**.
 
 ---
 
-## Phase 14 HIL — plan ready / test branch not yet created
+## Phase 14 HIL — deferred / plan ready
 
 Production branch: `phase/14-ptt-voice-mvp`
 
 HIL plan: `AI_Stored_Data/PHASE14_HIL_TEST_PLAN.md`
 
-Recommended future test branch: `test/phase14-ptt-voice-e2e-hil`
+Recommended test branch: `test/phase14-ptt-voice-e2e-hil`
 
-Phase-14 target acceptance must prove physical PTT -> real Xiaozhi READY -> INMP441 capture -> PCM uplink -> server response -> downlink -> audio_manager -> MAX98357 speaker -> cleanup -> repeated next turn.
+Target acceptance:
 
-Important risks remain actual downlink codec, temporary GPIO5 wiring, SD-backed response handoff, repeated-turn ownership and source-scoped CMake integration.
+```text
+physical PTT
+-> real Xiaozhi READY
+-> INMP441 capture
+-> PCM uplink
+-> server response
+-> downlink
+-> audio_manager
+-> MAX98357 speaker
+-> cleanup
+-> repeated next turn
+```
+
+Important risks:
+
+- actual downlink codec;
+- temporary GPIO5 wiring;
+- SD-backed response handoff;
+- repeated-turn audio ownership;
+- source-scoped CMake integration/tap build compatibility.
 
 When hardware is unavailable: **DEFERRED / TEST PLAN READY**.
 
 ---
 
-## Phase 15 — active software work
+## Phase 15 HIL — deferred / plan ready
 
-Branch: `phase/15-voice-assistant-ui`
+Production branch: `phase/15-voice-assistant-ui`
 
-Progress document: `AI_Stored_Data/PHASE15_PROGRESS.md`
+Progress/closure: `AI_Stored_Data/PHASE15_PROGRESS.md`
 
-Current checkpoint:
+HIL plan: `AI_Stored_Data/PHASE15_HIL_TEST_PLAN.md`
+
+Recommended test branch: `test/phase15-voice-ui-hil`
+
+Suggested activation label: `RUN PHASE 15 HIL`
+
+Target acceptance:
 
 ```text
-15-A Production Voice Event/UI Model     COMPLETE
-15-B Voice Assistant Screen              NEXT
-15-C User transcript                     pending
-15-D Assistant response text             pending
-15-E Repeated-turn/history/error UX      pending
-15-F Final review/HIL plan               pending
+real voice lifecycle
+-> Voice/Xiaozhi screen
+-> real USER CHAT_TEXT
+-> copied USER transcript on LCD
+-> real ASSISTANT CHAT_TEXT
+-> copied ASSISTANT text on LCD
+-> assistant text independent from audio playback
+-> repeated latest-turn replacement
+-> session-change stale-text cleanup
+-> ERROR/RECOVERING presentation
+-> UI/LVGL ownership remains stable
 ```
 
-15-A created a project-owned production presentation model with copied lifecycle/error/generation state and bounded USER/ASSISTANT text buffers. It deliberately does not reuse the temporary Phase-12 validation UI type.
+Important Phase-15 risks:
 
-`esp_xiaozhi` exposes semantic `CHAT_TEXT` events with USER/ASSISTANT roles, but production text wiring is intentionally deferred to 15-C/15-D. No transcript/text GUI success is claimed yet.
+- source-local `esp_xiaozhi_chat_init` semantic bridge must compile against pinned `esp_xiaozhi` 0.1.2;
+- USER/ASSISTANT semantic pointer lifetime must be proven by real callback behavior;
+- recovery snapshot must remain accepted by legacy `app_gui` after the final-review error-normalization fix;
+- legacy screen intentionally maps CONNECTING/THINKING/RECOVERING to `PROCESSING`;
+- Phase-14 audio/codec failures must not be misdiagnosed as Phase-15 text/UI failures.
+
+When hardware is unavailable: **DEFERRED / TEST PLAN READY**.
+
+---
+
+## Post-Phase-15 architecture follow-up — audio arbitration
+
+Before intentionally enabling multiple competing audio clients, add/review centralized `audio_manager` capture/playback arbitration.
+
+Examples:
+
+```text
+Xiaozhi SPEAKING + notification playback
+Xiaozhi LISTENING + another recorder
+critical alarm + Xiaozhi response playback
+```
+
+The current `audio_manager` sole-I2S ownership is correct, but general request priority/queue/preemption policy is not yet implemented.
+
+Do not solve future contention by giving another component direct I2S ownership.
 
 ---
 
@@ -96,9 +163,11 @@ Answer in this order:
 
 1. Phase 12 HIL remains deferred and Codex-ready.
 2. Phase 13 HIL remains deferred and Codex-ready.
-3. Phase 14 HIL remains deferred; plan is ready.
-4. Phase 15 is active; 15-A is complete.
-5. Next software checkpoint is **15-B — Voice Assistant Screen**, but do not implement it until Hải says `tiếp tục`.
+3. Phase 14 HIL remains deferred; plan ready.
+4. Phase 15 HIL remains deferred; plan ready.
+5. Phase 14 and Phase 15 software are complete.
+6. General audio arbitration remains a future integration/architecture follow-up.
+7. Phase 16 is not started; only plan/start it after explicit request.
 
 Concise state:
 
@@ -106,8 +175,10 @@ Concise state:
 P12 HIL -> DEFERRED / test branch ready
 P13 HIL -> DEFERRED / test branch ready
 P14 HIL -> DEFERRED / plan ready
-P15 SW  -> 15-A COMPLETE
-Next SW -> 15-B after explicit `tiếp tục`
+P15 HIL -> DEFERRED / plan ready
+P14 SW  -> COMPLETE
+P15 SW  -> COMPLETE
+P16     -> NOT STARTED
 ```
 
 ### If hardware IS available
@@ -117,11 +188,26 @@ Recommended order unless a specific regression requires otherwise:
 1. `RUN PHASE 12 HIL`.
 2. `RUN PHASE 13 HIL`.
 3. Create/use Phase-14 dedicated HIL branch and run PTT voice E2E.
-4. Continue/verify Phase-15 UI separately; do not use UI behavior to hide a Phase-14 voice transport/audio failure.
-5. Fix production defects on the owning phase branch and propagate forward.
-6. After independent acceptance, integrate production commits into the full Gateway/Firebase integration branch and run full regression HIL.
+4. Create/use Phase-15 dedicated HIL branch and run real semantic text/UI acceptance.
+5. Fix production defects on the owning phase branch and propagate forward/test branches.
+6. After independent acceptance, integrate **production branches/history only** into the full Gateway/Firebase integration branch.
+7. Run full regression HIL: Wi-Fi/provisioning + sensor + Firebase + GUI + SD + audio + Xiaozhi + Voice UI, including simultaneous Firebase/Xiaozhi load.
 
 Never merge HIL/test harness branches as production feature history.
+
+## Production-vs-test fix policy
+
+```text
+Test harness/config/expected-log defect
+-> fix on test branch
+
+Production component/architecture defect
+-> fix on owning production branch
+-> propagate forward/test branch
+-> retest
+```
+
+Preserve evidence before patching a failed HIL case.
 
 ## Evidence discipline
 
@@ -130,7 +216,7 @@ Use these states precisely:
 - `IMPLEMENTED` — code exists;
 - `STATIC REVIEW COMPLETE` — source review performed;
 - `BUILD VERIFIED` — real ESP-IDF build evidence exists;
-- `HIL PASS` — target evidence satisfies the documented contract;
+- `HIL PASS` — target evidence satisfies documented contract;
 - `DEFERRED HIL` — hardware acceptance intentionally postponed.
 
 `AI_Stored_Data/` is cross-session metadata only and must never become a firmware/build dependency.
