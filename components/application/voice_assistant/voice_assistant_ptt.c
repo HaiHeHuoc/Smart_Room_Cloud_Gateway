@@ -180,7 +180,7 @@ static void ptt_reconcile_voice_state(void)
                            voice.session_generation,
                            ESP_OK);
         } else {
-            ptt_set_status(VOICE_ASSISTANT_PTT_RELEASED,
+            ptt_set_status(VOICE_ASSISTANT_PTT_CANCEL_PENDING,
                            false,
                            false,
                            voice.session_generation,
@@ -270,7 +270,7 @@ static void ptt_handle_release(void)
 
     switch (current.state) {
         case VOICE_ASSISTANT_PTT_ARMING_SESSION:
-            ptt_set_status(VOICE_ASSISTANT_PTT_RELEASED,
+            ptt_set_status(VOICE_ASSISTANT_PTT_CANCEL_PENDING,
                            false,
                            false,
                            current.session_generation,
