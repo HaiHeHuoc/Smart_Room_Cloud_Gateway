@@ -29,15 +29,15 @@ RUN PHASE 15 HIL -> test/phase15-voice-ui-hil
 RUN PHASE 16 HIL -> test/phase16-audio-arbitration-hil
 ```
 
-Before checkout, inspect git status. If local work could be lost, stop and report; never auto-stash/reset/delete. If a required test branch/harness does not exist, report the prerequisite instead of testing on the current production branch.
+Before checkout, inspect git status. If local work could be lost, stop and report; never auto-stash/reset/delete. After routing, Codex must read the HIL plan/runbook on the selected test branch before editing/building/flashing.
 
 ## Deferred HIL
 
 - Phase 12: `test/xiaozhi-p2f-known-audio-e2e`, activation `RUN PHASE 12 HIL`.
 - Phase 13: `test/phase13-voice-assistant-hil`, activation `RUN PHASE 13 HIL`.
-- Phase 14: plan ready; dedicated `test/phase14-ptt-voice-e2e-hil` prerequisite must be verified/created before execution.
+- Phase 14: plan ready; dedicated `test/phase14-ptt-voice-e2e-hil` prerequisite must still be verified/created before execution.
 - Phase 15: `test/phase15-voice-ui-hil`, activation `RUN PHASE 15 HIL`.
-- Phase 16: plan `AI_Stored_Data/PHASE16_HIL_TEST_PLAN.md`; recommended test branch `test/phase16-audio-arbitration-hil`; activation `RUN PHASE 16 HIL`.
+- Phase 16: `test/phase16-audio-arbitration-hil`, plan `AI_Stored_Data/PHASE16_HIL_TEST_PLAN.md`, runbook `AI_Stored_Data/PHASE16_HIL_TEST_BRANCH.md`, activation `RUN PHASE 16 HIL`.
 
 All remain DEFERRED when hardware is unavailable.
 
@@ -45,6 +45,8 @@ All remain DEFERRED when hardware is unavailable.
 
 Production branch: `phase/16-audio-arbitration`
 Closure: `AI_Stored_Data/PHASE16_PROGRESS.md`
+Test branch: `test/phase16-audio-arbitration-hil`
+Activation: `RUN PHASE 16 HIL`
 
 Completed checkpoints:
 
@@ -87,7 +89,7 @@ If hardware is unavailable:
 2. Phase 13 HIL deferred / Codex-ready.
 3. Phase 14 HIL deferred / dedicated test-branch prerequisite.
 4. Phase 15 HIL deferred / test branch ready.
-5. Phase 16 HIL deferred / plan ready, create/populate dedicated test branch.
+5. Phase 16 HIL deferred / **test branch + Codex runbook ready**.
 6. Major feature coding is complete. Do not propose Phase 17 automatically.
 7. Useful non-HIL work is limited to documentation/review/test-harness preparation; avoid new feature scope without explicit user direction.
 
@@ -107,6 +109,25 @@ Phase 12 HIL
 ```
 
 Full regression must include Wi-Fi/provisioning + sensor + Firebase + GUI + SD + audio + Xiaozhi, simultaneous Firebase/Xiaozhi traffic, repeated PTT turns, notification queueing and critical-alarm preemption.
+
+## `RUN PHASE 16 HIL` Codex behavior
+
+From any clean branch, including `phase/16-audio-arbitration`, Codex must:
+
+```text
+inspect branch + git status
+-> checkout test/phase16-audio-arbitration-hil
+-> read Agent.md + Phase-16 HIL plan + Phase-16 HIL branch runbook
+-> inspect current test/production seams
+-> clean/reconfigure build
+-> flash connected ESP32-S3
+-> monitor from reset
+-> execute T16-01 ... T16-12 independently
+-> request only genuinely manual physical actions
+-> report PASS / FAIL / SKIP with runtime evidence
+```
+
+Never mark HIL PASS from source inspection. Test-only instrumentation may be added on the test branch. Production defects must be fixed on the owning production branch first and then propagated back for retest.
 
 ## Production-vs-test fix policy
 
