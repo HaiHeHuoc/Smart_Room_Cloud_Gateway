@@ -4,6 +4,7 @@
 
 #include "audio_manager.h"
 #include "audio_manager_stream.h"
+#include "voice_assistant_downlink.h"
 #include "voice_assistant_ptt.h"
 #include "xiaozhi_foundation.h"
 
@@ -89,7 +90,17 @@ static esp_err_t uplink_begin_turn(uint32_t generation)
         return ESP_ERR_INVALID_ARG;
     }
 
-    esp_err_t ret = xiaozhi_foundation_audio_uplink_start(generation);
+    if (voice_assistant_downlink_is_busy()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    audio_manager_status_t audio = {0};
+    esp_err_t ret = audio_manager_get_status(&audio);
+    if ((ret != ESP_OK) || (audio.state != AUDIO_MANAGER_STATE_IDLE)) {
+        return (ret != ESP_OK) ? ret : ESP_ERR_INVALID_STATE;
+    }
+
+    ret = xiaozhi_foundation_audio_uplink_start(generation);
     if (ret != ESP_OK) {
         return ret;
     }
@@ -97,6 +108,7 @@ static esp_err_t uplink_begin_turn(uint32_t generation)
     ret = audio_manager_stream_arm(generation);
     if (ret != ESP_OK) {
         (void)xiaozhi_foundation_audio_uplink_stop(generation);
+        (void)xiaozhi_foundation_audio_channel_close(generation);
         return ret;
     }
 
@@ -113,6 +125,7 @@ static esp_err_t uplink_begin_turn(uint32_t generation)
         portEXIT_CRITICAL(&s_lock);
         (void)audio_manager_stream_disarm(generation);
         (void)xiaozhi_foundation_audio_uplink_stop(generation);
+        (void)xiaozhi_foundation_audio_channel_close(generation);
         return ret;
     }
 
@@ -138,6 +151,7 @@ static esp_err_t uplink_end_turn(uint32_t generation)
         first_error = ret;
     }
 
+    /* Stop listening but intentionally keep the channel open for downlink. */
     ret = xiaozhi_foundation_audio_uplink_stop(generation);
     if ((ret != ESP_OK) && (ret != ESP_ERR_INVALID_STATE) &&
         (first_error == ESP_OK)) {
@@ -170,8 +184,11 @@ static void uplink_reconcile_ptt(void)
         (ptt.state == VOICE_ASSISTANT_PTT_AUTHORIZED) &&
         ptt.capture_authorized &&
         (ptt.session_generation != 0U)) {
+        if (voice_assistant_downlink_is_busy()) {
+            return;
+        }
         const esp_err_t ret = uplink_begin_turn(ptt.session_generation);
-        if (ret != ESP_OK) {
+        if ((ret != ESP_OK) && (ret != ESP_ERR_INVALID_STATE)) {
             ESP_LOGE(TAG, "turn start failed: %s", esp_err_to_name(ret));
             uplink_set_error(ret);
         }
