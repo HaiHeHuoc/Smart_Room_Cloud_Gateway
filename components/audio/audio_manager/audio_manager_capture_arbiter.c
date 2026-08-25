@@ -63,6 +63,8 @@ static void promote_pending_locked(void)
         s_current_valid = true;
         clear_slot(&s_pending);
         s_pending_valid = false;
+        s_cancel_current = false;
+        s_preempt_current = false;
         s_recording_observed = false;
     }
 }
@@ -75,6 +77,20 @@ static bool manager_is_external_busy(const audio_manager_status_t *manager)
     return ((manager->state == AUDIO_MANAGER_STATE_RECORDING) ||
             (manager->state == AUDIO_MANAGER_STATE_PROCESSING)) &&
            !s_current_valid;
+}
+
+static void drop_current_before_start_locked(bool count_preemption)
+{
+    if (count_preemption) {
+        ++s_status.preemption_count;
+    }
+    clear_slot(&s_current);
+    s_current_valid = false;
+    s_cancel_current = false;
+    s_preempt_current = false;
+    s_recording_observed = false;
+    promote_pending_locked();
+    sync_status_locked(AUDIO_MANAGER_CAPTURE_ARBITER_IDLE, ESP_OK);
 }
 
 static void capture_arbiter_task(void *arg)
@@ -109,6 +125,15 @@ static void capture_arbiter_task(void *arg)
         capture_slot_t start_slot = {0};
 
         if (take_lock()) {
+            if (s_current_valid && !s_recording_observed &&
+                (manager.state == AUDIO_MANAGER_STATE_IDLE)) {
+                if (s_cancel_current) {
+                    drop_current_before_start_locked(false);
+                } else if (s_preempt_current && s_pending_valid) {
+                    drop_current_before_start_locked(true);
+                }
+            }
+
             if (s_current_valid) {
                 if (manager.state == AUDIO_MANAGER_STATE_RECORDING) {
                     s_recording_observed = true;
@@ -183,9 +208,6 @@ static void capture_arbiter_task(void *arg)
                              audio_manager_client_to_string(start_slot.request.client),
                              (unsigned)start_slot.request.priority);
                 } else if (ret == ESP_ERR_INVALID_STATE) {
-                    /* Legacy capture may have won between our status snapshot
-                     * and submission. Keep the request and retry only after the
-                     * manager is genuinely IDLE again. */
                     sync_status_locked(AUDIO_MANAGER_CAPTURE_ARBITER_IDLE, ret);
                 } else {
                     ++s_status.failed_count;
