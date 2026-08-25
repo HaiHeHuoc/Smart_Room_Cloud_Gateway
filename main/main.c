@@ -706,12 +706,31 @@ void app_main(void)
             "Failed to start network coordinator: %s",
             esp_err_to_name(coordinator_ret));
 
+        const esp_err_t screen_ret =
+            app_gui_request_screen(
+                APP_GUI_SCREEN_WIFI_STATUS);
+
+        if (screen_ret != ESP_OK)
+        {
+            ESP_LOGW(
+                TAG,
+                "Failed to leave BOOT screen after coordinator start failure: %s",
+                esp_err_to_name(screen_ret));
+        }
+        else
+        {
+            ESP_LOGW(
+                TAG,
+                "Coordinator did not start; WIFI_STATUS queued instead of leaving BOOT Starting indefinitely");
+        }
+
         return;
     }
 
     bool cloud_started = false;
     /* Preserve the prior one-shot audio lifecycle attempt after the new gate. */
     bool audio_start_attempted = false;
+    bool network_failure_screen_requested = false;
 #if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
     bool audio_started = false;
     bool xiaozhi_validation_attempted = false;
@@ -734,6 +753,49 @@ void app_main(void)
                     TAG,
                     "Failed to inspect network readiness for deferred startup: %s",
                     esp_err_to_name(service_ret));
+            }
+            else if ((network_state == APP_NETWORK_COORDINATOR_STATE_FAILED) &&
+                     !network_failure_screen_requested)
+            {
+                app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
+                const esp_err_t screen_state_ret =
+                    app_gui_get_screen_id(&screen_id);
+
+                if ((screen_state_ret == ESP_OK) &&
+                    (screen_id == APP_GUI_SCREEN_BOOT))
+                {
+                    const esp_err_t screen_ret =
+                        app_gui_request_screen(
+                            APP_GUI_SCREEN_WIFI_STATUS);
+
+                    if (screen_ret == ESP_OK)
+                    {
+                        network_failure_screen_requested = true;
+                        ESP_LOGW(
+                            TAG,
+                            "Network coordinator entered FAILED while BOOT was active; WIFI_STATUS queued to prevent an indefinite Starting screen");
+                    }
+                    else
+                    {
+                        ESP_LOGW(
+                            TAG,
+                            "Failed to route BOOT screen after network failure: %s",
+                            esp_err_to_name(screen_ret));
+                    }
+                }
+                else if ((screen_state_ret == ESP_OK) &&
+                         (screen_id != APP_GUI_SCREEN_BOOT))
+                {
+                    /* Preserve provisioning/reset/other explicit UI routes. */
+                    network_failure_screen_requested = true;
+                }
+                else if (screen_state_ret != ESP_OK)
+                {
+                    ESP_LOGW(
+                        TAG,
+                        "Failed to inspect active screen after network failure: %s",
+                        esp_err_to_name(screen_state_ret));
+                }
             }
             else if (!audio_start_attempted &&
                      app_network_state_allows_audio_start(
