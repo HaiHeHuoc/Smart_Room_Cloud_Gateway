@@ -21,6 +21,7 @@ idf_component_register(
         provisioning_manager
         app_network_coordinator
         xiaozhi_foundation
+        voice_assistant
         button_manager
         app_reset_coordinator
         audio_manager
