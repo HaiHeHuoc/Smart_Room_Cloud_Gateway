@@ -1,160 +1,160 @@
 # Next Work + Deferred HIL Backlog
 
 Updated: 2026-08-25
-Authoritative development branch: `phase/13-voice-assistant`
-Purpose: cross-session/Codex routing for the question **"hiện tại nên làm gì tiếp theo?"**
+Authoritative development branch: `phase/14-ptt-voice-mvp`
+Purpose: cross-session/Codex routing for **"hiện tại nên làm gì tiếp theo?"**
 
 ## Routing rule
 
-Whenever Hải asks what to do next, always surface BOTH deferred hardware backlogs below before recommending new coding work.
+Always surface the deferred HIL backlog before recommending new coding work. Hardware-unavailable HIL must remain visible but must not block software development.
 
-Do not silently forget Phase 12 or Phase 13 HIL just because hardware is unavailable.
-
-At the same time, hardware-unavailable items must not block software development:
+Current software state:
 
 ```text
-hardware unavailable
--> show Phase 12 HIL backlog
--> show Phase 13 HIL backlog
--> mark both DEFERRED
--> recommend next software-only roadmap task
+Phase 12 SW -> COMPLETE / selected HIL deferred
+Phase 13 SW -> COMPLETE / HIL deferred
+Phase 14 SW -> COMPLETE / Build + HIL pending
 ```
 
-Current next software-only roadmap task after Phase 13 is:
-
-**Sprint 14 — Push-To-Talk Voice MVP**
-
-Do not start Sprint 14 automatically unless Hải requests it.
+Do not start Phase 15 automatically. Only recommend/start it after Hải explicitly asks.
 
 ---
 
-# Deferred HIL — Phase 12
+## Phase 12 HIL — deferred / Codex-ready
 
-Phase 12 status: **software implementation complete / selected target acceptance pending**.
-
-Primary test branch:
+Branch:
 
 `test/xiaozhi-p2f-known-audio-e2e`
 
-Primary handoffs:
+Primary runbook:
 
-- `AI_Stored_Data/P2F_KNOWN_AUDIO_HIL.md`
-- `AI_Stored_Data/PHASE12_HIL_TEST_PLAN.md` on the Phase-12 HIL branch where present
-- `AI_Stored_Data/BOOT_STARTING_DEBUG.md`
+`AI_Stored_Data/CODEX_HIL_RUNBOOK.md`
 
-Hardware backlog:
+Activation label:
 
-1. P2-F known-audio E2E from SD:
-   - fixture READY;
-   - 33/33 Opus frames TX;
-   - semantically correct USER STT;
-   - non-empty ASSISTANT text;
-   - server response audio RX;
-   - clean teardown.
-2. BOOT `Starting...` regression acceptance.
-3. Real AP/Wi-Fi/Internet/DNS/TLS/service-loss behavior.
-4. Runtime resource/cleanup baseline under the above real target flows.
+`RUN PHASE 12 HIL`
 
-Current routing state when hardware is unavailable:
+Backlog includes:
 
-**DEFERRED — DO NOT BLOCK SPRINT 14 SOFTWARE WORK.**
+- P2-F known-audio E2E from SD;
+- BOOT `Starting...` regression;
+- real AP/Internet/service loss;
+- resource/cleanup baseline.
+
+When hardware is unavailable: **DEFERRED**.
 
 ---
 
-# Deferred HIL — Phase 13
+## Phase 13 HIL — deferred / Codex-ready
 
-Phase 13 status: **Software Complete / Build + Hardware Acceptance Pending**.
-
-Dedicated test branch:
+Branch:
 
 `test/phase13-voice-assistant-hil`
 
-Primary handoff on that branch:
+Primary runbook:
 
-`AI_Stored_Data/PHASE13_HIL_TEST_BRANCH.md`
+`AI_Stored_Data/CODEX_HIL_RUNBOOK.md`
 
-The test branch contains a test-only app wrapper and HIL supervisor. It preserves production `main.c`, waits for Gateway steady state, then exercises the Phase-13 production `voice_assistant` session surface.
+Activation label:
 
-Automatic HIL matrix:
+`RUN PHASE 13 HIL`
 
-1. Wait for network ONLINE + `audio_manager` IDLE.
-2. Initialize/start `voice_assistant` and require IDLE.
-3. Exercise 32 rapid copied audio-status posts under latest-value coalescing.
-4. Run three production lifecycle cycles by default:
+Backlog includes:
 
-```text
-IDLE
--> CONNECTING
--> real Xiaozhi READY
--> explicit end
--> intentional cleanup
--> IDLE
-```
+- repeated production session start/stop;
+- duplicate command rejection;
+- audio-status coalescing;
+- real network-loss recovery;
+- stale/late event handling;
+- resource trend.
 
-5. Verify duplicate begin/end rejection.
-6. Capture internal/largest-block/PSRAM resource checkpoints.
-7. Require explicit automatic PASS summary.
-
-Manual real-network recovery window:
-
-```text
-READY
--> externally remove AP/Internet/service
--> ERROR
--> explicit recover()
--> RECOVERING
--> IDLE
-```
-
-If no external fault is injected during the window, this stage must be reported `SKIP`, not falsely marked PASS.
-
-Current routing state when hardware is unavailable:
-
-**DEFERRED — TEST INFRASTRUCTURE READY, TARGET EVIDENCE PENDING.**
+When hardware is unavailable: **DEFERRED**.
 
 ---
 
-# What to answer when asked "làm gì tiếp theo?"
+## Phase 14 HIL — plan ready / test branch not yet created
 
-## If hardware is NOT available
+Production branch:
+
+`phase/14-ptt-voice-mvp`
+
+HIL plan:
+
+`AI_Stored_Data/PHASE14_HIL_TEST_PLAN.md`
+
+Recommended future test branch:
+
+`test/phase14-ptt-voice-e2e-hil`
+
+Phase-14 target acceptance must prove:
+
+```text
+physical PTT
+-> real Xiaozhi READY
+-> INMP441 capture
+-> PCM uplink
+-> server response
+-> downlink aggregation
+-> audio_manager playback
+-> MAX98357 speaker
+-> cleanup
+-> repeated next turn
+```
+
+Important acceptance risks:
+
+- actual downlink codec must be proven compatible with the current PCM16 assumption;
+- temporary GPIO5 pull-down/active-high PTT wiring must be verified;
+- SD-backed response WAV handoff must work under `sd_card_manager` ownership;
+- repeated turns must not race mic/speaker I2S ownership;
+- source-scoped CMake composition/tap redirects require real build evidence.
+
+When hardware is unavailable: **DEFERRED / TEST PLAN READY / TEST BRANCH PENDING USER REQUEST**.
+
+---
+
+## What to answer when asked "làm gì tiếp theo?"
+
+### If hardware is NOT available
 
 Answer in this order:
 
-1. Remind that Phase 12 HIL remains deferred on `test/xiaozhi-p2f-known-audio-e2e`.
-2. Remind that Phase 13 HIL remains deferred on `test/phase13-voice-assistant-hil`.
-3. State that neither should block current vibe coding.
-4. Recommend the next software task: **Sprint 14 — Push-To-Talk Voice MVP**.
+1. Phase 12 HIL remains deferred and Codex-ready.
+2. Phase 13 HIL remains deferred and Codex-ready.
+3. Phase 14 HIL remains deferred; plan is ready but dedicated test branch has not yet been created.
+4. Phase 14 software is complete.
+5. Do not start Phase 15 unless Hải explicitly requests continuation.
 
-Example concise state:
+Concise state:
 
 ```text
-Phase 12 HIL  -> DEFERRED / test branch ready
-Phase 13 HIL  -> DEFERRED / test branch ready
-Phase 13 SW   -> COMPLETE
-Next coding   -> Sprint 14 PTT Voice MVP
+P12 HIL -> DEFERRED / test branch ready
+P13 HIL -> DEFERRED / test branch ready
+P14 HIL -> DEFERRED / plan ready
+P14 SW  -> COMPLETE
+Next SW -> Phase 15 only after explicit request
 ```
 
-## If hardware IS available
-
-Before declaring Phase 12 or Phase 13 fully accepted, run the corresponding HIL branches and preserve complete serial evidence.
+### If hardware IS available
 
 Recommended order unless a specific regression requires otherwise:
 
-1. Phase 12 HIL branch — close older deferred transport/startup/resource evidence first.
-2. Phase 13 HIL branch — validate the new production voice-assistant lifecycle/recovery layer.
-3. Fix failures on the owning phase branch, propagate forward, and rerun the affected HIL.
-4. Only mark a phase hardware-accepted after its documented PASS criteria are met.
+1. `RUN PHASE 12 HIL` and close older transport/startup evidence.
+2. `RUN PHASE 13 HIL` and close voice-session lifecycle evidence.
+3. Create/use the Phase-14 dedicated HIL branch and run full PTT voice E2E.
+4. Fix production defects on the owning production branch, propagate forward/test branches, then retest.
+5. After Phase 12/13/14 independent acceptance, integrate production commits into the full Gateway/Firebase integration branch and run a full regression HIL.
+
+Never merge HIL/test harness branches as production feature history.
 
 ## Evidence discipline
-
-Never turn any of these into PASS based only on source review, simulated/private protocol calls, or expected behavior.
 
 Use these states precisely:
 
 - `IMPLEMENTED` — code exists;
-- `STATIC REVIEW COMPLETE` — source-level review performed;
-- `BUILD VERIFIED` — actual ESP-IDF build evidence exists;
-- `HIL PASS` — target board serial/runtime evidence satisfies the documented contract;
-- `DEFERRED HIL` — hardware evidence intentionally postponed.
+- `STATIC REVIEW COMPLETE` — source review performed;
+- `BUILD VERIFIED` — real ESP-IDF build evidence exists;
+- `HIL PASS` — target evidence satisfies the documented contract;
+- `DEFERRED HIL` — hardware acceptance intentionally postponed.
 
 `AI_Stored_Data/` is cross-session metadata only and must never become a firmware/build dependency.
