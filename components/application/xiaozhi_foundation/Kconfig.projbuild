@@ -11,14 +11,28 @@ config XIAOZHI_FOUNDATION_VALIDATION_ENABLE
         validation gate is enabled.
 
 config XIAOZHI_FOUNDATION_P2F_EMBED_FIXTURE
-    bool "Embed the optional P2-F known-audio fixture"
+    bool "Enable the legacy embedded P2-F fixture provider"
     depends on XIAOZHI_FOUNDATION_VALIDATION_ENABLE
     default n
     help
-        Embed test_assets/p2f_fixture.bin only for Phase 12.5 P2-F hardware
-        validation. The asset is not a production audio input and is disabled
-        by default. The build fails clearly if this option is enabled without
-        the documented fixture file.
+        Provide the test-only XZF1 P2-F fixture through the legacy linker-symbol
+        boundary used by xiaozhi_foundation. When SD fixture mode is disabled,
+        this embeds test_assets/p2f_fixture.bin into firmware. SD fixture mode
+        selects this provider internally but fills the same bounded buffer from
+        /sdcard/xiaozhi/p2f_fixture.xzf immediately before validation.
+
+config XIAOZHI_FOUNDATION_P2F_SD_FIXTURE
+    bool "Load the P2-F known-audio fixture from SD card"
+    depends on XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+    select XIAOZHI_FOUNDATION_P2F_EMBED_FIXTURE
+    default n
+    help
+        Validation-only SD mode. The board waits up to 30 seconds for the
+        existing sd_card_manager mount, acquires its VFS lease, and loads the
+        exact 6030-byte test fixture from
+        /sdcard/xiaozhi/p2f_fixture.xzf. No microphone or production audio
+        ownership is added. The mode is disabled by default and is intended for
+        the dedicated P2-F hardware-test branch.
 
 config XIAOZHI_FOUNDATION_P2F_E2E_ONLINE_VALIDATION
     bool "Run P2-F known-audio E2E instead of default P2-E"
