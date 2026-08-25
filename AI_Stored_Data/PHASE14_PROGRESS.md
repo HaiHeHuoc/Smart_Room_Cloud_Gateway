@@ -2,8 +2,8 @@
 
 Updated: 2026-08-25
 Branch: `phase/14-ptt-voice-mvp`
-Current checkpoint: **14-B — Microphone / Public Streaming Contract**
-Status: **CONTRACT IMPLEMENTED / PRODUCER HOOK + BUILD + HIL NOT CLAIMED**
+Current checkpoint: **14-C — Xiaozhi Audio Uplink + Live Producer Hook**
+Status: **IMPLEMENTED / STATIC REVIEW COMPLETE / BUILD + HIL NOT CLAIMED**
 
 ## Collaboration rule
 
@@ -11,149 +11,172 @@ Phase 14 is implemented in reviewable parts. After each part, stop coding and wa
 
 Planned checkpoints:
 
-1. 14-A — PTT trigger + authorization state.
-2. 14-B — microphone/public streaming contract.
-3. 14-C — Xiaozhi audio uplink + connect audio-manager producer hook.
-4. 14-D — response downlink + speaker playback.
+1. 14-A — PTT trigger + authorization state. ✅
+2. 14-B — microphone/public streaming contract. ✅
+3. 14-C — Xiaozhi audio uplink + live producer hook. ✅
+4. 14-D — response downlink + speaker playback. NEXT
 5. 14-E — cancel/recovery/repeated-turn robustness.
 6. 14-F — FINAL Phase-14 review/docs/deferred HIL.
 
 When 14-F is reached, explicitly notify Hải that it is the final Phase-14 prompt before software closure.
 
-## 14-A — completed
+## 14-A summary
 
-- Added `voice_assistant_ptt` policy task and press/release/cancel API.
-- `capture_authorized=true` requires real `voice_assistant` READY evidence.
-- Release-before-READY becomes `CANCEL_PENDING` and cannot authorize capture later.
-- Temporary dedicated PTT pin reserved as GPIO5, active-high with internal pull-down. This assignment is explicitly temporary and will be changed by Hải later.
+- `voice_assistant_ptt` owns PTT authorization policy only.
+- `capture_authorized=true` requires a real READY production session.
+- release-before-READY becomes `CANCEL_PENDING` and cannot later authorize capture.
+- temporary GPIO5 reservation remains active-high with internal pull-down and must be replaceable later.
 
-## 14-B — contract implemented
+## 14-B summary
 
-### Existing capture path reviewed
-
-`audio_manager` already owns the complete INMP441 path:
+Added the project-owned live microphone contract:
 
 ```text
-I2S RX
--> 256 stereo-slot frames/block
--> startup discard
--> microphone slot detection
--> selected mono PCM24 conversion
--> manager-owned PSRAM retained recording
--> DSP / playback
+16 kHz / mono / PCM16 / max 256 samples per borrowed frame
 ```
 
-The safe Phase-14 publication point is after selected-slot conversion inside the audio-manager task. No I2S/DMA/private PSRAM pointer should cross the public boundary.
+The consumer must copy/enqueue before returning. No I2S, DMA, or manager-owned PSRAM pointer crosses the boundary.
 
-### Added public stream contract
+## 14-C — implemented
 
-New public header:
+### Production data path
 
-`components/audio/audio_manager/include/audio_manager_stream.h`
-
-Contract baseline:
+The implemented uplink path is now:
 
 ```text
-sample rate : 16000 Hz
-channels    : mono
-format      : signed PCM16
-granularity : up to 256 samples/frame
-ownership   : borrowed callback frame only
+INMP441
+  ↓ audio_manager owns I2S RX
+raw stereo slot samples
+  ↓ existing startup discard + slot detection
+selected mono PCM24 conversion
+  ↓ Phase-14 source-local tap
+PCM16 / 256 samples / 16 ms
+  ↓ audio_manager_stream borrowed callback
+copy into bounded queue (8 frames)
+  ↓ voice_uplink task
+xiaozhi_foundation_audio_uplink_send_pcm16()
+  ↓
+esp_xiaozhi public binary audio API
 ```
 
-`audio_manager_stream_frame_t` carries:
+`audio_manager` remains the only I2S/RX/DMA owner. Networking never runs in the audio-manager callback/task path beyond a non-blocking queue copy.
 
-- borrowed `const int16_t *samples`;
-- `sample_count`;
-- sample rate / channel count;
-- higher-level `stream_generation`;
-- monotonic `frame_sequence` within the generation.
+### Live producer hook
 
-Consumers must copy/enqueue before callback return. They must never retain the pointer or perform blocking network/LVGL/I2S lifecycle work in the callback.
+Added `audio_manager_stream_tap.c` and private tap hooks.
 
-### Stream lifecycle API
+Because `audio_manager.c` is a mature large capture owner, Phase 14 connects the producer with a source-local compile definition that redirects only that source file's call to:
+
+```c
+audio_dsp_convert_raw_slot_to_pcm24(...)
+```
+
+to the wrapper:
+
+```c
+audio_manager_stream_convert_raw_slot_to_pcm24(...)
+```
+
+The wrapper calls the original DSP conversion first, preserving its return value, and only performs stream publication while a stream generation is armed.
+
+The tap discards the existing microphone-slot-detection conversions before collecting selected recording samples. It then forms 256-sample PCM16 frames and publishes them through the 14-B contract. Disarm immediately disables publication and drops a partial frame.
+
+This implementation intentionally avoids a second I2S reader or exposing `s_rx_block` / `recording_pcm24` publicly. The geometry coupling (20 slot-detect blocks, 256 frames/block, 2 slots) is a static implementation dependency that must be covered by build/HIL and should be refactored into a direct capture-loop hook later if `audio_manager` is structurally changed.
+
+### Voice uplink coordinator
 
 Added:
 
-```c
-audio_manager_stream_register_callback(...);
-audio_manager_stream_arm(generation);
-audio_manager_stream_disarm(generation);
-audio_manager_stream_get_status(...);
-```
+- `include/voice_assistant_uplink.h`
+- `voice_assistant_uplink.c`
 
-Arming/disarming controls **publication authorization only**. It does not start/stop I2S; capture lifecycle remains owned by:
-
-```c
-audio_manager_start_recording();
-audio_manager_stop_recording();
-```
-
-The stream generation is non-zero and supplied by the higher-level voice transaction so late frames can be rejected downstream.
-
-### Internal producer boundary
-
-Added private helper:
-
-`audio_manager_stream_publish_internal()`
-
-in:
-
-- `audio_manager_stream.c`
-- `audio_manager_stream_internal.h`
-
-It accepts a temporary manager-owned PCM16 block and invokes the borrowed callback only after leaving its short metadata critical section.
-
-Stream metadata uses a static `portMUX_TYPE`; no lazy mutex allocation or extra lifecycle init is required.
-
-### Important deliberate boundary
-
-14-B establishes the public contract and safe publisher implementation, but **does not yet connect the existing PCM24 record loop to the publisher**. That source call-site is intentionally grouped with 14-C Xiaozhi uplink so the following can be reviewed as one complete data path:
+The coordinator polls copied PTT status and uses an 8-frame copied queue. When PTT becomes AUTHORIZED:
 
 ```text
-selected INMP441 PCM24 block
--> bounded PCM24 -> PCM16 conversion
--> audio_manager_stream_publish_internal()
--> voice transport queue / generation check
--> Opus/Xiaozhi uplink
+open Xiaozhi audio channel
+→ enter MANUAL listening
+→ arm audio stream generation
+→ request audio_manager_start_recording()
 ```
 
-Therefore current 14-B status is **contract implemented**, not live-microphone streaming PASS.
+On release/cancel/error/generation mismatch:
 
-This is intentionally not implemented by exposing `s_runtime.recording_pcm24`, `s_rx_block`, I2S handles, or by creating a second I2S reader.
+```text
+revoke turn_active
+→ disarm stream publication
+→ request cooperative audio_manager_stop_recording()
+→ stop Xiaozhi listening
+→ close Xiaozhi audio channel
+→ drain stale queued frames
+```
 
-### Build graph
+Every queued frame carries the production session generation. Stale frames are dropped before transport send.
 
-`audio_manager_stream.c` has been added to the `audio_manager` component CMake sources.
+### Xiaozhi production audio boundary
 
-## Ownership preserved
+`xiaozhi_foundation` now exposes:
 
-- `audio_manager`: sole I2S/RX/DMA/PCM producer owner.
-- `audio_manager_stream`: bounded project-owned publication metadata only.
+```c
+xiaozhi_foundation_audio_uplink_start(generation);
+xiaozhi_foundation_audio_uplink_send_pcm16(...);
+xiaozhi_foundation_audio_uplink_stop(generation);
+xiaozhi_foundation_audio_uplink_get_status(...);
+```
+
+The Phase-14 MVP opens the supported public Xiaozhi audio channel with explicit parameters:
+
+```text
+format         = pcm
+sample_rate    = 16000
+channels       = 1
+frame_duration = 16 ms
+listening mode = MANUAL
+```
+
+The long-lived Phase-13 WebSocket/chat session remains READY after a normal PTT uplink stop, enabling later turns to reuse the same production session.
+
+### Diagnostics / backpressure
+
+`voice_assistant_uplink_status_t` tracks:
+
+- frames queued;
+- frames sent;
+- queue-full drops;
+- stale-generation drops;
+- active generation;
+- last error.
+
+`xiaozhi_foundation_audio_uplink_status_t` tracks channel/listening state and transport frames/samples/bytes sent.
+
+Queue send from the audio callback is zero-wait. Slow network transmission therefore cannot block I2S capture; queue-full becomes explicit diagnostic evidence rather than hidden audio-task blocking.
+
+## Important remaining limitations
+
+1. ESP-IDF build has not been run in this ChatGPT environment; compile/link success is not claimed.
+2. Target HIL has not been run.
+3. Current production manual recording still retains the whole recording and runs its existing post-record DSP after stop. 14-C uses the live pre-DSP PCM stream for Xiaozhi; optimization/removal of unnecessary retained post-processing for a future dedicated streaming capture mode is a later hardening item, not silently claimed done.
+4. Server response audio callback remains intentionally unconsumed. Speaker/downlink ownership belongs to 14-D.
+5. PTT GPIO is reserved but not yet bound into production application composition.
+
+## Ownership review
+
+- `audio_manager`: sole microphone/I2S/DMA owner.
+- `audio_manager_stream/tap`: copied PCM publication only.
 - `voice_assistant_ptt`: authorization policy only.
-- future 14-C transport consumer: must copy/enqueue and return quickly.
-
-## Static review findings
-
-1. No private I2S/DMA/PSRAM pointer is exposed publicly.
-2. Stream callback executes outside the stream metadata critical section.
-3. Generation is explicit and non-zero at arm time.
-4. Duplicate arm is rejected; mismatched disarm is rejected.
-5. No dynamic lock allocation remains in the stream registry.
-6. The producer hook is deliberately not called yet, so no claim is made that live PCM frames are currently emitted.
-7. No ESP-IDF build or target HIL PASS is claimed.
+- `voice_assistant_uplink`: bounded queue + turn coordination.
+- `xiaozhi_foundation`: sole direct `esp_xiaozhi` dependency and audio-channel owner.
+- no LVGL or speaker ownership is introduced in 14-C.
 
 ## Next checkpoint — only after user says `tiếp tục`
 
-**14-C — Xiaozhi Audio Uplink + Live Producer Hook**
+**14-D — Response Downlink + Speaker Playback**
 
 Planned scope:
 
-1. connect selected microphone samples inside `audio_manager` to the PCM16 stream publisher;
-2. arm/start capture only after PTT authorization;
-3. add a bounded copied transport queue between audio callback and Xiaozhi work;
-4. encode/send audio through the supported Xiaozhi public audio-channel API;
-5. stop/disarm on PTT release/cancel/error;
-6. use generation checks to reject stale frames;
-7. keep callbacks non-blocking and `audio_manager` as sole I2S owner;
-8. do not implement speaker/downlink playback until 14-D.
+1. copy server audio out of the Xiaozhi callback into a bounded project-owned queue;
+2. add a public streaming playback input to `audio_manager` without exposing I2S;
+3. play response audio through MAX98357A while keeping `audio_manager` sole TX owner;
+4. use generation/lifecycle checks to reject stale response packets;
+5. introduce/verify `THINKING -> SPEAKING` evidence from protocol events where supported;
+6. keep all Xiaozhi callbacks non-blocking;
+7. leave repeated-turn/fault robustness for 14-E.
