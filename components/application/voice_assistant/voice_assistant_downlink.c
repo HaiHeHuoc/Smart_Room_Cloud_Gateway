@@ -1,6 +1,7 @@
 #include "voice_assistant_downlink.h"
 
 #include <errno.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -45,7 +46,7 @@ static TaskHandle_t s_task = NULL;
 static uint8_t *s_response = NULL;
 static size_t s_response_size = 0U;
 static TickType_t s_last_response_activity = 0U;
-static bool s_response_tainted = false;
+static atomic_bool s_response_tainted = false;
 static voice_assistant_downlink_status_t s_status = {0};
 
 static void downlink_set_error(esp_err_t error)
@@ -59,7 +60,7 @@ static void downlink_set_error(esp_err_t error)
 static void downlink_finish_turn_state(void)
 {
     s_response_size = 0U;
-    s_response_tainted = false;
+    atomic_store_explicit(&s_response_tainted, false, memory_order_release);
     portENTER_CRITICAL(&s_lock);
     s_status.collecting = false;
     s_status.playback_requested = false;
@@ -201,9 +202,12 @@ static esp_err_t downlink_wait_playback_complete(void)
 
 static esp_err_t downlink_finalize_response(uint32_t generation)
 {
+    const bool tainted = atomic_load_explicit(
+        &s_response_tainted,
+        memory_order_acquire);
     if ((generation == 0U) || (s_response_size == 0U) ||
-        ((s_response_size % sizeof(int16_t)) != 0U) || s_response_tainted) {
-        return s_response_tainted ? ESP_ERR_INVALID_RESPONSE : ESP_ERR_INVALID_SIZE;
+        ((s_response_size % sizeof(int16_t)) != 0U) || tainted) {
+        return tainted ? ESP_ERR_INVALID_RESPONSE : ESP_ERR_INVALID_SIZE;
     }
 
     esp_err_t first_error = xiaozhi_foundation_audio_channel_close(generation);
@@ -269,8 +273,8 @@ static void downlink_response_callback(
         if (xQueueSend(s_queue, &item, 0U) != pdTRUE) {
             portENTER_CRITICAL(&s_lock);
             ++s_status.chunks_dropped_queue_full;
-            s_response_tainted = true;
             portEXIT_CRITICAL(&s_lock);
+            atomic_store_explicit(&s_response_tainted, true, memory_order_release);
         }
         return;
     }
@@ -295,8 +299,8 @@ static void downlink_response_callback(
         if (xQueueSend(s_queue, &item, 0U) != pdTRUE) {
             portENTER_CRITICAL(&s_lock);
             ++s_status.chunks_dropped_queue_full;
-            s_response_tainted = true;
             portEXIT_CRITICAL(&s_lock);
+            atomic_store_explicit(&s_response_tainted, true, memory_order_release);
             break;
         }
         portENTER_CRITICAL(&s_lock);
@@ -384,11 +388,13 @@ static void downlink_task(void *argument)
             busy = s_status.collecting || s_status.playback_requested;
             portEXIT_CRITICAL(&s_lock);
             if (busy) {
+                portENTER_CRITICAL(&s_lock);
                 ++s_status.chunks_dropped_stale;
+                portEXIT_CRITICAL(&s_lock);
                 continue;
             }
             s_response_size = 0U;
-            s_response_tainted = false;
+            atomic_store_explicit(&s_response_tainted, false, memory_order_release);
             portENTER_CRITICAL(&s_lock);
             s_status.collecting = true;
             s_status.playback_requested = false;
@@ -482,7 +488,7 @@ esp_err_t voice_assistant_downlink_init(void)
     }
 
     s_response_size = 0U;
-    s_response_tainted = false;
+    atomic_store_explicit(&s_response_tainted, false, memory_order_release);
     portENTER_CRITICAL(&s_lock);
     s_status = (voice_assistant_downlink_status_t) {
         .initialized = true,
