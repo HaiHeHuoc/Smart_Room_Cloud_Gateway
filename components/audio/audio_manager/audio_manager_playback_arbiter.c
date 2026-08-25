@@ -67,13 +67,27 @@ static void promote_pending_locked(void)
     }
 }
 
-static bool manager_is_external_busy(const audio_manager_status_t *manager)
+static void finish_current_locked(bool preempted,
+                                  bool cancelled,
+                                  esp_err_t manager_result)
 {
-    if (manager == NULL) {
-        return false;
+    if (preempted) {
+        ++s_status.preemption_count;
+    } else if (!cancelled) {
+        if (manager_result == ESP_OK) {
+            ++s_status.completed_count;
+        } else {
+            ++s_status.failed_count;
+        }
     }
 
-    return (manager->state == AUDIO_MANAGER_STATE_PLAYBACK) && !s_current_valid;
+    clear_slot(&s_current);
+    s_current_valid = false;
+    s_cancel_current = false;
+    s_preempt_current = false;
+    promote_pending_locked();
+    sync_status_locked(AUDIO_MANAGER_PLAYBACK_ARBITER_IDLE,
+                       (manager_result == ESP_OK) ? ESP_OK : manager_result);
 }
 
 static void playback_arbiter_task(void *arg)
@@ -109,6 +123,11 @@ static void playback_arbiter_task(void *arg)
 
         if (take_lock()) {
             if (s_current_valid) {
+                if ((s_status.state == AUDIO_MANAGER_PLAYBACK_ARBITER_STARTING) &&
+                    (manager.state == AUDIO_MANAGER_STATE_PLAYBACK)) {
+                    sync_status_locked(AUDIO_MANAGER_PLAYBACK_ARBITER_ACTIVE, ESP_OK);
+                }
+
                 if ((s_cancel_current || s_preempt_current) &&
                     (manager.state == AUDIO_MANAGER_STATE_PLAYBACK)) {
                     do_stop = true;
@@ -116,28 +135,26 @@ static void playback_arbiter_task(void *arg)
                 } else if ((manager.state == AUDIO_MANAGER_STATE_IDLE) &&
                            (s_status.state == AUDIO_MANAGER_PLAYBACK_ARBITER_ACTIVE ||
                             s_status.state == AUDIO_MANAGER_PLAYBACK_ARBITER_PREEMPTING)) {
-                    if (s_preempt_current) {
-                        ++s_status.preemption_count;
-                    } else if (!s_cancel_current) {
-                        ++s_status.completed_count;
-                    }
-                    clear_slot(&s_current);
-                    s_current_valid = false;
-                    s_cancel_current = false;
-                    s_preempt_current = false;
-                    promote_pending_locked();
-                    sync_status_locked(AUDIO_MANAGER_PLAYBACK_ARBITER_IDLE, ESP_OK);
+                    finish_current_locked(s_preempt_current,
+                                          s_cancel_current,
+                                          manager.last_error);
+                } else if ((manager.state == AUDIO_MANAGER_STATE_IDLE) &&
+                           s_cancel_current &&
+                           (s_status.state == AUDIO_MANAGER_PLAYBACK_ARBITER_IDLE)) {
+                    /* Request was cancelled before it was ever submitted. */
+                    finish_current_locked(false, true, ESP_OK);
                 }
             }
 
             if (!s_current_valid && s_pending_valid &&
                 (manager.state == AUDIO_MANAGER_STATE_IDLE)) {
                 promote_pending_locked();
+                sync_status_locked(AUDIO_MANAGER_PLAYBACK_ARBITER_IDLE, ESP_OK);
             }
 
             if (s_current_valid &&
                 (manager.state == AUDIO_MANAGER_STATE_IDLE) &&
-                (s_status.state != AUDIO_MANAGER_PLAYBACK_ARBITER_ACTIVE) &&
+                (s_status.state == AUDIO_MANAGER_PLAYBACK_ARBITER_IDLE) &&
                 !s_cancel_current && !s_preempt_current) {
                 start_slot = s_current;
                 do_start = true;
@@ -145,7 +162,6 @@ static void playback_arbiter_task(void *arg)
             }
 
             if (!s_current_valid && !s_pending_valid &&
-                !manager_is_external_busy(&manager) &&
                 (manager.state == AUDIO_MANAGER_STATE_IDLE)) {
                 sync_status_locked(AUDIO_MANAGER_PLAYBACK_ARBITER_IDLE, ESP_OK);
             }
@@ -168,22 +184,27 @@ static void playback_arbiter_task(void *arg)
             const esp_err_t ret = audio_manager_play_wav(start_slot.path);
             if (take_lock()) {
                 if (ret == ESP_OK) {
-                    sync_status_locked(AUDIO_MANAGER_PLAYBACK_ARBITER_ACTIVE, ESP_OK);
+                    /* Command acceptance is not playback completion/start
+                     * evidence. Remain STARTING until manager reports
+                     * AUDIO_MANAGER_STATE_PLAYBACK on a later poll. */
+                    sync_status_locked(AUDIO_MANAGER_PLAYBACK_ARBITER_STARTING, ESP_OK);
                     ESP_LOGI(TAG,
-                             "grant request=%u client=%s priority=%u path=%s",
+                             "accepted request=%u client=%s priority=%u path=%s",
                              (unsigned)start_slot.request.request_id,
                              audio_manager_client_to_string(start_slot.request.client),
                              (unsigned)start_slot.request.priority,
                              start_slot.path);
                 } else if (ret == ESP_ERR_INVALID_STATE) {
-                    /* Another legacy caller may have won the manager between
-                     * our status snapshot and command submission. Preserve the
-                     * request and retry only after manager returns IDLE. */
+                    /* A legacy caller may have won between our status snapshot
+                     * and command submission. Keep ownership metadata and retry
+                     * only after a later copied manager status returns IDLE. */
                     sync_status_locked(AUDIO_MANAGER_PLAYBACK_ARBITER_IDLE, ret);
                 } else {
                     ++s_status.failed_count;
                     clear_slot(&s_current);
                     s_current_valid = false;
+                    s_cancel_current = false;
+                    s_preempt_current = false;
                     promote_pending_locked();
                     sync_status_locked(AUDIO_MANAGER_PLAYBACK_ARBITER_ERROR, ret);
                 }
@@ -252,14 +273,16 @@ esp_err_t audio_manager_playback_arbiter_submit_wav(
     const audio_manager_request_t *request,
     const char *path)
 {
-    if ((s_lock == NULL) || (s_task == NULL) || (request == NULL) || (path == NULL)) {
+    if ((s_lock == NULL) || (s_task == NULL) ||
+        (request == NULL) || (path == NULL)) {
         return ESP_ERR_INVALID_STATE;
     }
     if ((audio_manager_request_validate(request) != ESP_OK) ||
         (request->resource != AUDIO_MANAGER_RESOURCE_PLAYBACK)) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (strnlen(path, AUDIO_MANAGER_WAV_PATH_MAX_BYTES) >= AUDIO_MANAGER_WAV_PATH_MAX_BYTES) {
+    if (strnlen(path, AUDIO_MANAGER_WAV_PATH_MAX_BYTES) >=
+        AUDIO_MANAGER_WAV_PATH_MAX_BYTES) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -291,7 +314,6 @@ esp_err_t audio_manager_playback_arbiter_submit_wav(
     esp_err_t result = ESP_ERR_INVALID_STATE;
     switch (request->busy_policy) {
         case AUDIO_MANAGER_BUSY_REJECT:
-            result = ESP_ERR_INVALID_STATE;
             break;
 
         case AUDIO_MANAGER_BUSY_QUEUE:
@@ -305,15 +327,23 @@ esp_err_t audio_manager_playback_arbiter_submit_wav(
             break;
 
         case AUDIO_MANAGER_BUSY_PREEMPT_LOWER_PRIORITY:
-            if (!s_pending_valid &&
-                s_current.request.interruptible &&
+            if (s_current.request.interruptible &&
                 (request->priority > s_current.request.priority)) {
-                s_pending = incoming;
-                s_pending_valid = true;
-                s_preempt_current = true;
-                ++s_status.accepted_count;
-                ++s_status.queued_count;
-                result = ESP_OK;
+                if (s_status.state == AUDIO_MANAGER_PLAYBACK_ARBITER_IDLE) {
+                    /* Current request has not been submitted yet. Prefer the
+                     * higher-priority request without touching audio hardware. */
+                    s_current = incoming;
+                    ++s_status.accepted_count;
+                    ++s_status.preemption_count;
+                    result = ESP_OK;
+                } else if (!s_pending_valid) {
+                    s_pending = incoming;
+                    s_pending_valid = true;
+                    s_preempt_current = true;
+                    ++s_status.accepted_count;
+                    ++s_status.queued_count;
+                    result = ESP_OK;
+                }
             }
             break;
 
