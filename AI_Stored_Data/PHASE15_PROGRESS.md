@@ -2,7 +2,7 @@
 
 Updated: 2026-08-25
 Branch: `phase/15-voice-assistant-ui`
-Current checkpoint: **15-C — Production USER Transcript Wiring**
+Current checkpoint: **15-D — Production ASSISTANT Text Wiring**
 Status: **IMPLEMENTED / STATIC REVIEW COMPLETE / BUILD + HIL NOT CLAIMED**
 
 ## Collaboration rule
@@ -14,22 +14,18 @@ Planned checkpoints:
 1. 15-A — production voice event/UI model. ✅
 2. 15-B — dedicated Voice Assistant screen and lifecycle presentation. ✅
 3. 15-C — production USER transcript wiring. ✅
-4. 15-D — production ASSISTANT text wiring. NEXT
-5. 15-E — repeated-turn/history/error UX + presentation refinement.
+4. 15-D — production ASSISTANT text wiring. ✅
+5. 15-E — repeated-turn/history/error UX + presentation refinement. NEXT
 6. 15-F — FINAL review/composition/docs/deferred HIL.
 
 At 15-F explicitly notify Hải that it is the final Phase-15 prompt before software closure.
 
-## 15-A summary
+## 15-A / 15-B summary
 
-Added the production `voice_assistant_ui_model` above `voice_assistant` with copied lifecycle state, session generation, bounded 192-byte user/assistant text buffers, validity/truncation flags, stale-generation rejection and stale-text clearing on a new non-zero session generation.
-
-## 15-B summary
-
-Added `voice_assistant_ui_gui_adapter` and reused/promoted the existing UI-task-owned Xiaozhi visual surface. Production presentation now flows:
+Phase 15 now has a production `voice_assistant_ui_model` and a GUI adapter. Presentation flows only through copied data:
 
 ```text
-voice_assistant
+voice_assistant / semantic Xiaozhi events
 -> voice_assistant_ui_model
 -> voice_assistant_ui_gui_adapter
 -> app_gui latest-value queue
@@ -37,162 +33,121 @@ voice_assistant
 -> LVGL
 ```
 
-No LVGL API is called from voice/Xiaozhi callbacks.
+The production model is separate from the temporary Phase-12 validation UI model. The existing UI-task-owned Xiaozhi screen is reused/promoted as the visual surface; no voice/Xiaozhi callback calls LVGL directly.
 
-Current visual mapping limitation remains explicit: CONNECTING/THINKING/RECOVERING currently render through legacy PROCESSING until 15-E refinement.
+Current visual mapping limitation remains explicit: production CONNECTING/THINKING/RECOVERING still render through the legacy PROCESSING visual state until 15-E refinement.
 
-## 15-C — implemented
+## 15-C / 15-D semantic text implementation
 
-### Exact semantic event contract
+The project lock pins `espressif/esp_xiaozhi` 0.1.2. Production semantic text is observed through the Xiaozhi CHAT_TEXT callback contract and promoted through a dedicated project-owned text observer that is separate from both session-status and binary/TTS response callbacks.
 
-The project lock currently pins `espressif/esp_xiaozhi` **0.1.2**. The production semantic bridge is written against the component API contract in which:
-
-```c
-ESP_XIAOZHI_CHAT_EVENT_CHAT_TEXT
-```
-
-provides borrowed `esp_xiaozhi_chat_text_data_t *` with roles:
-
-```c
-ESP_XIAOZHI_CHAT_TEXT_ROLE_USER
-ESP_XIAOZHI_CHAT_TEXT_ROLE_ASSISTANT
-```
-
-The text pointer is treated as callback-lifetime only and is never retained by the project boundary.
-
-Build verification against the installed/pinned 0.1.2 headers is still required before claiming compatibility.
-
-### Production semantic-text boundary
-
-Added to `xiaozhi_foundation`:
+Foundation semantic roles:
 
 ```text
-xiaozhi_foundation_text_role_t
-xiaozhi_foundation_text_event_t
-xiaozhi_foundation_text_callback_t
-xiaozhi_foundation_text_register_callback()
+XIAOZHI_FOUNDATION_TEXT_ROLE_USER
+XIAOZHI_FOUNDATION_TEXT_ROLE_ASSISTANT
 ```
 
-This is separate from both:
+The upstream text pointer is callback-lifetime only. `xiaozhi_foundation` does not retain it; the UI model copies it synchronously into its bounded 192-byte project-owned buffer before callback return.
 
-- Phase-14 binary/TTS response callback used by downlink;
-- temporary Phase-12 validation UI status.
-
-The text event carries only:
+### USER path — 15-C
 
 ```text
-role
-client_generation
-borrowed text pointer
+Xiaozhi CHAT_TEXT / USER
+-> xiaozhi_foundation semantic text bridge
+-> current session generation
+-> voice_assistant_ui_model_post_user_text()
+-> copied user_text
+-> GUI adapter
+-> app_gui UI task
+-> LCD User text
 ```
 
-Consumers must copy before returning.
+### ASSISTANT path — 15-D
 
-### Source-local Xiaozhi init bridge
-
-Added:
-
-`components/application/xiaozhi_foundation/xiaozhi_text_bridge.c`
-
-Only `xiaozhi_session.c` has its `esp_xiaozhi_chat_init()` symbol redirected at compile time to:
-
-```c
-xiaozhi_foundation_chat_init_bridge()
-```
-
-The bridge:
-
-1. copies the existing Xiaozhi config;
-2. preserves the original production protocol callback and context;
-3. installs a project bridge callback;
-4. forwards every event to the original callback unchanged;
-5. additionally promotes `CHAT_TEXT` as project semantic text;
-6. calls the real `esp_xiaozhi_chat_init()` from its own translation unit.
-
-This avoids rewriting the large production session lifecycle while keeping the semantic hook scoped only to the production session source.
-
-### USER transcript path
-
-`voice_assistant_ui_model_start()` now registers the semantic text observer.
-
-Current 15-C handling:
+15-D now consumes the already-promoted ASSISTANT role:
 
 ```text
-Xiaozhi CHAT_TEXT
-    ↓
-role == USER
-    ↓
-xiaozhi_foundation text bridge
-    ↓
-client/session generation snapshot
-    ↓
-voice_assistant_ui_model_post_user_text()
-    ↓
-bounded 192-byte copy
-    ↓
-voice_assistant_ui_gui_adapter
-    ↓
-app_gui queue
-    ↓
-UI task / LVGL
+Xiaozhi CHAT_TEXT / ASSISTANT
+-> xiaozhi_foundation semantic text bridge
+-> current session generation
+-> voice_assistant_ui_model_post_assistant_text()
+-> copied assistant_text
+-> GUI adapter
+-> app_gui UI task
+-> LCD Assistant text
 ```
 
-ASSISTANT-role text is already classified by the foundation bridge but intentionally ignored by the UI model until 15-D.
+USER and ASSISTANT use the same generation, lifetime, bounds and truncation rules. A stale generation is rejected by the presentation model.
 
-### Lifetime and stale-event rules
+Assistant text presentation is intentionally independent from response audio playback. Receiving assistant text does not wait for, start, stop or directly control speaker playback. Audio remains on the Phase-14 response/downlink/audio-manager path.
 
-- Xiaozhi `event_data` and `text` are borrowed only during the upstream callback.
-- `xiaozhi_foundation` does not retain the text pointer.
-- `voice_assistant_ui_model_post_user_text()` copies synchronously before the callback returns.
-- the UI model rejects a text event whose `client_generation` does not match its current production voice session.
-- new session generation clears old user/assistant text.
-- app_gui receives only copied fixed-size text fields.
-
-### Callback ownership
-
-The project now deliberately keeps distinct observer paths:
+Therefore the normal order may be:
 
 ```text
-xiaozhi session status callback
+assistant semantic text arrives
+-> LCD text updates
+
+response audio arrives later/concurrently
+-> downlink path
+-> audio_manager playback
+-> speaker
+```
+
+No coupling requires the LCD to wait for TTS playback completion.
+
+## Semantic text callback ownership
+
+The project keeps three distinct observer paths:
+
+```text
+xiaozhi session status
     -> voice_assistant
 
-xiaozhi binary/TTS response callback
+xiaozhi binary/TTS response
     -> voice_assistant_downlink
 
-xiaozhi semantic text callback
+xiaozhi semantic USER/ASSISTANT text
     -> voice_assistant_ui_model
 ```
 
-This prevents USER transcript work from stealing the response callback already owned by downlink.
+This prevents UI text from stealing or overloading the response callback used by Phase-14 speaker playback.
+
+## Source-local Xiaozhi bridge
+
+`xiaozhi_session.c` has its production `esp_xiaozhi_chat_init()` source-locally redirected to `xiaozhi_foundation_chat_init_bridge()`.
+
+The bridge preserves and forwards the original protocol callback and additionally publishes CHAT_TEXT semantic events. This is a controlled integration seam intended to avoid rewriting the large session lifecycle. A real ESP-IDF build is required before claiming compatibility with the pinned component/toolchain; refactor the seam later if build/maintenance evidence shows it is fragile.
 
 ## Static review notes
 
-1. semantic bridge forwards the original protocol callback before additional text publication, so existing Phase-13/14 TTS/error handling remains in place.
-2. no network, LVGL or speaker operation runs from the text callback.
-3. semantic callback executes outside the bridge critical section.
-4. generation is copied from the current project session snapshot.
-5. UI text is copied before callback return and remains bounded/null-terminated.
-6. ASSISTANT-role semantic classification exists at the foundation boundary but no assistant UI update is performed yet.
-7. source-scoped init redirect is another controlled CMake integration seam and must be verified by a real ESP-IDF build; it should be refactored later if it proves fragile.
-8. no ESP-IDF build or HIL PASS is claimed.
+1. USER and ASSISTANT text are copied before the upstream callback returns.
+2. semantic callback performs no LVGL, I2S, storage or network lifecycle operation.
+3. app_gui receives only copied bounded fields.
+4. new non-zero session generation clears old conversation text.
+5. stale-generation semantic text cannot overwrite a newer session presentation.
+6. USER and ASSISTANT text are independently valid/truncated.
+7. assistant text is not coupled to audio playback completion.
+8. existing Phase-13/14 response and session callbacks remain separate.
+9. no ESP-IDF build or HIL PASS is claimed.
 
 ## Not implemented yet
 
-- no production ASSISTANT text presentation yet;
-- no multi-turn conversation history;
+- no multi-turn history buffer/list;
 - no exact production visual enum for CONNECTING vs THINKING vs RECOVERING;
+- no explicit per-turn presentation ID beyond the long-lived session generation;
 - no waveform/audio-level visualization;
 - no GUI PTT button;
 - no new hardware behavior.
 
 ## Next checkpoint — only after user says `tiếp tục`
 
-**15-D — Production ASSISTANT Text Wiring**
+**15-E — Repeated-Turn / History / Error UX + Presentation Refinement**
 
 Planned scope:
 
-1. consume the already-promoted semantic role ASSISTANT;
-2. copy assistant text through `voice_assistant_ui_model_post_assistant_text()`;
-3. preserve generation/lifetime/truncation rules;
-4. confirm the 15-B GUI adapter presents the assistant text independently of response audio playback;
-5. do not implement history/state refinement until 15-E.
+1. define bounded multi-turn presentation policy without unbounded transcript growth;
+2. decide when previous USER/ASSISTANT text is retained or replaced across PTT turns in the same long-lived session;
+3. refine visual distinction for CONNECTING / THINKING / RECOVERING if practical without destabilizing `app_gui`;
+4. improve ERROR/recovery presentation and stale-text cleanup rules;
+5. keep GUI PTT/waveform optional and out of scope unless needed for the Phase-15 acceptance contract.
