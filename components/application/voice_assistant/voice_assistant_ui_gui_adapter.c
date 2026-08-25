@@ -33,6 +33,24 @@ static ui_xiaozhi_state_t gui_map_state(voice_assistant_ui_state_t state)
     }
 }
 
+static esp_err_t gui_map_error(
+    ui_xiaozhi_state_t gui_state,
+    esp_err_t production_error)
+{
+    /*
+     * The reused Phase-12 GUI contract accepts a non-ESP_OK error only when
+     * the legacy visual state itself is ERROR. The production model keeps the
+     * real error independently, including while RECOVERING. Normalize only
+     * the translated legacy snapshot so app_gui does not reject a valid
+     * production RECOVERING -> PROCESSING presentation.
+     */
+    if (gui_state != UI_XIAOZHI_STATE_ERROR) {
+        return ESP_OK;
+    }
+
+    return (production_error == ESP_OK) ? ESP_FAIL : production_error;
+}
+
 static bool gui_state_should_present(voice_assistant_ui_state_t state)
 {
     switch (state) {
@@ -74,9 +92,10 @@ static void gui_model_callback(
         return;
     }
 
+    const ui_xiaozhi_state_t gui_state = gui_map_state(model->state);
     ui_xiaozhi_status_t gui = {
-        .state = gui_map_state(model->state),
-        .last_error = model->last_error,
+        .state = gui_state,
+        .last_error = gui_map_error(gui_state, model->last_error),
         .user_text_truncated = model->user_text_truncated,
         .assistant_text_truncated = model->assistant_text_truncated,
     };
