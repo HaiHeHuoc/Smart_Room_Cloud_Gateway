@@ -2,90 +2,99 @@
 
 Updated: 2026-08-25
 Branch: `phase/15-voice-assistant-ui`
-Current checkpoint: **15-E — Repeated-Turn / History / Error UX**
-Status: **IMPLEMENTED WITH DOCUMENTED LEGACY VISUAL-MAPPING LIMITATION / STATIC REVIEW COMPLETE / BUILD + HIL NOT CLAIMED**
+Current checkpoint: **15-F — FINAL Review / Closure**
+Status: **SOFTWARE COMPLETE / STATIC REVIEW COMPLETE / BUILD + HIL PENDING**
 
-## Collaboration rule
+## Collaboration result
 
-Phase 15 follows the same review cadence as Phases 13 and 14. Implement one checkpoint, stop, explain what changed, and continue only when Hải says `tiếp tục`.
+Phase 15 was implemented checkpoint-by-checkpoint and is now software-closed. Do not start Phase 16 automatically; wait for explicit user direction.
 
-Planned checkpoints:
+Completed checkpoints:
 
 1. 15-A — production voice event/UI model. ✅
-2. 15-B — dedicated Voice Assistant screen and lifecycle presentation. ✅
+2. 15-B — Voice Assistant screen/lifecycle presentation. ✅
 3. 15-C — production USER transcript wiring. ✅
 4. 15-D — production ASSISTANT text wiring. ✅
-5. 15-E — repeated-turn/history/error UX + presentation refinement. ✅
-6. 15-F — FINAL review/composition/docs/deferred HIL. NEXT
+5. 15-E — repeated-turn/history/error UX. ✅
+6. 15-F — final review/composition/docs/deferred HIL. ✅
 
-At 15-F explicitly notify Hải that it is the final Phase-15 prompt before software closure.
-
-## 15-A through 15-D summary
-
-Production presentation path:
+## Final production presentation architecture
 
 ```text
-voice_assistant / Xiaozhi semantic text
--> voice_assistant_ui_model
--> voice_assistant_ui_gui_adapter
--> app_gui latest-value queue
--> app_gui UI task
--> LVGL Voice/Xiaozhi visual surface
+voice_assistant lifecycle
+          +
+Xiaozhi CHAT_TEXT semantic events
+          ↓
+voice_assistant_ui_model
+  - copied state
+  - session_generation
+  - presentation turn_sequence
+  - bounded USER text
+  - bounded ASSISTANT text
+  - error/truncation flags
+          ↓
+voice_assistant_ui_gui_adapter
+          ↓
+app_gui copied latest-value queue
+          ↓
+app_gui UI task
+          ↓
+LVGL Voice/Xiaozhi visual surface
 ```
 
-Semantic USER and ASSISTANT text are copied synchronously from callback-lifetime Xiaozhi text into bounded 192-byte project-owned fields. Audio response remains independent on the Phase-14 downlink/audio-manager path.
+No Xiaozhi/voice callback calls LVGL directly.
 
-## 15-E — repeated-turn presentation policy
+## Production semantic text path
 
-### Why session generation is insufficient
+The project lock pins `espressif/esp_xiaozhi` 0.1.2. Phase 15 observes the semantic `CHAT_TEXT` contract and classifies USER/ASSISTANT roles through a dedicated `xiaozhi_foundation` text boundary.
 
-The production Xiaozhi connection is intentionally long-lived. Several PTT turns can therefore share one `session_generation`. The UI cannot use session generation alone to know that a new user utterance started a new displayed turn.
+The upstream `event_data`/text pointer is callback-lifetime only. The project does not retain it. The production UI model copies text synchronously into bounded 192-byte fields before callback return.
 
-15-E adds a presentation-only:
+Observer ownership remains distinct:
 
 ```text
-turn_sequence
+xiaozhi session status
+    -> voice_assistant
+
+xiaozhi binary/TTS response
+    -> voice_assistant_downlink
+
+xiaozhi semantic USER/ASSISTANT text
+    -> voice_assistant_ui_model
 ```
 
-This is not a protocol transaction ID and is not used for transport/audio ownership. It is only a bounded UI identity/counter inside the current long-lived session.
+## USER / ASSISTANT behavior
 
-### Latest-turn policy
-
-The 160x128 display does not retain an unbounded multi-message history. Phase 15 intentionally uses a **latest-turn view**:
+USER semantic text:
 
 ```text
-USER semantic text for current session
--> increment turn_sequence (non-zero wrap handling)
--> clear assistant text from previous turn
--> show new USER text
+USER event
+-> generation check
+-> increment presentation turn_sequence
+-> clear assistant text from prior displayed turn
+-> replace USER text
+-> publish copied model
+```
 
-ASSISTANT semantic text
+ASSISTANT semantic text:
+
+```text
+ASSISTANT event
+-> generation check
 -> retain current USER text
--> replace/update ASSISTANT text for current latest turn
+-> replace ASSISTANT text
+-> publish copied model
 ```
 
-Example:
+Assistant text is intentionally independent from Phase-14 response audio playback and may appear before/during speaker playback.
 
-```text
-turn 1
-User: Turn on the light
-Assistant: Done
+## Repeated-turn policy
 
-turn 2 USER arrives
--> turn_sequence 1 -> 2
-User: What is the temperature?
-Assistant: <cleared until response arrives>
+Phase 15 intentionally uses a **latest-turn view**, not unbounded conversation history. This matches the 160x128 LCD and avoids unbounded RAM growth.
 
-turn 2 ASSISTANT arrives
-User: What is the temperature?
-Assistant: 27 degrees
-```
+`session_generation` identifies a long-lived Xiaozhi session and can span multiple PTT turns. `turn_sequence` is therefore presentation-only and increments for each accepted USER semantic event in the current session.
 
-This prevents an assistant response from the previous displayed turn remaining beside a new user transcript.
-
-### Session transition
-
-When a new non-zero `session_generation` is observed:
+When a new non-zero session generation appears:
 
 ```text
 clear USER text
@@ -93,17 +102,61 @@ clear ASSISTANT text
 turn_sequence = 0
 ```
 
-Stale text from an old session remains rejected by the existing generation check.
+Stale old-generation text remains rejected.
 
-### Error / recovery UX policy
+## Error / recovery UX
 
-ERROR or RECOVERING state changes do **not** erase the current latest-turn text. The UI keeps the most recent conversation context visible while showing the lifecycle error/recovery state. Text is cleared only by an explicit clear or by a new session generation/new USER turn policy above.
+ERROR/RECOVERING do not erase the latest conversation text. The user keeps visible context while lifecycle recovery is shown.
 
-This is intentional: an error should not destroy the user's visible conversational context.
+### Final-review software defect found and fixed
 
-## Presentation-state refinement result
+15-F found a real adapter/legacy-GUI contract mismatch:
 
-The production model still retains exact states:
+- production RECOVERING may legitimately carry `last_error != ESP_OK`;
+- the Phase-15 adapter maps RECOVERING to the reused legacy `PROCESSING` visual state;
+- `app_gui` accepts non-OK `last_error` only when its visual state is `ERROR`;
+- therefore a valid RECOVERING snapshot could be rejected before reaching LVGL.
+
+Fix: `voice_assistant_ui_gui_adapter` now normalizes only the **legacy translated snapshot**:
+
+```text
+legacy visual != ERROR -> last_error = ESP_OK
+legacy visual == ERROR -> preserve non-OK production error,
+                          fallback ESP_FAIL if needed
+```
+
+The production `voice_assistant_ui_model` still retains the real error value. This preserves diagnostic semantics while satisfying the existing `app_gui` validation contract.
+
+Fix commit: `d0d7a5b7b4fd1c52e163a917050420289ccd1684`.
+
+## Production composition / validation isolation
+
+Normal production startup remains:
+
+```text
+audio_manager READY
+-> voice_assistant
+-> voice_assistant_ui_model
+-> voice_assistant_ui_gui_adapter
+-> PTT policy
+-> uplink
+-> downlink
+-> PTT GPIO
+```
+
+When `CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE=y`, the Phase-14/15 production voice stack remains suppressed. Phase-12 validation and Phase-15 production presentation therefore do not intentionally run as competing application owners.
+
+## Xiaozhi semantic init bridge
+
+`xiaozhi_session.c` has only its `esp_xiaozhi_chat_init()` symbol source-locally redirected through `xiaozhi_foundation_chat_init_bridge()`.
+
+The bridge preserves the original production callback/context, forwards all events unchanged, and additionally publishes CHAT_TEXT semantic events. This is a controlled integration seam rather than a transport rewrite.
+
+It remains a **build-verification risk** until the actual ESP-IDF/pinned component build succeeds. Refactor to a direct/public integration point later if maintenance/build evidence shows the seam is fragile.
+
+## Final presentation-state decision
+
+Phase 15 production model keeps exact states:
 
 ```text
 IDLE
@@ -116,50 +169,78 @@ RECOVERING
 ERROR
 ```
 
-The reused legacy `app_gui` Xiaozhi visual surface still has the older Phase-12 visual enum, so its current translation remains:
+The reused Phase-12 `app_gui` surface still renders:
 
 ```text
-CONNECTING  -> PROCESSING
-THINKING    -> PROCESSING
-RECOVERING  -> PROCESSING
-LISTENING   -> LISTENING
-SPEAKING    -> RESPONDING
-READY       -> READY
-ERROR       -> ERROR
+CONNECTING -> PROCESSING
+THINKING   -> PROCESSING
+RECOVERING -> PROCESSING
+READY      -> READY
+LISTENING  -> LISTENING
+SPEAKING   -> RESPONDING
+ERROR      -> ERROR
 ```
 
-15-E deliberately does not perform a large rewrite of `app_gui.c` solely to split those three labels before any build/HIL evidence exists. The backend semantic state remains exact; this is a **presentation limitation**, not lost state information.
+This is accepted as a documented **MVP presentation limitation**, not an architecture blocker. Do not claim exact CONNECTING/THINKING/RECOVERING LCD labels. A later small GUI refinement may split those labels after build/HIL evidence if worthwhile.
 
-15-F final review must decide whether this limitation is acceptable for Phase-15 MVP acceptance or whether a small post-build GUI refinement should be scheduled. It must not claim exact CONNECTING/THINKING/RECOVERING LCD labels unless target evidence/code actually supports them.
+## Phase-15 HIL plan
 
-## Static review notes
+Created:
 
-1. `turn_sequence` is presentation-only and resets on a new session generation.
-2. USER text starts a new latest-turn presentation and clears only prior assistant text.
-3. ASSISTANT text does not increment the turn counter.
-4. session change still clears all conversation text.
-5. ERROR/RECOVERING retain current text for diagnostic/user context.
-6. no unbounded conversation-history allocation was introduced.
-7. semantic callback still performs no LVGL/I2S/storage/network lifecycle operation.
-8. no ESP-IDF build or HIL PASS is claimed.
+`AI_Stored_Data/PHASE15_HIL_TEST_PLAN.md`
 
-## Intentionally out of scope
+Recommended future test branch:
 
-- full scrollable multi-turn conversation history;
+`test/phase15-voice-ui-hil`
+
+Suggested activation label:
+
+`RUN PHASE 15 HIL`
+
+The plan covers:
+
+- clean build/link;
+- boot/composition and Phase-12 validation isolation;
+- Voice screen routing;
+- real USER transcript;
+- real ASSISTANT text independent from audio;
+- at least three repeated turns;
+- new-session stale-text cleanup;
+- ERROR/RECOVERING presentation and the final-review error-contract fix;
+- text truncation robustness;
+- LVGL ownership/UI stress;
+- memory/stack/queue resource trend.
+
+## Intentionally out of scope / future enhancement
+
+- full scrollable conversation history;
 - waveform/audio-level visualization;
 - GUI PTT button;
-- exact legacy `app_gui` enum rewrite before build/HIL evidence;
-- new hardware behavior.
+- exact legacy app_gui state-enum rewrite;
+- new hardware behavior;
+- general multi-client audio arbitration (already tracked as a post-Phase-14 architecture follow-up).
 
-## Next checkpoint — only after user says `tiếp tục`
+## Evidence boundary
 
-**15-F — FINAL Phase-15 Review / Composition / Documentation / Deferred HIL**
+At software closure:
 
-This is the final Phase-15 prompt. Planned scope:
+```text
+Implementation       COMPLETE
+Static review        COMPLETE
+Production composition COMPLETE
+HIL plan             READY
+GitHub CI/checks     NONE PRESENT FOR CURRENT REVIEW HEAD
+idf.py build         NOT VERIFIED
+Target runtime       NOT VERIFIED
+USER transcript HIL  PENDING
+ASSISTANT text HIL   PENDING
+Repeated-turn UI HIL PENDING
+```
 
-1. review the complete Phase-15 diff and callback/dependency ownership;
-2. reconcile production composition and validation isolation;
-3. decide/document the exact visual-state limitation for MVP closure;
-4. produce Phase-15 HIL acceptance plan including USER/ASSISTANT text and repeated turns;
-5. update project state/next-work routing;
-6. if no new software blocker is found, close Phase 15 as Software Complete / Build + HIL Pending.
+No build/runtime/HIL PASS is claimed.
+
+## Closure
+
+**Phase 15 = Software Complete / Static Review Complete / Build + Hardware Acceptance Pending.**
+
+Do not automatically start Phase 16. When hardware is available, preserve the acceptance sequence and distinguish inherited Phase-12/13/14 transport/audio failures from Phase-15 UI/text defects.
