@@ -3,7 +3,7 @@
 Updated: 2026-08-25
 Branch: `phase/16-audio-arbitration`
 Base branch: `phase/15-voice-assistant-ui`
-Current checkpoint: **16-A — Audio Client / Request Model**
+Current checkpoint: **16-B — Playback Arbitration Runtime**
 Status: **IMPLEMENTED / STATIC REVIEW COMPLETE / BUILD + HIL NOT CLAIMED**
 
 ## Collaboration rule
@@ -13,8 +13,8 @@ Phase 16 follows the same checkpoint workflow as Phases 13-15. Implement one che
 Planned checkpoints:
 
 1. 16-A — audio client/request model. ✅
-2. 16-B — playback arbitration runtime. NEXT
-3. 16-C — capture arbitration runtime.
+2. 16-B — playback arbitration runtime. ✅
+3. 16-C — capture arbitration runtime. NEXT
 4. 16-D — priority/preemption/queue policy hardening.
 5. 16-E — Xiaozhi + notification/alarm integration/stubs and concurrency review.
 6. 16-F — final review/docs/deferred HIL.
@@ -23,146 +23,173 @@ At 16-F explicitly notify Hải that it is the final Phase-16 prompt before soft
 
 ## Why Phase 16 exists
 
-Through Phase 15, `audio_manager` is already the sole I2S/DMA owner. That prevents direct hardware ownership conflicts, but it does not identify competing legitimate clients or decide which request should win.
+`audio_manager` remains the sole I2S/DMA owner, but Phase 16 adds policy for multiple legitimate clients requesting CAPTURE/PLAYBACK without giving any client hardware ownership.
 
-Example unresolved cases before Phase 16:
+## 16-A summary
+
+Added project-owned request metadata:
 
 ```text
-Xiaozhi SPEAKING + notification playback
-Xiaozhi SPEAKING + critical alarm
-Xiaozhi LISTENING + another recorder request
+client: SYSTEM / XIAOZHI / NOTIFICATION / ALARM / RECORDER / UI / TEST
+resource: CAPTURE / PLAYBACK
+priority: uint8_t, higher wins
+busy_policy: REJECT / QUEUE / PREEMPT_LOWER_PRIORITY
+interruptible: cooperative-preemption eligibility
+request_id: non-zero correlation identity
 ```
 
-FreeRTOS tasks may continue running concurrently. Phase 16 is about **audio resource arbitration**, not globally pausing unrelated tasks.
-
-## 16-A — implemented
+## 16-B — implemented playback arbitration runtime
 
 Added:
 
 ```text
-components/audio/audio_manager/include/audio_manager_arbitration.h
-components/audio/audio_manager/audio_manager_arbitration.c
+components/audio/audio_manager/include/audio_manager_playback_arbiter.h
+components/audio/audio_manager/audio_manager_playback_arbiter.c
 ```
 
-and compiled the new model through the existing `audio_manager` component.
+and compiled the runtime into the existing `audio_manager` component.
 
-### Logical clients
+### Ownership model
+
+The arbiter does **not** own I2S, DMA, SD files or playback buffers. It only coordinates through existing public APIs:
 
 ```text
-SYSTEM
-XIAOZHI
-NOTIFICATION
-ALARM
-RECORDER
-UI
-TEST
+client request
+-> playback arbiter
+-> audio_manager_play_wav()
+-> audio_manager task
+-> existing source/I2S TX path
 ```
 
-These are metadata identities only. No client receives an I2S/DMA/file/raw-buffer handle.
-
-### Resource classes
+Cancellation/preemption uses:
 
 ```text
-CAPTURE
-PLAYBACK
+playback arbiter
+-> audio_manager_stop_playback()
+-> cooperative manager-owned cleanup
 ```
 
-### Busy-policy intent
+### Runtime state
 
 ```text
-REJECT
-QUEUE
-PREEMPT_LOWER_PRIORITY
+IDLE
+STARTING
+ACTIVE
+PREEMPTING
+ERROR
 ```
 
-16-A defines the intent only. Runtime queue/preemption semantics are implemented in later checkpoints.
-
-### Recommended priority defaults
+Important semantic boundary:
 
 ```text
-BACKGROUND      20
-UI              30
-NOTIFICATION    50
-XIAOZHI         70
-SYSTEM          90
-CRITICAL_ALARM 100
+audio_manager_play_wav() returns ESP_OK
+!= proof that I2S playback already started
 ```
 
-Higher numeric value means higher arbitration priority.
+Therefore the arbiter remains `STARTING` after command acceptance and only enters `ACTIVE` after a copied `audio_manager_status_t` reports `AUDIO_MANAGER_STATE_PLAYBACK`. Completion is recognized only after a real `PLAYBACK -> IDLE` observation.
 
-Current defaults:
+### Bounded request storage
+
+The runtime stores:
 
 ```text
-ALARM        priority=100 policy=PREEMPT_LOWER_PRIORITY interruptible=false
-SYSTEM       priority=90  policy=REJECT                   interruptible=false
-XIAOZHI      priority=70  policy=REJECT                   interruptible=true
-NOTIFICATION priority=50  policy=QUEUE                    interruptible=true
-UI           priority=30  policy=QUEUE                    interruptible=true
-RECORDER     priority=20  policy=REJECT                   interruptible=true
-TEST         priority=20  policy=REJECT                   interruptible=true
+1 current playback request
+1 pending playback request
 ```
 
-These defaults are policy starting points, not target-accepted behavior. 16-D may refine them after the runtime arbiter exists.
+WAV paths are copied into bounded `AUDIO_MANAGER_WAV_PATH_MAX_BYTES` storage before submit returns.
 
-### Request contract
+There is no unbounded queue/allocation.
 
-`audio_manager_request_t` contains:
+### Busy policies implemented for playback
+
+`REJECT`:
 
 ```text
-request_id       non-zero correlation identity
-client           logical requester
-resource         CAPTURE / PLAYBACK
-priority         uint8_t, higher wins
-busy_policy      REJECT / QUEUE / PREEMPT_LOWER_PRIORITY
-interruptible    whether an already-granted operation may be cooperatively preempted
+current exists -> reject new request
 ```
 
-Public helpers:
-
-```c
-audio_manager_request_make_default(...);
-audio_manager_request_validate(...);
-audio_manager_client_to_string(...);
-audio_manager_resource_to_string(...);
-audio_manager_busy_policy_to_string(...);
-```
-
-`request_id` is not an ownership token and cannot be used to touch I2S directly.
-
-## Important compatibility rule
-
-16-A intentionally does **not** change existing production APIs or runtime behavior:
+`QUEUE`:
 
 ```text
-audio_manager_start_recording()
-audio_manager_stop_recording()
-audio_manager_play_recorded()
-audio_manager_play_wav()
-audio_manager_stop_playback()
+current exists + pending slot empty
+-> accept into one pending slot
 ```
 
-They retain their Phase-15 semantics until later checkpoints explicitly migrate selected paths behind arbitration.
+`PREEMPT_LOWER_PRIORITY`:
 
-This prevents a metadata-model checkpoint from silently changing the already-deferred Phase-14/15 voice path.
+```text
+new.priority > current.priority
+AND current.interruptible == true
+```
 
-## Static review notes
+If current has not yet been submitted, the higher-priority request replaces it without touching hardware.
 
-1. No new task, queue, mutex, allocation, I2S handle or hardware ownership is introduced in 16-A.
-2. Arbitration model is independent from Xiaozhi/application components.
-3. Client identity and priority are project-owned metadata only.
-4. Runtime queue/preemption behavior is intentionally not claimed yet.
-5. Existing sole-I2S-owner rule remains unchanged.
-6. No ESP-IDF build or HIL PASS is claimed.
+If current is already STARTING/ACTIVE, higher-priority request occupies the pending slot and the arbiter requests cooperative stop once playback is observed. After manager returns IDLE, the pending request is promoted.
+
+### Legacy/external playback safety
+
+Phase-14/15 existing callers have not yet been migrated to the arbiter. If playback is already active outside this arbiter, the runtime treats it as external/unknown ownership and waits for `audio_manager` to return IDLE. It does not preempt unknown legacy playback because no client/interruptibility metadata exists.
+
+Actual Xiaozhi/notification/alarm migration is intentionally deferred until 16-E after playback + capture arbitration and policy hardening are complete.
+
+### Diagnostics/status
+
+Copied arbiter status exposes:
+
+```text
+current request metadata
+pending request metadata
+accepted_count
+rejected_count
+queued_count
+preemption_count
+completed_count
+failed_count
+last_error
+```
+
+No raw hardware handles are exposed.
+
+### Production composition
+
+After `audio_manager_start()` succeeds, production composition now initializes/starts the playback arbiter before starting the voice stack:
+
+```text
+audio_manager READY
+-> playback arbiter READY
+-> voice/PTT/UI/uplink/downlink stack
+```
+
+The arbiter is independent from Xiaozhi validation ownership because it owns no Xiaozhi resource.
+
+## Static review corrections made during 16-B
+
+1. Fixed false-completion risk caused by treating command acceptance as playback start.
+2. Added explicit `STARTING -> ACTIVE` transition only on real manager PLAYBACK evidence.
+3. Cancellation before command submission now removes the request cleanly.
+4. Preemption before command submission prefers the higher-priority request without issuing unnecessary stop operations.
+5. Playback failure vs normal completion is derived from manager `last_error` at returned-IDLE observation.
+6. Unknown legacy playback is never preempted.
+
+## Known limitation after 16-B
+
+- playback arbiter currently has init/start but no dedicated stop/deinit lifecycle API;
+- existing production Xiaozhi playback still calls legacy audio-manager playback until 16-E migration;
+- recorded-audio playback arbitration is not promoted yet; 16-B public request path is WAV-oriented;
+- no build/HIL PASS is claimed.
+
+These are follow-up items, not hidden acceptance claims.
 
 ## Next checkpoint — only after user says `tiếp tục`
 
-**16-B — Playback Arbitration Runtime**
+**16-C — Capture Arbitration Runtime**
 
 Planned scope:
 
-1. inspect the existing `play_recorded` / `play_wav` command acceptance and cancellation path;
-2. add one bounded playback ownership/arbitration state inside `audio_manager` without exposing I2S;
-3. support request/client identity for playback requests;
-4. start conservatively with deterministic busy handling and bounded pending requests;
-5. preserve legacy playback APIs through compatibility wrappers so Phase-14/15 behavior is not broken;
-6. do not implement capture arbitration until 16-C.
+1. arbitrate microphone/manual recording ownership with the same client/request model;
+2. keep `audio_manager` as sole I2S RX owner;
+3. support one current + bounded pending capture request;
+4. provide cooperative cancellation/preemption through existing manager recording controls;
+5. preserve legacy capture APIs until client migration in later checkpoint;
+6. review capture vs playback interaction without inventing a second audio hardware owner.
