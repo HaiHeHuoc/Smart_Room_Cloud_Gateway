@@ -75,21 +75,8 @@ static bool voice_assistant_audio_status_is_valid(
         return false;
     }
 
-    if (status->capture_active && status->playback_active) {
-        return false;
-    }
-
-    if ((status->state == VOICE_ASSISTANT_AUDIO_RECORDING) &&
-        !status->capture_active) {
-        return false;
-    }
-
-    if ((status->state == VOICE_ASSISTANT_AUDIO_PLAYBACK) &&
-        !status->playback_active) {
-        return false;
-    }
-
-    return true;
+    /* Current audio_manager owns a single half-duplex I2S operation at once. */
+    return !(status->capture_active && status->playback_active);
 }
 
 static void voice_assistant_publish_status(void)
@@ -233,7 +220,6 @@ static void voice_assistant_foundation_status_callback(
         return;
     }
 
-    /* CONNECTING is owned by the begin command; STOPPED by explicit end. */
     if ((status->state != XIAOZHI_FOUNDATION_SESSION_READY) &&
         (status->state != XIAOZHI_FOUNDATION_SESSION_ERROR)) {
         return;
@@ -337,7 +323,6 @@ static void voice_assistant_task(void *argument)
                 const esp_err_t ret =
                     xiaozhi_foundation_session_start(command.generation);
 
-                /* session_start succeeds only after a real CONNECTED event. */
                 if (ret == ESP_OK) {
                     voice_assistant_set_status(
                         VOICE_ASSISTANT_STATE_READY,
