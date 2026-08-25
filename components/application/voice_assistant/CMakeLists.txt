@@ -3,6 +3,7 @@ idf_component_register(
         "voice_assistant.c"
         "voice_assistant_audio_adapter.c"
         "voice_assistant_ptt.c"
+        "voice_assistant_uplink.c"
 
     INCLUDE_DIRS
         "include"
