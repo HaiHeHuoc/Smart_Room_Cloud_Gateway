@@ -50,6 +50,16 @@ static voice_assistant_ui_state_t ui_map_voice_state(voice_assistant_state_t sta
     }
 }
 
+static void ui_clear_text_locked(void)
+{
+    s_model.user_text[0] = '\0';
+    s_model.assistant_text[0] = '\0';
+    s_model.user_text_valid = false;
+    s_model.assistant_text_valid = false;
+    s_model.user_text_truncated = false;
+    s_model.assistant_text_truncated = false;
+}
+
 static void ui_publish(void)
 {
     voice_assistant_ui_model_t snapshot = {0};
@@ -82,6 +92,10 @@ static void ui_voice_status_callback(
     if (!ui_take_lock()) {
         ESP_LOGW(TAG, "voice status dropped: lock timeout");
         return;
+    }
+    if ((status->session_generation != 0U) &&
+        (status->session_generation != s_model.session_generation)) {
+        ui_clear_text_locked();
     }
     s_model.state = ui_map_voice_state(status->state);
     s_model.session_generation = status->session_generation;
@@ -228,12 +242,7 @@ esp_err_t voice_assistant_ui_model_clear_text(void)
     if (!ui_take_lock()) {
         return (s_lock == NULL) ? ESP_ERR_INVALID_STATE : ESP_ERR_TIMEOUT;
     }
-    s_model.user_text[0] = '\0';
-    s_model.assistant_text[0] = '\0';
-    s_model.user_text_valid = false;
-    s_model.assistant_text_valid = false;
-    s_model.user_text_truncated = false;
-    s_model.assistant_text_truncated = false;
+    ui_clear_text_locked();
     xSemaphoreGive(s_lock);
     ui_publish();
     return ESP_OK;
