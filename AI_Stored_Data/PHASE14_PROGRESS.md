@@ -2,7 +2,7 @@
 
 Updated: 2026-08-25
 Branch: `phase/14-ptt-voice-mvp`
-Current checkpoint: **14-D — Response Downlink + Speaker Playback**
+Current checkpoint: **14-E — Cancel / Recovery / Repeated-Turn Robustness**
 Status: **IMPLEMENTED / STATIC REVIEW COMPLETE / BUILD + HIL NOT CLAIMED**
 
 ## Collaboration rule
@@ -15,8 +15,8 @@ Planned checkpoints:
 2. 14-B — microphone/public streaming contract. ✅
 3. 14-C — Xiaozhi audio uplink + live producer hook. ✅
 4. 14-D — response downlink + speaker playback. ✅
-5. 14-E — cancel/recovery/repeated-turn robustness. NEXT
-6. 14-F — FINAL Phase-14 review/docs/deferred HIL.
+5. 14-E — cancel/recovery/repeated-turn robustness. ✅
+6. 14-F — FINAL Phase-14 review/docs/deferred HIL. NEXT
 
 When 14-F is reached, explicitly notify Hải that it is the final Phase-14 prompt before software closure.
 
@@ -29,161 +29,171 @@ When 14-F is reached, explicitly notify Hải that it is the final Phase-14 prom
 
 ## 14-B summary
 
-Added the project-owned live microphone contract:
+Added project-owned live microphone contract:
 
 ```text
 16 kHz / mono / PCM16 / max 256 samples per borrowed frame
 ```
 
-The consumer must copy/enqueue before returning. No I2S, DMA, or manager-owned PSRAM pointer crosses the boundary.
+No I2S, DMA, or manager-owned PSRAM pointer crosses the boundary.
 
-## 14-C summary and 14-D lifecycle correction
+## 14-C summary
 
-The live uplink is:
-
-```text
-INMP441 -> audio_manager I2S RX -> selected mono PCM24
--> PCM16 256-sample tap -> bounded voice_uplink queue
--> xiaozhi_foundation -> public Xiaozhi binary audio API
-```
-
-14-D corrected one important lifecycle assumption from 14-C: PTT release must **stop MANUAL listening but keep the Xiaozhi audio channel open**, because the same channel is needed for server response audio.
-
-Correct turn boundary is now:
+Implemented production microphone uplink:
 
 ```text
-PTT release
--> stop live microphone publication
--> cooperative audio_manager_stop_recording()
--> esp_xiaozhi_chat_send_stop_listening()
--> KEEP audio channel open
--> receive server response
--> TTS STOP / completion
--> close audio channel
+INMP441
+-> audio_manager I2S RX
+-> PCM24 selected microphone samples
+-> bounded PCM16 stream tap
+-> copied 8-frame queue
+-> voice_uplink task
+-> xiaozhi_foundation
+-> Xiaozhi PCM audio channel
 ```
 
-The long-lived Phase-13 WebSocket/chat session remains READY throughout a normal turn.
+PTT release now stops MANUAL listening but intentionally leaves the audio channel open so the server can return response audio.
 
-## 14-D — implemented
+## 14-D summary
 
-### Production response callback boundary
-
-`xiaozhi_foundation` now promotes project-owned response event kinds:
+Implemented bounded response path:
 
 ```text
-TTS_START
-AUDIO
-TTS_STOP
-ERROR
-```
-
-via:
-
-```c
-xiaozhi_foundation_response_register_callback(...)
-```
-
-The response callback receives only borrowed event/audio data plus copied generation/error fields. It never exposes the Xiaozhi chat handle or protocol-private objects.
-
-The production Xiaozhi audio callback publishes `RESPONSE_AUDIO`; the protocol callback maps `CHAT_TTS_STATE START/STOP` and chat errors into the project-owned response boundary.
-
-### Bounded downlink coordinator
-
-Added:
-
-- `include/voice_assistant_downlink.h`
-- `voice_assistant_downlink.c`
-
-Xiaozhi callbacks do not perform SD or speaker work. They only copy response audio into an 8-item zero-wait queue. Each queue item is bounded to 2048 bytes; larger callback payloads are split into bounded copied chunks. Queue pressure is explicit through `chunks_dropped_queue_full` rather than blocking the Xiaozhi callback.
-
-The downlink worker owns a bounded 1 MiB PSRAM response buffer. On TTS_START it resets the current response generation. AUDIO chunks are accepted only for that generation. Overflow aborts the response and closes the audio channel.
-
-### Speaker handoff strategy for Phase-14 MVP
-
-14-D deliberately does **not** create a second I2S TX owner and does not call the I2S driver from `voice_assistant`.
-
-The current MVP uses a buffered handoff:
-
-```text
-Xiaozhi response callback
--> bounded copied queue
--> voice_downlink task
--> bounded 1 MiB PSRAM PCM16 aggregation
+Xiaozhi callback
+-> copied queue
+-> 1 MiB PSRAM response buffer
 -> TTS_STOP
--> close Xiaozhi audio channel
--> write canonical 16-kHz mono PCM16 WAV to
-   /sdcard/xiaozhi_response.wav under sd_card_manager lease
--> wait boundedly for audio_manager to return IDLE
+-> close audio channel
+-> canonical PCM16 WAV on SD under sd_card_manager lease
 -> audio_manager_play_wav()
--> existing audio_manager MAX98357A/I2S TX path
+-> MAX98357 speaker
 ```
 
-This preserves the strongest project ownership rule: `audio_manager` remains the sole I2S TX / MAX98357 owner.
+This keeps `audio_manager` as sole I2S TX owner. It is intentionally a Phase-14 MVP trade-off: response playback begins after aggregation rather than low-latency streaming.
 
-Trade-off: response playback begins only after response completion and requires mounted SD. This adds latency and SD dependency. It is accepted as the Phase-14 software MVP boundary because the existing `audio_manager` has no public live PCM playback source yet. A true streaming speaker source should be introduced only through the audio-manager task/command ownership model, not by bypassing it from a new task.
+## 14-E — implemented robustness
 
-### WAV safety / SD ownership
+### 1. Missing TTS_STOP / stalled response is bounded
 
-The downlink worker writes a standard 44-byte PCM WAV header for:
+The downlink worker no longer blocks forever on `portMAX_DELAY` while collecting a response. It polls the queue every 100 ms and applies a 15-second inactivity timeout while `collecting=true`.
+
+Timeout path:
 
 ```text
-format      PCM
-sample rate 16000 Hz
-channels    1
-bits/sample 16
+collecting
+-> no response activity for 15 s
+-> close audio channel best effort
+-> responses_failed++
+-> response_timeouts++
+-> clear response buffer/turn state
+-> reset downlink queue
 ```
 
-It acquires `sd_card_manager` before fopen and releases only after fclose. Confirmed file-media failures are reported back to SD recovery. Playback then uses the already-owned `audio_manager_play_wav()` path.
+This prevents one missing `TTS_STOP` or broken server response from permanently blocking later turns.
 
-### Generation / bounded behavior
+### 2. Queue loss taints the response
 
-`voice_assistant_downlink_status_t` tracks:
+If the Xiaozhi callback cannot enqueue an audio/control item because the 8-item downlink queue is full, the current response is marked **tainted** using an atomic flag.
 
-- collecting/running/playback requested;
-- session generation;
-- bytes received/buffered;
-- chunks queued;
+A tainted response is never packaged into WAV or played as if complete. `TTS_STOP` therefore fails deterministically with `ESP_ERR_INVALID_RESPONSE` instead of playing truncated/corrupted audio while claiming success.
+
+### 3. Stale/session-invalid events are rejected
+
+Before processing a downlink item, the worker verifies that the long-lived production session is still:
+
+```text
+active
+READY
+same non-zero session_generation
+```
+
+Items outside the current session are dropped and counted in `chunks_dropped_stale`.
+
+Important limitation: Phase-13 `session_generation` identifies the **long-lived WebSocket session**, not each individual PTT turn. Because multiple PTT turns reuse one session, generation alone cannot distinguish a pathological late packet from turn N that arrives after turn N+1 has begun. 14-E therefore also serializes turn boundaries instead of overclaiming per-turn generation safety.
+
+### 4. Repeated turns are serialized against downlink/playback
+
+`voice_assistant_downlink_is_busy()` reports true while the prior turn is:
+
+```text
+collecting response
+or
+speaker playback requested/in progress
+```
+
+`voice_uplink` will not open a new microphone/Xiaozhi turn while downlink is busy. It also requires `audio_manager` to be `IDLE` before opening a new uplink.
+
+This prevents:
+
+```text
+turn N speaker PLAYBACK
++ turn N+1 microphone RECORDING
+```
+
+from racing for audio ownership.
+
+### 5. Playback completion is now real, not merely command acceptance
+
+14-D originally counted `responses_completed` immediately after `audio_manager_play_wav()` accepted the command. 14-E changes this:
+
+```text
+play_wav accepted
+-> playback_requested=true
+-> wait until AUDIO_MANAGER_STATE_PLAYBACK is observed
+-> wait until it returns to IDLE
+-> require last_error == ESP_OK
+-> only then responses_completed++
+```
+
+Playback completion is bounded to 60 seconds. This makes repeated-turn gating correspond to actual speaker ownership rather than queue acceptance.
+
+### 6. Speaker busy / SD unavailable are bounded failures
+
+Before playback, downlink waits at most 10 seconds for `audio_manager` IDLE. Failure to obtain an SD lease or write the response WAV fails the response instead of bypassing `sd_card_manager` ownership.
+
+The turn state is cleared after finalize failure so later turns can recover; no automatic infinite retry loop is introduced.
+
+### 7. Network/session loss
+
+Xiaozhi protocol errors are converted to a response ERROR item. The downlink path closes the audio channel best effort, records the failure, clears collection state, and resets the queue. Existing Phase-13 `voice_assistant` recovery remains the owner of long-lived session recovery; downlink does not reconnect transport itself.
+
+## 14-E diagnostics added
+
+`voice_assistant_downlink_status_t` now includes:
+
+- `chunks_dropped_stale`;
+- `response_timeouts`;
 - queue-full drops;
-- completed/failed response count;
+- responses completed/failed;
+- collected/buffered bytes;
+- current collecting/playback flags;
 - last error.
 
-Response chunks for a generation other than the currently collecting turn are ignored.
+## Static review notes
 
-### Current response format assumption
-
-The Phase-14 channel requests explicit `pcm`, 16 kHz, mono. The downlink worker therefore treats server callback bytes as PCM16 for the MVP. Build cannot validate this protocol property; target HIL must verify that the pinned Xiaozhi server/component actually returns compatible PCM bytes when the channel is opened with this format. If target evidence shows the server still returns Opus, the correct fix is a decoder/boundary change, not forcing those bytes through PCM playback.
-
-## Ownership review
-
-- `audio_manager`: sole RX/TX I2S, DMA and MAX98357 owner.
-- `audio_manager_stream/tap`: copied microphone PCM publication only.
-- `voice_assistant_ptt`: authorization policy only.
-- `voice_assistant_uplink`: copied mic queue + transport sender.
-- `voice_assistant_downlink`: copied response queue, bounded PSRAM aggregation and SD handoff only; never owns I2S.
-- `xiaozhi_foundation`: sole direct `esp_xiaozhi` dependency and Xiaozhi audio-channel owner.
-- `sd_card_manager`: sole VFS recovery/lease owner.
-
-## Static review findings / limitations
-
-1. ESP-IDF build has not been run in this ChatGPT environment; compile/link success is not claimed.
-2. Target HIL has not been run.
-3. Response PCM compatibility is an explicit HIL item.
-4. The current buffered-SD playback is intentionally not low-latency streaming playback.
-5. `voice_assistant_uplink` and `voice_assistant_downlink` are component-ready but final production application composition/start ordering is closed in 14-F.
-6. Manual PTT recording still performs existing post-record DSP/retention after stop; optimization into a dedicated streaming-only capture mode remains a hardening item.
-7. Response timeout, missing TTS_STOP, queue overflow recovery, repeated turns and stale callbacks are hardened in 14-E.
-8. GPIO5 remains a temporary board assignment and is not yet production-bound to the PTT API.
+1. Xiaozhi callbacks remain non-blocking and copy/enqueue only.
+2. Queue-drop response taint uses C11 atomic state; the worker never reads a callback-written plain bool unsafely.
+3. `voice_uplink` checks downlink busy state and audio-manager IDLE before opening a new turn.
+4. Response completion is counted only after actual playback returns to IDLE.
+5. Missing TTS_STOP cannot keep `collecting=true` indefinitely.
+6. SD failure, audio busy timeout, response overflow, callback queue loss, and protocol error all have bounded terminal paths.
+7. No automatic reconnect/retry loop was introduced.
+8. ESP-IDF build and target HIL remain unverified.
+9. Server response PCM-vs-Opus format still requires hardware evidence; if the server callback provides Opus despite the negotiated PCM channel, 14-D/14-E playback must gain a decoder before acceptance.
+10. The Phase-14 MVP still uses SD-backed aggregated playback; low-latency streaming TX is a later optimization, not silently claimed complete.
 
 ## Next checkpoint — only after user says `tiếp tục`
 
-**14-E — Cancel / Recovery / Repeated-Turn Robustness**
+**14-F — FINAL Phase-14 Review / Composition / Docs / Deferred HIL**
 
-Planned scope:
+Planned final closure scope:
 
-1. harden missing/late TTS_START/TTS_STOP and response timeout;
-2. close retained audio channel on cancel/network/session error;
-3. ensure repeated turns cannot reuse stale response data/queued packets;
-4. define behavior when SD is unavailable or speaker playback is busy;
-5. reconcile uplink/downlink errors with PTT/session recovery without reconnect loops;
-6. audit queue pressure/resource cleanup over repeated turns;
-7. prepare deterministic HIL markers for later Phase-14 test branch.
+1. scan production application composition and bind the Phase-14 coordinators in the correct startup order without auto-triggering PTT;
+2. review temporary GPIO5 reservation and ensure factory-reset button ownership remains untouched;
+3. review all Phase-14 ownership/concurrency/build surfaces together;
+4. reconcile roadmap/document wording with the implemented MVP boundary;
+5. create/update Phase-14 HIL test plan and expected logs suitable for a later `test/...` branch;
+6. update `AI_Stored_Data/NEXT_WORK_AND_HIL_BACKLOG.md`;
+7. if no new software blocker is found, mark **Phase 14 = Software Complete / Build + HIL Pending**.
+
+**The next `tiếp tục` prompt is the final Phase-14 implementation/closure prompt.**
