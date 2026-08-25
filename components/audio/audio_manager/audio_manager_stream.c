@@ -1,4 +1,5 @@
 #include "audio_manager_stream.h"
+#include "audio_manager_stream_internal.h"
 
 #include <string.h>
 
@@ -39,6 +40,8 @@ esp_err_t audio_manager_stream_arm(uint32_t stream_generation)
     s_stream_status.armed = true;
     s_stream_status.stream_generation = stream_generation;
     portEXIT_CRITICAL(&s_stream_lock);
+
+    audio_manager_stream_tap_arm();
     return ESP_OK;
 }
 
@@ -59,6 +62,8 @@ esp_err_t audio_manager_stream_disarm(uint32_t stream_generation)
 
     s_stream_status.armed = false;
     portEXIT_CRITICAL(&s_stream_lock);
+
+    audio_manager_stream_tap_disarm();
     return ESP_OK;
 }
 
@@ -76,14 +81,6 @@ esp_err_t audio_manager_stream_get_status(
     return ESP_OK;
 }
 
-/*
- * Internal producer hook for audio_manager.c.
- *
- * 14-B establishes this safe publication boundary; the exact producer call
- * site is connected in the next uplink checkpoint so transport integration and
- * PCM publication can be reviewed together. This function deliberately accepts
- * a temporary copied PCM16 block and never exposes I2S/DMA/private PSRAM ownership.
- */
 esp_err_t audio_manager_stream_publish_internal(
     const int16_t *samples,
     size_t sample_count)
