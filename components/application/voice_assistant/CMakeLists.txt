@@ -4,6 +4,7 @@ idf_component_register(
         "voice_assistant_audio_adapter.c"
         "voice_assistant_ptt.c"
         "voice_assistant_uplink.c"
+        "voice_assistant_downlink.c"
 
     INCLUDE_DIRS
         "include"
@@ -12,8 +13,10 @@ idf_component_register(
         esp_common
         xiaozhi_foundation
         audio_manager
+        sd_card_manager
 
     PRIV_REQUIRES
         freertos
         log
+        heap
 )
