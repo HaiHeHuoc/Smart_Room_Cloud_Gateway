@@ -1,14 +1,16 @@
 #include "audio_manager.h"
-#include "audio_manager_stream.h"
 #include "board_config.h"
 #include "esp_log.h"
 #include "sdkconfig.h"
-#include "voice_assistant.h"
 #include "voice_assistant_audio_adapter.h"
+
+#if !CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+#include "voice_assistant.h"
 #include "voice_assistant_downlink.h"
 #include "voice_assistant_ptt.h"
 #include "voice_assistant_ptt_gpio.h"
 #include "voice_assistant_uplink.h"
+#endif
 
 _Static_assert(PTT_BUTTON_USE_INTERNAL_PULLDOWN == 1,
                "Phase-14 PTT GPIO contract requires internal pull-down");
@@ -17,7 +19,9 @@ static const char *const TAG = "PH14_COMPOSE";
 
 static audio_manager_status_callback_t s_app_audio_callback = NULL;
 static void *s_app_audio_callback_context = NULL;
+#if !CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
 static bool s_voice_started = false;
+#endif
 
 static void phase14_audio_status_fanout(
     const audio_manager_status_t *status,
