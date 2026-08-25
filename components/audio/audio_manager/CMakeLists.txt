@@ -5,6 +5,7 @@ idf_component_register(
         "audio_manager_arbitration_policy.c"
         "audio_manager_playback_arbiter.c"
         "audio_manager_capture_arbiter.c"
+        "audio_manager_named_playback.c"
         "audio_manager_stream.c"
         "audio_manager_stream_tap.c"
         "audio_api_test_task.c"
