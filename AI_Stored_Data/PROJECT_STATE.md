@@ -1,6 +1,6 @@
 # Smart Room Cloud Gateway — AI Project State
 
-Updated from branch: `phase/12.5-transport-validation-clean`
+Updated from branch: `phase/13-voice-assistant`
 Snapshot date: 2026-08-25
 
 ## Working Constitution
@@ -10,121 +10,161 @@ Snapshot date: 2026-08-25
 - Inspect implementation and documentation before editing.
 - Keep changes minimal and evidence-based.
 - Never claim build, hardware validation, merge, or runtime success without evidence.
+- `AI_Stored_Data/` is cross-session support metadata only and may be deleted by Hải; firmware/build code must never depend on it.
 
-## Current Architecture Snapshot
+## Current High-Level State
 
-The repository remains an ESP-IDF ESP32-S3 Smart Room Cloud Gateway with component-domain organization under `components/`.
+Sprint 12 software implementation and most prior target validation are complete, but selected HIL acceptance remains deferred because hardware is unavailable.
 
-Top-level domains currently include:
+Sprint 13 `voice_assistant` software foundation is now complete on `phase/13-voice-assistant`.
 
-- application
-- audio
-- cloud
-- connectivity
-- display
-- input
-- sensing
-- storage
-- system
-- ui
+Current status:
 
-Phase 12 Xiaozhi work is isolated primarily behind:
+```text
+Sprint 12  Software complete / selected HIL deferred
+Sprint 13  Software complete / HIL pending
+Sprint 14  NOT STARTED
+```
 
-`components/application/xiaozhi_foundation/`
+## Sprint 12 — Deferred HIL Backlog
 
-The public boundary exposes copied, non-sensitive project-owned state rather than Xiaozhi-owned pointers/handles or transport secrets.
+Keep these deferred until hardware is explicitly available:
 
-## Sprint 12 State
+- P2-F known-audio E2E from SD;
+- BOOT `Starting...` regression acceptance;
+- real AP/Wi-Fi/Internet/DNS/TLS/service-loss recovery;
+- runtime resource/cleanup measurements.
 
-### CONFIRMED — dependency/foundation direction
+Use:
 
-- Target is ESP32-S3 N16R8 / ESP-IDF 6.0.1.
-- Resolved managed dependency documented as `espressif/esp_xiaozhi: 0.1.2`, with manifest constraint `^0.1.1`.
-- Xiaozhi transport decision is WebSocket only.
-- MQTT+UDP is not selected as a project transport and must not be added as fallback during Phase 12.5.
+- `AI_Stored_Data/PHASE12_HIL_TEST_PLAN.md`;
+- `AI_Stored_Data/P2F_KNOWN_AUDIO_HIL.md`;
+- `AI_Stored_Data/BOOT_STARTING_DEBUG.md`;
+- dedicated branch `test/xiaozhi-p2f-known-audio-e2e`.
 
-### CONFIRMED — Phase 12 validation isolation
+Do not repeatedly choose these as the next Codex task while hardware is unavailable.
 
-`CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE` is the default-off master gate for temporary Phase 12 runtime validation.
+## Sprint 13 — Voice Assistant Software Closure
 
-When the gate is disabled, normal Gateway application composition must not automatically request Xiaozhi validation, route the temporary Xiaozhi UI screen, or register its validation observer.
+Branch: `phase/13-voice-assistant`
 
-Temporary P2-F, lifecycle matrix, fault matrix, resource-attribution matrix, heap-trace options, and the new SD-fixture loader are subordinate validation-only options and are not production voice-assistant features.
+Status: **SOFTWARE COMPLETE / BUILD NOT CLAIMED / HIL DEFERRED**
 
-### CONFIRMED — Phase 12.5
+### Implemented
 
-- P1/P2-C: WebSocket control lifecycle selected and validated on target hardware.
-- P2-D: resolved 0.1.2 public API has no arbitrary typed-text TX API; receive transcript handling uses bounded copied USER/ASSISTANT text.
-- P2.1: temporary copied-status UI bridge and `XIAOZHI` validation screen implemented; build verified. LCD interaction acceptance remains separate.
-- Master validation feature gate implemented and build verified.
-- Feature-off compile regression build verified.
-- Feature-off target behavior passed on 2026-08-25 for a 120-second normal Gateway run with no Xiaozhi validation activity or watchdog/panic/assert evidence.
-- P2-E target hardware acceptance passed: WebSocket CONNECTED -> open -> OPENED -> bounded hold -> close -> CLOSED -> stop -> deinit -> MCP destroy.
-- MVP transport recorded in an ADR according to the roadmap.
-- A project-generated lawful P2-F known-audio fixture now exists at `components/application/xiaozhi_foundation/test_assets/p2f_fixture.xzf` for the spoken phrase `What is two plus two?`.
-- The fixture is a 6030-byte XZF1 stream with 33 Opus packets; local libopus verification confirmed 960 samples per packet at 16 kHz (60 ms).
-- Validation-only SD fixture infrastructure now loads `/sdcard/xiaozhi/p2f_fixture.xzf` through the existing `sd_card_manager` lease before the existing P2-F worker runs.
-- Dedicated hardware-test branch: `test/xiaozhi-p2f-known-audio-e2e`.
+`components/application/voice_assistant/` now provides:
 
-### PENDING — Phase 12.5
+- project-owned conversation state machine;
+- one long-lived orchestration task;
+- bounded command queue and lock waits;
+- session generation and stale-event rejection;
+- long-lived Xiaozhi production-session integration through `xiaozhi_foundation`;
+- real CONNECTED evidence for READY;
+- explicit begin/end/recover lifecycle;
+- intentional-stop vs unexpected-disconnect handling;
+- copied audio status contract;
+- latest-value audio callback coalescing;
+- UI-safe copied status model;
+- no direct LVGL, I2S, Wi-Fi, provisioning, cloud, reset, storage or arbitrary-driver ownership.
 
-- P2-F known-audio E2E **target hardware acceptance is still pending**. The fixture/infrastructure now exist, but the new SD loader/test branch has not yet been ESP-IDF build-verified or run on target.
-- Required P2-F target evidence remains: fixture READY, 33/33 TX packets, semantically correct USER transcript, non-empty ASSISTANT transcript, completed turn, server audio RX, clean transport teardown, and no panic/assert/WDT/resource regression.
-- Do not create a private/raw typed-text workaround to bypass the supported audio/STT path.
-- Remaining transport-comparison evidence includes connection/reconnect, sockets, heap, CPU, audio loss, cleanup, and network-failure behavior where not already covered by later Phase 12.6 evidence.
+### Final ownership
 
-### CONFIRMED — Phase 12.6 evidence already present on this branch
+```text
+wifi_manager / app_network_coordinator
+    -> Wi-Fi + provisioning/network lifecycle
 
-Although the active branch name is Phase 12.5 cleanup, canonical roadmap/docs already record substantial Phase 12.6 validation:
+audio_manager
+    -> sole microphone/speaker/I2S/DMA/PCM owner
 
-- repeated WebSocket lifecycle matrix implemented/build verified;
-- prior target progression through 1/3/10/20/100 cycles recorded;
-- controlled safe-boundary fault/recovery framework implemented/build verified;
-- first `AFTER_CHAT_INIT` controlled fault passed;
-- root-cause/resource acceptance passed on 2026-08-25 after an upstream-compatible certificate-bundle fix removed the Stage-D retained-memory slope;
-- full `ALL_SUPPORTED` controlled fault/recovery acceptance passed across seven safe boundaries.
+xiaozhi_foundation
+    -> sole direct esp_xiaozhi/MCP/service/session boundary
 
-### PENDING — Phase 12.6
+voice_assistant
+    -> conversation state/generation/command ordering/recovery policy
+       + copied audio/transport orchestration
 
-- real Wi-Fi/AP loss;
-- Internet/DNS/TLS/service loss;
-- server goodbye / remote timeout / malformed response;
-- allocation-pressure validation;
-- P2-F fault coverage after P2-F HIL proof.
+app_gui / ui_manager_lvgl
+    -> GUI model/queue + sole LVGL ownership
+```
 
-Do not simulate these with private transport calls, raw protocol messages, unsafe lifecycle manipulation, or unrelated Wi-Fi ownership changes.
+### Production-vs-validation rule
 
-## Public Xiaozhi Boundary
+The repository keeps Phase-12 validation code/assets for test use, but Phase-13 production defaults explicitly set:
 
-Current public API includes:
+```text
+CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE=n
+```
 
-- copied service-info snapshot;
-- WebSocket/AUTO transport request enum where AUTO resolves to WebSocket;
-- non-blocking service-probe request;
-- temporary transport-validation request;
-- temporary copied validation-UI observer/status.
+Therefore normal Phase-13 firmware does not automatically request the temporary Phase-12 validator. Dedicated HIL/test branches may opt in explicitly.
 
-The temporary UI status contains bounded copied transcripts and scalar state only. It must not expose credentials, endpoints, tokens, raw audio, framework-owned pointers, or raw protocol payloads.
+Do not run the Phase-12 validation lifecycle and Phase-13 production session lifecycle concurrently.
 
-Callbacks must remain short and must not call LVGL directly.
+### Why Phase 13 does not auto-start a conversation
 
-## Current Debug/HIL Handoffs
+Phase 13 provides the orchestration foundation only. It deliberately does not auto-call `voice_assistant_begin_session()` at boot.
 
-- `AI_Stored_Data/BOOT_STARTING_DEBUG.md`: startup `Starting...` mitigation and later target-debug plan.
-- `AI_Stored_Data/P2F_KNOWN_AUDIO_HIL.md`: P2-F SD fixture facts, expected logs, test procedure, and acceptance contract.
+Sprint 14 owns user-authorized Push-to-Talk, microphone uplink, Xiaozhi audio-channel transaction, response-audio playback, cancel/privacy behavior and the first real conversation trigger.
 
-## Next-work guidance
+### Audio boundary
 
-Before implementing the next requested step:
+Current `audio_manager` does not expose a public live PCM streaming API. Do not bypass its private recording storage or create another I2S owner.
 
-1. Re-read the relevant Phase 12.5/12.6 section in `XIAOZHI_IMPLEMENTATION_ROADMAP.md`.
-2. Inspect current `xiaozhi_foundation` implementation/config/docs and application composition in `main`.
-3. Determine whether the request is cleanup/validation of existing infrastructure or truly belongs to the next phase.
-4. Preserve WebSocket-only scope and validation-gate isolation.
-5. Do not implement production `voice_assistant` Phase 13 behavior unless explicitly requested.
-6. For P2-F target work, start from `test/xiaozhi-p2f-known-audio-e2e` and `AI_Stored_Data/P2F_KNOWN_AUDIO_HIL.md`.
-7. Update this snapshot after material acceptance or architecture changes.
+Sprint 14 must introduce the minimum bounded public streaming path required for:
 
-## Repository-local AI handoff rule
+```text
+audio_manager -> voice_assistant -> xiaozhi_foundation
+```
 
-`AI_Stored_Data/` is allowed to be freely reorganized/updated by AI assistants as cross-session support metadata. It may be deleted by Hải and therefore must never become a firmware/build dependency.
+and response audio in the reverse direction while preserving `audio_manager` ownership.
+
+### GUI/event boundary
+
+Phase 13 owns copied scalar conversation/audio state only.
+
+- PTT/audio transaction states become active in Sprint 14.
+- transcript/emotion presentation and final GUI voice queue/rendering remain Sprint 15.
+- do not pull those features backward merely to satisfy outdated roadmap wording.
+
+### Security boundary
+
+`voice_assistant` exposes no API for reboot, OTA, NVS erase/write, Wi-Fi reconfiguration, provisioning lifecycle, arbitrary GPIO/driver control or shell/system commands.
+
+Voice recovery may clean only the Xiaozhi session it owns through the foundation boundary.
+
+## Phase 13 HIL
+
+Use `AI_Stored_Data/PHASE13_HIL_TEST_PLAN.md` when hardware becomes available.
+
+Target evidence still pending includes:
+
+- repeated production session start/stop;
+- failed connect and explicit recovery;
+- transport loss after READY;
+- intentional-stop late callbacks;
+- stale generation behavior;
+- queue-pressure behavior;
+- resource/stack trends;
+- no panic/assert/WDT.
+
+No target PASS is claimed yet.
+
+## Next-work Guidance
+
+When asked **“hiện tại nên làm gì tiếp theo trên Codex?”** while hardware is unavailable:
+
+1. Do not choose the deferred Sprint-12 or Sprint-13 HIL backlog.
+2. Treat Phase 13 as software complete unless a static/build issue is found.
+3. The next software development task is **Sprint 14 — Push-To-Talk Voice MVP**.
+4. Before coding Sprint 14, re-read `AGENTS.md`, `XIAOZHI_IMPLEMENTATION_ROADMAP.md`, `AI_Stored_Data/PHASE13_PROGRESS.md`, and the current `audio_manager` public API.
+5. Preserve the ownership boundaries above.
+6. Do not merge or delete the dedicated Phase-12 HIL assets merely because software development has moved forward.
+
+## Verification Boundary
+
+The Phase-13 final source diff was statically reviewed in this session. This environment did not run the ESP-IDF target toolchain or board, so the following are explicitly unclaimed:
+
+- final `idf.py build` / link;
+- target runtime behavior;
+- production WebSocket HIL through `voice_assistant`;
+- resource measurements;
+- mic/Opus/TTS E2E.
