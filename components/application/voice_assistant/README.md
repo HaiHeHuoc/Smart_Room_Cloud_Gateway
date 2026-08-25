@@ -2,167 +2,151 @@
 
 ## Purpose
 
-`voice_assistant` is the application orchestration layer for Phase 13. It is intentionally separate from `audio_manager`, `xiaozhi_foundation`, and `app_gui`.
+`voice_assistant` is the project-owned conversation orchestrator. It sits between
+`audio_manager`, `xiaozhi_foundation`, and future GUI composition without owning
+those components' hardware or framework objects.
 
-Ownership is fixed as follows:
+Ownership remains:
 
-- `audio_manager` remains the sole production I2S/audio-hardware owner;
-- `xiaozhi_foundation` remains the Xiaozhi transport/service boundary;
-- `app_gui`/the LVGL UI task remain the only GUI owners;
-- `voice_assistant` owns conversation state, session generation, and orchestration decisions only.
+- `audio_manager`: sole microphone/speaker/I2S/DMA/PCM owner;
+- `xiaozhi_foundation`: Xiaozhi transport/session boundary;
+- `voice_assistant`: conversation generation, state and orchestration policy;
+- `app_gui`: sole GUI/LVGL owner.
 
-Phase 13-C adds the copied audio-status contract and formalizes `voice_assistant_status_t` as the UI-safe voice model. It still does **not** expose raw PCM, open a production audio channel, play response audio, or call LVGL.
-
-## Current state machine
+## State machine
 
 ```text
-UNINITIALIZED
-    |
-    | init()
-    v
-INITIALIZED
-    |
-    | start()
-    v
-   IDLE
-    |
-    | begin_session()
-    v
-CONNECTING
-    |
-    | real Xiaozhi CONNECTED event
-    v
-  READY
-    |
-    +--> LISTENING   (reserved for explicit voice-owned audio flow)
-    +--> THINKING
-    +--> SPEAKING
-    +--> RECOVERING
-    +--> ERROR
+UNINITIALIZED -> INITIALIZED -> IDLE
+                              |
+                              | begin_session()
+                              v
+                          CONNECTING
+                              |
+                              | real Xiaozhi CONNECTED
+                              v
+                            READY
 
-Active session
-    |
-    | end_session()
-    v
-   IDLE
+transport/session failure -> ERROR
+                              |
+                              | recover()
+                              v
+                         RECOVERING
+                              |
+                              | bounded cleanup, no reconnect loop
+                              v
+                            IDLE
+
+active session -- end_session() --> IDLE
 ```
 
-`CONNECTING -> READY` is not synthesized. `xiaozhi_foundation_session_start()` returns success only after the WebSocket chat reports a real CONNECTED event within its bounded timeout.
+`LISTENING`, `THINKING`, and `SPEAKING` remain reserved for explicit voice-owned
+audio flow. Generic `audio_manager` recording/playback does not drive them.
 
-Phase 13-C deliberately does **not** transition to LISTENING/THINKING/SPEAKING merely because `audio_manager` reports RECORDING/PROCESSING/PLAYBACK. A local recording or WAV playback may be unrelated to the voice session. Those conversation transitions are activated only when a later phase gives `voice_assistant` explicit ownership of the voice command flow.
+## Xiaozhi production session
 
-## Xiaozhi production session boundary
+The production session is separate from Phase-12 P2-E/P2-F validation. Session
+start requires real WebSocket CONNECTED evidence and remains alive until stop or
+failure.
 
-Phase 12 validation still exists separately. Phase 13-B does not reuse the P2-E/P2-F worker as a production session because those workers deliberately connect, validate, and tear down.
-
-The long-lived foundation contract is:
+Public foundation surface:
 
 ```c
-esp_err_t xiaozhi_foundation_session_register_status_callback(...);
-esp_err_t xiaozhi_foundation_session_start(uint32_t client_generation);
-esp_err_t xiaozhi_foundation_session_stop(void);
-esp_err_t xiaozhi_foundation_session_get_status(...);
+xiaozhi_foundation_session_register_status_callback(...);
+xiaozhi_foundation_session_start(generation);
+xiaozhi_foundation_session_stop();
+xiaozhi_foundation_session_get_status(...);
 ```
 
-The foundation session:
+Cleanup order remains:
 
-1. retrieves Xiaozhi service information;
-2. requires WebSocket capability and explicitly disables MQTT preference;
-3. creates the MCP engine;
-4. creates/initializes the Xiaozhi chat object;
-5. registers the public ESP event handler;
-6. starts chat and waits at most 15 seconds for CONNECTED;
-7. remains alive in READY until explicit stop or asynchronous transport failure;
-8. cleans up in the validated Phase-12 ownership order: chat stop -> event handler unregister -> chat deinit -> MCP destroy -> EventGroup delete.
+```text
+chat stop
+-> event handler unregister
+-> chat deinit
+-> MCP destroy
+-> EventGroup delete
+```
 
-No Xiaozhi handle, MCP handle, token, endpoint, credential, or framework-owned pointer crosses the public foundation API.
+The session layer now distinguishes an intentional stop from an unexpected
+transport loss. DISCONNECTED/SERVER_GOODBYE generated during explicit stop are
+recorded as expected teardown evidence instead of producing a false ERROR. A
+disconnect while CONNECTING also preserves `active=false`; only an already-ready
+session reports an active transport failure.
 
-## Callback/event flow
+## Callback and stale-event policy
 
-Xiaozhi event-loop callbacks do not mutate `voice_assistant` state directly.
+Xiaozhi callbacks never mutate voice state directly:
 
 ```text
 Xiaozhi event loop
-      |
-      | copied foundation status
-      v
-voice_assistant queue
-      |
-      v
-voice_assistant task
-      |
-      +--> generation check
-      +--> READY / ERROR state transition
+-> copied foundation status
+-> bounded voice queue
+-> voice task
+-> session-generation check
+-> state transition
 ```
 
-The foundation copies the application-provided `client_generation` into every session status. `voice_assistant` drops events whose generation no longer matches the active conversation.
+Late events from an older generation are dropped. A same-generation late ERROR
+arriving after an intentional stop has already returned the voice state to IDLE
+is ignored instead of regressing IDLE back to ERROR.
+
+## Explicit recovery policy
+
+`voice_assistant_recover()` is accepted only from `ERROR`. It queues one bounded
+recovery operation:
+
+```text
+ERROR -> RECOVERING
+      -> query foundation session status
+      -> stop/cleanup only if still active
+      -> IDLE on success
+      -> ERROR on cleanup failure
+```
+
+Recovery does **not** automatically reconnect and never loops indefinitely.
+A later application policy may decide when to begin a fresh session.
 
 ## Audio contract
 
-`audio_manager` already owns one application callback. Phase 13-C does not register a second callback owner. Instead it provides a small fan-out adapter:
+`voice_assistant_audio_adapter_post()` translates the existing copied
+`audio_manager_status_t` into `voice_assistant_audio_status_t`. No I2S handle,
+DMA descriptor, PCM pointer or private recording storage crosses the boundary.
 
-```c
-esp_err_t voice_assistant_audio_adapter_post(
-    const audio_manager_status_t *status);
-```
+Audio notifications use latest-value coalescing. While one audio marker is
+pending in the command queue, newer audio snapshots overwrite the private copied
+pending value instead of enqueueing additional markers. This prevents a burst of
+audio status callbacks from consuming all control/event queue slots.
 
-Application composition can call this from the existing audio-manager callback. The adapter copies only:
-
-- lifecycle state;
-- capture-active flag;
-- playback-active flag;
-- last `esp_err_t`.
-
-It maps those facts into the project-owned `voice_assistant_audio_status_t` and then queues them through:
-
-```c
-esp_err_t voice_assistant_notify_audio_status(
-    const voice_assistant_audio_status_t *status);
-```
-
-The voice task remains the only writer of the public `voice_assistant_status_t` snapshot.
-
-The audio contract explicitly does **not** expose:
-
-- I2S handles;
-- DMA descriptors;
-- manager-owned PCM buffers;
-- private recording storage;
-- raw hardware callbacks.
-
-Current `audio_manager` does not provide a public live PCM frame/ring API. Phase 13-C therefore does not bypass private storage. A future microphone-to-Xiaozhi streaming path must first use a bounded project-owned public streaming contract while keeping `audio_manager` as the sole I2S owner.
+The current `audio_manager` still does not expose a live PCM streaming API, so
+Phase 13 does not bypass its private recording buffer. Real microphone-to-Xiaozhi
+streaming remains a later integration step.
 
 ## GUI contract
 
-`voice_assistant_status_t` is now the production UI-safe contract. It contains only copied project-owned scalar state:
+`voice_assistant_status_t` is the production UI-safe model. It contains only:
 
-```text
-conversation state
-session generation
-session-active flag
-last voice error
-copied audio state
-capture/playback active flags
-last audio error
-```
+- conversation state;
+- session generation;
+- session-active flag;
+- latest voice error;
+- copied audio lifecycle state;
+- capture/playback active flags;
+- latest audio error.
 
-A future `app_gui` adapter may queue this snapshot into the UI task. `voice_assistant` itself must never call LVGL or depend on LVGL object lifetime.
-
-The Phase-12 `ui_xiaozhi_status_t` remains a temporary validation model and is **not** reused as the production Phase-13 contract merely to avoid adding the correct boundary. Production GUI rendering remains a later GUI phase.
+`voice_assistant` does not call LVGL. Application composition can copy this model
+into `app_gui` later.
 
 ## Task and queue
 
-A single `voice_assistant` task owns state-machine and copied audio-status execution.
-
+- one long-lived `voice_assistant` task;
 - stack: 4096 bytes;
 - priority: 4;
 - command queue length: 8;
-- APIs use bounded mutex waits;
-- task start waits at most 2 seconds for the task to reach `IDLE`;
-- callbacks are invoked only after the component status lock has been released;
-- audio status posting is non-blocking and returns `ESP_ERR_TIMEOUT` if the bounded queue is full.
-
-`begin_session()` and `end_session()` enqueue bounded commands rather than performing transport work in the caller context. Transport setup/teardown executes in the orchestration task, not in Wi-Fi, Xiaozhi event-loop, audio-manager callback, or GUI callback context.
+- bounded mutex wait: 100 ms;
+- task-start readiness wait: 2 seconds;
+- one public lifecycle command pending at a time;
+- audio updates coalesced latest-value style;
+- status callbacks run only after releasing the voice status mutex.
 
 ## Public API
 
@@ -171,15 +155,11 @@ esp_err_t voice_assistant_init(void);
 esp_err_t voice_assistant_start(void);
 esp_err_t voice_assistant_begin_session(void);
 esp_err_t voice_assistant_end_session(void);
+esp_err_t voice_assistant_recover(void);
 esp_err_t voice_assistant_notify_audio_status(
     const voice_assistant_audio_status_t *status);
-esp_err_t voice_assistant_register_status_callback(
-    voice_assistant_status_callback_t callback,
-    void *user_context);
-esp_err_t voice_assistant_get_status(voice_assistant_status_t *status);
-const char *voice_assistant_state_to_string(voice_assistant_state_t state);
-const char *voice_assistant_audio_state_to_string(
-    voice_assistant_audio_state_t state);
+esp_err_t voice_assistant_register_status_callback(...);
+esp_err_t voice_assistant_get_status(...);
 ```
 
 Composition-only audio adapter:
@@ -189,18 +169,16 @@ esp_err_t voice_assistant_audio_adapter_post(
     const audio_manager_status_t *status);
 ```
 
-## Current limitations / deferred work
+## Remaining Phase-13 closure items
 
-Phase 13-C intentionally does not implement:
-
-- live microphone PCM frame export from `audio_manager`;
-- Opus TX or production Xiaozhi audio-channel open/close;
-- response-audio routing into `audio_manager`;
-- automatic LISTENING/THINKING/SPEAKING transitions from generic audio activity;
-- USER/ASSISTANT transcript promotion into the production status contract;
-- direct `app_gui` queue integration or Phase-15 voice rendering;
-- automatic retry/recovery state machine after transport loss;
-- production composition/start trigger in `main.c`;
-- hardware/runtime acceptance.
-
-The Phase-12 validation API and the Phase-13 production session API are separate lifecycle surfaces. Application composition must not run them concurrently; explicit cross-surface exclusion is hardened in the later robustness checkpoint.
+- production composition in `main.c` still needs to replace the temporary
+  Phase-12 validation orchestration where appropriate;
+- Phase-12 validation and Phase-13 production session are still separate public
+  lifecycle surfaces. Current application policy must not run them concurrently;
+  final composition cleanup must ensure production runtime chooses one surface;
+- cancellation while the synchronous 15-second CONNECTING start is inside the
+  foundation call is not yet a preemptive cancel. Public duplicate/end commands
+  are rejected while that command is pending; the bounded connect timeout is the
+  current escape path;
+- no live PCM/Opus streaming, response playback or production transcript model;
+- no target build/HIL acceptance claimed yet.
