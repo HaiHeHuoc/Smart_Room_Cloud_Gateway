@@ -11,7 +11,7 @@ Phase 12 SW -> COMPLETE / selected HIL deferred
 Phase 13 SW -> COMPLETE / HIL deferred
 Phase 14 SW -> COMPLETE / Build + HIL pending
 Phase 15 SW -> COMPLETE / Build + HIL pending
-Phase 16 SW -> IN PROGRESS / 16-B complete
+Phase 16 SW -> IN PROGRESS / 16-C complete
 ```
 
 Continue Phase 16 one checkpoint at a time and only after Hải says `tiếp tục`.
@@ -50,19 +50,23 @@ Current checkpoint:
 ```text
 16-A Audio client/request model                 COMPLETE
 16-B Playback arbitration runtime               COMPLETE
-16-C Capture arbitration runtime                NEXT
-16-D Priority/preemption/queue hardening        pending
+16-C Capture arbitration runtime                COMPLETE
+16-D Priority/preemption/queue hardening        NEXT
 16-E Xiaozhi + notification/alarm integration   pending
 16-F Final review/HIL plan                      pending
 ```
 
-16-B added a bounded playback arbiter with one current + one pending WAV request, copied request/client metadata, `REJECT`, `QUEUE`, and cooperative `PREEMPT_LOWER_PRIORITY` behavior. It coordinates only through public `audio_manager_play_wav()` / `audio_manager_stop_playback()` and copied manager status; it owns no I2S or source hardware.
+Playback arbiter: one current + one pending WAV request; command acceptance is separated from real PLAYBACK evidence; known interruptible lower-priority playback can be cooperatively preempted.
 
-Legacy Xiaozhi/notification/alarm callers are intentionally not migrated yet. Unknown legacy playback is never preempted because its client/interruptibility metadata is unavailable. Client migration is deferred to 16-E.
+Capture arbiter: one current + one pending manual-capture request; STARTING is separated from real RECORDING evidence; RECORDING may be cooperatively stopped, PROCESSING is allowed to finish naturally, and pre-start cancel/preempt does not touch hardware.
 
-Known 16-B follow-ups:
+Legacy Xiaozhi/notification/alarm callers are intentionally not migrated yet. Unknown legacy capture/playback is never preempted because client/interruptibility metadata is unavailable. Client migration is deferred to 16-E.
 
-- arbiter stop/deinit lifecycle API not implemented yet;
+Known follow-ups before Phase-16 closure:
+
+- playback/capture arbiter stop/deinit lifecycle APIs are not implemented yet;
+- capture/playback arbiters still need shared cross-resource policy hardening because `audio_manager` has one operation state;
+- fairness/equal-priority/pending replacement behavior must be finalized in 16-D;
 - recorded-audio playback is not promoted into request arbitration yet;
 - no build/HIL evidence yet.
 
@@ -74,8 +78,8 @@ If hardware is unavailable, answer in this order:
 2. Phase 13 HIL deferred / Codex-ready.
 3. Phase 14 HIL deferred / dedicated test-branch prerequisite.
 4. Phase 15 HIL deferred / test branch ready.
-5. Phase 16 active: 16-A and 16-B complete.
-6. Next software checkpoint: **16-C — Capture Arbitration Runtime**, only after explicit `tiếp tục`.
+5. Phase 16 active: 16-A, 16-B and 16-C complete.
+6. Next software checkpoint: **16-D — Priority / Preemption / Queue Policy Hardening**, only after explicit `tiếp tục`.
 
 Concise state:
 
@@ -84,8 +88,8 @@ P12 HIL -> DEFERRED
 P13 HIL -> DEFERRED
 P14 HIL -> DEFERRED / branch prerequisite
 P15 HIL -> DEFERRED / test branch ready
-P16 SW  -> 16-B COMPLETE
-Next SW -> 16-C after `tiếp tục`
+P16 SW  -> 16-C COMPLETE
+Next SW -> 16-D after `tiếp tục`
 ```
 
 ## Production-vs-test fix policy
