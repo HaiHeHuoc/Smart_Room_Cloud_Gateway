@@ -3,7 +3,7 @@
 Updated: 2026-08-25
 Branch: `phase/16-audio-arbitration`
 Base branch: `phase/15-voice-assistant-ui`
-Current checkpoint: **16-C — Capture Arbitration Runtime**
+Current checkpoint: **16-D — Priority / Preemption / Queue Policy Hardening**
 Status: **IMPLEMENTED / STATIC REVIEW COMPLETE / BUILD + HIL NOT CLAIMED**
 
 ## Collaboration rule
@@ -15,8 +15,8 @@ Planned checkpoints:
 1. 16-A — audio client/request model. ✅
 2. 16-B — playback arbitration runtime. ✅
 3. 16-C — capture arbitration runtime. ✅
-4. 16-D — priority/preemption/queue policy hardening. NEXT
-5. 16-E — Xiaozhi + notification/alarm integration/stubs and concurrency review.
+4. 16-D — priority/preemption/queue policy hardening. ✅
+5. 16-E — Xiaozhi + notification/alarm integration/stubs and concurrency review. NEXT
 6. 16-F — final review/docs/deferred HIL.
 
 At 16-F explicitly notify Hải that it is the final Phase-16 prompt before software closure.
@@ -42,126 +42,88 @@ interruptible
 
 Playback arbitration uses one current + one pending WAV request. The arbiter never owns I2S, files or DMA and controls playback only through `audio_manager_play_wav()` / `audio_manager_stop_playback()`. STARTING is not considered ACTIVE until real manager PLAYBACK evidence is observed.
 
-## 16-C — implemented capture arbitration runtime
+## 16-C summary — capture runtime
 
-Added:
+Capture arbitration uses one current + one pending request. It controls recording only through `audio_manager_start_recording()` / `audio_manager_stop_recording()` and copied manager status. RECORDING is real ACTIVE evidence; PROCESSING is FINISHING and is allowed to complete before pending promotion.
 
-```text
-components/audio/audio_manager/include/audio_manager_capture_arbiter.h
-components/audio/audio_manager/audio_manager_capture_arbiter.c
-```
+## 16-D — implemented deterministic policy hardening
 
-and compiled it into the existing `audio_manager` component.
-
-### Ownership
+Added a shared project-owned decision contract:
 
 ```text
-client request
--> capture arbiter
--> audio_manager_start_recording()
--> audio_manager task
--> sole I2S RX owner
+audio_manager_arbitration_policy_decide(incoming, owner)
+-> GRANT / WAIT / REJECT / PREEMPT
 ```
 
-Cooperative stop/preemption:
+Rules are deterministic across CAPTURE and PLAYBACK request metadata:
 
 ```text
-capture arbiter
--> audio_manager_stop_recording()
--> manager-owned RX cleanup / DSP completion
+no known owner
+-> GRANT
+
+busy_policy = REJECT
+-> REJECT
+
+busy_policy = QUEUE
+-> WAIT
+
+busy_policy = PREEMPT_LOWER_PRIORITY
++ current interruptible
++ incoming priority strictly greater than current
+-> PREEMPT
+
+same priority
+-> never preempt
+
+lower priority
+-> never preempt
 ```
 
-The arbiter owns no I2S/DMA/raw microphone buffer.
+This deliberately avoids equal-priority ping-pong and makes preemption a strictly-higher-priority operation.
 
-### Runtime states
+### Cross-resource rule
 
-```text
-IDLE
-STARTING
-ACTIVE
-FINISHING
-PREEMPTING
-ERROR
-```
+Capture and playback arbiters remain structurally separate, but the underlying `audio_manager` has one operation state. Therefore a request may only be submitted to hardware when copied manager state is IDLE. A CAPTURE request and PLAYBACK request can both exist logically in their bounded arbiter slots, but only one may become the manager operation at a time.
 
-Important lifecycle evidence:
+16-D does not introduce a second hardware scheduler or I2S owner. When both arbiters observe IDLE near-simultaneously, the existing `audio_manager` command serialization remains the final hardware gate; the loser sees `ESP_ERR_INVALID_STATE` and waits/retries after manager returns IDLE. This is safe but does not guarantee global fairness between the two independent arbiter tasks.
 
-```text
-audio_manager_start_recording() ESP_OK
-= command accepted, not recording-start proof
+### Fairness / starvation decision
 
-RECORDING observed
-= ACTIVE
+For the current embedded MVP, no unbounded fairness queue is introduced. Each resource has exactly one current + one pending request. Priority is deterministic inside each resource. Cross-resource fairness is intentionally not claimed because capture and playback have separate bounded arbiters above one manager state machine.
 
-PROCESSING observed after recording
-= FINISHING
+If HIL/integration proves starvation under sustained competing CAPTURE/PLAYBACK load, the next architectural step is a single unified audio scheduler above both resources. Do not add an unbounded queue merely to claim fairness before evidence exists.
 
-IDLE after observed recording
-= current capture transaction complete/cancelled/preempted
-```
+### Pending-slot behavior
 
-The arbiter does not attempt to stop DSP once the manager has moved to PROCESSING; it waits for the existing manager-owned processing path to return IDLE before promoting the pending request.
+- one pending slot only;
+- if pending is occupied, additional QUEUE requests are rejected;
+- a higher-priority request does not silently replace an already accepted pending request;
+- cancellation explicitly removes matching pending/current ownership;
+- request IDs must remain unique among current/pending slots;
+- unknown legacy/external manager activity is never preempted because trusted client/interruptibility metadata does not exist.
 
-### Bounded request storage
+### Diagnostics
 
-```text
-1 current capture request
-1 pending capture request
-```
+Both arbiters expose bounded copied status including current/pending request metadata and counters for accepted, rejected, queued, preempted, completed and failed operations. These counters are the intended HIL evidence for policy behavior.
 
-No dynamic/unbounded request queue is introduced.
+### Known limitations after 16-D
 
-### Busy policies
-
-`REJECT`: reject when current arbiter owner exists.
-
-`QUEUE`: accept into the one pending slot if empty.
-
-`PREEMPT_LOWER_PRIORITY`: accepted only if current is interruptible, new priority is higher, and the pending slot is empty.
-
-If preemption occurs before real recording starts, the lower-priority current request is replaced without touching hardware. If RECORDING is already active, cooperative stop is requested through `audio_manager_stop_recording()` and the pending request is promoted only after manager cleanup returns IDLE.
-
-### Legacy/external capture safety
-
-Existing Phase-14 Xiaozhi uplink still calls legacy `audio_manager_start_recording()` / `audio_manager_stop_recording()` until 16-E. A recording/processing transaction not owned by the capture arbiter is treated as external/unknown busy and is never preempted because no trusted metadata exists.
-
-### Static-review fixes in 16-C
-
-1. command acceptance is not treated as proof of active recording;
-2. capture completion spans RECORDING -> optional PROCESSING -> IDLE;
-3. cancel-before-start removes current request cleanly;
-4. preempt-before-start replaces lower-priority request without issuing a hardware stop;
-5. preemption during PROCESSING waits for natural manager cleanup;
-6. unknown legacy capture is never preempted.
-
-### Production composition
-
-After `audio_manager_start()` succeeds:
-
-```text
-audio_manager READY
--> playback arbiter READY
--> capture arbiter READY
--> Phase-15 voice/UI/PTT/uplink/downlink stack
-```
-
-### Known limitations after 16-C
-
-- capture/playback arbiters currently have init/start but no dedicated stop/deinit API;
-- Phase-14 Xiaozhi capture/playback has not yet migrated to the arbiter APIs;
-- capture and playback policies are structurally separate but share the underlying audio_manager single-operation state, so 16-D must harden cross-resource ordering/policy;
-- request fairness/starvation policy is not finalized;
+- cross-resource global fairness is not guaranteed; manager serialization is safe but separate arbiter tasks can race for IDLE;
+- arbiter stop/deinit lifecycle APIs are still not implemented;
+- recorded-audio playback is not promoted into request arbitration;
+- production Xiaozhi capture/playback is still legacy until 16-E;
+- notification/alarm clients are not yet integrated;
 - no build/HIL PASS is claimed.
 
 ## Next checkpoint — only after user says `tiếp tục`
 
-**16-D — Priority / Preemption / Queue Policy Hardening**
+**16-E — Xiaozhi + Notification/Alarm Integration and Concurrency Review**
 
 Planned scope:
 
-1. review playback and capture arbiters together against the single `audio_manager` state machine;
-2. define deterministic cross-resource behavior when capture and playback requests arrive together;
-3. harden equal-priority, pending-slot replacement, cancellation and starvation behavior;
-4. add/normalize diagnostics needed for integration/HIL;
-5. preserve unknown legacy-client safety;
-6. do not migrate Xiaozhi/notification/alarm callers until 16-E.
+1. migrate Phase-14 Xiaozhi capture/playback requests to arbitration metadata without bypassing `audio_manager`;
+2. add minimal notification/alarm request helpers or stubs sufficient to exercise policy without inventing a new product feature;
+3. verify Xiaozhi is interruptible/non-interruptible at the correct points;
+4. review simultaneous sensor/Firebase/UI work: unrelated tasks continue; only audio requests are arbitrated;
+5. preserve bounded callbacks/queues and existing PTT semantics;
+6. prepare final integration surface for 16-F closure/HIL.
