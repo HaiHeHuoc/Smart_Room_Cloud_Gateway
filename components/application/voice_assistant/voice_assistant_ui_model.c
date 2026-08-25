@@ -153,17 +153,36 @@ static void ui_semantic_text_callback(
     void *user_context)
 {
     (void)user_context;
-    if ((event == NULL) ||
-        (event->role != XIAOZHI_FOUNDATION_TEXT_ROLE_USER)) {
+    if ((event == NULL) || (event->text == NULL)) {
         return;
     }
 
-    const esp_err_t ret = voice_assistant_ui_model_post_user_text(
-        event->client_generation,
-        event->text);
+    esp_err_t ret = ESP_OK;
+    const char *role = "UNKNOWN";
+
+    switch (event->role) {
+        case XIAOZHI_FOUNDATION_TEXT_ROLE_USER:
+            role = "USER";
+            ret = voice_assistant_ui_model_post_user_text(
+                event->client_generation,
+                event->text);
+            break;
+
+        case XIAOZHI_FOUNDATION_TEXT_ROLE_ASSISTANT:
+            role = "ASSISTANT";
+            ret = voice_assistant_ui_model_post_assistant_text(
+                event->client_generation,
+                event->text);
+            break;
+
+        default:
+            return;
+    }
+
     if ((ret != ESP_OK) && (ret != ESP_ERR_INVALID_STATE)) {
         ESP_LOGW(TAG,
-                 "USER transcript dropped generation=%u error=%s",
+                 "%s text dropped generation=%u error=%s",
+                 role,
                  (unsigned)event->client_generation,
                  esp_err_to_name(ret));
     }
@@ -226,7 +245,7 @@ esp_err_t voice_assistant_ui_model_start(void)
 
     s_started = true;
     ui_voice_status_callback(&status, NULL);
-    ESP_LOGI(TAG, "production voice UI model started with USER transcript observer");
+    ESP_LOGI(TAG, "production voice UI model started with semantic text observer");
     return ESP_OK;
 }
 
