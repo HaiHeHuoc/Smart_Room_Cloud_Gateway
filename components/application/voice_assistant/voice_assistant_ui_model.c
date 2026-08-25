@@ -29,36 +29,33 @@ static bool ui_take_lock(void)
 static voice_assistant_ui_state_t ui_map_voice_state(voice_assistant_state_t state)
 {
     switch (state) {
-        case VOICE_ASSISTANT_STATE_CONNECTING:
-            return VOICE_ASSISTANT_UI_CONNECTING;
-        case VOICE_ASSISTANT_STATE_READY:
-            return VOICE_ASSISTANT_UI_READY;
-        case VOICE_ASSISTANT_STATE_LISTENING:
-            return VOICE_ASSISTANT_UI_LISTENING;
-        case VOICE_ASSISTANT_STATE_THINKING:
-            return VOICE_ASSISTANT_UI_THINKING;
-        case VOICE_ASSISTANT_STATE_SPEAKING:
-            return VOICE_ASSISTANT_UI_SPEAKING;
-        case VOICE_ASSISTANT_STATE_RECOVERING:
-            return VOICE_ASSISTANT_UI_RECOVERING;
-        case VOICE_ASSISTANT_STATE_ERROR:
-            return VOICE_ASSISTANT_UI_ERROR;
+        case VOICE_ASSISTANT_STATE_CONNECTING: return VOICE_ASSISTANT_UI_CONNECTING;
+        case VOICE_ASSISTANT_STATE_READY: return VOICE_ASSISTANT_UI_READY;
+        case VOICE_ASSISTANT_STATE_LISTENING: return VOICE_ASSISTANT_UI_LISTENING;
+        case VOICE_ASSISTANT_STATE_THINKING: return VOICE_ASSISTANT_UI_THINKING;
+        case VOICE_ASSISTANT_STATE_SPEAKING: return VOICE_ASSISTANT_UI_SPEAKING;
+        case VOICE_ASSISTANT_STATE_RECOVERING: return VOICE_ASSISTANT_UI_RECOVERING;
+        case VOICE_ASSISTANT_STATE_ERROR: return VOICE_ASSISTANT_UI_ERROR;
         case VOICE_ASSISTANT_STATE_UNINITIALIZED:
         case VOICE_ASSISTANT_STATE_INITIALIZED:
         case VOICE_ASSISTANT_STATE_IDLE:
-        default:
-            return VOICE_ASSISTANT_UI_IDLE;
+        default: return VOICE_ASSISTANT_UI_IDLE;
     }
+}
+
+static void ui_clear_assistant_locked(void)
+{
+    s_model.assistant_text[0] = '\0';
+    s_model.assistant_text_valid = false;
+    s_model.assistant_text_truncated = false;
 }
 
 static void ui_clear_text_locked(void)
 {
     s_model.user_text[0] = '\0';
-    s_model.assistant_text[0] = '\0';
     s_model.user_text_valid = false;
-    s_model.assistant_text_valid = false;
     s_model.user_text_truncated = false;
-    s_model.assistant_text_truncated = false;
+    ui_clear_assistant_locked();
 }
 
 static void ui_publish(void)
@@ -97,6 +94,7 @@ static void ui_voice_status_callback(
     if ((status->session_generation != 0U) &&
         (status->session_generation != s_model.session_generation)) {
         ui_clear_text_locked();
+        s_model.turn_sequence = 0U;
     }
     s_model.state = ui_map_voice_state(status->state);
     s_model.session_generation = status->session_generation;
@@ -114,10 +112,8 @@ static esp_err_t ui_copy_text(
         return ESP_ERR_INVALID_ARG;
     }
 
-    const size_t source_len =
-        strnlen(text, VOICE_ASSISTANT_UI_TEXT_BUFFER_SIZE);
-    const bool truncated =
-        source_len == VOICE_ASSISTANT_UI_TEXT_BUFFER_SIZE;
+    const size_t source_len = strnlen(text, VOICE_ASSISTANT_UI_TEXT_BUFFER_SIZE);
+    const bool truncated = source_len == VOICE_ASSISTANT_UI_TEXT_BUFFER_SIZE;
     const size_t copy_len = truncated
                                 ? (VOICE_ASSISTANT_UI_TEXT_BUFFER_SIZE - 1U)
                                 : source_len;
@@ -129,6 +125,14 @@ static esp_err_t ui_copy_text(
         (s_model.session_generation != session_generation)) {
         xSemaphoreGive(s_lock);
         return ESP_ERR_INVALID_STATE;
+    }
+
+    if (user_text) {
+        s_model.turn_sequence++;
+        if (s_model.turn_sequence == 0U) {
+            s_model.turn_sequence = 1U;
+        }
+        ui_clear_assistant_locked();
     }
 
     char *const destination = user_text ? s_model.user_text : s_model.assistant_text;
@@ -167,14 +171,12 @@ static void ui_semantic_text_callback(
                 event->client_generation,
                 event->text);
             break;
-
         case XIAOZHI_FOUNDATION_TEXT_ROLE_ASSISTANT:
             role = "ASSISTANT";
             ret = voice_assistant_ui_model_post_assistant_text(
                 event->client_generation,
                 event->text);
             break;
-
         default:
             return;
     }
@@ -193,12 +195,10 @@ esp_err_t voice_assistant_ui_model_init(void)
     if (s_lock != NULL) {
         return ESP_OK;
     }
-
     s_lock = xSemaphoreCreateMutex();
     if (s_lock == NULL) {
         return ESP_ERR_NO_MEM;
     }
-
     if (!ui_take_lock()) {
         vSemaphoreDelete(s_lock);
         s_lock = NULL;
@@ -220,16 +220,11 @@ esp_err_t voice_assistant_ui_model_start(void)
         return ESP_OK;
     }
 
-    esp_err_t ret = voice_assistant_register_status_callback(
-        ui_voice_status_callback,
-        NULL);
+    esp_err_t ret = voice_assistant_register_status_callback(ui_voice_status_callback, NULL);
     if (ret != ESP_OK) {
         return ret;
     }
-
-    ret = xiaozhi_foundation_text_register_callback(
-        ui_semantic_text_callback,
-        NULL);
+    ret = xiaozhi_foundation_text_register_callback(ui_semantic_text_callback, NULL);
     if (ret != ESP_OK) {
         (void)voice_assistant_register_status_callback(NULL, NULL);
         return ret;
