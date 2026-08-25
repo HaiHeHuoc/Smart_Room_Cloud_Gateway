@@ -3,15 +3,17 @@
 ## Purpose
 
 `voice_assistant` is the project-owned conversation orchestrator. It sits between
-`audio_manager`, `xiaozhi_foundation`, and future GUI composition without owning
-those components' hardware or framework objects.
+`audio_manager`, `xiaozhi_foundation`, and future GUI/PTT composition without
+owning those components' hardware or framework objects.
 
 Ownership remains:
 
 - `audio_manager`: sole microphone/speaker/I2S/DMA/PCM owner;
-- `xiaozhi_foundation`: Xiaozhi transport/session boundary;
-- `voice_assistant`: conversation generation, state and orchestration policy;
-- `app_gui`: sole GUI/LVGL owner.
+- `xiaozhi_foundation`: sole direct `esp_xiaozhi`/MCP/service/session boundary;
+- `voice_assistant`: conversation generation, state, command ordering and recovery policy;
+- `app_gui` / `ui_manager_lvgl`: sole GUI/LVGL ownership.
+
+Phase 13 status: **Software Complete / HIL Pending**.
 
 ## State machine
 
@@ -39,8 +41,9 @@ transport/session failure -> ERROR
 active session -- end_session() --> IDLE
 ```
 
-`LISTENING`, `THINKING`, and `SPEAKING` remain reserved for explicit voice-owned
-audio flow. Generic `audio_manager` recording/playback does not drive them.
+`LISTENING`, `THINKING`, and `SPEAKING` are reserved for the explicit
+voice-owned PTT/audio transaction introduced in Sprint 14. Generic
+`audio_manager` recording or playback does not drive these states.
 
 ## Xiaozhi production session
 
@@ -67,11 +70,11 @@ chat stop
 -> EventGroup delete
 ```
 
-The session layer now distinguishes an intentional stop from an unexpected
-transport loss. DISCONNECTED/SERVER_GOODBYE generated during explicit stop are
-recorded as expected teardown evidence instead of producing a false ERROR. A
-disconnect while CONNECTING also preserves `active=false`; only an already-ready
-session reports an active transport failure.
+The session layer distinguishes intentional stop from unexpected transport loss.
+DISCONNECTED/SERVER_GOODBYE generated during explicit stop are treated as
+teardown evidence instead of false runtime failures. A connection failure before
+READY preserves `active=false`; an established-session failure preserves
+`active=true` until recovery/cleanup.
 
 ## Callback and stale-event policy
 
@@ -87,54 +90,53 @@ Xiaozhi event loop
 ```
 
 Late events from an older generation are dropped. A same-generation late ERROR
-arriving after an intentional stop has already returned the voice state to IDLE
-is ignored instead of regressing IDLE back to ERROR.
+after an intentional stop has already returned to IDLE is ignored rather than
+regressing IDLE back to ERROR.
 
 ## Explicit recovery policy
 
-`voice_assistant_recover()` is accepted only from `ERROR`. It queues one bounded
-recovery operation:
+`voice_assistant_recover()` is accepted only from `ERROR`:
 
 ```text
 ERROR -> RECOVERING
       -> query foundation session status
-      -> stop/cleanup only if still active
+      -> stop/cleanup once if still active
       -> IDLE on success
       -> ERROR on cleanup failure
 ```
 
-Recovery does **not** automatically reconnect and never loops indefinitely.
-A later application policy may decide when to begin a fresh session.
+There is no automatic reconnect loop. A later explicit `begin_session()` starts
+a fresh generation.
 
 ## Audio contract
 
-`voice_assistant_audio_adapter_post()` translates the existing copied
+`voice_assistant_audio_adapter_post()` translates one existing copied
 `audio_manager_status_t` into `voice_assistant_audio_status_t`. No I2S handle,
 DMA descriptor, PCM pointer or private recording storage crosses the boundary.
 
 Audio notifications use latest-value coalescing. While one audio marker is
 pending in the command queue, newer audio snapshots overwrite the private copied
-pending value instead of enqueueing additional markers. This prevents a burst of
-audio status callbacks from consuming all control/event queue slots.
+pending value instead of consuming additional queue slots.
 
-The current `audio_manager` still does not expose a live PCM streaming API, so
-Phase 13 does not bypass its private recording buffer. Real microphone-to-Xiaozhi
-streaming remains a later integration step.
+The current `audio_manager` does not expose a public live PCM streaming API.
+Phase 13 therefore does not bypass private audio storage. Real mic -> Opus ->
+Xiaozhi uplink and response-audio playback are Sprint-14 work while
+`audio_manager` remains the sole I2S owner.
 
 ## GUI contract
 
-`voice_assistant_status_t` is the production UI-safe model. It contains only:
+`voice_assistant_status_t` is a production UI-safe copied model containing:
 
 - conversation state;
 - session generation;
 - session-active flag;
 - latest voice error;
 - copied audio lifecycle state;
-- capture/playback active flags;
+- capture/playback-active flags;
 - latest audio error.
 
-`voice_assistant` does not call LVGL. Application composition can copy this model
-into `app_gui` later.
+`voice_assistant` does not call LVGL. Transcript/emotion presentation and the
+final GUI voice queue/rendering belong to Sprint 15.
 
 ## Task and queue
 
@@ -169,16 +171,35 @@ esp_err_t voice_assistant_audio_adapter_post(
     const audio_manager_status_t *status);
 ```
 
-## Remaining Phase-13 closure items
+## Production vs Phase-12 validation
 
-- production composition in `main.c` still needs to replace the temporary
-  Phase-12 validation orchestration where appropriate;
-- Phase-12 validation and Phase-13 production session are still separate public
-  lifecycle surfaces. Current application policy must not run them concurrently;
-  final composition cleanup must ensure production runtime chooses one surface;
-- cancellation while the synchronous 15-second CONNECTING start is inside the
-  foundation call is not yet a preemptive cancel. Public duplicate/end commands
-  are rejected while that command is pending; the bounded connect timeout is the
-  current escape path;
-- no live PCM/Opus streaming, response playback or production transcript model;
-- no target build/HIL acceptance claimed yet.
+The repository retains the Phase-12 validation composition and assets for HIL.
+The Phase-13 production branch explicitly defaults:
+
+```text
+CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE=n
+```
+
+so normal Phase-13 firmware does not automatically run the temporary validator.
+Dedicated HIL/test branches may opt in explicitly.
+
+Phase 13 also deliberately does not auto-call `voice_assistant_begin_session()`
+at boot. A conversation must be user-authorized; Sprint 14 owns the PTT trigger,
+voice-session start, mic uplink and response-audio lifecycle.
+
+## Security boundary
+
+Phase 13 exposes no voice API for reboot, OTA, NVS erase/write, Wi-Fi
+reconfiguration, provisioning lifecycle, arbitrary GPIO/driver control or
+shell/system commands.
+
+Voice recovery may clean only the voice-owned Xiaozhi session. It may not take
+over Wi-Fi, provisioning, cloud, reset, storage, audio hardware or GUI lifecycle.
+
+## Verification boundary
+
+Static/source review is complete. Final `idf.py build`, target runtime,
+WebSocket/session HIL and resource measurements are not claimed in the current
+environment and remain explicitly deferred.
+
+Use `AI_Stored_Data/PHASE13_HIL_TEST_PLAN.md` when target hardware is available.
