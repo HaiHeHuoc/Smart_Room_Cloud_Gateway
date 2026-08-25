@@ -2,8 +2,8 @@
 
 Updated: 2026-08-25
 Branch: `phase/15-voice-assistant-ui`
-Current checkpoint: **15-D — Production ASSISTANT Text Wiring**
-Status: **IMPLEMENTED / STATIC REVIEW COMPLETE / BUILD + HIL NOT CLAIMED**
+Current checkpoint: **15-E — Repeated-Turn / History / Error UX**
+Status: **IMPLEMENTED WITH DOCUMENTED LEGACY VISUAL-MAPPING LIMITATION / STATIC REVIEW COMPLETE / BUILD + HIL NOT CLAIMED**
 
 ## Collaboration rule
 
@@ -15,139 +15,151 @@ Planned checkpoints:
 2. 15-B — dedicated Voice Assistant screen and lifecycle presentation. ✅
 3. 15-C — production USER transcript wiring. ✅
 4. 15-D — production ASSISTANT text wiring. ✅
-5. 15-E — repeated-turn/history/error UX + presentation refinement. NEXT
-6. 15-F — FINAL review/composition/docs/deferred HIL.
+5. 15-E — repeated-turn/history/error UX + presentation refinement. ✅
+6. 15-F — FINAL review/composition/docs/deferred HIL. NEXT
 
 At 15-F explicitly notify Hải that it is the final Phase-15 prompt before software closure.
 
-## 15-A / 15-B summary
+## 15-A through 15-D summary
 
-Phase 15 now has a production `voice_assistant_ui_model` and a GUI adapter. Presentation flows only through copied data:
+Production presentation path:
 
 ```text
-voice_assistant / semantic Xiaozhi events
+voice_assistant / Xiaozhi semantic text
 -> voice_assistant_ui_model
 -> voice_assistant_ui_gui_adapter
 -> app_gui latest-value queue
 -> app_gui UI task
--> LVGL
+-> LVGL Voice/Xiaozhi visual surface
 ```
 
-The production model is separate from the temporary Phase-12 validation UI model. The existing UI-task-owned Xiaozhi screen is reused/promoted as the visual surface; no voice/Xiaozhi callback calls LVGL directly.
+Semantic USER and ASSISTANT text are copied synchronously from callback-lifetime Xiaozhi text into bounded 192-byte project-owned fields. Audio response remains independent on the Phase-14 downlink/audio-manager path.
 
-Current visual mapping limitation remains explicit: production CONNECTING/THINKING/RECOVERING still render through the legacy PROCESSING visual state until 15-E refinement.
+## 15-E — repeated-turn presentation policy
 
-## 15-C / 15-D semantic text implementation
+### Why session generation is insufficient
 
-The project lock pins `espressif/esp_xiaozhi` 0.1.2. Production semantic text is observed through the Xiaozhi CHAT_TEXT callback contract and promoted through a dedicated project-owned text observer that is separate from both session-status and binary/TTS response callbacks.
+The production Xiaozhi connection is intentionally long-lived. Several PTT turns can therefore share one `session_generation`. The UI cannot use session generation alone to know that a new user utterance started a new displayed turn.
 
-Foundation semantic roles:
+15-E adds a presentation-only:
 
 ```text
-XIAOZHI_FOUNDATION_TEXT_ROLE_USER
-XIAOZHI_FOUNDATION_TEXT_ROLE_ASSISTANT
+turn_sequence
 ```
 
-The upstream text pointer is callback-lifetime only. `xiaozhi_foundation` does not retain it; the UI model copies it synchronously into its bounded 192-byte project-owned buffer before callback return.
+This is not a protocol transaction ID and is not used for transport/audio ownership. It is only a bounded UI identity/counter inside the current long-lived session.
 
-### USER path — 15-C
+### Latest-turn policy
+
+The 160x128 display does not retain an unbounded multi-message history. Phase 15 intentionally uses a **latest-turn view**:
 
 ```text
-Xiaozhi CHAT_TEXT / USER
--> xiaozhi_foundation semantic text bridge
--> current session generation
--> voice_assistant_ui_model_post_user_text()
--> copied user_text
--> GUI adapter
--> app_gui UI task
--> LCD User text
+USER semantic text for current session
+-> increment turn_sequence (non-zero wrap handling)
+-> clear assistant text from previous turn
+-> show new USER text
+
+ASSISTANT semantic text
+-> retain current USER text
+-> replace/update ASSISTANT text for current latest turn
 ```
 
-### ASSISTANT path — 15-D
-
-15-D now consumes the already-promoted ASSISTANT role:
+Example:
 
 ```text
-Xiaozhi CHAT_TEXT / ASSISTANT
--> xiaozhi_foundation semantic text bridge
--> current session generation
--> voice_assistant_ui_model_post_assistant_text()
--> copied assistant_text
--> GUI adapter
--> app_gui UI task
--> LCD Assistant text
+turn 1
+User: Turn on the light
+Assistant: Done
+
+turn 2 USER arrives
+-> turn_sequence 1 -> 2
+User: What is the temperature?
+Assistant: <cleared until response arrives>
+
+turn 2 ASSISTANT arrives
+User: What is the temperature?
+Assistant: 27 degrees
 ```
 
-USER and ASSISTANT use the same generation, lifetime, bounds and truncation rules. A stale generation is rejected by the presentation model.
+This prevents an assistant response from the previous displayed turn remaining beside a new user transcript.
 
-Assistant text presentation is intentionally independent from response audio playback. Receiving assistant text does not wait for, start, stop or directly control speaker playback. Audio remains on the Phase-14 response/downlink/audio-manager path.
+### Session transition
 
-Therefore the normal order may be:
+When a new non-zero `session_generation` is observed:
 
 ```text
-assistant semantic text arrives
--> LCD text updates
-
-response audio arrives later/concurrently
--> downlink path
--> audio_manager playback
--> speaker
+clear USER text
+clear ASSISTANT text
+turn_sequence = 0
 ```
 
-No coupling requires the LCD to wait for TTS playback completion.
+Stale text from an old session remains rejected by the existing generation check.
 
-## Semantic text callback ownership
+### Error / recovery UX policy
 
-The project keeps three distinct observer paths:
+ERROR or RECOVERING state changes do **not** erase the current latest-turn text. The UI keeps the most recent conversation context visible while showing the lifecycle error/recovery state. Text is cleared only by an explicit clear or by a new session generation/new USER turn policy above.
+
+This is intentional: an error should not destroy the user's visible conversational context.
+
+## Presentation-state refinement result
+
+The production model still retains exact states:
 
 ```text
-xiaozhi session status
-    -> voice_assistant
-
-xiaozhi binary/TTS response
-    -> voice_assistant_downlink
-
-xiaozhi semantic USER/ASSISTANT text
-    -> voice_assistant_ui_model
+IDLE
+CONNECTING
+READY
+LISTENING
+THINKING
+SPEAKING
+RECOVERING
+ERROR
 ```
 
-This prevents UI text from stealing or overloading the response callback used by Phase-14 speaker playback.
+The reused legacy `app_gui` Xiaozhi visual surface still has the older Phase-12 visual enum, so its current translation remains:
 
-## Source-local Xiaozhi bridge
+```text
+CONNECTING  -> PROCESSING
+THINKING    -> PROCESSING
+RECOVERING  -> PROCESSING
+LISTENING   -> LISTENING
+SPEAKING    -> RESPONDING
+READY       -> READY
+ERROR       -> ERROR
+```
 
-`xiaozhi_session.c` has its production `esp_xiaozhi_chat_init()` source-locally redirected to `xiaozhi_foundation_chat_init_bridge()`.
+15-E deliberately does not perform a large rewrite of `app_gui.c` solely to split those three labels before any build/HIL evidence exists. The backend semantic state remains exact; this is a **presentation limitation**, not lost state information.
 
-The bridge preserves and forwards the original protocol callback and additionally publishes CHAT_TEXT semantic events. This is a controlled integration seam intended to avoid rewriting the large session lifecycle. A real ESP-IDF build is required before claiming compatibility with the pinned component/toolchain; refactor the seam later if build/maintenance evidence shows it is fragile.
+15-F final review must decide whether this limitation is acceptable for Phase-15 MVP acceptance or whether a small post-build GUI refinement should be scheduled. It must not claim exact CONNECTING/THINKING/RECOVERING LCD labels unless target evidence/code actually supports them.
 
 ## Static review notes
 
-1. USER and ASSISTANT text are copied before the upstream callback returns.
-2. semantic callback performs no LVGL, I2S, storage or network lifecycle operation.
-3. app_gui receives only copied bounded fields.
-4. new non-zero session generation clears old conversation text.
-5. stale-generation semantic text cannot overwrite a newer session presentation.
-6. USER and ASSISTANT text are independently valid/truncated.
-7. assistant text is not coupled to audio playback completion.
-8. existing Phase-13/14 response and session callbacks remain separate.
-9. no ESP-IDF build or HIL PASS is claimed.
+1. `turn_sequence` is presentation-only and resets on a new session generation.
+2. USER text starts a new latest-turn presentation and clears only prior assistant text.
+3. ASSISTANT text does not increment the turn counter.
+4. session change still clears all conversation text.
+5. ERROR/RECOVERING retain current text for diagnostic/user context.
+6. no unbounded conversation-history allocation was introduced.
+7. semantic callback still performs no LVGL/I2S/storage/network lifecycle operation.
+8. no ESP-IDF build or HIL PASS is claimed.
 
-## Not implemented yet
+## Intentionally out of scope
 
-- no multi-turn history buffer/list;
-- no exact production visual enum for CONNECTING vs THINKING vs RECOVERING;
-- no explicit per-turn presentation ID beyond the long-lived session generation;
-- no waveform/audio-level visualization;
-- no GUI PTT button;
-- no new hardware behavior.
+- full scrollable multi-turn conversation history;
+- waveform/audio-level visualization;
+- GUI PTT button;
+- exact legacy `app_gui` enum rewrite before build/HIL evidence;
+- new hardware behavior.
 
 ## Next checkpoint — only after user says `tiếp tục`
 
-**15-E — Repeated-Turn / History / Error UX + Presentation Refinement**
+**15-F — FINAL Phase-15 Review / Composition / Documentation / Deferred HIL**
 
-Planned scope:
+This is the final Phase-15 prompt. Planned scope:
 
-1. define bounded multi-turn presentation policy without unbounded transcript growth;
-2. decide when previous USER/ASSISTANT text is retained or replaced across PTT turns in the same long-lived session;
-3. refine visual distinction for CONNECTING / THINKING / RECOVERING if practical without destabilizing `app_gui`;
-4. improve ERROR/recovery presentation and stale-text cleanup rules;
-5. keep GUI PTT/waveform optional and out of scope unless needed for the Phase-15 acceptance contract.
+1. review the complete Phase-15 diff and callback/dependency ownership;
+2. reconcile production composition and validation isolation;
+3. decide/document the exact visual-state limitation for MVP closure;
+4. produce Phase-15 HIL acceptance plan including USER/ASSISTANT text and repeated turns;
+5. update project state/next-work routing;
+6. if no new software blocker is found, close Phase 15 as Software Complete / Build + HIL Pending.
