@@ -1,5 +1,6 @@
 set(xiaozhi_foundation_sources
-    "xiaozhi_foundation.c")
+    "xiaozhi_foundation.c"
+    "xiaozhi_session.c")
 
 set(xiaozhi_foundation_private_requires
     esp_event
