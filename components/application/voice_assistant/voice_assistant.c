@@ -67,6 +67,7 @@ static void voice_assistant_publish_status(void)
     callback_context = s_status_callback_context;
     xSemaphoreGive(s_status_lock);
 
+    /* Application code is never called while the component lock is held. */
     if (callback != NULL) {
         callback(&snapshot, callback_context);
     }
@@ -105,6 +106,31 @@ static void voice_assistant_set_status(
     voice_assistant_publish_status();
 }
 
+static bool voice_assistant_command_is_current(
+    const voice_assistant_command_t *command)
+{
+    if ((command == NULL) || !voice_assistant_take_lock()) {
+        return false;
+    }
+
+    const uint32_t current_generation = s_status.session_generation;
+    const bool current =
+        (command->generation != 0U) &&
+        (command->generation == current_generation);
+    xSemaphoreGive(s_status_lock);
+
+    if (!current) {
+        ESP_LOGW(
+            TAG,
+            "drop stale command=%d generation=%u current_generation=%u",
+            (int)command->type,
+            (unsigned)command->generation,
+            (unsigned)current_generation);
+    }
+
+    return current;
+}
+
 static void voice_assistant_task(void *argument)
 {
     (void)argument;
@@ -131,8 +157,16 @@ static void voice_assistant_task(void *argument)
             continue;
         }
 
+        if (!voice_assistant_command_is_current(&command)) {
+            continue;
+        }
+
         switch (command.type) {
             case VOICE_ASSISTANT_COMMAND_BEGIN_SESSION:
+                /*
+                 * Phase 13-A deliberately stops at CONNECTING. READY requires
+                 * real transport evidence from the Xiaozhi adapter in 13-B.
+                 */
                 voice_assistant_set_status(
                     VOICE_ASSISTANT_STATE_CONNECTING,
                     true,
@@ -210,7 +244,7 @@ esp_err_t voice_assistant_start(void)
     s_start_waiter = xTaskGetCurrentTaskHandle();
     xSemaphoreGive(s_status_lock);
 
-    BaseType_t task_ret = xTaskCreate(
+    const BaseType_t task_ret = xTaskCreate(
         voice_assistant_task,
         VOICE_ASSISTANT_TASK_NAME,
         VOICE_ASSISTANT_TASK_STACK_BYTES,
