@@ -17,9 +17,9 @@
 #define XIAOZHI_SESSION_EVENT_GOODBYE       BIT2
 #define XIAOZHI_SESSION_CONNECT_TIMEOUT_MS  15000U
 
-#define XIAOZHI_SESSION_UPSTREAM_CHAT_LOG_TAG       "ESP_XIAOZHI_CHAT"
-#define XIAOZHI_SESSION_UPSTREAM_MCP_MANAGER_TAG    "esp_mcp_mgr"
-#define XIAOZHI_SESSION_UPSTREAM_MCP_ENGINE_TAG     "esp_mcp_engine"
+#define XIAOZHI_SESSION_UPSTREAM_CHAT_LOG_TAG    "ESP_XIAOZHI_CHAT"
+#define XIAOZHI_SESSION_UPSTREAM_MCP_MANAGER_TAG "esp_mcp_mgr"
+#define XIAOZHI_SESSION_UPSTREAM_MCP_ENGINE_TAG  "esp_mcp_engine"
 
 static const char *const TAG = "XZ_SESSION";
 
@@ -33,6 +33,7 @@ static xiaozhi_foundation_session_status_t s_status = {
 static xiaozhi_foundation_session_status_callback_t s_status_callback = NULL;
 static void *s_status_callback_context = NULL;
 static bool s_lifecycle_busy = false;
+static bool s_intentional_stop = false;
 
 static EventGroupHandle_t s_events = NULL;
 static esp_mcp_t *s_mcp = NULL;
@@ -84,16 +85,18 @@ static void xiaozhi_session_set_status(
     generation = s_status.client_generation;
     portEXIT_CRITICAL(&s_lock);
 
-    ESP_LOGI(
-        TAG,
-        "state %s -> %s generation=%u active=%s error=%s",
-        xiaozhi_foundation_session_state_to_string(previous),
-        xiaozhi_foundation_session_state_to_string(state),
-        (unsigned)generation,
-        active ? "yes" : "no",
-        esp_err_to_name(
-            (state == XIAOZHI_FOUNDATION_SESSION_ERROR) ?
-                ((error == ESP_OK) ? ESP_FAIL : error) : ESP_OK));
+    if ((previous != state) || (state == XIAOZHI_FOUNDATION_SESSION_ERROR)) {
+        ESP_LOGI(
+            TAG,
+            "state %s -> %s generation=%u active=%s error=%s",
+            xiaozhi_foundation_session_state_to_string(previous),
+            xiaozhi_foundation_session_state_to_string(state),
+            (unsigned)generation,
+            active ? "yes" : "no",
+            esp_err_to_name(
+                (state == XIAOZHI_FOUNDATION_SESSION_ERROR) ?
+                    ((error == ESP_OK) ? ESP_FAIL : error) : ESP_OK));
+    }
 
     xiaozhi_session_publish_status();
 }
@@ -106,7 +109,7 @@ static void xiaozhi_session_protocol_callback(
     (void)event;
     (void)event_data;
     (void)ctx;
-    /* Phase 13-B owns transport readiness only. Text/audio is integrated later. */
+    /* Text/audio protocol promotion belongs to later voice integration. */
 }
 
 static void xiaozhi_session_audio_callback(
@@ -117,7 +120,7 @@ static void xiaozhi_session_audio_callback(
     (void)data;
     (void)len;
     (void)ctx;
-    /* Phase 13-B deliberately does not route response audio yet. */
+    /* Phase 13 does not route response audio through this callback yet. */
 }
 
 static void xiaozhi_session_event_handler(
@@ -131,8 +134,12 @@ static void xiaozhi_session_event_handler(
     (void)event_data;
 
     EventGroupHandle_t events = NULL;
+    bool active = false;
+    bool intentional_stop = false;
     portENTER_CRITICAL(&s_lock);
     events = s_events;
+    active = s_status.active;
+    intentional_stop = s_intentional_stop;
     portEXIT_CRITICAL(&s_lock);
 
     if (events == NULL) {
@@ -150,17 +157,25 @@ static void xiaozhi_session_event_handler(
 
         case ESP_XIAOZHI_CHAT_EVENT_DISCONNECTED:
             (void)xEventGroupSetBits(events, XIAOZHI_SESSION_EVENT_DISCONNECTED);
+            if (intentional_stop) {
+                ESP_LOGI(TAG, "DISCONNECTED observed during intentional stop");
+                break;
+            }
             xiaozhi_session_set_status(
                 XIAOZHI_FOUNDATION_SESSION_ERROR,
-                true,
+                active,
                 ESP_ERR_INVALID_STATE);
             break;
 
         case ESP_XIAOZHI_CHAT_EVENT_SERVER_GOODBYE:
             (void)xEventGroupSetBits(events, XIAOZHI_SESSION_EVENT_GOODBYE);
+            if (intentional_stop) {
+                ESP_LOGI(TAG, "SERVER_GOODBYE observed during intentional stop");
+                break;
+            }
             xiaozhi_session_set_status(
                 XIAOZHI_FOUNDATION_SESSION_ERROR,
-                true,
+                active,
                 ESP_FAIL);
             break;
 
@@ -175,13 +190,11 @@ static void xiaozhi_session_suppress_payload_logs(void)
     if (s_payload_logs_suppressed) {
         return;
     }
-
     s_chat_log_level = esp_log_level_get(XIAOZHI_SESSION_UPSTREAM_CHAT_LOG_TAG);
     s_mcp_manager_log_level =
         esp_log_level_get(XIAOZHI_SESSION_UPSTREAM_MCP_MANAGER_TAG);
     s_mcp_engine_log_level =
         esp_log_level_get(XIAOZHI_SESSION_UPSTREAM_MCP_ENGINE_TAG);
-
     esp_log_level_set(XIAOZHI_SESSION_UPSTREAM_CHAT_LOG_TAG, ESP_LOG_NONE);
     esp_log_level_set(XIAOZHI_SESSION_UPSTREAM_MCP_MANAGER_TAG, ESP_LOG_NONE);
     esp_log_level_set(XIAOZHI_SESSION_UPSTREAM_MCP_ENGINE_TAG, ESP_LOG_NONE);
@@ -195,7 +208,6 @@ static void xiaozhi_session_restore_payload_logs(void)
     if (!s_payload_logs_suppressed) {
         return;
     }
-
     esp_log_level_set(XIAOZHI_SESSION_UPSTREAM_CHAT_LOG_TAG, s_chat_log_level);
     esp_log_level_set(
         XIAOZHI_SESSION_UPSTREAM_MCP_MANAGER_TAG,
@@ -265,7 +277,6 @@ esp_err_t xiaozhi_foundation_session_register_status_callback(
         portEXIT_CRITICAL(&s_lock);
         return ESP_ERR_INVALID_STATE;
     }
-
     s_status_callback = callback;
     s_status_callback_context = user_context;
     portEXIT_CRITICAL(&s_lock);
@@ -285,6 +296,7 @@ esp_err_t xiaozhi_foundation_session_start(uint32_t client_generation)
         return ESP_ERR_INVALID_STATE;
     }
     s_lifecycle_busy = true;
+    s_intentional_stop = false;
     s_status.client_generation = client_generation;
     portEXIT_CRITICAL(&s_lock);
 
@@ -304,13 +316,11 @@ esp_err_t xiaozhi_foundation_session_start(uint32_t client_generation)
         ESP_LOGE(TAG, "get_info failed: %s", esp_err_to_name(ret));
         goto fail;
     }
-
     if (!info.has_websocket_config) {
         ret = ESP_ERR_NOT_SUPPORTED;
         ESP_LOGE(TAG, "server did not provide WebSocket configuration");
         goto fail;
     }
-
     ret = esp_xiaozhi_chat_free_info(&info);
     info_must_be_freed = false;
     memset(&info, 0, sizeof(info));
@@ -396,7 +406,6 @@ esp_err_t xiaozhi_foundation_session_start(uint32_t client_generation)
     s_status.active = true;
     portEXIT_CRITICAL(&s_lock);
 
-    /* CONNECTED handler already published READY; publish a coherent active bit. */
     xiaozhi_session_set_status(
         XIAOZHI_FOUNDATION_SESSION_READY,
         true,
@@ -413,7 +422,6 @@ fail:
         }
         memset(&info, 0, sizeof(info));
     }
-
     {
         const esp_err_t cleanup_ret = xiaozhi_session_cleanup();
         if ((ret == ESP_OK) && (cleanup_ret != ESP_OK)) {
@@ -423,6 +431,7 @@ fail:
 
     portENTER_CRITICAL(&s_lock);
     s_lifecycle_busy = false;
+    s_intentional_stop = false;
     s_status.active = false;
     portEXIT_CRITICAL(&s_lock);
 
@@ -441,12 +450,14 @@ esp_err_t xiaozhi_foundation_session_stop(void)
         return ESP_ERR_INVALID_STATE;
     }
     s_lifecycle_busy = true;
+    s_intentional_stop = true;
     portEXIT_CRITICAL(&s_lock);
 
     const esp_err_t ret = xiaozhi_session_cleanup();
 
     portENTER_CRITICAL(&s_lock);
     s_lifecycle_busy = false;
+    s_intentional_stop = false;
     s_status.active = false;
     portEXIT_CRITICAL(&s_lock);
 
@@ -461,7 +472,6 @@ esp_err_t xiaozhi_foundation_session_stop(void)
             false,
             ret);
     }
-
     return ret;
 }
 
@@ -471,7 +481,6 @@ esp_err_t xiaozhi_foundation_session_get_status(
     if (status == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
-
     portENTER_CRITICAL(&s_lock);
     *status = s_status;
     portEXIT_CRITICAL(&s_lock);
@@ -482,15 +491,10 @@ const char *xiaozhi_foundation_session_state_to_string(
     xiaozhi_foundation_session_state_t state)
 {
     switch (state) {
-        case XIAOZHI_FOUNDATION_SESSION_STOPPED:
-            return "STOPPED";
-        case XIAOZHI_FOUNDATION_SESSION_CONNECTING:
-            return "CONNECTING";
-        case XIAOZHI_FOUNDATION_SESSION_READY:
-            return "READY";
-        case XIAOZHI_FOUNDATION_SESSION_ERROR:
-            return "ERROR";
-        default:
-            return "UNKNOWN";
+        case XIAOZHI_FOUNDATION_SESSION_STOPPED: return "STOPPED";
+        case XIAOZHI_FOUNDATION_SESSION_CONNECTING: return "CONNECTING";
+        case XIAOZHI_FOUNDATION_SESSION_READY: return "READY";
+        case XIAOZHI_FOUNDATION_SESSION_ERROR: return "ERROR";
+        default: return "UNKNOWN";
     }
 }
