@@ -8,6 +8,7 @@ idf_component_register(
         "voice_assistant_ptt_gpio.c"
         "voice_assistant_uplink.c"
         "voice_assistant_downlink.c"
+        "voice_assistant_audio_arbitration_bridge.c"
 
     INCLUDE_DIRS
         "include"
@@ -24,4 +25,20 @@ idf_component_register(
         freertos
         log
         heap
+)
+
+# Phase 16 migration: only the production Xiaozhi uplink/downlink sources are
+# redirected through arbitration-aware compatibility bridges. The public
+# audio_manager APIs remain unchanged for other legacy callers until they are
+# explicitly migrated.
+set_source_files_properties(
+    "voice_assistant_uplink.c"
+    PROPERTIES COMPILE_DEFINITIONS
+    "audio_manager_start_recording=phase16_xiaozhi_start_recording;audio_manager_stop_recording=phase16_xiaozhi_stop_recording"
+)
+
+set_source_files_properties(
+    "voice_assistant_downlink.c"
+    PROPERTIES COMPILE_DEFINITIONS
+    "audio_manager_play_wav=phase16_xiaozhi_play_wav"
 )
