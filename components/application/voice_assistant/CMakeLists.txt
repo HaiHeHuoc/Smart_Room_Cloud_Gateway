@@ -3,6 +3,7 @@ idf_component_register(
         "voice_assistant.c"
         "voice_assistant_audio_adapter.c"
         "voice_assistant_ptt.c"
+        "voice_assistant_ptt_gpio.c"
         "voice_assistant_uplink.c"
         "voice_assistant_downlink.c"
 
@@ -11,6 +12,7 @@ idf_component_register(
 
     REQUIRES
         esp_common
+        esp_driver_gpio
         xiaozhi_foundation
         audio_manager
         sd_card_manager
