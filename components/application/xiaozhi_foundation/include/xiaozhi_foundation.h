@@ -39,7 +39,6 @@ typedef enum {
 
 /* Phase 13 production session boundary ------------------------------------ */
 
-/** Observable state of the project-owned long-lived Xiaozhi chat session. */
 typedef enum {
     XIAOZHI_FOUNDATION_SESSION_STOPPED = 0,
     XIAOZHI_FOUNDATION_SESSION_CONNECTING,
@@ -47,13 +46,6 @@ typedef enum {
     XIAOZHI_FOUNDATION_SESSION_ERROR,
 } xiaozhi_foundation_session_state_t;
 
-/**
- * @brief Copied session state emitted by the production-facing foundation API.
- *
- * client_generation is an opaque application-supplied generation value. The
- * foundation copies it into every callback so an orchestrator can reject late
- * events from an older conversation without exposing Xiaozhi internals.
- */
 typedef struct {
     xiaozhi_foundation_session_state_t state;
     uint32_t client_generation;
@@ -61,13 +53,6 @@ typedef struct {
     esp_err_t last_error;
 } xiaozhi_foundation_session_status_t;
 
-/**
- * @brief Receive one borrowed copied session snapshot.
- *
- * The callback runs in normal task/event-loop context and is never called while
- * the foundation session lock is held. Keep it short and copy/queue the status
- * before returning. Do not call LVGL or perform blocking lifecycle work here.
- */
 typedef void (*xiaozhi_foundation_session_status_callback_t)(
     const xiaozhi_foundation_session_status_t *status,
     void *user_context);
@@ -76,27 +61,19 @@ esp_err_t xiaozhi_foundation_session_register_status_callback(
     xiaozhi_foundation_session_status_callback_t callback,
     void *user_context);
 
-/** Start one long-lived WebSocket Xiaozhi chat session. */
 esp_err_t xiaozhi_foundation_session_start(uint32_t client_generation);
-
-/** Stop and release the active production Xiaozhi chat session. */
 esp_err_t xiaozhi_foundation_session_stop(void);
-
-/** Copy the current production session status. */
 esp_err_t xiaozhi_foundation_session_get_status(
     xiaozhi_foundation_session_status_t *status);
-
-/** Convert one production session state to a stable diagnostic string. */
 const char *xiaozhi_foundation_session_state_to_string(
     xiaozhi_foundation_session_state_t state);
 
-/* Phase 14 production audio-uplink boundary ------------------------------- */
+/* Phase 14 production audio boundary -------------------------------------- */
 
 #define XIAOZHI_FOUNDATION_UPLINK_SAMPLE_RATE_HZ 16000U
 #define XIAOZHI_FOUNDATION_UPLINK_CHANNELS       1U
 #define XIAOZHI_FOUNDATION_UPLINK_FRAME_SAMPLES  256U
 
-/** Copied scalar diagnostics for one production microphone uplink. */
 typedef struct {
     bool audio_channel_open;
     bool listening;
@@ -107,37 +84,57 @@ typedef struct {
     esp_err_t last_error;
 } xiaozhi_foundation_audio_uplink_status_t;
 
-/**
- * @brief Open the production audio channel and enter MANUAL listening mode.
- *
- * The parent production session must already be READY for the same non-zero
- * client generation. The Phase-14 MVP advertises PCM, 16 kHz, mono, 16 ms
- * frames (256 PCM16 samples). No I2S or audio-manager ownership is taken here.
- */
+/** Open the shared production audio channel and enter MANUAL listening. */
 esp_err_t xiaozhi_foundation_audio_uplink_start(uint32_t client_generation);
 
-/**
- * @brief Send one PCM16 microphone frame through the active Xiaozhi channel.
- *
- * This may perform transport work and therefore must never be called from the
- * audio-manager frame callback. The caller must use its own bounded queue/task.
- */
+/** Send one PCM16 microphone frame from a non-audio callback task. */
 esp_err_t xiaozhi_foundation_audio_uplink_send_pcm16(
     uint32_t client_generation,
     const int16_t *samples,
     size_t sample_count);
 
 /**
- * @brief End MANUAL listening and close the production audio channel.
- *
- * The long-lived Phase-13 chat session remains alive/READY after a successful
- * uplink stop so a later PTT turn may reuse it.
+ * Stop MANUAL listening after PTT release but keep the audio channel open.
+ * The open channel is retained so the server can deliver the response audio.
+ * Phase 14-D closes it only after response completion/abort.
  */
 esp_err_t xiaozhi_foundation_audio_uplink_stop(uint32_t client_generation);
 
-/** Copy current audio-uplink scalar diagnostics. */
+/** Close the shared production audio channel after response completion. */
+esp_err_t xiaozhi_foundation_audio_channel_close(uint32_t client_generation);
+
 esp_err_t xiaozhi_foundation_audio_uplink_get_status(
     xiaozhi_foundation_audio_uplink_status_t *status);
+
+/** Project-owned classification of production response events. */
+typedef enum {
+    XIAOZHI_FOUNDATION_RESPONSE_TTS_START = 0,
+    XIAOZHI_FOUNDATION_RESPONSE_AUDIO,
+    XIAOZHI_FOUNDATION_RESPONSE_TTS_STOP,
+    XIAOZHI_FOUNDATION_RESPONSE_ERROR,
+} xiaozhi_foundation_response_event_kind_t;
+
+/**
+ * Borrowed response event. `data` is valid only during the callback and is
+ * non-NULL only for RESPONSE_AUDIO. The current Phase-14 PCM channel requests
+ * 16-kHz mono PCM; HIL must verify server downlink interoperability.
+ */
+typedef struct {
+    xiaozhi_foundation_response_event_kind_t kind;
+    uint32_t client_generation;
+    const uint8_t *data;
+    size_t data_len;
+    esp_err_t error;
+} xiaozhi_foundation_response_event_t;
+
+typedef void (*xiaozhi_foundation_response_callback_t)(
+    const xiaozhi_foundation_response_event_t *event,
+    void *user_context);
+
+/** Register/remove the production response observer. Passing NULL removes it. */
+esp_err_t xiaozhi_foundation_response_register_callback(
+    xiaozhi_foundation_response_callback_t callback,
+    void *user_context);
 
 /* Temporary Phase 12 validation UI status -------------------------------- */
 
