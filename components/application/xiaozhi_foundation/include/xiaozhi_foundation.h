@@ -136,6 +136,35 @@ esp_err_t xiaozhi_foundation_response_register_callback(
     xiaozhi_foundation_response_callback_t callback,
     void *user_context);
 
+/* Phase 15 production semantic text boundary ------------------------------ */
+
+typedef enum {
+    XIAOZHI_FOUNDATION_TEXT_ROLE_USER = 0,
+    XIAOZHI_FOUNDATION_TEXT_ROLE_ASSISTANT,
+} xiaozhi_foundation_text_role_t;
+
+/**
+ * Borrowed semantic text event promoted from Xiaozhi CHAT_TEXT.
+ *
+ * `text` is valid only during the callback. Consumers must copy it before
+ * returning. `client_generation` identifies the long-lived production voice
+ * session that produced the event.
+ */
+typedef struct {
+    xiaozhi_foundation_text_role_t role;
+    uint32_t client_generation;
+    const char *text;
+} xiaozhi_foundation_text_event_t;
+
+typedef void (*xiaozhi_foundation_text_callback_t)(
+    const xiaozhi_foundation_text_event_t *event,
+    void *user_context);
+
+/** Register/remove the single production semantic-text observer. */
+esp_err_t xiaozhi_foundation_text_register_callback(
+    xiaozhi_foundation_text_callback_t callback,
+    void *user_context);
+
 /* Temporary Phase 12 validation UI status -------------------------------- */
 
 #define XIAOZHI_FOUNDATION_UI_TEXT_BUFFER_SIZE 192U
