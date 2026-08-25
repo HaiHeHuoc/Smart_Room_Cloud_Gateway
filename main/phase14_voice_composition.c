@@ -9,6 +9,7 @@
 #include "voice_assistant_downlink.h"
 #include "voice_assistant_ptt.h"
 #include "voice_assistant_ptt_gpio.h"
+#include "voice_assistant_ui_model.h"
 #include "voice_assistant_uplink.h"
 #endif
 
@@ -83,6 +84,16 @@ static esp_err_t phase14_start_voice_stack(void)
         return ret;
     }
 
+    ret = voice_assistant_ui_model_init();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    ret = voice_assistant_ui_model_start();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
     ret = voice_assistant_ptt_init();
     if (ret != ESP_OK) {
         return ret;
@@ -132,7 +143,7 @@ static esp_err_t phase14_start_voice_stack(void)
 
     s_voice_started = true;
     ESP_LOGI(TAG,
-             "Phase-14 voice stack READY ptt_gpio=%d active_level=%u pull=down",
+             "Phase-15 voice stack READY ui_model=yes ptt_gpio=%d active_level=%u pull=down",
              (int)PTT_BUTTON_GPIO,
              (unsigned)PTT_BUTTON_ACTIVE_LEVEL);
     return ESP_OK;
@@ -149,7 +160,7 @@ esp_err_t app_phase14_audio_manager_start(void)
     const esp_err_t voice_ret = phase14_start_voice_stack();
     if (voice_ret != ESP_OK) {
         ESP_LOGE(TAG,
-                 "Phase-14 voice stack startup failed after audio READY: %s",
+                 "Phase-15 voice stack startup failed after audio READY: %s",
                  esp_err_to_name(voice_ret));
         return voice_ret;
     }
