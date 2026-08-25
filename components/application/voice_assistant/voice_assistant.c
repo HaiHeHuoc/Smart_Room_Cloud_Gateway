@@ -8,6 +8,8 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 
+#include "xiaozhi_foundation.h"
+
 #define VOICE_ASSISTANT_TASK_NAME            "voice_assistant"
 #define VOICE_ASSISTANT_TASK_STACK_BYTES     4096U
 #define VOICE_ASSISTANT_TASK_PRIORITY        4U
@@ -18,11 +20,13 @@
 typedef enum {
     VOICE_ASSISTANT_COMMAND_BEGIN_SESSION = 0,
     VOICE_ASSISTANT_COMMAND_END_SESSION,
+    VOICE_ASSISTANT_COMMAND_FOUNDATION_STATUS,
 } voice_assistant_command_type_t;
 
 typedef struct {
     voice_assistant_command_type_t type;
     uint32_t generation;
+    xiaozhi_foundation_session_status_t foundation_status;
 } voice_assistant_command_t;
 
 static const char *const TAG = "VOICE_ASSISTANT";
@@ -67,7 +71,6 @@ static void voice_assistant_publish_status(void)
     callback_context = s_status_callback_context;
     xSemaphoreGive(s_status_lock);
 
-    /* Application code is never called while the component lock is held. */
     if (callback != NULL) {
         callback(&snapshot, callback_context);
     }
@@ -91,7 +94,6 @@ static void voice_assistant_set_status(
     s_status.session_active = session_active;
     s_status.last_error = last_error;
     generation = s_status.session_generation;
-    s_command_pending = false;
     xSemaphoreGive(s_status_lock);
 
     ESP_LOGI(
@@ -106,29 +108,100 @@ static void voice_assistant_set_status(
     voice_assistant_publish_status();
 }
 
-static bool voice_assistant_command_is_current(
-    const voice_assistant_command_t *command)
+static bool voice_assistant_generation_is_current(uint32_t generation)
 {
-    if ((command == NULL) || !voice_assistant_take_lock()) {
+    bool current = false;
+
+    if (!voice_assistant_take_lock()) {
         return false;
     }
 
-    const uint32_t current_generation = s_status.session_generation;
-    const bool current =
-        (command->generation != 0U) &&
-        (command->generation == current_generation);
+    current = (generation != 0U) &&
+              (generation == s_status.session_generation);
     xSemaphoreGive(s_status_lock);
+    return current;
+}
 
-    if (!current) {
-        ESP_LOGW(
-            TAG,
-            "drop stale command=%d generation=%u current_generation=%u",
-            (int)command->type,
-            (unsigned)command->generation,
-            (unsigned)current_generation);
+static void voice_assistant_finish_public_command(void)
+{
+    if (!voice_assistant_take_lock()) {
+        ESP_LOGE(TAG, "Unable to clear public-command gate: lock timeout");
+        return;
     }
 
-    return current;
+    s_command_pending = false;
+    xSemaphoreGive(s_status_lock);
+}
+
+static void voice_assistant_foundation_status_callback(
+    const xiaozhi_foundation_session_status_t *status,
+    void *user_context)
+{
+    (void)user_context;
+
+    if ((status == NULL) || (s_command_queue == NULL)) {
+        return;
+    }
+
+    /* CONNECTING is already owned by the begin command. STOPPED is owned by
+     * the explicit end command. Queue only transport evidence that can change
+     * the asynchronous orchestration state. */
+    if ((status->state != XIAOZHI_FOUNDATION_SESSION_READY) &&
+        (status->state != XIAOZHI_FOUNDATION_SESSION_ERROR)) {
+        return;
+    }
+
+    voice_assistant_command_t command = {
+        .type = VOICE_ASSISTANT_COMMAND_FOUNDATION_STATUS,
+        .generation = status->client_generation,
+        .foundation_status = *status,
+    };
+
+    if (xQueueSend(s_command_queue, &command, 0U) != pdTRUE) {
+        ESP_LOGW(
+            TAG,
+            "Dropped Xiaozhi status event generation=%u state=%s: queue full",
+            (unsigned)status->client_generation,
+            xiaozhi_foundation_session_state_to_string(status->state));
+    }
+}
+
+static void voice_assistant_handle_foundation_status(
+    const voice_assistant_command_t *command)
+{
+    if (command == NULL) {
+        return;
+    }
+
+    if (!voice_assistant_generation_is_current(command->generation)) {
+        ESP_LOGW(
+            TAG,
+            "Dropped stale Xiaozhi status generation=%u state=%s",
+            (unsigned)command->generation,
+            xiaozhi_foundation_session_state_to_string(
+                command->foundation_status.state));
+        return;
+    }
+
+    switch (command->foundation_status.state) {
+        case XIAOZHI_FOUNDATION_SESSION_READY:
+            voice_assistant_set_status(
+                VOICE_ASSISTANT_STATE_READY,
+                true,
+                ESP_OK);
+            break;
+
+        case XIAOZHI_FOUNDATION_SESSION_ERROR:
+            voice_assistant_set_status(
+                VOICE_ASSISTANT_STATE_ERROR,
+                command->foundation_status.active,
+                (command->foundation_status.last_error == ESP_OK) ?
+                    ESP_FAIL : command->foundation_status.last_error);
+            break;
+
+        default:
+            break;
+    }
 }
 
 static void voice_assistant_task(void *argument)
@@ -157,27 +230,67 @@ static void voice_assistant_task(void *argument)
             continue;
         }
 
-        if (!voice_assistant_command_is_current(&command)) {
-            continue;
-        }
-
         switch (command.type) {
-            case VOICE_ASSISTANT_COMMAND_BEGIN_SESSION:
-                /*
-                 * Phase 13-A deliberately stops at CONNECTING. READY requires
-                 * real transport evidence from the Xiaozhi adapter in 13-B.
-                 */
+            case VOICE_ASSISTANT_COMMAND_BEGIN_SESSION: {
+                if (!voice_assistant_generation_is_current(command.generation)) {
+                    ESP_LOGW(TAG, "Dropped stale begin command generation=%u",
+                             (unsigned)command.generation);
+                    voice_assistant_finish_public_command();
+                    break;
+                }
+
                 voice_assistant_set_status(
                     VOICE_ASSISTANT_STATE_CONNECTING,
                     true,
                     ESP_OK);
-                break;
 
-            case VOICE_ASSISTANT_COMMAND_END_SESSION:
-                voice_assistant_set_status(
-                    VOICE_ASSISTANT_STATE_IDLE,
-                    false,
-                    ESP_OK);
+                const esp_err_t ret =
+                    xiaozhi_foundation_session_start(command.generation);
+
+                if (ret == ESP_OK) {
+                    /* A real CONNECTED event is required before start returns. */
+                    voice_assistant_set_status(
+                        VOICE_ASSISTANT_STATE_READY,
+                        true,
+                        ESP_OK);
+                } else {
+                    voice_assistant_set_status(
+                        VOICE_ASSISTANT_STATE_ERROR,
+                        false,
+                        ret);
+                }
+
+                voice_assistant_finish_public_command();
+                break;
+            }
+
+            case VOICE_ASSISTANT_COMMAND_END_SESSION: {
+                if (!voice_assistant_generation_is_current(command.generation)) {
+                    ESP_LOGW(TAG, "Dropped stale end command generation=%u",
+                             (unsigned)command.generation);
+                    voice_assistant_finish_public_command();
+                    break;
+                }
+
+                const esp_err_t ret = xiaozhi_foundation_session_stop();
+                if (ret == ESP_OK) {
+                    voice_assistant_set_status(
+                        VOICE_ASSISTANT_STATE_IDLE,
+                        false,
+                        ESP_OK);
+                } else {
+                    voice_assistant_set_status(
+                        VOICE_ASSISTANT_STATE_ERROR,
+                        false,
+                        ret);
+                }
+
+                voice_assistant_finish_public_command();
+                break;
+            }
+
+            case VOICE_ASSISTANT_COMMAND_FOUNDATION_STATUS:
+                voice_assistant_handle_foundation_status(&command);
                 break;
 
             default:
@@ -216,7 +329,21 @@ esp_err_t voice_assistant_init(void)
     s_status.last_error = ESP_OK;
     s_command_pending = false;
 
-    ESP_LOGI(TAG, "initialized");
+    const esp_err_t observer_ret =
+        xiaozhi_foundation_session_register_status_callback(
+            voice_assistant_foundation_status_callback,
+            NULL);
+    if (observer_ret != ESP_OK) {
+        vQueueDelete(s_command_queue);
+        s_command_queue = NULL;
+        vSemaphoreDelete(s_status_lock);
+        s_status_lock = NULL;
+        memset(&s_status, 0, sizeof(s_status));
+        s_status.state = VOICE_ASSISTANT_STATE_UNINITIALIZED;
+        return observer_ret;
+    }
+
+    ESP_LOGI(TAG, "initialized with Xiaozhi session observer");
     voice_assistant_publish_status();
     return ESP_OK;
 }
