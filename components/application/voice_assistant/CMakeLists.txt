@@ -2,6 +2,7 @@ idf_component_register(
     SRCS
         "voice_assistant.c"
         "voice_assistant_audio_adapter.c"
+        "voice_assistant_ptt.c"
 
     INCLUDE_DIRS
         "include"
