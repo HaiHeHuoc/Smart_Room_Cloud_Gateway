@@ -11,10 +11,11 @@ Phase 12 SW -> COMPLETE / selected HIL deferred
 Phase 13 SW -> COMPLETE / HIL deferred
 Phase 14 SW -> COMPLETE / Build + HIL pending
 Phase 15 SW -> COMPLETE / Build + HIL pending
-Phase 16 SW -> IN PROGRESS / 16-E complete
+Phase 16 SW -> COMPLETE / Static review complete / Build + HIL pending
+Major feature coding -> COMPLETE through Phase 16
 ```
 
-Continue Phase 16 one checkpoint at a time and only after Hải says `tiếp tục`.
+Do not start Phase 17 automatically. The next project stage is acceptance/integration/hardening unless Hải explicitly expands feature scope.
 
 ## Global Codex HIL routing
 
@@ -25,6 +26,7 @@ RUN PHASE 12 HIL -> test/xiaozhi-p2f-known-audio-e2e
 RUN PHASE 13 HIL -> test/phase13-voice-assistant-hil
 RUN PHASE 14 HIL -> test/phase14-ptt-voice-e2e-hil
 RUN PHASE 15 HIL -> test/phase15-voice-ui-hil
+RUN PHASE 16 HIL -> test/phase16-audio-arbitration-hil
 ```
 
 Before checkout, inspect git status. If local work could be lost, stop and report; never auto-stash/reset/delete. If a required test branch/harness does not exist, report the prerequisite instead of testing on the current production branch.
@@ -35,17 +37,16 @@ Before checkout, inspect git status. If local work could be lost, stop and repor
 - Phase 13: `test/phase13-voice-assistant-hil`, activation `RUN PHASE 13 HIL`.
 - Phase 14: plan ready; dedicated `test/phase14-ptt-voice-e2e-hil` prerequisite must be verified/created before execution.
 - Phase 15: `test/phase15-voice-ui-hil`, activation `RUN PHASE 15 HIL`.
+- Phase 16: plan `AI_Stored_Data/PHASE16_HIL_TEST_PLAN.md`; recommended test branch `test/phase16-audio-arbitration-hil`; activation `RUN PHASE 16 HIL`.
 
 All remain DEFERRED when hardware is unavailable.
 
-## Phase 16 — active software work
+## Phase 16 closure
 
 Production branch: `phase/16-audio-arbitration`
-Progress: `AI_Stored_Data/PHASE16_PROGRESS.md`
+Closure: `AI_Stored_Data/PHASE16_PROGRESS.md`
 
-Goal: centralized multi-client capture/playback arbitration while `audio_manager` remains the sole I2S/DMA owner.
-
-Current checkpoint:
+Completed checkpoints:
 
 ```text
 16-A Audio client/request model                 COMPLETE
@@ -53,46 +54,59 @@ Current checkpoint:
 16-C Capture arbitration runtime                COMPLETE
 16-D Priority/preemption/queue hardening        COMPLETE
 16-E Xiaozhi + notification/alarm integration   COMPLETE
-16-F Final review/HIL plan                      NEXT / FINAL PROMPT
+16-F Final review/HIL plan                      COMPLETE
 ```
 
-16-E migrated production Xiaozhi capture/playback into arbitration-aware compatibility bridges. Xiaozhi capture uses client XIAOZHI priority 70 with REJECT/interruptible semantics; playback uses client XIAOZHI priority 70 with QUEUE/interruptible semantics. Both bridges wait for real manager RECORDING/PLAYBACK evidence before returning success to the existing Phase-14 voice flow.
+Final policy summary:
 
-Minimal named playback helpers now exist for notification and critical alarm requests. Notification defaults to priority 50 + QUEUE + interruptible. Critical alarm defaults to priority 100 + PREEMPT_LOWER_PRIORITY + non-interruptible. These helpers submit only through the playback arbiter and receive no hardware ownership.
+```text
+XIAOZHI capture  priority 70  REJECT  interruptible
+XIAOZHI playback priority 70  QUEUE   interruptible
+NOTIFICATION     priority 50  QUEUE   interruptible
+ALARM            priority 100 PREEMPT_LOWER_PRIORITY non-interruptible
+```
 
-Sensor/Firebase/GUI/Wi-Fi tasks continue to run normally during voice activity. Phase 16 arbitrates audio requests only; do not globally pause unrelated tasks without HIL evidence.
+`audio_manager` remains the sole I2S/DMA owner. Capture and playback arbiters each keep one current + one pending request. Equal/lower priority never preempts. Unknown external/legacy activity is never preempted. Global cross-resource fairness is not claimed.
 
-Known follow-ups before closure:
+Known accepted technical debt entering HIL:
 
-- full ESP-IDF build has not been verified;
-- Phase-16 HIL plan/test branch still needs creation in 16-F;
-- source-local CMake compatibility redirects remain a maintainability seam;
-- playback/capture arbiter stop/deinit APIs are absent;
-- global cross-resource fairness is not guaranteed;
-- recorded-audio playback is not migrated to arbitration;
-- no HIL evidence yet.
+- no target build evidence yet;
+- no HIL evidence yet;
+- arbiter stop/deinit lifecycle APIs absent;
+- source-local CMake bridges need build proof;
+- recorded-audio playback not migrated;
+- Xiaozhi downlink still waits for manager IDLE before playback submit;
+- global capture/playback fairness not guaranteed;
+- Phase-14 codec/SD-backed playback risks remain.
 
 ## What to answer when asked "làm gì tiếp theo?"
 
-If hardware is unavailable, answer in this order:
+If hardware is unavailable:
 
 1. Phase 12 HIL deferred / Codex-ready.
 2. Phase 13 HIL deferred / Codex-ready.
 3. Phase 14 HIL deferred / dedicated test-branch prerequisite.
 4. Phase 15 HIL deferred / test branch ready.
-5. Phase 16 active: 16-A through 16-E complete.
-6. Next software checkpoint: **16-F — Final Review / Closure / HIL Plan**, only after explicit `tiếp tục`.
+5. Phase 16 HIL deferred / plan ready, create/populate dedicated test branch.
+6. Major feature coding is complete. Do not propose Phase 17 automatically.
+7. Useful non-HIL work is limited to documentation/review/test-harness preparation; avoid new feature scope without explicit user direction.
 
-Concise state:
+If hardware is available, recommended order:
 
 ```text
-P12 HIL -> DEFERRED
-P13 HIL -> DEFERRED
-P14 HIL -> DEFERRED / branch prerequisite
-P15 HIL -> DEFERRED / test branch ready
-P16 SW  -> 16-E COMPLETE
-Next SW -> 16-F FINAL after `tiếp tục`
+Phase 12 HIL
+-> Phase 13 HIL
+-> Phase 14 HIL
+-> Phase 15 HIL
+-> Phase 16 HIL
+-> fix production defects on owning phase branch and propagate forward
+-> integrate production history into full Gateway/Firebase branch
+-> full system regression
+-> performance/resource/stability hardening
+-> final documentation/release/portfolio closure
 ```
+
+Full regression must include Wi-Fi/provisioning + sensor + Firebase + GUI + SD + audio + Xiaozhi, simultaneous Firebase/Xiaozhi traffic, repeated PTT turns, notification queueing and critical-alarm preemption.
 
 ## Production-vs-test fix policy
 
