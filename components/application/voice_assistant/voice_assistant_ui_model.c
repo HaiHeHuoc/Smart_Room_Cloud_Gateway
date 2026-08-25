@@ -113,8 +113,13 @@ static esp_err_t ui_copy_text(
         return ESP_ERR_INVALID_ARG;
     }
 
-    const size_t source_len = strlen(text);
-    const bool truncated = source_len >= VOICE_ASSISTANT_UI_TEXT_BUFFER_SIZE;
+    const size_t source_len =
+        strnlen(text, VOICE_ASSISTANT_UI_TEXT_BUFFER_SIZE);
+    const bool truncated =
+        source_len == VOICE_ASSISTANT_UI_TEXT_BUFFER_SIZE;
+    const size_t copy_len = truncated
+                                ? (VOICE_ASSISTANT_UI_TEXT_BUFFER_SIZE - 1U)
+                                : source_len;
 
     if (!ui_take_lock()) {
         return ESP_ERR_TIMEOUT;
@@ -126,9 +131,6 @@ static esp_err_t ui_copy_text(
     }
 
     char *const destination = user_text ? s_model.user_text : s_model.assistant_text;
-    const size_t copy_len = truncated
-                                ? (VOICE_ASSISTANT_UI_TEXT_BUFFER_SIZE - 1U)
-                                : source_len;
     memcpy(destination, text, copy_len);
     destination[copy_len] = '\0';
 
