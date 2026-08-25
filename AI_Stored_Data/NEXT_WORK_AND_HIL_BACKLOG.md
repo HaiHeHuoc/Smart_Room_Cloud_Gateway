@@ -11,7 +11,7 @@ Phase 12 SW -> COMPLETE / selected HIL deferred
 Phase 13 SW -> COMPLETE / HIL deferred
 Phase 14 SW -> COMPLETE / Build + HIL pending
 Phase 15 SW -> COMPLETE / Build + HIL pending
-Phase 16 SW -> IN PROGRESS / 16-D complete
+Phase 16 SW -> IN PROGRESS / 16-E complete
 ```
 
 Continue Phase 16 one checkpoint at a time and only after Hải says `tiếp tục`.
@@ -52,23 +52,25 @@ Current checkpoint:
 16-B Playback arbitration runtime               COMPLETE
 16-C Capture arbitration runtime                COMPLETE
 16-D Priority/preemption/queue hardening        COMPLETE
-16-E Xiaozhi + notification/alarm integration   NEXT
-16-F Final review/HIL plan                      pending
+16-E Xiaozhi + notification/alarm integration   COMPLETE
+16-F Final review/HIL plan                      NEXT / FINAL PROMPT
 ```
 
-16-D adds a shared deterministic decision contract (`GRANT / WAIT / REJECT / PREEMPT`). Equal-priority requests never preempt; preemption requires strictly higher priority plus an interruptible known owner. Each resource remains bounded to one current + one pending request; occupied pending slots are not silently replaced.
+16-E migrated production Xiaozhi capture/playback into arbitration-aware compatibility bridges. Xiaozhi capture uses client XIAOZHI priority 70 with REJECT/interruptible semantics; playback uses client XIAOZHI priority 70 with QUEUE/interruptible semantics. Both bridges wait for real manager RECORDING/PLAYBACK evidence before returning success to the existing Phase-14 voice flow.
 
-Capture and playback arbiters still sit above one `audio_manager` operation state. Only copied manager `IDLE` permits hardware submission. If both arbiters race for IDLE, `audio_manager` serialization is the final gate and the losing request waits/retries. This is safe but global cross-resource fairness is not claimed. A unified scheduler is deferred unless HIL proves starvation.
+Minimal named playback helpers now exist for notification and critical alarm requests. Notification defaults to priority 50 + QUEUE + interruptible. Critical alarm defaults to priority 100 + PREEMPT_LOWER_PRIORITY + non-interruptible. These helpers submit only through the playback arbiter and receive no hardware ownership.
 
-Unknown legacy capture/playback remains non-preemptible until callers are migrated because trusted client/interruptibility metadata is unavailable.
+Sensor/Firebase/GUI/Wi-Fi tasks continue to run normally during voice activity. Phase 16 arbitrates audio requests only; do not globally pause unrelated tasks without HIL evidence.
 
-Known follow-ups before Phase-16 closure:
+Known follow-ups before closure:
 
-- migrate Xiaozhi capture/playback through arbitration in 16-E;
-- add minimal notification/alarm request integration/stubs in 16-E;
-- playback/capture arbiter stop/deinit lifecycle APIs are not implemented yet;
-- recorded-audio playback is not promoted into request arbitration;
-- no build/HIL evidence yet.
+- full ESP-IDF build has not been verified;
+- Phase-16 HIL plan/test branch still needs creation in 16-F;
+- source-local CMake compatibility redirects remain a maintainability seam;
+- playback/capture arbiter stop/deinit APIs are absent;
+- global cross-resource fairness is not guaranteed;
+- recorded-audio playback is not migrated to arbitration;
+- no HIL evidence yet.
 
 ## What to answer when asked "làm gì tiếp theo?"
 
@@ -78,8 +80,8 @@ If hardware is unavailable, answer in this order:
 2. Phase 13 HIL deferred / Codex-ready.
 3. Phase 14 HIL deferred / dedicated test-branch prerequisite.
 4. Phase 15 HIL deferred / test branch ready.
-5. Phase 16 active: 16-A through 16-D complete.
-6. Next software checkpoint: **16-E — Xiaozhi + Notification/Alarm Integration and Concurrency Review**, only after explicit `tiếp tục`.
+5. Phase 16 active: 16-A through 16-E complete.
+6. Next software checkpoint: **16-F — Final Review / Closure / HIL Plan**, only after explicit `tiếp tục`.
 
 Concise state:
 
@@ -88,8 +90,8 @@ P12 HIL -> DEFERRED
 P13 HIL -> DEFERRED
 P14 HIL -> DEFERRED / branch prerequisite
 P15 HIL -> DEFERRED / test branch ready
-P16 SW  -> 16-D COMPLETE
-Next SW -> 16-E after `tiếp tục`
+P16 SW  -> 16-E COMPLETE
+Next SW -> 16-F FINAL after `tiếp tục`
 ```
 
 ## Production-vs-test fix policy
