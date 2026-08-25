@@ -86,6 +86,35 @@ capture_authorized=false
 
 Explicit cancel always revokes authorization. If the Xiaozhi start operation is still CONNECTING, cancel remains pending instead of attempting an unsafe/preemptive upstream teardown. Once READY/IDLE/error becomes observable, the policy reconciles deterministically.
 
+### Temporary physical PTT GPIO reservation
+
+`board_config.h` now reserves **GPIO5** as the temporary dedicated PTT input for Phase 14.
+
+Temporary wiring/polarity:
+
+```text
+GPIO5 ---- push button ---- 3V3
+```
+
+The future input implementation must configure the ESP32-S3 internal **pull-down**:
+
+```text
+released = LOW
+pressed  = HIGH
+```
+
+Board macros:
+
+```c
+#define PTT_BUTTON_GPIO                  GPIO_NUM_5
+#define PTT_BUTTON_ACTIVE_LEVEL          1
+#define PTT_BUTTON_USE_INTERNAL_PULLDOWN 1
+#define PTT_BUTTON_POLL_PERIOD_MS        10U
+#define PTT_BUTTON_DEBOUNCE_MS           40U
+```
+
+**GPIO5 is temporary.** Hải explicitly plans to change the final PTT GPIO later. Re-check the complete hardware/pin map before considering the hardware assignment stable. The current change only reserves/configures the board-level contract; no GPIO driver is bound to `voice_assistant_ptt` yet.
+
 ### Input ownership decision
 
 The existing physical `button_manager` is already the factory-reset input and supports one application callback. Sprint 14 roadmap also requires that PTT not overload the factory-reset long press.
@@ -113,7 +142,7 @@ Therefore 14-A does **not** bind PTT to the current reset button. The PTT API is
 
 ## Not implemented in 14-A
 
-- no dedicated physical PTT GPIO binding;
+- no PTT GPIO driver/binding yet (GPIO5 is only reserved in board config);
 - no factory-reset button reuse;
 - no microphone capture;
 - no live PCM frame/ring export;
@@ -130,7 +159,8 @@ Therefore 14-A does **not** bind PTT to the current reset button. The PTT API is
 3. callback publication occurs after the PTT mutex is released.
 4. PTT task never calls GPIO, I2S, LVGL, or private Xiaozhi APIs.
 5. a press from `RELEASED` may authorize a later turn on an already-READY session; bounded multi-turn policy is finalized later in Phase 14.
-6. no ESP-IDF build/HIL PASS is claimed in this session.
+6. GPIO5 is a temporary reservation and must be replaceable without changing PTT policy code.
+7. no ESP-IDF build/HIL PASS is claimed in this session.
 
 ## Next checkpoint — only after user says `tiếp tục`
 
