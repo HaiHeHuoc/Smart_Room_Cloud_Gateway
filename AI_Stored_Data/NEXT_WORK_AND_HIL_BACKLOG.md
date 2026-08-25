@@ -2,7 +2,7 @@
 
 Updated: 2026-08-25
 Authoritative development branch: `phase/16-audio-arbitration`
-Purpose: cross-session/Codex routing for **"hiện tại nên làm gì tiếp theo?"**
+Purpose: cross-session/Codex routing for **"hiện tại nên làm gì tiếp theo?"** and phase HIL activation from any clean working branch.
 
 ## Routing rule
 
@@ -19,6 +19,52 @@ Phase 16 SW -> IN PROGRESS / 16-A complete
 ```
 
 Phase 16 was explicitly started from `phase/15-voice-assistant-ui`. Continue one checkpoint at a time and only after Hải says `tiếp tục`.
+
+---
+
+## Global Codex HIL command routing
+
+The HIL activation commands are intended to be usable even when Codex starts on the latest production/development branch such as `phase/16-audio-arbitration`.
+
+Codex MUST NOT execute an older phase HIL against whatever branch happens to be checked out. It must route to that phase's dedicated test branch first.
+
+General flow:
+
+```text
+RUN PHASE <N> HIL
+-> inspect current branch + git status
+-> if working tree has uncommitted/untracked work that could be lost: STOP and report; do not stash/reset/delete automatically
+-> resolve the dedicated test branch from this document
+-> checkout that test branch
+-> read that branch's AI_Stored_Data HIL/runbook documents
+-> verify branch/config/test harness
+-> build -> flash -> monitor -> execute acceptance
+-> report PASS / FAIL / SKIP with evidence
+```
+
+Do not silently test Phase 12/13/14/15 from `phase/16-audio-arbitration` or another production branch.
+
+After HIL, Codex may report the branch it is currently on. It must not automatically merge test history into production and must not discard local changes merely to return to the original branch.
+
+### Command routing table
+
+```text
+RUN PHASE 12 HIL
+-> test/xiaozhi-p2f-known-audio-e2e
+
+RUN PHASE 13 HIL
+-> test/phase13-voice-assistant-hil
+
+RUN PHASE 14 HIL
+-> test/phase14-ptt-voice-e2e-hil
+
+RUN PHASE 15 HIL
+-> test/phase15-voice-ui-hil
+```
+
+If a listed test branch does not yet exist or its harness/runbook is incomplete, Codex must report that prerequisite instead of running the test on the current branch.
+
+Production defects found by an HIL run are not fixed only on the test branch. Follow the production-vs-test fix policy near the end of this document.
 
 ---
 
@@ -44,13 +90,16 @@ When hardware is unavailable: **DEFERRED**.
 
 ---
 
-## Phase 14 HIL — deferred / plan ready
+## Phase 14 HIL — deferred / branch prerequisite must be verified
 
 Production branch: `phase/14-ptt-voice-mvp`
 HIL plan: `AI_Stored_Data/PHASE14_HIL_TEST_PLAN.md`
-Recommended test branch: `test/phase14-ptt-voice-e2e-hil`
+Dedicated route: `test/phase14-ptt-voice-e2e-hil`
+Activation label: `RUN PHASE 14 HIL`
 
 Target acceptance remains physical PTT -> Xiaozhi READY -> INMP441 -> uplink -> response -> audio_manager -> MAX98357 -> repeated turn.
+
+If the dedicated test branch has not yet been created/populated, Codex must stop and report that prerequisite; it must not substitute the Phase-14 production branch silently.
 
 When hardware is unavailable: **DEFERRED / TEST PLAN READY**.
 
@@ -117,7 +166,7 @@ Answer in this order:
 
 1. Phase 12 HIL deferred / Codex-ready.
 2. Phase 13 HIL deferred / Codex-ready.
-3. Phase 14 HIL deferred / plan ready.
+3. Phase 14 HIL deferred / verify/create dedicated test branch before execution.
 4. Phase 15 HIL deferred / test branch ready.
 5. Phase 16 software is active; 16-A is complete.
 6. Next software checkpoint is **16-B — Playback Arbitration Runtime**, but only implement after explicit `tiếp tục`.
@@ -125,10 +174,10 @@ Answer in this order:
 Concise state:
 
 ```text
-P12 HIL -> DEFERRED
-P13 HIL -> DEFERRED
-P14 HIL -> DEFERRED
-P15 HIL -> DEFERRED / test branch ready
+P12 HIL -> DEFERRED / routable from latest branch
+P13 HIL -> DEFERRED / routable from latest branch
+P14 HIL -> DEFERRED / dedicated test-branch prerequisite
+P15 HIL -> DEFERRED / routable from latest branch
 P16 SW  -> 16-A COMPLETE
 Next SW -> 16-B after `tiếp tục`
 ```
@@ -145,6 +194,7 @@ Recommended acceptance order remains:
 6. After independent acceptance, integrate production history into the full Gateway/Firebase integration branch.
 7. Run full regression with Wi-Fi/provisioning + sensor + Firebase + GUI + SD + audio + Xiaozhi, including simultaneous cloud/voice load and Phase-16 multi-client audio cases once implemented.
 
+The global command-routing rule above applies regardless of the branch Codex starts on.
 Never merge HIL/test harness branches as production feature history.
 
 ## Production-vs-test fix policy
@@ -154,10 +204,14 @@ Test harness/config/expected-log defect
 -> fix on test branch
 
 Production component/architecture defect
--> fix on owning production branch
--> propagate forward/test branch
+-> identify the owning production phase branch
+-> fix there first
+-> propagate/cherry-pick/merge forward as appropriate
+-> update affected test branch
 -> retest
 ```
+
+Do not hide a production defect with a test-only workaround.
 
 ## Evidence discipline
 
