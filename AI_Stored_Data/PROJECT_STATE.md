@@ -21,6 +21,8 @@ Sprint 14  Software complete / Build + HIL pending
 Sprint 15  NOT STARTED
 ```
 
+A full architecture review through Phase 14 was completed on 2026-08-25 and is stored in `AI_Stored_Data/FULL_PROJECT_REVIEW_TO_PHASE14.md`.
+
 ## Deferred HIL routing
 
 Phase 12:
@@ -117,6 +119,31 @@ The wrapper:
 - no unbounded reconnect loop;
 - SD failure remains under `sd_card_manager` ownership.
 
+## Cross-system concurrency conclusion
+
+Sensor, Firebase/cloud, GUI and other normal FreeRTOS workloads may continue to run while Xiaozhi is recording, sending or playing a response. The design does not require stopping unrelated tasks. Safety comes from explicit resource ownership and bounded queues/callbacks.
+
+Important distinction:
+
+```text
+CPU/task interleaving                          allowed
+Firebase + Xiaozhi network coexistence         allowed, HIL must measure contention
+multiple clients directly accessing I2S        forbidden
+multiple legitimate audio requests             require audio-manager arbitration
+```
+
+### Newly recorded architecture follow-up — general audio arbitration
+
+`audio_manager` is currently the sole I2S owner, which prevents direct hardware ownership conflicts. However, there is not yet a complete general policy for cases such as:
+
+- Xiaozhi speaking while a notification requests playback;
+- Xiaozhi listening while another recorder requests microphone capture;
+- a critical alarm arriving during Xiaozhi response playback.
+
+Before intentionally enabling competing audio clients, add/review a centralized capture/playback arbitration policy in `audio_manager` (source/priority/interruptibility or an equivalent design). This is a post-Phase-14 architecture enhancement/integration requirement, not a reason to reopen the already scoped PTT MVP before its first HIL run.
+
+Do not allow a new component to solve contention by calling I2S directly.
+
 ## Known Phase-14 acceptance risks
 
 1. Build/link not yet verified with the target ESP-IDF toolchain.
@@ -125,6 +152,8 @@ The wrapper:
 4. Response playback is aggregated/SD-backed, not low-latency direct streaming.
 5. GPIO5 is temporary.
 6. `session_generation` identifies the long-lived session, not a unique PTT turn; turn serialization is part of the safety boundary.
+7. Firebase/cloud + Xiaozhi simultaneous network/resource load has not yet been measured on target hardware.
+8. General multi-client audio arbitration is not yet implemented.
 
 ## Next-work guidance
 
@@ -132,8 +161,9 @@ When asked **"hiện tại nên làm gì tiếp theo?"**:
 
 - Always mention Phase-12 and Phase-13 Codex-ready HIL backlogs.
 - Also mention Phase-14 HIL plan/test-branch pending status.
+- Mention the post-Phase-14 audio-arbitration/integration follow-up before enabling competing notification/alarm/recorder clients.
 - If hardware is unavailable, keep all HIL marked DEFERRED.
 - Phase 14 software is complete.
 - Do not start Sprint 15 automatically; wait for explicit user direction.
 
-When hardware becomes available, recommended order is Phase 12 HIL -> Phase 13 HIL -> Phase 14 full PTT voice HIL, then full-Gateway/Firebase integration regression using production branches only.
+When hardware becomes available, recommended order is Phase 12 HIL -> Phase 13 HIL -> Phase 14 full PTT voice HIL, then full-Gateway/Firebase integration regression using production branches only. The integration regression should include simultaneous Firebase/cloud and Xiaozhi traffic and any enabled competing audio-client scenarios.
