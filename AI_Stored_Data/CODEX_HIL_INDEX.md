@@ -1,14 +1,15 @@
 # Codex HIL Index
 
 Updated: 2026-08-25
-Development branch: `phase/13-voice-assistant`
+Development branch: `phase/14-ptt-voice-mvp`
 
 The operator plans to connect target hardware to the local development machine and use Codex as the HIL test operator/analyst.
 
-When hardware is available, run deferred acceptance in this order unless a specific regression requires otherwise:
+Phase 12 and Phase 13 target acceptance passed on 2026-08-25. The next hardware acceptance is:
 
-1. Phase 12 — checkout `test/xiaozhi-p2f-known-audio-e2e` and read `AI_Stored_Data/CODEX_HIL_RUNBOOK.md` plus the Phase-12 HIL documents.
-2. Phase 13 — checkout `test/phase13-voice-assistant-hil` and read `AI_Stored_Data/CODEX_HIL_RUNBOOK.md` plus the Phase-13 HIL documents.
+1. Phase 14 — checkout `test/phase14-ptt-voice-e2e-hil`.
+2. On that test branch, read `AI_Stored_Data/PHASE14_HIL_TEST_BRANCH.md` and `AI_Stored_Data/PHASE14_HIL_TEST_PLAN.md`.
+3. Use activation label `RUN PHASE 14 HIL` only after the required PTT/audio hardware is ready.
 
 Codex may build, flash, monitor serial, analyze evidence, make minimal evidence-backed fixes, reflash/retest, and update HIL documentation when the local environment exposes ESP-IDF and the ESP32-S3 serial device.
 

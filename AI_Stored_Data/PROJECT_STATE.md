@@ -15,33 +15,32 @@ Snapshot date: 2026-08-25
 ## Current high-level state
 
 ```text
-Sprint 12  Software complete / selected HIL deferred
-Sprint 13  Software complete / HIL deferred
-Sprint 14  Software complete / Build + HIL pending
+Sprint 12  Software complete / HIL PASS 2026-08-25
+Sprint 13  Software complete / HIL PASS 2026-08-25
+Sprint 14  Software complete / Build PASS / HIL pending
 Sprint 15  NOT STARTED
 ```
 
 A full architecture review through Phase 14 was completed on 2026-08-25 and is stored in `AI_Stored_Data/FULL_PROJECT_REVIEW_TO_PHASE14.md`.
 
-## Deferred HIL routing
+## HIL routing
 
 Phase 12:
 
 - branch `test/xiaozhi-p2f-known-audio-e2e`;
-- Codex activation `RUN PHASE 12 HIL`;
-- known-audio E2E, BOOT Starting regression, real network-loss and resource evidence.
+- target acceptance **PASS / closed 2026-08-25**.
 
 Phase 13:
 
 - branch `test/phase13-voice-assistant-hil`;
-- Codex activation `RUN PHASE 13 HIL`;
-- lifecycle, recovery, coalescing, stale/late event and resource evidence.
+- target acceptance **PASS / closed 2026-08-25**;
+- lifecycle stress, recovery, connect-failure, coalescing, generation and resource evidence accepted.
 
 Phase 14:
 
 - production branch `phase/14-ptt-voice-mvp`;
 - HIL plan `AI_Stored_Data/PHASE14_HIL_TEST_PLAN.md`;
-- recommended future test branch `test/phase14-ptt-voice-e2e-hil`;
+- test branch `test/phase14-ptt-voice-e2e-hil`;
 - full physical PTT -> mic -> Xiaozhi -> response -> speaker -> repeated-turn evidence still pending.
 
 ## Sprint 14 — final software architecture
@@ -146,24 +145,23 @@ Do not allow a new component to solve contention by calling I2S directly.
 
 ## Known Phase-14 acceptance risks
 
-1. Build/link not yet verified with the target ESP-IDF toolchain.
-2. Target HIL not yet run.
-3. Actual Xiaozhi response codec must be proven. The MVP currently assumes PCM16-compatible downlink after PCM negotiation; Opus evidence requires adding a decoder before speaker acceptance.
-4. Response playback is aggregated/SD-backed, not low-latency direct streaming.
-5. GPIO5 is temporary.
-6. `session_generation` identifies the long-lived session, not a unique PTT turn; turn serialization is part of the safety boundary.
-7. Firebase/cloud + Xiaozhi simultaneous network/resource load has not yet been measured on target hardware.
-8. General multi-client audio arbitration is not yet implemented.
+1. Target HIL not yet run.
+2. Actual Xiaozhi response codec must be proven. The MVP currently assumes PCM16-compatible downlink after PCM negotiation; Opus evidence requires adding a decoder before speaker acceptance.
+3. Response playback is aggregated/SD-backed, not low-latency direct streaming.
+4. GPIO5 is temporary.
+5. `session_generation` identifies the long-lived session, not a unique PTT turn; turn serialization is part of the safety boundary.
+6. Firebase/cloud + Xiaozhi simultaneous network/resource load has not yet been measured on target hardware.
+7. General multi-client audio arbitration is not yet implemented.
 
 ## Next-work guidance
 
 When asked **"hiện tại nên làm gì tiếp theo?"**:
 
-- Always mention Phase-12 and Phase-13 Codex-ready HIL backlogs.
-- Also mention Phase-14 HIL plan/test-branch pending status.
+- State that Phase-12 and Phase-13 HIL are closed with PASS evidence.
+- Mention Phase-14 HIL test-branch pending status.
 - Mention the post-Phase-14 audio-arbitration/integration follow-up before enabling competing notification/alarm/recorder clients.
-- If hardware is unavailable, keep all HIL marked DEFERRED.
+- If hardware is unavailable, keep Phase-14 HIL marked pending/deferred; do not downgrade accepted Phase-12/13 evidence.
 - Phase 14 software is complete.
 - Do not start Sprint 15 automatically; wait for explicit user direction.
 
-When hardware becomes available, recommended order is Phase 12 HIL -> Phase 13 HIL -> Phase 14 full PTT voice HIL, then full-Gateway/Firebase integration regression using production branches only. The integration regression should include simultaneous Firebase/cloud and Xiaozhi traffic and any enabled competing audio-client scenarios.
+When hardware becomes available, run Phase 14 full PTT voice HIL, then a full-Gateway/Firebase integration regression using production branches only. The integration regression should include simultaneous Firebase/cloud and Xiaozhi traffic and any enabled competing audio-client scenarios.

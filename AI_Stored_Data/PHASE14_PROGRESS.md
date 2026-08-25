@@ -3,7 +3,7 @@
 Updated: 2026-08-25
 Branch: `phase/14-ptt-voice-mvp`
 Current checkpoint: **14-F — FINAL Review / Production Composition / Docs**
-Status: **SOFTWARE COMPLETE / STATIC REVIEW COMPLETE / BUILD + HIL PENDING**
+Status: **SOFTWARE COMPLETE / STATIC REVIEW COMPLETE / BUILD PASS / HIL READY**
 
 ## Final checkpoint status
 
@@ -163,21 +163,28 @@ No Phase-14 callback directly owns LVGL or I2S.
 
 ## Important HIL risks / unclaimed points
 
-1. No ESP-IDF build/link was executed from this ChatGPT environment.
-2. No ESP32-S3 target HIL was executed.
-3. The source-local CMake stream tap and main composition redirects require real toolchain verification.
-4. The Phase-14 MVP negotiates PCM audio; actual server downlink payload must be proven to be compatible PCM16. If target evidence shows Opus, a decoder is required before speaker acceptance.
-5. Downlink currently aggregates response then uses an SD-backed WAV handoff. This is intentionally higher latency than direct streaming playback.
-6. GPIO5 is temporary.
-7. Long-lived `session_generation` is not a unique per-PTT-turn ID; repeated turns are protected mainly by serialized turn boundaries.
+1. No ESP32-S3 target HIL was executed for Phase 14.
+2. The Phase-14 MVP negotiates PCM audio; actual server downlink payload must be proven to be compatible PCM16. If target evidence shows Opus, a decoder is required before speaker acceptance.
+3. Downlink currently aggregates response then uses an SD-backed WAV handoff. This is intentionally higher latency than direct streaming playback.
+4. GPIO5 is temporary.
+5. Long-lived `session_generation` is not a unique per-PTT-turn ID; repeated turns are protected mainly by serialized turn boundaries.
 
-## Deferred HIL plan
+## Build evidence — 2026-08-25
+
+- ESP-IDF 6.0.1 production build: **PASS** (`2088/2088`);
+- app binary: `0x1efd60` bytes, 52% of the app partition free;
+- Phase-12 validator: OFF;
+- stale Phase-13 HIL generated-config symbols removed during reconfigure;
+- source-local Phase-14 composition and stream-tap objects compiled and linked;
+- known non-fatal warnings: missing `ESP_ROM_ELF_DIR` gdbinit generation and one existing unused LVGL image helper.
+
+## HIL handoff
 
 Use:
 
 `AI_Stored_Data/PHASE14_HIL_TEST_PLAN.md`
 
-Recommended future dedicated test branch:
+Dedicated test branch:
 
 `test/phase14-ptt-voice-e2e-hil`
 
@@ -185,6 +192,6 @@ Do not claim Phase-14 HIL PASS until target evidence proves mic -> Xiaozhi -> re
 
 ## Closure statement
 
-**Phase 14 = Software Complete / Build + Hardware Acceptance Pending.**
+**Phase 14 = Software Complete / Build PASS / Hardware Acceptance Pending.**
 
 Do not start Phase 15 automatically. The next software roadmap task may be considered only after Hải explicitly asks to continue.

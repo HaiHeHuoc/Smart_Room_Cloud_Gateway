@@ -1,14 +1,27 @@
-# Phase 13 Deferred HIL Test Plan
+# Phase 13 HIL Test Plan
 
 Updated: 2026-08-25
 Branch: `phase/13-voice-assistant`
-Status: **DEFERRED HIL — SOFTWARE ROBUSTNESS IMPLEMENTED, TARGET EVIDENCE PENDING**
+Status: **HIL PASS — TARGET ACCEPTED 2026-08-25**
 
 ## Rule
 
-Hardware is currently unavailable. Do not block Phase-13 software work on these
-tests and do not mark them PASS without target logs. When hardware returns,
-resume from this file.
+These cases were executed on the dedicated `test/phase13-voice-assistant-hil`
+branch. PASS below is backed by ESP32-S3 serial/runtime evidence.
+
+## Execution result — 2026-08-25
+
+| Case | Result | Target evidence |
+| --- | --- | --- |
+| 1. Normal lifecycle | PASS | 20/20 cycles completed twice; every generation reached real WebSocket READY and returned to IDLE without panic/assert/WDT. |
+| 2. Connect failure | PASS | With AP unavailable, CONNECTING reached ERROR in 7140 ms with `session_active=false`. |
+| 3. Explicit recovery | PASS | Transport-loss and failed-connect paths executed `ERROR -> RECOVERING -> IDLE`. |
+| 4. Transport loss after READY | PASS | Real AP removal produced coordinator `ONLINE -> OFFLINE` and voice `READY -> ERROR`. |
+| 5. Intentional-stop late callback | PASS | Repeated intentional disconnects returned to IDLE without a later `IDLE -> ERROR` regression. |
+| 6. Audio status burst | PASS | 32 rapid copied-status posts succeeded and lifecycle commands kept making progress. |
+| 7. Generation protection | PASS | Generations advanced monotonically and no prior generation mutated a newer session. |
+
+The final regression boot used 3 automatic cycles after the HIL harness was tightened to require coordinator state other than `ONLINE` before accepting manual AP loss. The board returned to `ONLINE` after AP restoration without reset.
 
 ## Test matrix
 
@@ -154,7 +167,4 @@ while a production voice session is active. This is also reviewed in Phase 13-E.
 
 ## Hardware acceptance boundary
 
-Phase 13 is not target-accepted until the above lifecycle/recovery tests pass on
-ESP32-S3 with normal Gateway services active. Real microphone->Xiaozhi->speaker
-conversation is not a Phase-13 acceptance requirement; it belongs to the later
-PTT/voice integration phase.
+The above lifecycle/recovery tests passed on ESP32-S3 with normal Gateway services active on 2026-08-25. Real microphone->Xiaozhi->speaker conversation belongs to Phase 14 and remains independently pending.

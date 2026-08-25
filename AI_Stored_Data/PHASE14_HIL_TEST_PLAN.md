@@ -2,7 +2,7 @@
 
 Updated: 2026-08-25
 Production branch: `phase/14-ptt-voice-mvp`
-Status: **READY FOR LATER TEST-BRANCH IMPLEMENTATION / TARGET EVIDENCE PENDING**
+Status: **TEST BRANCH READY / PRODUCTION BUILD PASS / TARGET EVIDENCE PENDING**
 
 ## Goal
 
@@ -46,6 +46,13 @@ GPIO5 is temporary and Hải intends to replace it later. HIL evidence must reco
 5. Verify INMP441, MAX98357/speaker, SD card, Wi-Fi/Internet and temporary PTT button are connected.
 6. Capture serial log from reset.
 7. Never classify target behavior PASS from expected logs alone.
+
+Production build baseline recorded on 2026-08-25:
+
+- ESP-IDF 6.0.1: **PASS** (`2088/2088`);
+- binary `0x1efd60`, 52% app-partition free;
+- production validator OFF;
+- branch `test/phase14-ptt-voice-e2e-hil` already exists and carries the standardized Codex HIL runbook.
 
 ## Expected boot/composition evidence
 
@@ -235,9 +242,9 @@ Use only:
 - `FAIL` — evidence violates criteria;
 - `SKIP` — test not performed; never equivalent to PASS.
 
-## Future dedicated test branch
+## Dedicated test branch
 
-When hardware test automation is requested, create a dedicated branch from this production branch, recommended name:
+Use the existing dedicated branch:
 
 `test/phase14-ptt-voice-e2e-hil`
 
