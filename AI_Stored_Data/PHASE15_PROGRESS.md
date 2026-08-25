@@ -2,8 +2,8 @@
 
 Updated: 2026-08-25
 Branch: `phase/15-voice-assistant-ui`
-Current checkpoint: **15-A — Production Voice Event/UI Model**
-Status: **IMPLEMENTED / STATIC REVIEW COMPLETE / BUILD + HIL NOT CLAIMED**
+Current checkpoint: **15-B — Voice Assistant Screen / Lifecycle Presentation**
+Status: **IMPLEMENTED WITH DOCUMENTED VISUAL-MAPPING LIMITATION / STATIC REVIEW COMPLETE / BUILD + HIL NOT CLAIMED**
 
 ## Collaboration rule
 
@@ -12,36 +12,60 @@ Phase 15 follows the same review cadence as Phases 13 and 14. Implement one chec
 Planned checkpoints:
 
 1. 15-A — production voice event/UI model. ✅
-2. 15-B — dedicated Voice Assistant screen and lifecycle presentation.
-3. 15-C — production USER transcript wiring.
+2. 15-B — dedicated Voice Assistant screen and lifecycle presentation. ✅
+3. 15-C — production USER transcript wiring. NEXT
 4. 15-D — production ASSISTANT text wiring.
-5. 15-E — repeated-turn/history/error UX.
+5. 15-E — repeated-turn/history/error UX + presentation refinement.
 6. 15-F — FINAL review/composition/docs/deferred HIL.
 
 At 15-F explicitly notify Hải that it is the final Phase-15 prompt before software closure.
 
-## 15-A — implemented
+## 15-A summary
 
-Added a production presentation model inside `voice_assistant`:
+Added the production `voice_assistant_ui_model` above `voice_assistant` with:
 
-- `include/voice_assistant_ui_model.h`;
-- `voice_assistant_ui_model.c`;
-- bounded 192-byte user transcript buffer;
-- bounded 192-byte assistant response buffer;
 - copied lifecycle state;
-- copied session generation;
-- copied last error;
-- valid/truncated flags;
-- single copied observer callback;
-- copied getter;
-- explicit user/assistant text ingress APIs;
-- generation mismatch rejection;
-- automatic stale-text clearing when a new non-zero session generation appears.
+- session generation;
+- last error;
+- bounded 192-byte user/assistant text buffers;
+- validity/truncation flags;
+- stale-generation rejection;
+- stale text clearing on a new non-zero session generation;
+- copied observer/getter;
+- no LVGL calls.
 
-### Presentation states
+The production model is intentionally separate from the temporary Phase-12 `xiaozhi_foundation_ui_status_t` validation model.
+
+## 15-B — implemented
+
+### Production GUI adapter
+
+Added:
+
+- `include/voice_assistant_ui_gui_adapter.h`;
+- `voice_assistant_ui_gui_adapter.c`;
+- `app_gui` as a `voice_assistant` component dependency;
+- production composition startup for the GUI adapter after the UI model starts.
+
+Flow:
 
 ```text
-IDLE
+voice_assistant
+-> voice_assistant_ui_model
+-> voice_assistant_ui_gui_adapter
+-> app_gui_post_xiaozhi_status()
+-> app_gui latest-value queue
+-> app_gui UI task
+-> LVGL Xiaozhi/Voice visual surface
+```
+
+The adapter never calls LVGL. It only copies presentation data and posts an app_gui screen request.
+
+### Screen routing
+
+The production adapter requests the existing Xiaozhi visual surface when the production model enters an active/relevant state:
+
+```text
 CONNECTING
 READY
 LISTENING
@@ -51,88 +75,93 @@ RECOVERING
 ERROR
 ```
 
-15-A maps these from the existing `voice_assistant_state_t`. It does not invent new transport ownership and does not call LVGL.
+`IDLE` does not force a screen transition. If the Voice/Xiaozhi screen is already active, model updates continue to render through its queue.
 
-Important current boundary: Phase 14 does not yet drive all of `LISTENING / THINKING / SPEAKING` directly through `voice_assistant_state_t`; PTT/uplink/downlink still own part of that transaction state. Therefore 15-A does not synthesize those states from READY or audio activity. Later Phase-15 checkpoints must promote real semantic/transaction events explicitly.
+This preserves existing sensor/Wi-Fi/cloud screens until an actual voice lifecycle requires presentation.
 
-### Text contract
+### Visual-surface promotion decision
 
-Production UI text is project-owned and bounded:
+`app_gui` already contains a Xiaozhi screen with:
 
-```c
-#define VOICE_ASSISTANT_UI_TEXT_BUFFER_SIZE 192U
+- connection/state label;
+- state indicator;
+- detail/duration labels;
+- bounded user text label;
+- bounded assistant text label.
+
+15-B reuses/promotes this UI-task-owned visual surface rather than duplicating another LVGL screen. The production backend does **not** reuse the Phase-12 validation model; the GUI adapter is the translation boundary.
+
+### Current lifecycle mapping limitation
+
+The existing `app_gui` Xiaozhi enum was designed for Phase-12 validation and has fewer visual states than the production Phase-15 model. Current mapping is therefore:
+
+```text
+Production IDLE        -> DISCONNECTED
+Production CONNECTING  -> PROCESSING
+Production READY       -> READY
+Production LISTENING   -> LISTENING
+Production THINKING    -> PROCESSING
+Production SPEAKING    -> RESPONDING
+Production RECOVERING  -> PROCESSING
+Production ERROR       -> ERROR
 ```
 
-Ingress:
+This means the backend model retains exact `CONNECTING / THINKING / RECOVERING`, but the current promoted visual surface renders those three as the legacy `PROCESSING` state. This limitation is explicit and must not be described as exact-state visual acceptance.
 
-```c
-voice_assistant_ui_model_post_user_text(generation, text);
-voice_assistant_ui_model_post_assistant_text(generation, text);
-```
+15-E/final presentation refinement may promote the app_gui enum/screen to exact production state labels if that remains useful after transcript/assistant text are wired.
 
-The caller keeps ownership of the input string; the model copies it before returning. Text from a stale or mismatched session generation is rejected.
+### Text placeholders
 
-Text inspection is bounded with `strnlen(..., 192)`. The model never performs an unbounded `strlen()` over a borrowed production text pointer; input that has no NUL within the model capacity is safely truncated to 191 bytes plus NUL and marked truncated.
+15-B copies the production model's user/assistant buffers into the existing bounded screen fields. At this checkpoint they normally remain empty because real production semantic text ingress is not wired until 15-C/15-D.
 
-### Why this is not the old Phase-12 UI model
+No fake transcript/assistant text is generated.
 
-`xiaozhi_foundation_ui_status_t` remains a temporary Phase-12 validation presentation structure. Phase 15 introduces a separate production model above `voice_assistant` so production GUI does not depend on validation-only state/types.
-
-### Production composition
-
-The existing Phase-14 production composition now initializes/starts the production UI model after `voice_assistant_start()` and before PTT/uplink/downlink startup.
+### Production composition order
 
 ```text
 audio_manager READY
 -> voice_assistant init/start
 -> voice_assistant_ui_model init/start
+-> voice_assistant_ui_gui_adapter init/start
 -> PTT policy
 -> uplink
 -> downlink
 -> PTT GPIO
 ```
 
-The model currently observes copied `voice_assistant` lifecycle state through the existing status callback. No GUI adapter is registered yet; that is 15-B.
-
-## Production text ingress evidence boundary
-
-The existing Phase-12 validation path already proves that user/assistant text can exist in the Xiaozhi integration and temporary validation UI. However, the Phase-15 production path does not yet promote a verified semantic text event into `voice_assistant_ui_model`.
-
-Do not assume or document a specific upstream production `CHAT_TEXT` event/type until the pinned `esp_xiaozhi` API used by this branch is inspected in 15-C/15-D. Those checkpoints must verify the exact event, role semantics, pointer lifetime and string termination before wiring production USER/ASSISTANT text.
-
-Therefore no semantic text is claimed to reach the production UI yet.
+Phase-12 validation mode still suppresses the complete production voice stack, so validation and production presentation do not concurrently own the Xiaozhi UI path under normal branch configuration.
 
 ## Static review notes
 
-1. UI model callback is invoked after releasing its mutex.
-2. No LVGL API is called from `voice_assistant_ui_model`.
-3. Text buffers are always null terminated.
-4. text with no NUL inside the 192-byte inspection bound is truncated safely with an explicit flag.
-5. stale generation text is rejected.
-6. new session generation clears old user/assistant text to prevent stale conversation display.
-7. model startup consumes the existing single `voice_assistant` status-observer slot; Phase-15 composition must not register a second direct observer without adding an explicit fan-out boundary.
-8. `AI_Stored_Data` remains documentation-only and is not a firmware dependency.
-9. No ESP-IDF build or HIL PASS is claimed.
+1. GUI adapter callback performs copied translation and queue/screen requests only.
+2. No LVGL API is called outside `app_gui` UI ownership.
+3. The model observer remains single-owner: UI model observes `voice_assistant`; GUI adapter observes UI model.
+4. No second direct `voice_assistant` status observer was added.
+5. app_gui remains independent from voice-assistant internals; dependency direction is `voice_assistant -> app_gui`, avoiding a component cycle.
+6. Existing Phase-12 validation UI API remains available.
+7. Production active states request the Voice/Xiaozhi screen; IDLE does not steal routing from the normal dashboard.
+8. Exact visual distinction for CONNECTING/THINKING/RECOVERING is a known remaining presentation limitation.
+9. No ESP-IDF build or target HIL PASS is claimed.
 
-## Not implemented in 15-A
+## Not implemented yet
 
-- no dedicated LVGL Voice Assistant screen;
-- no `app_gui` production voice queue/adapter;
-- no real USER transcript ingress yet;
-- no real ASSISTANT text ingress yet;
-- no conversation history;
+- no real production USER transcript ingress yet;
+- no real production ASSISTANT text ingress yet;
+- no multi-turn conversation history;
+- no exact production visual enum for CONNECTING vs THINKING vs RECOVERING;
 - no waveform/audio-level visualization;
 - no GUI PTT button;
 - no new hardware behavior.
 
 ## Next checkpoint — only after user says `tiếp tục`
 
-**15-B — Dedicated Voice Assistant Screen / Lifecycle Presentation**
+**15-C — Production USER Transcript Wiring**
 
 Planned scope:
 
-1. add production voice UI status type/queue to `app_gui`;
-2. register an application adapter from `voice_assistant_ui_model` to `app_gui`;
-3. render `IDLE / CONNECTING / READY / LISTENING / THINKING / SPEAKING / RECOVERING / ERROR` only inside the UI task;
-4. reserve bounded areas for user/assistant text without wiring real text events yet;
-5. preserve all existing Wi-Fi/sensor/cloud screens and LVGL ownership.
+1. inspect/verify the exact pinned `esp_xiaozhi` semantic text event and USER role;
+2. promote USER text through `xiaozhi_foundation` as a copied/project-owned production semantic event;
+3. preserve callback lifetime and generation filtering;
+4. feed `voice_assistant_ui_model_post_user_text()`;
+5. verify the app_gui screen receives the copied transcript through the existing 15-B adapter;
+6. do not wire ASSISTANT text until 15-D.
