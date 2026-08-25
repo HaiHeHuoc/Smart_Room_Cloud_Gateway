@@ -2,7 +2,7 @@
 
 /**
  * @file xiaozhi_foundation.h
- * @brief Project-owned Xiaozhi boundary for service, session, and validation use.
+ * @brief Project-owned Xiaozhi boundary for service, session, audio, and validation use.
  *
  * Public structures contain copied scalar/project-owned state only. Xiaozhi
  * handles, transport endpoints, credentials, tokens, and callback-lifetime
@@ -10,6 +10,7 @@
  */
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "esp_err.h"
@@ -71,47 +72,72 @@ typedef void (*xiaozhi_foundation_session_status_callback_t)(
     const xiaozhi_foundation_session_status_t *status,
     void *user_context);
 
-/**
- * @brief Register or remove the production session observer.
- *
- * Passing NULL unregisters it. Registration is rejected while a production
- * session start/stop lifecycle is active or while a session is connected.
- */
 esp_err_t xiaozhi_foundation_session_register_status_callback(
     xiaozhi_foundation_session_status_callback_t callback,
     void *user_context);
 
-/**
- * @brief Start one long-lived WebSocket Xiaozhi chat session.
- *
- * This task-context API performs service-info retrieval, creates the project-
- * owned MCP/chat objects, starts WebSocket transport, and waits up to the
- * bounded connection timeout for a real CONNECTED event. On success the chat
- * remains alive in READY until xiaozhi_foundation_session_stop() is called or
- * an asynchronous transport failure is reported. No audio channel is opened
- * here and no microphone/speaker/I2S resource is owned.
- *
- * @param client_generation Opaque non-zero application generation copied into
- *        all session callbacks for stale-event rejection.
- */
+/** Start one long-lived WebSocket Xiaozhi chat session. */
 esp_err_t xiaozhi_foundation_session_start(uint32_t client_generation);
 
-/**
- * @brief Stop and release the active production Xiaozhi chat session.
- *
- * Cleanup order follows the validated Phase-12 lifecycle: chat stop, event
- * handler unregister, chat deinit, MCP destroy, then EventGroup release. The
- * call is task-context only and must be serialized by the application.
- */
+/** Stop and release the active production Xiaozhi chat session. */
 esp_err_t xiaozhi_foundation_session_stop(void);
 
-/** @brief Copy the current production session status. */
+/** Copy the current production session status. */
 esp_err_t xiaozhi_foundation_session_get_status(
     xiaozhi_foundation_session_status_t *status);
 
 /** Convert one production session state to a stable diagnostic string. */
 const char *xiaozhi_foundation_session_state_to_string(
     xiaozhi_foundation_session_state_t state);
+
+/* Phase 14 production audio-uplink boundary ------------------------------- */
+
+#define XIAOZHI_FOUNDATION_UPLINK_SAMPLE_RATE_HZ 16000U
+#define XIAOZHI_FOUNDATION_UPLINK_CHANNELS       1U
+#define XIAOZHI_FOUNDATION_UPLINK_FRAME_SAMPLES  256U
+
+/** Copied scalar diagnostics for one production microphone uplink. */
+typedef struct {
+    bool audio_channel_open;
+    bool listening;
+    uint32_t client_generation;
+    uint64_t frames_sent;
+    uint64_t samples_sent;
+    uint64_t bytes_sent;
+    esp_err_t last_error;
+} xiaozhi_foundation_audio_uplink_status_t;
+
+/**
+ * @brief Open the production audio channel and enter MANUAL listening mode.
+ *
+ * The parent production session must already be READY for the same non-zero
+ * client generation. The Phase-14 MVP advertises PCM, 16 kHz, mono, 16 ms
+ * frames (256 PCM16 samples). No I2S or audio-manager ownership is taken here.
+ */
+esp_err_t xiaozhi_foundation_audio_uplink_start(uint32_t client_generation);
+
+/**
+ * @brief Send one PCM16 microphone frame through the active Xiaozhi channel.
+ *
+ * This may perform transport work and therefore must never be called from the
+ * audio-manager frame callback. The caller must use its own bounded queue/task.
+ */
+esp_err_t xiaozhi_foundation_audio_uplink_send_pcm16(
+    uint32_t client_generation,
+    const int16_t *samples,
+    size_t sample_count);
+
+/**
+ * @brief End MANUAL listening and close the production audio channel.
+ *
+ * The long-lived Phase-13 chat session remains alive/READY after a successful
+ * uplink stop so a later PTT turn may reuse it.
+ */
+esp_err_t xiaozhi_foundation_audio_uplink_stop(uint32_t client_generation);
+
+/** Copy current audio-uplink scalar diagnostics. */
+esp_err_t xiaozhi_foundation_audio_uplink_get_status(
+    xiaozhi_foundation_audio_uplink_status_t *status);
 
 /* Temporary Phase 12 validation UI status -------------------------------- */
 
@@ -143,17 +169,10 @@ typedef void (*xiaozhi_foundation_ui_status_callback_t)(
 
 /* Existing Phase 12 service/validation API -------------------------------- */
 
-/** Probe Xiaozhi and copy non-sensitive service state to caller storage. */
 esp_err_t xiaozhi_foundation_probe(xiaozhi_foundation_info_t *out_info);
-
-/** Request a one-shot background service probe. */
 esp_err_t xiaozhi_foundation_request_probe(void);
-
-/** Request one temporary Phase-12 transport-validation checkpoint. */
 esp_err_t xiaozhi_foundation_request_transport_validation(
     xiaozhi_foundation_transport_t transport);
-
-/** Register the temporary Phase-12 validation UI observer. */
 esp_err_t xiaozhi_foundation_register_ui_status_callback(
     xiaozhi_foundation_ui_status_callback_t callback,
     void *user_context);
