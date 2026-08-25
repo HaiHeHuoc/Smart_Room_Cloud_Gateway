@@ -2,164 +2,183 @@
 
 Updated: 2026-08-25
 Branch: `phase/13-voice-assistant`
-Current checkpoint: **13-C — Audio + GUI Contracts**
+Current checkpoint: **13-D — Failure / Recovery + Software Validation**
 Status: **IMPLEMENTED / STATIC REVIEW COMPLETE / BUILD + HIL NOT CLAIMED**
 
 ## Collaboration rule
 
-Phase 13 is implemented in reviewable parts. After each part, stop coding and wait for Hải to review. Continue only after the user explicitly says `tiếp tục`.
+Phase 13 is implemented in reviewable parts. After each part, stop coding and
+wait for Hải to review. Continue only after the user explicitly says `tiếp tục`.
 
 ## 13-A — completed
 
-Created `components/application/voice_assistant/` and implemented:
+Implemented the `voice_assistant` component foundation:
 
 - one long-lived orchestration task;
-- 4096-byte stack, priority 4;
-- bounded queue length 8;
-- bounded status mutex waits;
-- 2-second task-start readiness wait;
-- copied status observer called only after releasing the mutex;
+- bounded queue/mutex/start wait;
 - non-zero session generation;
-- stale queued command rejection;
-- conversation states `UNINITIALIZED`, `INITIALIZED`, `IDLE`, `CONNECTING`, `READY`, `LISTENING`, `THINKING`, `SPEAKING`, `RECOVERING`, `ERROR`.
+- stale command rejection;
+- conversation states from UNINITIALIZED through ERROR/RECOVERING.
 
 ## 13-B — completed
 
-### Production Xiaozhi lifecycle surface
-
-Added `components/application/xiaozhi_foundation/xiaozhi_session.c` and public session APIs:
-
-- `xiaozhi_foundation_session_register_status_callback()`;
-- `xiaozhi_foundation_session_start(client_generation)`;
-- `xiaozhi_foundation_session_stop()`;
-- `xiaozhi_foundation_session_get_status()`;
-- `xiaozhi_foundation_session_state_to_string()`.
-
-The production session is separate from the Phase-12 P2-E/P2-F validation worker. A successful session start requires a real WebSocket CONNECTED event and the session stays alive until explicit stop or transport failure.
-
-Foundation callback flow:
+Added the production Xiaozhi WebSocket session boundary in
+`xiaozhi_foundation`:
 
 ```text
-Xiaozhi event loop
--> copied foundation session status
--> non-blocking voice_assistant queue send
--> voice_assistant task
--> generation check
--> READY or ERROR transition
+begin session
+-> CONNECTING
+-> public Xiaozhi get_info / MCP / chat init
+-> real CONNECTED event
+-> READY
+-> explicit stop/failure
+-> ownership-ordered cleanup
 ```
 
-No Xiaozhi/MCP handles, tokens, endpoints, credentials, or framework-owned pointers cross the public boundary.
+The production session is distinct from the Phase-12 validation worker and no
+Xiaozhi/MCP handle or sensitive value crosses the public boundary.
 
-## 13-C — implemented
+## 13-C — completed
 
-### Audio contract
+Added the project-owned audio/UI-safe status contract:
 
-Added a project-owned audio status model to `voice_assistant.h`:
-
-- `voice_assistant_audio_state_t`;
 - `voice_assistant_audio_status_t`;
 - copied audio state inside `voice_assistant_status_t`;
 - `voice_assistant_notify_audio_status()`;
-- `voice_assistant_audio_state_to_string()`.
+- `voice_assistant_audio_adapter_post()` for application fan-out from the
+  existing `audio_manager` callback.
 
-The voice task now accepts bounded copied audio-status commands and publishes them through the same UI-safe status callback. Audio status and conversation state remain distinct.
+No I2S/DMA/PCM ownership moved out of `audio_manager`. Generic audio activity
+does not automatically become LISTENING/THINKING/SPEAKING.
 
-### audio_manager fan-out adapter
+## 13-D — implemented
+
+### Intentional stop vs unexpected disconnect
+
+`xiaozhi_session.c` now tracks explicit stop intent. DISCONNECTED or
+SERVER_GOODBYE observed while `session_stop()` is cleaning up are treated as
+expected teardown evidence instead of publishing a false transport ERROR.
+
+Unexpected disconnect still produces ERROR.
+
+### Correct active-state semantics during CONNECTING
+
+Before 13-D, DISCONNECTED/SERVER_GOODBYE hard-coded `active=true`. A failed
+connection could therefore publish an ERROR claiming an active session even if
+READY was never reached.
+
+13-D snapshots the pre-event `s_status.active` value:
+
+```text
+CONNECTING failure -> ERROR active=false
+READY transport loss -> ERROR active=true
+```
+
+### Late callback hardening
+
+`voice_assistant` now accepts READY only while CONNECTING/READY. It ignores a
+same-generation late ERROR when the orchestrator has already completed an
+intentional stop and returned to IDLE, or while bounded recovery is already in
+progress.
+
+Generation mismatch is still dropped before any state transition.
+
+### Explicit bounded recovery
 
 Added:
 
-- `include/voice_assistant_audio_adapter.h`;
-- `voice_assistant_audio_adapter.c`.
-
-The adapter converts one existing `audio_manager_status_t` snapshot into project-owned voice audio facts and calls `voice_assistant_notify_audio_status()`.
-
-It deliberately does **not** register a second callback with `audio_manager`. Application composition can fan out its existing audio callback to both GUI and voice-assistant adapters later.
-
-Copied fields only:
-
-- mapped lifecycle state;
-- `capture_i2s_active`;
-- `playback_i2s_active`;
-- `last_error`.
-
-No I2S handle, DMA descriptor, PCM buffer, private recording storage, or hardware callback crosses the adapter.
-
-### Transitional snapshot rule
-
-The audio contract treats lifecycle state and I2S-active flags as independent transition facts. It rejects only impossible simultaneous capture+playback, rather than requiring every RECORDING snapshot to already have capture-active=true or every PLAYBACK snapshot to already have playback-active=true. This avoids dropping legitimate transitional status snapshots.
-
-### GUI contract
-
-`voice_assistant_status_t` is now explicitly the production UI-safe voice model. It contains only copied project-owned scalar state:
-
-```text
-conversation state
-session generation
-session-active flag
-last voice error
-copied audio state
-capture/playback active flags
-last audio error
+```c
+esp_err_t voice_assistant_recover(void);
 ```
 
-`voice_assistant` still has no dependency on `app_gui` or LVGL. A future application/UI adapter may copy this status into the app_gui task. The temporary Phase-12 `ui_xiaozhi_status_t` is intentionally not reused as the production contract.
-
-### Important audio limitation discovered
-
-Current `audio_manager` does **not** expose a public live PCM frame/ring interface. Its production public surface owns recording/playback internally and retains processed recordings privately.
-
-Therefore 13-C intentionally does not bypass private audio storage or introduce a second I2S owner. Real mic -> Xiaozhi streaming requires a bounded public streaming contract in a later integration step while `audio_manager` remains the sole I2S/DMA owner.
-
-### State semantics preserved
-
-Generic audio activity does **not** automatically drive:
-
-- `LISTENING`;
-- `THINKING`;
-- `SPEAKING`.
-
-A local recording or WAV playback may be unrelated to the voice conversation. Those transitions are reserved until `voice_assistant` explicitly owns the voice command flow.
-
-## Ownership after 13-C
+Accepted only from ERROR. Flow:
 
 ```text
-audio_manager
-    -> sole microphone/speaker/I2S/DMA/PCM owner
-
-xiaozhi_foundation
-    -> Xiaozhi transport/session boundary
-
-voice_assistant
-    -> conversation/session state + copied audio/transport orchestration
-
-app_gui
-    -> sole GUI/LVGL owner
+ERROR
+-> RECOVERING
+-> query foundation session status
+-> stop/cleanup once if still active
+-> IDLE on success
+-> ERROR on cleanup failure
 ```
 
-## Static review notes
+There is no automatic reconnect loop. A fresh session requires a later explicit
+`begin_session()`.
 
-- Audio notifications are non-blocking queue operations.
-- Voice status callbacks execute after the voice status mutex is released.
-- No audio callback directly changes conversation state.
-- No direct LVGL/app_gui call was introduced.
-- No raw PCM or private audio-manager buffer was exposed.
-- `READY -> READY` is deduplicated in the foundation-status handler when a same-generation asynchronous READY follows synchronous start confirmation.
-- Phase-12 validation and Phase-13 production session are still separate lifecycle surfaces; cross-surface exclusion remains a 13-D robustness item.
-- Intentional-stop/disconnect ordering, abort while CONNECTING, queue-pressure policy, recovery, and repeated-session robustness remain 13-D items.
+### Audio queue-pressure policy
 
-No ESP-IDF build or target HIL is claimed because this environment did not run the project toolchain/board.
+Audio status now uses latest-value coalescing instead of one queue item per
+callback:
+
+```text
+audio callback A -> enqueue one AUDIO marker
+audio callback B/C/D before marker consumed -> overwrite copied pending value
+voice task consumes marker -> applies latest D
+```
+
+This prevents a burst of audio-status callbacks from filling the bounded command
+queue needed for lifecycle and Xiaozhi transport events.
+
+### Duplicate / command ordering policy
+
+The existing `s_command_pending` gate continues to allow only one public
+begin/end/recover command in flight. Duplicate lifecycle requests are rejected
+with `ESP_ERR_INVALID_STATE` instead of accumulating.
+
+The synchronous foundation connection startup is bounded to 15 seconds. While
+it is executing inside the voice task, public duplicate/end/recover requests are
+rejected rather than pretending to preempt an upstream operation that has no
+project cancel API.
+
+### Deferred HIL plan
+
+Created:
+
+`AI_Stored_Data/PHASE13_HIL_TEST_PLAN.md`
+
+It records expected logs and acceptance for:
+
+- normal repeated session lifecycle;
+- connect failure;
+- explicit recovery;
+- transport loss after READY;
+- intentional-stop late callbacks;
+- audio callback bursts / queue pressure;
+- stale generation events.
+
+Hardware is unavailable, so all target evidence remains **DEFERRED HIL**.
+
+## Remaining closure findings for 13-E
+
+1. `main.c` still contains the temporary Phase-12 Xiaozhi validation
+   composition. Phase 13-E must decide/implement the production composition
+   boundary without accidentally running validation and production session
+   lifecycles together.
+2. Phase-12 validation and Phase-13 production session remain separate public
+   lifecycle surfaces. The current production rule is "do not run them
+   concurrently"; final composition review must ensure this is enforced by the
+   application path used in production.
+3. No public live PCM stream exists in `audio_manager`; do not bypass private
+   buffers. Real microphone/audio-channel/response-audio work belongs to the
+   later PTT integration phase.
+4. No ESP-IDF build or target HIL is claimed in this session.
 
 ## Next checkpoint — only after user says `tiếp tục`
 
-**13-D — Failure / Recovery + Software Validation**
+**13-E — FINAL PHASE-13 PROMPT: Final Review + Composition + Docs + Deferred HIL**
+
+This is the final planned coding/review checkpoint of Phase 13.
 
 Planned scope:
 
-1. harden cross-surface exclusion between Phase-12 validation and Phase-13 production session;
-2. define bounded recovery/error policy for transport loss;
-3. review begin/end/stop ordering, including cancellation while CONNECTING;
-4. harden stale/late callback handling after intentional stop;
-5. exercise queue-pressure and duplicate-command behavior by software/static validation hooks where useful;
-6. review repeated session start/stop lifecycle and cleanup ownership;
-7. prepare deferred HIL procedures/log markers without claiming target PASS;
-8. do not implement Phase-14 real microphone streaming just to close Phase 13.
+1. full Phase-13 diff/ownership/concurrency/lifetime review;
+2. integrate `voice_assistant` into production composition where safe;
+3. remove/disable temporary Phase-12 runtime orchestration that conflicts with
+   the production session path, without deleting deferred validation assets;
+4. wire copied status fan-out needed by composition while keeping LVGL/I2S
+   ownership unchanged;
+5. review compile surface and documentation drift;
+6. update roadmap/project state/AI_Stored_Data;
+7. leave hardware-dependent acceptance explicitly deferred;
+8. if no software blocker remains, declare **Phase 13 Software Complete / HIL
+   Pending** and notify Hải that this is the prompt that completes Phase 13.
