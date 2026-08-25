@@ -20,8 +20,11 @@
 #define DOWNLINK_QUEUE_LENGTH              8U
 #define DOWNLINK_CHUNK_BYTES               2048U
 #define DOWNLINK_RESPONSE_CAPACITY_BYTES   (1024U * 1024U)
-#define DOWNLINK_AUDIO_IDLE_TIMEOUT_MS      10000U
-#define DOWNLINK_AUDIO_IDLE_POLL_MS         50U
+#define DOWNLINK_RESPONSE_TIMEOUT_MS       15000U
+#define DOWNLINK_QUEUE_POLL_MS             100U
+#define DOWNLINK_AUDIO_IDLE_TIMEOUT_MS     10000U
+#define DOWNLINK_PLAYBACK_TIMEOUT_MS       60000U
+#define DOWNLINK_AUDIO_IDLE_POLL_MS        50U
 #define DOWNLINK_WAV_PATH                  "/sdcard/xiaozhi_response.wav"
 
 _Static_assert((DOWNLINK_RESPONSE_CAPACITY_BYTES % 2U) == 0U,
@@ -41,6 +44,8 @@ static QueueHandle_t s_queue = NULL;
 static TaskHandle_t s_task = NULL;
 static uint8_t *s_response = NULL;
 static size_t s_response_size = 0U;
+static TickType_t s_last_response_activity = 0U;
+static bool s_response_tainted = false;
 static voice_assistant_downlink_status_t s_status = {0};
 
 static void downlink_set_error(esp_err_t error)
@@ -49,6 +54,29 @@ static void downlink_set_error(esp_err_t error)
     s_status.last_error = (error == ESP_OK) ? ESP_FAIL : error;
     ++s_status.responses_failed;
     portEXIT_CRITICAL(&s_lock);
+}
+
+static void downlink_finish_turn_state(void)
+{
+    s_response_size = 0U;
+    s_response_tainted = false;
+    portENTER_CRITICAL(&s_lock);
+    s_status.collecting = false;
+    s_status.playback_requested = false;
+    s_status.response_bytes_buffered = 0U;
+    portEXIT_CRITICAL(&s_lock);
+}
+
+static bool downlink_generation_is_current(uint32_t generation)
+{
+    if (generation == 0U) {
+        return false;
+    }
+    xiaozhi_foundation_session_status_t session = {0};
+    return (xiaozhi_foundation_session_get_status(&session) == ESP_OK) &&
+           session.active &&
+           (session.state == XIAOZHI_FOUNDATION_SESSION_READY) &&
+           (session.client_generation == generation);
 }
 
 static void put_u16_le(uint8_t *dst, uint16_t value)
@@ -123,10 +151,10 @@ static esp_err_t downlink_write_wav(const uint8_t *pcm, size_t pcm_bytes)
     return ESP_OK;
 }
 
-static esp_err_t downlink_wait_audio_idle(void)
+static esp_err_t downlink_wait_audio_idle(uint32_t timeout_ms)
 {
     uint32_t waited = 0U;
-    while (waited <= DOWNLINK_AUDIO_IDLE_TIMEOUT_MS) {
+    while (waited <= timeout_ms) {
         audio_manager_status_t audio = {0};
         const esp_err_t ret = audio_manager_get_status(&audio);
         if (ret != ESP_OK) {
@@ -146,11 +174,36 @@ static esp_err_t downlink_wait_audio_idle(void)
     return ESP_ERR_TIMEOUT;
 }
 
+static esp_err_t downlink_wait_playback_complete(void)
+{
+    bool playback_seen = false;
+    uint32_t waited = 0U;
+    while (waited <= DOWNLINK_PLAYBACK_TIMEOUT_MS) {
+        audio_manager_status_t audio = {0};
+        const esp_err_t ret = audio_manager_get_status(&audio);
+        if (ret != ESP_OK) {
+            return ret;
+        }
+        if (audio.state == AUDIO_MANAGER_STATE_PLAYBACK) {
+            playback_seen = true;
+        } else if (playback_seen && (audio.state == AUDIO_MANAGER_STATE_IDLE)) {
+            return (audio.last_error == ESP_OK) ? ESP_OK : audio.last_error;
+        } else if ((audio.state == AUDIO_MANAGER_STATE_ERROR) ||
+                   (audio.state == AUDIO_MANAGER_STATE_UNINITIALIZED) ||
+                   (audio.state == AUDIO_MANAGER_STATE_INITIALIZED)) {
+            return (audio.last_error == ESP_OK) ? ESP_ERR_INVALID_STATE : audio.last_error;
+        }
+        vTaskDelay(pdMS_TO_TICKS(DOWNLINK_AUDIO_IDLE_POLL_MS));
+        waited += DOWNLINK_AUDIO_IDLE_POLL_MS;
+    }
+    return ESP_ERR_TIMEOUT;
+}
+
 static esp_err_t downlink_finalize_response(uint32_t generation)
 {
     if ((generation == 0U) || (s_response_size == 0U) ||
-        ((s_response_size % sizeof(int16_t)) != 0U)) {
-        return ESP_ERR_INVALID_SIZE;
+        ((s_response_size % sizeof(int16_t)) != 0U) || s_response_tainted) {
+        return s_response_tainted ? ESP_ERR_INVALID_RESPONSE : ESP_ERR_INVALID_SIZE;
     }
 
     esp_err_t first_error = xiaozhi_foundation_audio_channel_close(generation);
@@ -163,7 +216,7 @@ static esp_err_t downlink_finalize_response(uint32_t generation)
         return first_error;
     }
 
-    first_error = downlink_wait_audio_idle();
+    first_error = downlink_wait_audio_idle(DOWNLINK_AUDIO_IDLE_TIMEOUT_MS);
     if (first_error != ESP_OK) {
         return first_error;
     }
@@ -175,8 +228,6 @@ static esp_err_t downlink_finalize_response(uint32_t generation)
 
     portENTER_CRITICAL(&s_lock);
     s_status.playback_requested = true;
-    ++s_status.responses_completed;
-    s_status.last_error = ESP_OK;
     portEXIT_CRITICAL(&s_lock);
 
     ESP_LOGI(TAG,
@@ -184,6 +235,19 @@ static esp_err_t downlink_finalize_response(uint32_t generation)
              (unsigned)generation,
              (unsigned)s_response_size,
              DOWNLINK_WAV_PATH);
+
+    first_error = downlink_wait_playback_complete();
+    if (first_error != ESP_OK) {
+        return first_error;
+    }
+
+    portENTER_CRITICAL(&s_lock);
+    s_status.playback_requested = false;
+    ++s_status.responses_completed;
+    s_status.last_error = ESP_OK;
+    portEXIT_CRITICAL(&s_lock);
+    ESP_LOGI(TAG, "response PLAYBACK_COMPLETE generation=%u",
+             (unsigned)generation);
     return ESP_OK;
 }
 
@@ -205,6 +269,7 @@ static void downlink_response_callback(
         if (xQueueSend(s_queue, &item, 0U) != pdTRUE) {
             portENTER_CRITICAL(&s_lock);
             ++s_status.chunks_dropped_queue_full;
+            s_response_tainted = true;
             portEXIT_CRITICAL(&s_lock);
         }
         return;
@@ -230,6 +295,7 @@ static void downlink_response_callback(
         if (xQueueSend(s_queue, &item, 0U) != pdTRUE) {
             portENTER_CRITICAL(&s_lock);
             ++s_status.chunks_dropped_queue_full;
+            s_response_tainted = true;
             portEXIT_CRITICAL(&s_lock);
             break;
         }
@@ -241,23 +307,88 @@ static void downlink_response_callback(
     }
 }
 
+static void downlink_abort_response(
+    uint32_t generation,
+    esp_err_t error,
+    bool timeout)
+{
+    (void)xiaozhi_foundation_audio_channel_close(generation);
+    if (timeout) {
+        portENTER_CRITICAL(&s_lock);
+        ++s_status.response_timeouts;
+        portEXIT_CRITICAL(&s_lock);
+    }
+    downlink_set_error(error);
+    ESP_LOGE(TAG,
+             "response ABORT generation=%u timeout=%s error=%s",
+             (unsigned)generation,
+             timeout ? "yes" : "no",
+             esp_err_to_name(error));
+    downlink_finish_turn_state();
+    if (s_queue != NULL) {
+        (void)xQueueReset(s_queue);
+    }
+}
+
+static void downlink_check_timeout(void)
+{
+    bool collecting = false;
+    uint32_t generation = 0U;
+    portENTER_CRITICAL(&s_lock);
+    collecting = s_status.collecting;
+    generation = s_status.session_generation;
+    portEXIT_CRITICAL(&s_lock);
+    if (!collecting) {
+        return;
+    }
+
+    const TickType_t now = xTaskGetTickCount();
+    if ((now - s_last_response_activity) >=
+        pdMS_TO_TICKS(DOWNLINK_RESPONSE_TIMEOUT_MS)) {
+        downlink_abort_response(generation, ESP_ERR_TIMEOUT, true);
+    }
+}
+
 static void downlink_task(void *argument)
 {
     (void)argument;
     portENTER_CRITICAL(&s_lock);
     s_status.running = true;
     portEXIT_CRITICAL(&s_lock);
-    ESP_LOGI(TAG, "coordinator started capacity=%uB",
-             (unsigned)DOWNLINK_RESPONSE_CAPACITY_BYTES);
+    ESP_LOGI(TAG, "coordinator started capacity=%uB timeout=%ums",
+             (unsigned)DOWNLINK_RESPONSE_CAPACITY_BYTES,
+             (unsigned)DOWNLINK_RESPONSE_TIMEOUT_MS);
 
     for (;;) {
         downlink_item_t item = {0};
-        if (xQueueReceive(s_queue, &item, portMAX_DELAY) != pdTRUE) {
+        if (xQueueReceive(
+                s_queue,
+                &item,
+                pdMS_TO_TICKS(DOWNLINK_QUEUE_POLL_MS)) != pdTRUE) {
+            downlink_check_timeout();
             continue;
         }
 
+        if (!downlink_generation_is_current(item.generation)) {
+            portENTER_CRITICAL(&s_lock);
+            ++s_status.chunks_dropped_stale;
+            portEXIT_CRITICAL(&s_lock);
+            continue;
+        }
+
+        s_last_response_activity = xTaskGetTickCount();
+
         if (item.kind == XIAOZHI_FOUNDATION_RESPONSE_TTS_START) {
+            bool busy = false;
+            portENTER_CRITICAL(&s_lock);
+            busy = s_status.collecting || s_status.playback_requested;
+            portEXIT_CRITICAL(&s_lock);
+            if (busy) {
+                ++s_status.chunks_dropped_stale;
+                continue;
+            }
             s_response_size = 0U;
+            s_response_tainted = false;
             portENTER_CRITICAL(&s_lock);
             s_status.collecting = true;
             s_status.playback_requested = false;
@@ -276,17 +407,14 @@ static void downlink_task(void *argument)
                      (s_status.session_generation == item.generation);
             portEXIT_CRITICAL(&s_lock);
             if (!accept) {
+                portENTER_CRITICAL(&s_lock);
+                ++s_status.chunks_dropped_stale;
+                portEXIT_CRITICAL(&s_lock);
                 continue;
             }
             if ((s_response_size + item.data_len) >
                 DOWNLINK_RESPONSE_CAPACITY_BYTES) {
-                downlink_set_error(ESP_ERR_NO_MEM);
-                portENTER_CRITICAL(&s_lock);
-                s_status.collecting = false;
-                portEXIT_CRITICAL(&s_lock);
-                (void)xiaozhi_foundation_audio_channel_close(item.generation);
-                ESP_LOGE(TAG, "response buffer overflow generation=%u",
-                         (unsigned)item.generation);
+                downlink_abort_response(item.generation, ESP_ERR_NO_MEM, false);
                 continue;
             }
             memcpy(&s_response[s_response_size], item.data, item.data_len);
@@ -298,14 +426,10 @@ static void downlink_task(void *argument)
         }
 
         if (item.kind == XIAOZHI_FOUNDATION_RESPONSE_ERROR) {
-            portENTER_CRITICAL(&s_lock);
-            s_status.collecting = false;
-            portEXIT_CRITICAL(&s_lock);
-            (void)xiaozhi_foundation_audio_channel_close(item.generation);
-            downlink_set_error((item.error == ESP_OK) ? ESP_FAIL : item.error);
-            ESP_LOGE(TAG, "response ERROR generation=%u error=%s",
-                     (unsigned)item.generation,
-                     esp_err_to_name((item.error == ESP_OK) ? ESP_FAIL : item.error));
+            downlink_abort_response(
+                item.generation,
+                (item.error == ESP_OK) ? ESP_FAIL : item.error,
+                false);
             continue;
         }
 
@@ -317,6 +441,9 @@ static void downlink_task(void *argument)
             s_status.collecting = false;
             portEXIT_CRITICAL(&s_lock);
             if (!accept) {
+                portENTER_CRITICAL(&s_lock);
+                ++s_status.chunks_dropped_stale;
+                portEXIT_CRITICAL(&s_lock);
                 continue;
             }
             const esp_err_t ret = downlink_finalize_response(item.generation);
@@ -326,6 +453,7 @@ static void downlink_task(void *argument)
                          (unsigned)item.generation,
                          esp_err_to_name(ret));
             }
+            downlink_finish_turn_state();
         }
     }
 }
@@ -354,6 +482,7 @@ esp_err_t voice_assistant_downlink_init(void)
     }
 
     s_response_size = 0U;
+    s_response_tainted = false;
     portENTER_CRITICAL(&s_lock);
     s_status = (voice_assistant_downlink_status_t) {
         .initialized = true,
@@ -406,4 +535,13 @@ esp_err_t voice_assistant_downlink_get_status(
     *status = s_status;
     portEXIT_CRITICAL(&s_lock);
     return ESP_OK;
+}
+
+bool voice_assistant_downlink_is_busy(void)
+{
+    bool busy = false;
+    portENTER_CRITICAL(&s_lock);
+    busy = s_status.collecting || s_status.playback_requested;
+    portEXIT_CRITICAL(&s_lock);
+    return busy;
 }
