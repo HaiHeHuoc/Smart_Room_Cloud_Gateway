@@ -254,13 +254,17 @@ When hardware is available:
    test/phase13-voice-assistant-hil
    RUN PHASE 13 HIL
 
-3. Phase 14 HIL
-   create/use test/phase14-ptt-voice-e2e-hil
+3. Phase 14 HIL (completed after this review snapshot)
+   test/phase14-ptt-voice-e2e-hil
    physical PTT -> mic -> Xiaozhi -> speaker + repeated turns
 
-4. Integrate production history only into main_including_Firebase_security
+4. Phase 15 voice/UI HIL
+   test/phase15-voice-ui-hil
+   display routing + voice status/transcript presentation
 
-5. Full Gateway regression
+5. Integrate production history only into main_including_Firebase_security
+
+6. Full Gateway regression
    Wi-Fi/provisioning + sensor + Firebase + GUI + SD + audio + Xiaozhi
    including simultaneous Firebase/Xiaozhi load
 ```
@@ -271,4 +275,7 @@ Production defects discovered by HIL belong on the owning production phase branc
 
 The project architecture through Phase 14 remains coherent: major hardware/service domains have explicit owners, and Phase 12-14 add Xiaozhi without intentionally bypassing Wi-Fi, LVGL, SD or I2S ownership. The largest newly identified architecture gap is not task scheduling itself but **audio request arbitration among multiple legitimate clients**. This is not required to claim Phase-14 software implementation complete, but it must be addressed before the project intentionally allows alerts/notifications/other recording clients to compete with active Xiaozhi audio.
 
-No new runtime/build/HIL PASS is claimed by this review.
+This document is the pre-Phase-14-HIL architecture snapshot. Subsequent target
+evidence recorded in `PHASE14_HIL_TEST_PLAN.md` confirms the Phase-14
+golden-path HIL, including three audible repeated turns; the remaining fault
+injection cases are explicitly deferred.

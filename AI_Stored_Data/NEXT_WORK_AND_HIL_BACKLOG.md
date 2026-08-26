@@ -1,6 +1,6 @@
 # Next Work + HIL Routing
 
-Updated: 2026-08-25
+Updated: 2026-08-26
 Authoritative development branch: `phase/14-ptt-voice-mvp`
 Purpose: cross-session/Codex routing for **"hiện tại nên làm gì tiếp theo?"**
 
@@ -14,10 +14,11 @@ Current software state:
 Phase 12     -> SOFTWARE COMPLETE / HIL PASS
 Phase 13     -> SOFTWARE COMPLETE / HIL PASS
 Phase 14 SW  -> COMPLETE / BUILD PASS
-Phase 14 HIL -> TEST BRANCH READY / PENDING
+Phase 14 HIL -> GOLDEN-PATH PASS / REPOSITORY CLOSURE IN PROGRESS
 ```
 
-Do not start Phase 15 automatically. Only recommend/start it after Hải explicitly asks.
+Do not start Phase 15 implementation automatically. The operator has now
+explicitly requested the Phase-14 closure and Phase-15 test preparation.
 
 ---
 
@@ -41,7 +42,7 @@ Target acceptance: **PASS / closed 2026-08-25**. Accepted evidence covers repeat
 
 ---
 
-## Phase 14 HIL — test branch ready
+## Phase 14 HIL — golden path accepted
 
 Production branch:
 
@@ -70,15 +71,25 @@ physical PTT
 -> repeated next turn
 ```
 
-Important acceptance risks:
+Remaining boundaries:
 
-- actual downlink codec must be proven compatible with the current PCM16 assumption;
-- GPIO38 pull-down/active-high PTT wiring must be verified; GPIO48 remains reserved for NeoPixel;
-- SD-backed response WAV handoff must work under `sd_card_manager` ownership;
-- repeated turns must not race mic/speaker I2S ownership;
-- source-scoped CMake composition/tap redirects have build evidence; runtime ownership still requires HIL.
+- fault-injection cases (stalled response, network loss, SD unavailable and
+  queue pressure) were not injected and remain SKIP/deferred;
+- GPIO38 pull-down/active-high wiring was verified on target; GPIO48 remains
+  reserved for NeoPixel;
+- the LCD `Starting...` route remains a Phase-15 UI concern;
+- source-scoped CMake composition/tap redirects are build- and runtime-tested
+  for the accepted voice path.
 
-Current state: **PRODUCTION BUILD PASS / TEST BRANCH READY / TARGET HIL PENDING**.
+Current state: **BUILD PASS / FLASH PASS / GOLDEN-PATH HIL PASS / FAULT CASES SKIP**.
+
+The corrected target run used GPIO38 and completed three consecutive PTT
+turns: Opus uplink, server response, PCM16 decode, SD-backed WAV playback and
+`PLAYBACK_COMPLETE`. The operator confirmed audible speaker output. Two
+release-before-READY attempts also completed bounded cancellation. The
+stalled-response, network-loss, SD-unavailable and queue-pressure cases were
+not injected and remain explicitly deferred. The LCD `Starting...` route is a
+separate Phase-15 UI concern.
 
 ---
 
@@ -90,26 +101,27 @@ Answer in this order:
 
 1. Phase 12 and Phase 13 HIL are closed with PASS evidence.
 2. Phase 14 software and production build are complete.
-3. Phase 14 HIL is pending on its dedicated test branch.
-4. Do not start Phase 15 unless Hải explicitly requests continuation.
+3. Phase 14 golden-path HIL is PASS; fault cases remain SKIP/deferred.
+4. Complete the Phase-14 documentation/Git checkpoint before Phase 15 HIL.
 
 Concise state:
 
 ```text
 P12 HIL -> PASS / closed
 P13 HIL -> PASS / closed
-P14 HIL -> PENDING / test branch ready
+P14 HIL -> GOLDEN-PATH PASS / fault cases deferred
 P14 SW  -> COMPLETE / build PASS
-Next SW -> Phase 15 only after explicit request
+Next SW -> Phase 15 HIL/UI checkpoint after Phase-14 closure
 ```
 
 ### If hardware IS available
 
 Recommended order unless a specific regression requires otherwise:
 
-1. Use the Phase-14 dedicated HIL branch and run full PTT voice E2E.
-2. Fix production defects on the owning production branch, propagate forward/test branches, then retest.
-3. After Phase-14 acceptance, integrate production commits into the full Gateway/Firebase integration branch and run a full regression HIL.
+1. Close the Phase-14 documentation and Git checkpoint.
+2. Propagate the Phase-14 production commit into the Phase-15 production branch.
+3. Merge the Phase-15 production branch into its dedicated test branch and run
+   `RUN PHASE 15 HIL`.
 
 Never merge HIL/test harness branches as production feature history.
 
