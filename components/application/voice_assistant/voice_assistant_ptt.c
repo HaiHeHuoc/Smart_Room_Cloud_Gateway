@@ -226,6 +226,27 @@ static void ptt_handle_press(const ptt_command_t *command)
         return;
     }
 
+    if (voice.state == VOICE_ASSISTANT_STATE_ERROR) {
+        const esp_err_t recover_ret = voice_assistant_recover();
+        if (recover_ret != ESP_OK) {
+            ptt_set_status(VOICE_ASSISTANT_PTT_ERROR,
+                           false,
+                           false,
+                           voice.session_generation,
+                           recover_ret);
+            return;
+        }
+        ptt_set_status(VOICE_ASSISTANT_PTT_CANCEL_PENDING,
+                       false,
+                       false,
+                       voice.session_generation,
+                       ESP_OK);
+        ESP_LOGI(TAG,
+                 "press requested bounded recovery generation=%u; press again after IDLE",
+                 (unsigned)command->generation);
+        return;
+    }
+
     if (voice.state != VOICE_ASSISTANT_STATE_IDLE) {
         ptt_set_status(VOICE_ASSISTANT_PTT_ERROR,
                        false,
@@ -415,7 +436,8 @@ static esp_err_t ptt_queue_command(ptt_command_type_t type)
 
     if (type == PTT_COMMAND_PRESS) {
         if ((s_status.state != VOICE_ASSISTANT_PTT_IDLE) &&
-            (s_status.state != VOICE_ASSISTANT_PTT_RELEASED)) {
+            (s_status.state != VOICE_ASSISTANT_PTT_RELEASED) &&
+            (s_status.state != VOICE_ASSISTANT_PTT_ERROR)) {
             xSemaphoreGive(s_lock);
             return ESP_ERR_INVALID_STATE;
         }

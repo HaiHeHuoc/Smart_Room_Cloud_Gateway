@@ -605,10 +605,10 @@ esp_err_t xiaozhi_foundation_audio_uplink_start(uint32_t client_generation)
 
     (void)xEventGroupClearBits(s_events, XIAOZHI_SESSION_EVENT_AUDIO_OPENED);
     esp_xiaozhi_chat_audio_t audio = {
-        .format = "pcm",
+        .format = "opus",
         .sample_rate = XIAOZHI_FOUNDATION_UPLINK_SAMPLE_RATE_HZ,
         .channels = XIAOZHI_FOUNDATION_UPLINK_CHANNELS,
-        .frame_duration = 16,
+        .frame_duration = XIAOZHI_FOUNDATION_OPUS_FRAME_DURATION_MS,
     };
     esp_err_t ret = esp_xiaozhi_chat_open_audio_channel(
         s_chat, &audio, NULL, 0U);
@@ -644,9 +644,10 @@ esp_err_t xiaozhi_foundation_audio_uplink_start(uint32_t client_generation)
     s_uplink.client_generation = client_generation;
     s_uplink.last_error = ESP_OK;
     portEXIT_CRITICAL(&s_lock);
-    ESP_LOGI(TAG, "audio channel READY generation=%u format=pcm rate=%u channels=1 frame_ms=16",
+    ESP_LOGI(TAG, "audio channel READY generation=%u format=opus rate=%u channels=1 frame_ms=%u",
              (unsigned)client_generation,
-             (unsigned)XIAOZHI_FOUNDATION_UPLINK_SAMPLE_RATE_HZ);
+             (unsigned)XIAOZHI_FOUNDATION_UPLINK_SAMPLE_RATE_HZ,
+             (unsigned)XIAOZHI_FOUNDATION_OPUS_FRAME_DURATION_MS);
     return ESP_OK;
 
 fail:
@@ -659,14 +660,14 @@ fail:
     return (ret == ESP_OK) ? ESP_FAIL : ret;
 }
 
-esp_err_t xiaozhi_foundation_audio_uplink_send_pcm16(
+esp_err_t xiaozhi_foundation_audio_uplink_send_opus_packet(
     uint32_t client_generation,
-    const int16_t *samples,
-    size_t sample_count)
+    const uint8_t *packet,
+    size_t packet_size)
 {
-    if ((client_generation == 0U) || (samples == NULL) ||
-        (sample_count == 0U) ||
-        (sample_count > XIAOZHI_FOUNDATION_UPLINK_FRAME_SAMPLES)) {
+    if ((client_generation == 0U) || (packet == NULL) ||
+        (packet_size == 0U) ||
+        (packet_size > XIAOZHI_FOUNDATION_OPUS_MAX_PACKET_BYTES)) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -684,17 +685,16 @@ esp_err_t xiaozhi_foundation_audio_uplink_send_pcm16(
         return ESP_ERR_INVALID_STATE;
     }
 
-    const size_t bytes = sample_count * sizeof(int16_t);
     const esp_err_t ret = esp_xiaozhi_chat_send_audio_data(
-        chat, (const char *)samples, bytes);
+        chat, (const char *)packet, packet_size);
 
     portENTER_CRITICAL(&s_lock);
     if ((s_uplink.client_generation == client_generation) &&
         s_uplink.audio_channel_open) {
         if (ret == ESP_OK) {
             ++s_uplink.frames_sent;
-            s_uplink.samples_sent += sample_count;
-            s_uplink.bytes_sent += bytes;
+            s_uplink.samples_sent += XIAOZHI_FOUNDATION_OPUS_FRAME_SAMPLES;
+            s_uplink.bytes_sent += packet_size;
             s_uplink.last_error = ESP_OK;
         } else {
             s_uplink.last_error = ret;

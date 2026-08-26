@@ -70,7 +70,7 @@ Deferred acceptance remains on `test/phase13-voice-assistant-hil` via `RUN PHASE
 Phase 14 adds:
 
 - dedicated PTT authorization policy;
-- temporary dedicated GPIO5 input, internal pull-down, active-high;
+- dedicated GPIO38 input, internal pull-down, active-high;
 - live copied PCM16 stream contract from `audio_manager`;
 - bounded mic uplink queue/task;
 - production Xiaozhi audio-channel uplink;
@@ -83,7 +83,7 @@ Phase 14 adds:
 Current intended voice turn:
 
 ```text
-GPIO5 press
+GPIO38 press
 -> PTT ARMING
 -> real Xiaozhi READY
 -> AUTHORIZED
@@ -91,7 +91,7 @@ GPIO5 press
 -> PCM16 16 kHz mono
 -> bounded uplink
 -> Xiaozhi MANUAL listening
--> GPIO5 release
+-> GPIO38 release
 -> stop mic/listening, keep response channel
 -> server response
 -> bounded downlink + PSRAM aggregation
@@ -131,7 +131,7 @@ Sensor sampling and Firebase upload remain independent FreeRTOS workloads. They 
 ### Physical buttons
 
 - GPIO9 / `button_manager`: factory reset only.
-- GPIO5 / `voice_assistant_ptt_gpio`: temporary PTT only.
+- GPIO38 / `voice_assistant_ptt_gpio`: dedicated PTT only; GPIO48 remains NeoPixel-owned.
 - Do not overload factory-reset long press with PTT.
 
 ## Concurrency review
@@ -237,7 +237,7 @@ Do not pause Firebase globally during voice operation without evidence that coex
 
 ### P2 — cleanup / maintainability
 
-1. GPIO5 is temporary and must be rechecked/replaced against the final pin map.
+1. GPIO38 PTT assignment must be verified against the exact board and GPIO48 NeoPixel wiring.
 2. Canonical roadmap/component documentation should continue to be reconciled as HIL closes; do not let `AI_Stored_Data` become the only source of important architecture facts.
 3. Keep test/HIL harness commits on `test/...` branches; merge production branches only into the eventual full Gateway/Firebase integration branch.
 
