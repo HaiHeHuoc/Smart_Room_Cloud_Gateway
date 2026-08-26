@@ -29,7 +29,7 @@ before wiring a module.
 Use these first for additional peripherals:
 
 ```text
-GPIO1, GPIO2, GPIO5, GPIO6, GPIO7, GPIO21, GPIO47
+GPIO1, GPIO5, GPIO6
 ```
 
 They are free in the current project and do not normally carry boot-strapping,
@@ -40,10 +40,9 @@ native USB, default UART0, or JTAG duties.
 ```text
 GPIO0, GPIO3,
 GPIO19, GPIO20,
-GPIO38, GPIO39, GPIO40, GPIO41, GPIO42,
+GPIO39, GPIO40, GPIO41, GPIO42,
 GPIO43, GPIO44,
-GPIO45, GPIO46,
-GPIO48
+GPIO45, GPIO46
 ```
 
 These pins remain usable, but their special roles are described later in this
@@ -52,11 +51,11 @@ document.
 ### Complete available set
 
 ```text
-GPIO0, GPIO1, GPIO2, GPIO3,
-GPIO5, GPIO6, GPIO7,
-GPIO19, GPIO20, GPIO21,
-GPIO38, GPIO39, GPIO40, GPIO41, GPIO42,
-GPIO43, GPIO44, GPIO45, GPIO46, GPIO47, GPIO48
+GPIO0, GPIO1, GPIO3,
+GPIO5, GPIO6,
+GPIO19, GPIO20,
+GPIO39, GPIO40, GPIO41, GPIO42,
+GPIO43, GPIO44, GPIO45, GPIO46
 ```
 
 ---
@@ -74,7 +73,7 @@ digital output, or GPIO interrupts.
 Preferred group:
 
 ```text
-GPIO1, GPIO2, GPIO5, GPIO6, GPIO7, GPIO21, GPIO47
+GPIO1, GPIO5, GPIO6
 ```
 
 Typical uses:
@@ -90,16 +89,14 @@ Typical uses:
 | GPIO | Channel | Recommendation |
 |---:|---|---|
 | GPIO1 | ADC1_CH0 | Preferred |
-| GPIO2 | ADC1_CH1 | Preferred |
 | GPIO3 | ADC1_CH2 | Strapping pin; use carefully |
 | GPIO5 | ADC1_CH4 | Preferred |
 | GPIO6 | ADC1_CH5 | Preferred |
-| GPIO7 | ADC1_CH6 | Preferred |
 
 Recommended ADC inputs:
 
 ```text
-GPIO1, GPIO2, GPIO5, GPIO6, GPIO7
+GPIO1, GPIO5, GPIO6
 ```
 
 ### ADC2
@@ -117,13 +114,13 @@ restrictions and GPIO19/GPIO20 are also the native USB differential pair.
 Available touch-capable pins:
 
 ```text
-GPIO1, GPIO2, GPIO3, GPIO5, GPIO6, GPIO7
+GPIO1, GPIO3, GPIO5, GPIO6
 ```
 
 Preferred touch pins:
 
 ```text
-GPIO1, GPIO2, GPIO5, GPIO6, GPIO7
+GPIO1, GPIO5, GPIO6
 ```
 
 GPIO3 is a strapping pin and should not be externally biased to an unintended
@@ -134,15 +131,15 @@ level during reset.
 Available RTC-capable GPIOs:
 
 ```text
-GPIO0, GPIO1, GPIO2, GPIO3,
-GPIO5, GPIO6, GPIO7,
-GPIO19, GPIO20, GPIO21
+GPIO0, GPIO1, GPIO3,
+GPIO5, GPIO6,
+GPIO19, GPIO20
 ```
 
 Preferred low-conflict RTC pins:
 
 ```text
-GPIO1, GPIO2, GPIO5, GPIO6, GPIO7, GPIO21
+GPIO1, GPIO5, GPIO6
 ```
 
 Confirm that the selected ESP-IDF wake-up API supports the chosen pin and wake
@@ -155,7 +152,7 @@ I2C SDA and SCL can be routed through the GPIO Matrix.
 Preferred pin pool:
 
 ```text
-GPIO1, GPIO2, GPIO5, GPIO6, GPIO7, GPIO21, GPIO47
+GPIO1, GPIO5, GPIO6
 ```
 
 Choose any two different suitable pins from that pool.
@@ -174,7 +171,7 @@ Matrix.
 Preferred pin pool:
 
 ```text
-GPIO1, GPIO2, GPIO5, GPIO6, GPIO7, GPIO21, GPIO47
+GPIO1, GPIO5, GPIO6
 ```
 
 Typical signal groups:
@@ -200,7 +197,7 @@ SPI signals can be routed through the GPIO Matrix.
 Preferred pin pool for a separately routed bus:
 
 ```text
-GPIO1, GPIO2, GPIO5, GPIO6, GPIO7, GPIO21, GPIO47
+GPIO1, GPIO5, GPIO6
 ```
 
 Possible signals:
@@ -224,7 +221,7 @@ UART TX, RX, RTS, and CTS can be routed through the GPIO Matrix.
 Preferred pin pool for an additional UART:
 
 ```text
-GPIO1, GPIO2, GPIO5, GPIO6, GPIO7, GPIO21, GPIO47
+GPIO1, GPIO5, GPIO6
 ```
 
 GPIO43 and GPIO44 are normally UART0 console pins on DevKitC-style boards, so
@@ -238,7 +235,7 @@ These peripherals can use GPIO Matrix routing.
 Preferred pin pool:
 
 ```text
-GPIO1, GPIO2, GPIO5, GPIO6, GPIO7, GPIO21, GPIO47
+GPIO1, GPIO5, GPIO6
 ```
 
 Typical uses:
@@ -259,7 +256,7 @@ consume several pins.
 Start from the preferred pool:
 
 ```text
-GPIO1, GPIO2, GPIO5, GPIO6, GPIO7, GPIO21, GPIO47
+GPIO1, GPIO5, GPIO6
 ```
 
 Before extending into the special-pin group, review USB, JTAG, UART, boot, and
@@ -320,18 +317,16 @@ GPIO44 -> UART0 RX
 They are commonly connected to the onboard USB-to-UART bridge. Reassigning
 them may remove normal serial logging or cause contention with the bridge.
 
-## 3.5 Onboard RGB LED pin
+## 3.5 Current PTT and onboard NeoPixel pins
 
-Depending on the exact DevKitC revision or compatible-board design, the
-onboard RGB LED may use:
+The current board assignment is:
 
 ```text
-GPIO38 or GPIO48
+GPIO38 -> dedicated active-high PTT input
+GPIO48 -> onboard NeoPixel LED
 ```
 
-Both can still act as digital GPIOs, but external use may also drive or load
-the onboard LED. Check the exact board schematic before assigning either pin to
-a timing-sensitive peripheral.
+Both are therefore unavailable for additional peripherals.
 
 ## 3.6 Flash and Octal PSRAM pins
 
@@ -353,16 +348,16 @@ the available GPIO sets in this document.
 
 | Peripheral | First GPIO group to consider | Main caution |
 |---|---|---|
-| Digital input/output | GPIO1, GPIO2, GPIO5, GPIO6, GPIO7, GPIO21, GPIO47 | Check voltage and current |
-| Analog sensor | GPIO1, GPIO2, GPIO5, GPIO6, GPIO7 | Prefer ADC1 with Wi-Fi |
-| Capacitive touch | GPIO1, GPIO2, GPIO5, GPIO6, GPIO7 | Validate noise and electrode layout |
+| Digital input/output | GPIO1, GPIO5, GPIO6 | Check voltage and current |
+| Analog sensor | GPIO1, GPIO5, GPIO6 | Prefer ADC1 with Wi-Fi |
+| Capacitive touch | GPIO1, GPIO5, GPIO6 | Validate noise and electrode layout |
 | I2C sensor | Any two preferred GPIOs | Add external pull-ups |
 | I2S microphone/amplifier | BCLK, WS, DIN/DOUT and optional MCLK from preferred pool | Preserve DMA/internal-RAM headroom |
 | SPI module | SCLK, MOSI, optional MISO and CS from preferred pool | Review bus sharing |
 | UART module | TX/RX from preferred pool | Avoid GPIO43/GPIO44 unless console is moved |
 | Native USB | GPIO19 and GPIO20 | Fixed differential pair |
 | External JTAG | GPIO39 through GPIO42 | Reserve the complete group |
-| Deep-sleep wake | GPIO1, GPIO2, GPIO5, GPIO6, GPIO7, GPIO21 | Verify wake API support |
+| Deep-sleep wake | GPIO1, GPIO5, GPIO6 | Verify wake API support |
 
 ---
 

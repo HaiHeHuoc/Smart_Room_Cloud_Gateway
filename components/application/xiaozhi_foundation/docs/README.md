@@ -487,6 +487,13 @@ The exact pinned source contract is:
   `audio_callback`; it does not decode them. With P2-F's `opus` hello, the
   expected RX is raw Opus payload, but the public API does not expose a
   negotiated RX-format object.
+- Phase 14 production therefore owns codec conversion above this foundation:
+  `voice_assistant_uplink` aggregates PCM16 into complete 60-ms packets and
+  encodes them with pinned `esp_audio_codec` Opus, while
+  `voice_assistant_downlink` preserves each callback packet boundary and
+  decodes Opus to PCM16 before the SD-backed WAV handoff. The foundation only
+  transports complete encoded packets and never owns microphone, speaker, or
+  codec handles.
 - `ESP_XIAOZHI_CHAT_EVENT_AUDIO_DATA_INCOMING` is declared in the 0.1.2 public
   header but is not posted by its pinned implementation. P2-F registers the
   event defensively and uses the supported `audio_callback` counters for the
