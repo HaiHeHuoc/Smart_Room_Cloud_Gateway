@@ -1,7 +1,7 @@
 # Codex HIL Index
 
 Updated: 2026-08-26
-Development branch: `phase/14-ptt-voice-mvp`
+Development branch: `phase/15-voice-assistant-ui`
 
 The operator plans to connect target hardware to the local development machine and use Codex as the HIL test operator/analyst.
 
@@ -10,11 +10,11 @@ golden-path target acceptance passed on 2026-08-26 after three audible PTT
 turns on GPIO38. The next hardware acceptance is:
 
 1. Phase 15 — checkout `test/phase15-voice-ui-hil` after the Phase-14 Git
-   checkpoint is propagated into `phase/15-voice-assistant-ui`.
+   checkpoint has been propagated into `phase/15-voice-assistant-ui`.
 2. On that test branch, read `AI_Stored_Data/PHASE15_HIL_TEST_BRANCH.md` and
    `AI_Stored_Data/PHASE15_HIL_TEST_PLAN.md`.
 3. Use activation label `RUN PHASE 15 HIL` only after the required display,
-   PTT/audio and network hardware is ready.
+   GPIO38 PTT/audio and network hardware is ready.
 
 Codex may build, flash, monitor serial, analyze evidence, make minimal evidence-backed fixes, reflash/retest, and update HIL documentation when the local environment exposes ESP-IDF and the ESP32-S3 serial device.
 

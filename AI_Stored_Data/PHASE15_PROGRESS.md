@@ -1,9 +1,9 @@
 # Phase 15 Voice Assistant UI / Conversation Presentation Progress
 
-Updated: 2026-08-25
+Updated: 2026-08-26
 Branch: `phase/15-voice-assistant-ui`
 Current checkpoint: **15-F — FINAL Review / Closure**
-Status: **SOFTWARE COMPLETE / STATIC REVIEW COMPLETE / BUILD + HIL PENDING**
+Status: **SOFTWARE COMPLETE / STATIC REVIEW COMPLETE / BUILD PASS / HIL PENDING**
 
 ## Collaboration result
 
@@ -152,7 +152,10 @@ When `CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE=y`, the Phase-14/15 production
 
 The bridge preserves the original production callback/context, forwards all events unchanged, and additionally publishes CHAT_TEXT semantic events. This is a controlled integration seam rather than a transport rewrite.
 
-It remains a **build-verification risk** until the actual ESP-IDF/pinned component build succeeds. Refactor to a direct/public integration point later if maintenance/build evidence shows the seam is fragile.
+The merged Phase-15 production branch was built with ESP-IDF 6.0.1 after
+Phase-14 propagation. The source-local bridge compiled successfully against
+pinned `esp_xiaozhi` 0.1.2. Refactor to a direct/public integration point later
+only if maintenance/build evidence shows the seam is fragile.
 
 ## Final presentation-state decision
 
@@ -222,7 +225,7 @@ The plan covers:
 
 ## Evidence boundary
 
-At software closure:
+At the merged Phase-15 production checkpoint:
 
 ```text
 Implementation       COMPLETE
@@ -230,17 +233,17 @@ Static review        COMPLETE
 Production composition COMPLETE
 HIL plan             READY
 GitHub CI/checks     NONE PRESENT FOR CURRENT REVIEW HEAD
-idf.py build         NOT VERIFIED
+idf.py build         PASS (ESP-IDF 6.0.1; binary 0x21c250; 47% app free)
 Target runtime       NOT VERIFIED
 USER transcript HIL  PENDING
 ASSISTANT text HIL   PENDING
 Repeated-turn UI HIL PENDING
 ```
 
-No build/runtime/HIL PASS is claimed.
+No target runtime/HIL PASS is claimed yet.
 
 ## Closure
 
-**Phase 15 = Software Complete / Static Review Complete / Build + Hardware Acceptance Pending.**
+**Phase 15 = Software Complete / Static Review Complete / Build PASS / Hardware Acceptance Pending.**
 
 Do not automatically start Phase 16. When hardware is available, preserve the acceptance sequence and distinguish inherited Phase-12/13/14 transport/audio failures from Phase-15 UI/text defects.
