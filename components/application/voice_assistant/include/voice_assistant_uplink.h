@@ -14,7 +14,9 @@ typedef struct {
     bool running;
     bool turn_active;
     uint32_t session_generation;
+    /** Copied audio-manager PCM frames accepted by the bounded queue. */
     uint64_t frames_queued;
+    /** Complete 60-ms Opus packets successfully sent to Xiaozhi. */
     uint64_t frames_sent;
     uint64_t frames_dropped_queue_full;
     uint64_t frames_dropped_stale;

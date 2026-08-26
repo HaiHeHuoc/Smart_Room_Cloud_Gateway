@@ -1,19 +1,26 @@
 # Phase 14 HIL Test Plan — Push-To-Talk Voice MVP
 
-Updated: 2026-08-25
+Updated: 2026-08-26
 Production branch: `phase/14-ptt-voice-mvp`
-Status: **READY FOR LATER TEST-BRANCH IMPLEMENTATION / TARGET EVIDENCE PENDING**
+Status: **GOLDEN-PATH HIL PASS / BUILD + FLASH PASS / FAULT CASES NOT RUN**
+
+Retest closure note: the first Opus firmware run exposed a 5-KiB uplink-task
+stack failure, and the next run exposed a 2-KiB response-item stack overflow on
+the 4-KiB WebSocket task. The codec-owning tasks now use bounded documented
+stack budgets, and the downlink callback stages its item outside the WebSocket
+stack. The corrected image completed three consecutive target PTT turns with
+audible response confirmed by the operator.
 
 ## Goal
 
 Validate the complete Phase-14 production path on ESP32-S3 hardware without weakening ownership or inferring PASS from build/static review.
 
 ```text
-GPIO5 PTT (temporary)
+GPIO38 PTT
 -> PTT authorization
 -> Xiaozhi READY
 -> INMP441 capture
--> PCM16 uplink
+-> PCM16 capture -> 60-ms Opus uplink
 -> server response
 -> bounded downlink
 -> SD-backed WAV handoff
@@ -27,7 +34,7 @@ GPIO5 PTT (temporary)
 Current Phase-14 board reservation:
 
 ```text
-3V3 ---- push button ---- GPIO5
+3V3 ---- push button ---- GPIO38
                          |
                     internal pull-down
 
@@ -35,7 +42,7 @@ released = LOW
 pressed  = HIGH
 ```
 
-GPIO5 is temporary and Hải intends to replace it later. HIL evidence must record the actual GPIO used for the run.
+GPIO38 is the selected PTT input for the current board. GPIO48 remains reserved for the onboard NeoPixel. HIL evidence must confirm the actual GPIO38 edge markers.
 
 ## Mandatory preflight
 
@@ -47,6 +54,48 @@ GPIO5 is temporary and Hải intends to replace it later. HIL evidence must reco
 6. Capture serial log from reset.
 7. Never classify target behavior PASS from expected logs alone.
 
+Production build baseline recorded on 2026-08-25:
+
+- ESP-IDF 6.0.1: **PASS** (`2088/2088`);
+- binary `0x1efd60`, 52% app-partition free;
+- production validator OFF;
+- branch `test/phase14-ptt-voice-e2e-hil` already exists and carries the standardized Codex HIL runbook.
+
+Target execution on 2026-08-26 used GPIO38 and passed clean build, flash,
+boot/composition, two release-before-READY cleanup attempts, and three
+complete PTT turns. Each turn produced Opus uplink packets, a TTS response,
+decoded PCM16, SD-backed WAV playback, and `PLAYBACK_COMPLETE`; the operator
+confirmed audible response. The corrected run had no panic, assertion, WDT,
+I2S ownership error, or stale-turn playback. Cases 5-8 (fault injection) were
+not run and remain explicitly deferred. Detailed markers and the earlier
+failure evidence are recorded in `AI_Stored_Data/PHASE14_HIL_TEST_BRANCH.md`.
+
+## Target execution result (2026-08-26)
+
+| Case | Result | Evidence |
+| --- | --- | --- |
+| T14_01 build/flash | PASS | ESP-IDF 6.0.1 build `2093/2093`; COM4 flash verified |
+| T14_02 boot/composition | PASS | GPIO38, Opus encoder/decoder and both coordinator tasks READY |
+| T14_03 first PTT uplink | PASS | Opus packet generation and non-zero packet counters |
+| T14_04 response/speaker | PASS | Opus decode, WAV_DIAG `ESP_OK`, playback complete; audible response confirmed |
+| T14_05 repeated turns | PASS | Three complete turns returned to `IDLE` without crash or ownership error |
+| T14_06 release before READY | PASS | Two early-release attempts ended in bounded cancellation/cleanup |
+| T14_07 stalled response | SKIP | Not injected during this run |
+| T14_08 network loss | SKIP | Not injected during this run |
+| T14_09 SD unavailable | SKIP | Not injected during this run |
+| T14_10 queue pressure | SKIP | Not injected during this run |
+| T14_11 resource trend | PASS (observed) | Three turns completed; no monotonic failure or crash observed |
+
+Representative corrected-run markers:
+
+```text
+VOICE_DOWNLINK: WebSocket callback stack_hwm=744 staging=static
+VOICE_UPLINK: first Opus packet generation=1 bytes=180 stack_hwm=14820
+VOICE_DOWNLINK: first Opus packet decoded generation=1 opus_bytes=2100 pcm_bytes=1920
+AUDIO_MANAGER: WAV_DIAG result=ESP_OK ... tx_q_ovf=0 tx_timeout=0
+VOICE_DOWNLINK: response PLAYBACK_COMPLETE generation=1
+```
+
 ## Expected boot/composition evidence
 
 After network handoff and audio startup, expected Phase-14 markers include:
@@ -56,9 +105,9 @@ VOICE_ASSISTANT: ... IDLE
 VOICE_PTT: ... IDLE
 VOICE_UPLINK: coordinator started
 VOICE_DOWNLINK: coordinator started ...
-VOICE_PTT_GPIO: initialized gpio=5 active_level=1 poll=10ms debounce=40ms
-VOICE_PTT_GPIO: started gpio=5 active_level=1 pull=down initial=released
-PH14_COMPOSE: Phase-14 voice stack READY ptt_gpio=5 active_level=1 pull=down
+VOICE_PTT_GPIO: initialized gpio=38 active_level=1 poll=10ms debounce=40ms
+VOICE_PTT_GPIO: started gpio=38 active_level=1 pull=down initial=released
+PH14_COMPOSE: Phase-14 voice stack READY ptt_gpio=38 active_level=1 pull=down
 ```
 
 Acceptance:
@@ -88,11 +137,12 @@ VOICE_ASSISTANT: CONNECTING -> READY
 VOICE_PTT: ... -> AUTHORIZED ... authorized=yes
 VOICE_UPLINK: turn START generation=N
 AUDIO_MANAGER: ... RECORDING
-XZ_SESSION: audio uplink READY generation=N format=pcm rate=16000 channels=1 frame_ms=16
+VOICE_OPUS: encoder READY rate=16000 channels=1 frame_ms=60 ...
+XZ_SESSION: audio channel READY generation=N format=opus rate=16000 channels=1 frame_ms=60
 ...
 VOICE_PTT_GPIO: edge=RELEASE
 VOICE_PTT: ... -> RELEASED ... authorized=no
-VOICE_UPLINK: turn STOP generation=N result=ESP_OK
+VOICE_UPLINK: turn STOP generation=N result=ESP_OK opus_packets=N opus_bytes=N pcm_samples=N channel_retained=yes
 ```
 
 Required evidence:
@@ -123,7 +173,9 @@ Physical acceptance:
 
 Critical codec acceptance:
 
-The Phase-14 MVP currently assumes the negotiated downlink callback payload is PCM16. If the target proves the callback is Opus or another codec, mark this case **FAIL** and preserve the raw evidence. Do not wrap compressed bytes in a PCM WAV or weaken acceptance.
+The server response callback is treated as one complete raw Opus packet. The
+downlink task must decode each packet to 16-kHz mono PCM16 before WAV creation;
+compressed bytes must never be wrapped directly in a PCM WAV.
 
 ## Case 3 — Repeated turns
 
@@ -188,7 +240,9 @@ Expected ownership:
 - no automatic unbounded reconnect loop;
 - no stuck I2S capture/playback.
 
-After restoring network, exercise explicit recovery according to the production/test harness and verify a new PTT turn can complete.
+After restoring network, press PTT once to request the bounded recovery. Wait
+for `RECOVERING -> IDLE` and PTT `CANCEL_PENDING -> IDLE`, then press again for
+a new turn. Recovery must not silently authorize capture on the first press.
 
 ## Case 7 — SD unavailable during response
 
@@ -235,9 +289,9 @@ Use only:
 - `FAIL` — evidence violates criteria;
 - `SKIP` — test not performed; never equivalent to PASS.
 
-## Future dedicated test branch
+## Dedicated test branch
 
-When hardware test automation is requested, create a dedicated branch from this production branch, recommended name:
+Use the existing dedicated branch:
 
 `test/phase14-ptt-voice-e2e-hil`
 

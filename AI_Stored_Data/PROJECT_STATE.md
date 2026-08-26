@@ -1,7 +1,7 @@
 # Smart Room Cloud Gateway — AI Project State
 
 Updated from branch: `phase/15-voice-assistant-ui`
-Snapshot date: 2026-08-25
+Snapshot date: 2026-08-26
 
 ## Working Constitution
 
@@ -15,9 +15,9 @@ Snapshot date: 2026-08-25
 ## Current high-level state
 
 ```text
-Sprint 12  Software complete / selected HIL deferred
-Sprint 13  Software complete / HIL deferred
-Sprint 14  Software complete / Build + HIL pending
+Sprint 12  Software complete / HIL PASS
+Sprint 13  Software complete / HIL PASS
+Sprint 14  Software complete / Build PASS / golden-path HIL PASS
 Sprint 15  Software complete / Build + HIL pending
 Sprint 16  NOT STARTED
 ```
@@ -44,7 +44,8 @@ Phase 14:
 - production branch `phase/14-ptt-voice-mvp`;
 - plan `AI_Stored_Data/PHASE14_HIL_TEST_PLAN.md`;
 - recommended test branch `test/phase14-ptt-voice-e2e-hil`;
-- physical PTT -> mic -> Xiaozhi -> response -> speaker -> repeated-turn evidence pending.
+- golden-path PASS: three GPIO38 PTT turns reached audible response playback;
+- fault-injection cases remain deferred; LCD `Starting...` routing belongs to Phase 15 UI HIL.
 
 Phase 15:
 
@@ -59,12 +60,12 @@ Phase 15:
 Temporary PTT hardware reservation remains:
 
 ```text
-GPIO5 ---- push button ---- 3V3
+GPIO38 ---- push button ---- 3V3
 internal pull-down
 released LOW / pressed HIGH
 ```
 
-GPIO5 is intentionally temporary and must be rechecked/replaced later.
+GPIO48 remains reserved for the NeoPixel; GPIO38 is the current PTT input.
 Factory reset remains independent on GPIO9.
 
 Production voice path:
@@ -209,11 +210,11 @@ This remains a post-Phase-14/15 architecture enhancement, not a reason to reopen
 
 ## Known acceptance/build risks
 
-1. Phase-14/15 build/link is not yet verified with target ESP-IDF toolchain.
-2. Phase-14/15 target HIL has not run.
-3. Actual Xiaozhi response audio codec must be proven; Opus evidence requires decoder work before Phase-14 speaker acceptance.
+1. Phase-15 build/link and target HIL are not yet verified on the merged Phase-15 branch.
+2. Phase-14 fault-injection cases were not run and remain deferred.
+3. Phase-14 response codec/decode and audible speaker path passed the recorded golden run; SD-backed latency remains a boundary.
 4. Phase-14 response playback is PSRAM/SD-backed rather than low-latency streaming.
-5. GPIO5 PTT is temporary.
+5. GPIO38 PTT wiring is board-specific; GPIO48 must remain reserved for NeoPixel.
 6. Firebase/cloud + Xiaozhi simultaneous load remains unmeasured.
 7. General multi-client audio arbitration is not implemented.
 8. Phase-15 source-scoped `esp_xiaozhi_chat_init` semantic bridge requires real build compatibility evidence against pinned `esp_xiaozhi` 0.1.2.
@@ -223,15 +224,15 @@ This remains a post-Phase-14/15 architecture enhancement, not a reason to reopen
 
 When asked **"hiện tại nên làm gì tiếp theo?"**:
 
-- Always surface Phase-12 and Phase-13 Codex-ready HIL first.
-- Mention Phase-14 HIL plan/test-branch pending status.
+- Treat Phase-12 and Phase-13 HIL as closed regression baselines.
+- Mention Phase-14 golden-path HIL PASS and its deferred fault cases.
 - Mention Phase-15 HIL plan/test-branch pending status.
-- If hardware is unavailable, keep all HIL marked DEFERRED.
+- If hardware is unavailable, preserve the recorded Phase-14 golden PASS and mark only new/unexecuted cases DEFERRED.
 - Phase 14 software is complete.
 - Phase 15 software is complete.
 - Mention the general audio-arbitration follow-up before enabling competing audio clients.
 - Do not start Sprint 16 automatically; wait for explicit user direction.
 
-When hardware is available, recommended order is Phase 12 HIL -> Phase 13 HIL -> Phase 14 PTT voice HIL -> Phase 15 voice UI HIL -> full Gateway/Firebase integration regression using production branches only.
+When hardware is available, recommended order is Phase 15 voice UI HIL -> full Gateway/Firebase integration regression using production branches only; Phase 12/13/14 results remain regression baselines.
 
 The full integration regression must include simultaneous Firebase/cloud and Xiaozhi traffic and any enabled competing audio-client scenarios.

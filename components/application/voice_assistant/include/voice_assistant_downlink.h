@@ -17,7 +17,9 @@ typedef struct {
     bool collecting;
     bool playback_requested;
     uint32_t session_generation;
+    /** Encoded Opus bytes copied from complete response packet callbacks. */
     uint64_t response_bytes_received;
+    /** Decoded PCM16 bytes currently buffered for the WAV handoff. */
     uint64_t response_bytes_buffered;
     uint32_t chunks_queued;
     uint32_t chunks_dropped_queue_full;

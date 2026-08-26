@@ -127,20 +127,19 @@
 /* =========================================================================
  * Phase 14 Push-To-Talk input
  * =========================================================================
- * Temporary reservation for the dedicated PTT button.
+ * Dedicated PTT button assignment for the current board.
  *
- * Wiring for this temporary configuration:
- *     GPIO5 ---- push button ---- 3V3
+ * Wiring:
+ *     GPIO38 ---- push button ---- 3V3
  *
  * The input is intended to use the ESP32-S3 internal pull-down, therefore:
  *     released -> LOW
  *     pressed  -> HIGH
  *
- * IMPORTANT: GPIO5 is a temporary Phase-14 assignment only. Re-check the
- * final hardware/pin map and replace this GPIO before the hardware design is
- * considered stable.
+ * GPIO48 remains reserved for the board's NeoPixel LED. GPIO38 is not a
+ * strapping, native-USB, UART0, or external-JTAG pin on ESP32-S3.
  */
-#define PTT_BUTTON_GPIO                         GPIO_NUM_5
+#define PTT_BUTTON_GPIO                         GPIO_NUM_38
 #define PTT_BUTTON_ACTIVE_LEVEL                 1
 #define PTT_BUTTON_USE_INTERNAL_PULLDOWN        1
 #define PTT_BUTTON_POLL_PERIOD_MS               10U

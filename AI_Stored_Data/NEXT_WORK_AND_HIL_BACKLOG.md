@@ -1,19 +1,21 @@
 # Next Work + Deferred HIL Backlog
 
-Updated: 2026-08-25
+Updated: 2026-08-26
 Authoritative development branch: `phase/15-voice-assistant-ui`
 Purpose: cross-session/Codex routing for **"hiện tại nên làm gì tiếp theo?"**
 
 ## Routing rule
 
-Always surface the deferred HIL backlog before recommending new coding work. Hardware-unavailable HIL remains visible but does not block software development.
+Use completed HIL as regression baselines and keep the remaining Phase-14
+fault cases plus Phase-15 UI HIL visible before recommending new coding work.
 
 Current software state:
 
 ```text
-Phase 12 SW -> COMPLETE / selected HIL deferred
-Phase 13 SW -> COMPLETE / HIL deferred
-Phase 14 SW -> COMPLETE / Build + HIL pending
+Phase 12 SW -> COMPLETE / HIL PASS
+Phase 13 SW -> COMPLETE / HIL PASS
+Phase 14 SW -> COMPLETE / BUILD PASS
+Phase 14 HIL -> GOLDEN-PATH PASS / fault cases deferred
 Phase 15 SW -> COMPLETE / Build + HIL pending
 Phase 16    -> NOT STARTED
 ```
@@ -22,7 +24,7 @@ Do not start Phase 16 automatically. Only start it after explicit user direction
 
 ---
 
-## Phase 12 HIL — deferred / Codex-ready
+## Phase 12 HIL — closed / regression baseline
 
 Branch: `test/xiaozhi-p2f-known-audio-e2e`
 
@@ -37,11 +39,11 @@ Backlog includes:
 - real AP/Internet/service loss;
 - resource/cleanup baseline.
 
-When hardware is unavailable: **DEFERRED**.
+Target acceptance is already closed; rerun only as an explicit regression.
 
 ---
 
-## Phase 13 HIL — deferred / Codex-ready
+## Phase 13 HIL — closed / regression baseline
 
 Branch: `test/phase13-voice-assistant-hil`
 
@@ -58,17 +60,23 @@ Backlog includes:
 - stale/late event handling;
 - resource trend.
 
-When hardware is unavailable: **DEFERRED**.
+Target acceptance is already closed; rerun only as an explicit regression.
 
 ---
 
-## Phase 14 HIL — deferred / plan ready
+## Phase 14 HIL — golden path accepted / fault cases deferred
 
 Production branch: `phase/14-ptt-voice-mvp`
 
 HIL plan: `AI_Stored_Data/PHASE14_HIL_TEST_PLAN.md`
 
 Recommended test branch: `test/phase14-ptt-voice-e2e-hil`
+
+Acceptance recorded on 2026-08-26: three GPIO38 PTT turns reached real
+Xiaozhi response playback and were audible. Opus uplink/decode, WAV
+completion, repeated turns and release-before-READY evidence passed. Fault
+injection cases remain SKIP/deferred; the LCD `Starting...` route is tracked
+by Phase 15 UI HIL.
 
 Target acceptance:
 
@@ -87,13 +95,14 @@ physical PTT
 
 Important risks:
 
-- actual downlink codec;
-- temporary GPIO5 wiring;
+- deferred fault-injection coverage;
+- GPIO38 PTT wiring (GPIO48 reserved for NeoPixel);
 - SD-backed response handoff;
 - repeated-turn audio ownership;
 - source-scoped CMake integration/tap build compatibility.
 
-When hardware is unavailable: **DEFERRED / TEST PLAN READY**.
+When hardware is unavailable for a new rerun: preserve the recorded
+golden-path PASS and mark only unexecuted fault cases **DEFERRED**.
 
 ---
 
@@ -161,10 +170,10 @@ Do not solve future contention by giving another component direct I2S ownership.
 
 Answer in this order:
 
-1. Phase 12 HIL remains deferred and Codex-ready.
-2. Phase 13 HIL remains deferred and Codex-ready.
-3. Phase 14 HIL remains deferred; plan ready.
-4. Phase 15 HIL remains deferred; plan ready.
+1. Phase 12 HIL is closed and retained as a regression baseline.
+2. Phase 13 HIL is closed and retained as a regression baseline.
+3. Phase 14 golden-path HIL is PASS; fault cases remain deferred.
+4. Phase 15 HIL remains deferred; plan/test branch ready.
 5. Phase 14 and Phase 15 software are complete.
 6. General audio arbitration remains a future integration/architecture follow-up.
 7. Phase 16 is not started; only plan/start it after explicit request.
@@ -172,12 +181,12 @@ Answer in this order:
 Concise state:
 
 ```text
-P12 HIL -> DEFERRED / test branch ready
-P13 HIL -> DEFERRED / test branch ready
-P14 HIL -> DEFERRED / plan ready
-P15 HIL -> DEFERRED / plan ready
-P14 SW  -> COMPLETE
-P15 SW  -> COMPLETE
+P12 HIL -> PASS / closed baseline
+P13 HIL -> PASS / closed baseline
+P14 HIL -> GOLDEN-PATH PASS / fault cases deferred
+P15 HIL -> DEFERRED / test branch ready
+P14 SW  -> COMPLETE / BUILD PASS
+P15 SW  -> COMPLETE / build/HIL pending
 P16     -> NOT STARTED
 ```
 
@@ -185,13 +194,16 @@ P16     -> NOT STARTED
 
 Recommended order unless a specific regression requires otherwise:
 
-1. `RUN PHASE 12 HIL`.
-2. `RUN PHASE 13 HIL`.
-3. Create/use Phase-14 dedicated HIL branch and run PTT voice E2E.
-4. Create/use Phase-15 dedicated HIL branch and run real semantic text/UI acceptance.
-5. Fix production defects on the owning phase branch and propagate forward/test branches.
-6. After independent acceptance, integrate **production branches/history only** into the full Gateway/Firebase integration branch.
-7. Run full regression HIL: Wi-Fi/provisioning + sensor + Firebase + GUI + SD + audio + Xiaozhi + Voice UI, including simultaneous Firebase/Xiaozhi load.
+1. Finish publishing the Phase-14 production and HIL checkpoints.
+2. Create/use the Phase-15 dedicated HIL branch and run real semantic
+   text/UI acceptance.
+3. Fix production defects on the owning phase branch and propagate
+   forward/test branches.
+4. After independent acceptance, integrate **production branches/history
+   only** into the full Gateway/Firebase integration branch.
+5. Run full regression HIL: Wi-Fi/provisioning + sensor + Firebase + GUI +
+   SD + audio + Xiaozhi + Voice UI, including simultaneous Firebase/Xiaozhi
+   load.
 
 Never merge HIL/test harness branches as production feature history.
 

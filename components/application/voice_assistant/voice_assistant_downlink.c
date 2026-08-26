@@ -7,6 +7,7 @@
 
 #include "audio_manager.h"
 #include "sd_card_manager.h"
+#include "voice_assistant_opus.h"
 #include "xiaozhi_foundation.h"
 
 #include "esp_heap_caps.h"
@@ -16,7 +17,9 @@
 #include "freertos/task.h"
 
 #define DOWNLINK_TASK_NAME                 "voice_downlink"
-#define DOWNLINK_TASK_STACK_BYTES          5120U
+/* esp_audio_codec documents about 20 KiB of task stack for decoder coverage;
+ * keep additional coordinator headroom for queue/WAV orchestration. */
+#define DOWNLINK_TASK_STACK_BYTES          (24U * 1024U)
 #define DOWNLINK_TASK_PRIORITY             5U
 #define DOWNLINK_QUEUE_LENGTH              8U
 #define DOWNLINK_CHUNK_BYTES               2048U
@@ -45,6 +48,16 @@ static QueueHandle_t s_queue = NULL;
 static TaskHandle_t s_task = NULL;
 static uint8_t *s_response = NULL;
 static size_t s_response_size = 0U;
+/* ESP-Xiaozhi invokes the response callbacks synchronously from the 4 KiB
+ * WebSocket task. Keep the 2 KiB queue staging item out of that task's stack.
+ * The atomic flag rejects unexpected concurrent callback entry rather than
+ * allowing two producers to overwrite the shared staging item. xQueueSend()
+ * copies the complete item before the flag is released. */
+static downlink_item_t s_callback_item = {0};
+static atomic_flag s_callback_busy = ATOMIC_FLAG_INIT;
+static atomic_bool s_callback_stack_reported = false;
+/* The downlink task is the sole owner after initialization. */
+static int16_t s_decoded_pcm[VOICE_ASSISTANT_OPUS_PCM_SAMPLES] = {0};
 static TickType_t s_last_response_activity = 0U;
 static atomic_bool s_response_tainted = false;
 static voice_assistant_downlink_status_t s_status = {0};
@@ -264,51 +277,81 @@ static void downlink_response_callback(
         return;
     }
 
+    if (atomic_flag_test_and_set_explicit(
+            &s_callback_busy,
+            memory_order_acquire)) {
+        portENTER_CRITICAL(&s_lock);
+        ++s_status.chunks_dropped_queue_full;
+        portEXIT_CRITICAL(&s_lock);
+        atomic_store_explicit(
+            &s_response_tainted,
+            true,
+            memory_order_release);
+        return;
+    }
+
     if (event->kind != XIAOZHI_FOUNDATION_RESPONSE_AUDIO) {
-        const downlink_item_t item = {
-            .kind = event->kind,
-            .generation = event->client_generation,
-            .error = event->error,
-        };
-        if (xQueueSend(s_queue, &item, 0U) != pdTRUE) {
+        s_callback_item.kind = event->kind;
+        s_callback_item.generation = event->client_generation;
+        s_callback_item.data_len = 0U;
+        s_callback_item.error = event->error;
+        if (xQueueSend(s_queue, &s_callback_item, 0U) != pdTRUE) {
             portENTER_CRITICAL(&s_lock);
             ++s_status.chunks_dropped_queue_full;
             portEXIT_CRITICAL(&s_lock);
             atomic_store_explicit(&s_response_tainted, true, memory_order_release);
         }
+        if ((event->kind == XIAOZHI_FOUNDATION_RESPONSE_TTS_START) &&
+            !atomic_exchange_explicit(
+                &s_callback_stack_reported,
+                true,
+                memory_order_acq_rel)) {
+            ESP_LOGI(TAG,
+                     "WebSocket callback stack_hwm=%u staging=static",
+                     (unsigned)uxTaskGetStackHighWaterMark(NULL));
+        }
+        atomic_flag_clear_explicit(&s_callback_busy, memory_order_release);
         return;
     }
 
     if ((event->data == NULL) || (event->data_len == 0U)) {
+        atomic_flag_clear_explicit(&s_callback_busy, memory_order_release);
         return;
     }
 
-    size_t offset = 0U;
-    while (offset < event->data_len) {
-        size_t chunk = event->data_len - offset;
-        if (chunk > DOWNLINK_CHUNK_BYTES) {
-            chunk = DOWNLINK_CHUNK_BYTES;
-        }
-        downlink_item_t item = {
-            .kind = XIAOZHI_FOUNDATION_RESPONSE_AUDIO,
-            .generation = event->client_generation,
-            .data_len = chunk,
-            .error = ESP_OK,
-        };
-        memcpy(item.data, &event->data[offset], chunk);
-        if (xQueueSend(s_queue, &item, 0U) != pdTRUE) {
-            portENTER_CRITICAL(&s_lock);
-            ++s_status.chunks_dropped_queue_full;
-            portEXIT_CRITICAL(&s_lock);
-            atomic_store_explicit(&s_response_tainted, true, memory_order_release);
-            break;
-        }
+    /* A WebSocket binary message is one complete Opus packet. Never split an
+     * oversized packet because doing so would destroy the decoder boundary. */
+    if (event->data_len > DOWNLINK_CHUNK_BYTES) {
         portENTER_CRITICAL(&s_lock);
-        ++s_status.chunks_queued;
-        s_status.response_bytes_received += chunk;
+        ++s_status.chunks_dropped_queue_full;
         portEXIT_CRITICAL(&s_lock);
-        offset += chunk;
+        atomic_store_explicit(&s_response_tainted, true, memory_order_release);
+        ESP_LOGE(TAG,
+                 "Opus packet dropped: size=%u exceeds capacity=%u",
+                 (unsigned)event->data_len,
+                 (unsigned)DOWNLINK_CHUNK_BYTES);
+        atomic_flag_clear_explicit(&s_callback_busy, memory_order_release);
+        return;
     }
+
+    s_callback_item.kind = XIAOZHI_FOUNDATION_RESPONSE_AUDIO;
+    s_callback_item.generation = event->client_generation;
+    s_callback_item.data_len = event->data_len;
+    s_callback_item.error = ESP_OK;
+    memcpy(s_callback_item.data, event->data, event->data_len);
+    if (xQueueSend(s_queue, &s_callback_item, 0U) != pdTRUE) {
+        portENTER_CRITICAL(&s_lock);
+        ++s_status.chunks_dropped_queue_full;
+        portEXIT_CRITICAL(&s_lock);
+        atomic_store_explicit(&s_response_tainted, true, memory_order_release);
+        atomic_flag_clear_explicit(&s_callback_busy, memory_order_release);
+        return;
+    }
+    portENTER_CRITICAL(&s_lock);
+    ++s_status.chunks_queued;
+    s_status.response_bytes_received += event->data_len;
+    portEXIT_CRITICAL(&s_lock);
+    atomic_flag_clear_explicit(&s_callback_busy, memory_order_release);
 }
 
 static void downlink_abort_response(
@@ -393,6 +436,11 @@ static void downlink_task(void *argument)
                 portEXIT_CRITICAL(&s_lock);
                 continue;
             }
+            const esp_err_t reset_ret = voice_assistant_opus_decoder_reset();
+            if (reset_ret != ESP_OK) {
+                downlink_abort_response(item.generation, reset_ret, false);
+                continue;
+            }
             s_response_size = 0U;
             atomic_store_explicit(&s_response_tainted, false, memory_order_release);
             portENTER_CRITICAL(&s_lock);
@@ -418,13 +466,33 @@ static void downlink_task(void *argument)
                 portEXIT_CRITICAL(&s_lock);
                 continue;
             }
-            if ((s_response_size + item.data_len) >
+            size_t decoded_samples = 0U;
+            const esp_err_t decode_ret = voice_assistant_opus_decode(
+                item.data,
+                item.data_len,
+                s_decoded_pcm,
+                VOICE_ASSISTANT_OPUS_PCM_SAMPLES,
+                &decoded_samples);
+            if (decode_ret != ESP_OK) {
+                downlink_abort_response(item.generation, decode_ret, false);
+                continue;
+            }
+            const size_t decoded_bytes = decoded_samples * sizeof(int16_t);
+            if (s_response_size == 0U) {
+                ESP_LOGI(TAG,
+                         "first Opus packet decoded generation=%u opus_bytes=%u pcm_bytes=%u stack_hwm=%u",
+                         (unsigned)item.generation,
+                         (unsigned)item.data_len,
+                         (unsigned)decoded_bytes,
+                         (unsigned)uxTaskGetStackHighWaterMark(NULL));
+            }
+            if ((s_response_size + decoded_bytes) >
                 DOWNLINK_RESPONSE_CAPACITY_BYTES) {
                 downlink_abort_response(item.generation, ESP_ERR_NO_MEM, false);
                 continue;
             }
-            memcpy(&s_response[s_response_size], item.data, item.data_len);
-            s_response_size += item.data_len;
+            memcpy(&s_response[s_response_size], s_decoded_pcm, decoded_bytes);
+            s_response_size += decoded_bytes;
             portENTER_CRITICAL(&s_lock);
             s_status.response_bytes_buffered = s_response_size;
             portEXIT_CRITICAL(&s_lock);
@@ -472,6 +540,11 @@ esp_err_t voice_assistant_downlink_init(void)
         return ESP_OK;
     }
     portEXIT_CRITICAL(&s_lock);
+
+    const esp_err_t codec_ret = voice_assistant_opus_decoder_init();
+    if (codec_ret != ESP_OK) {
+        return codec_ret;
+    }
 
     s_queue = xQueueCreate(DOWNLINK_QUEUE_LENGTH, sizeof(downlink_item_t));
     if (s_queue == NULL) {
