@@ -3,7 +3,7 @@
 Updated: 2026-08-26
 Branch: `phase/14-ptt-voice-mvp`
 Current checkpoint: **14-F — FINAL Review / Production Composition / Docs**
-Status: **SOFTWARE COMPLETE / STATIC REVIEW COMPLETE / BUILD PASS / HIL READY**
+Status: **SOFTWARE COMPLETE / BUILD PASS / GOLDEN-PATH HIL PASS / CLOSURE IN PROGRESS**
 
 ## Final checkpoint status
 
@@ -165,22 +165,40 @@ No Phase-14 callback directly owns LVGL or I2S.
 - a press in voice ERROR requests one bounded recovery and requires a fresh press after IDLE;
 - SD failures stay under `sd_card_manager` ownership.
 
-## Important HIL risks / unclaimed points
+## HIL result and remaining boundaries
 
-1. The first ESP32-S3 target HIL run failed after proving the server path is Opus; the Opus and recovery fixes now require a fresh target retest.
-2. Phase 14 now negotiates raw Opus at 16 kHz mono/60 ms, encodes uplink PCM16, preserves one callback per downlink packet, and decodes response packets before creating the PCM16 WAV.
-3. Downlink currently aggregates response then uses an SD-backed WAV handoff. This is intentionally higher latency than direct streaming playback.
-4. GPIO38 wiring and active-high pull-down behavior require target verification.
-5. Long-lived `session_generation` is not a unique per-PTT-turn ID; repeated turns are protected mainly by serialized turn boundaries.
+The corrected ESP32-S3 image was built and flashed on COM4. The operator then
+confirmed audible response on GPIO38 after three complete PTT turns. Each turn
+produced complete Opus uplink packets, decoded response PCM16, an `ESP_OK`
+SD-backed WAV diagnostic, and `VOICE_DOWNLINK: response PLAYBACK_COMPLETE`.
+Two release-before-READY attempts also completed bounded cancellation without
+authorizing capture after release. No panic, assertion, watchdog reset, or I2S
+ownership error occurred in the corrected run.
 
-## Build evidence — 2026-08-26
+The following fault-injection cases were not run and remain explicitly
+deferred: stalled response, network loss during a turn, SD unavailable during
+response, and queue-pressure/corrupt-response injection. The LCD `Starting...`
+route is a separate Phase-15 UI concern; it does not invalidate the accepted
+voice transport/speaker path.
+
+Other retained boundaries:
+
+1. Downlink currently aggregates response then uses an SD-backed WAV handoff.
+   This is intentionally higher latency than direct streaming playback.
+2. Long-lived `session_generation` is not a unique per-PTT-turn ID; repeated
+   turns are protected mainly by serialized turn boundaries.
+
+## Build and HIL evidence — 2026-08-26
 
 - ESP-IDF 6.0.1 production build after Opus/recovery fixes: **PASS** (`2093/2093`);
-- app binary: `0x21b370` bytes, 47% of the app partition free;
+- app binary: `0x21b670` bytes, 47% of the app partition free;
 - Phase-12 validator: OFF;
 - stale Phase-13 HIL generated-config symbols removed during reconfigure;
 - source-local Phase-14 composition and stream-tap objects compiled and linked;
-- known non-fatal warnings: missing `ESP_ROM_ELF_DIR` gdbinit generation and one existing unused LVGL image helper.
+- corrected callback build includes the static WebSocket staging item and
+  codec-task stack budgets;
+- known non-fatal warnings: missing `ESP_ROM_ELF_DIR` gdbinit generation and
+  one existing unused LVGL image helper.
 
 ## HIL handoff
 
@@ -192,10 +210,15 @@ Dedicated test branch:
 
 `test/phase14-ptt-voice-e2e-hil`
 
-Do not claim Phase-14 HIL PASS until target evidence proves mic -> Xiaozhi -> response -> speaker and repeated turns.
+Target evidence now proves mic -> Xiaozhi -> response -> speaker and three
+repeated turns. Phase-14 golden-path HIL is therefore PASS; the fault cases
+listed above remain SKIP/deferred.
 
 ## Closure statement
 
-**Phase 14 = Software Complete / Build PASS / Hardware Acceptance Pending.**
+**Phase 14 = Software Complete / Build PASS / Golden-path HIL PASS / Repository
+closure in progress.**
 
-Do not start Phase 15 automatically. The next software roadmap task may be considered only after Hải explicitly asks to continue.
+After the documentation and Git checkpoint are closed, the next planned
+checkpoint is Phase 15 voice/UI HIL. Do not start Phase 15 implementation in
+this Phase-14 closure change.

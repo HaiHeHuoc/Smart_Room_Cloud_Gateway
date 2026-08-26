@@ -1,7 +1,7 @@
 # Smart Room Cloud Gateway — AI Project State
 
-Updated from branch: `phase/14-ptt-voice-mvp`
-Snapshot date: 2026-08-25
+Updated from branch: `test/phase14-ptt-voice-e2e-hil`
+Snapshot date: 2026-08-26
 
 ## Working Constitution
 
@@ -17,7 +17,7 @@ Snapshot date: 2026-08-25
 ```text
 Sprint 12  Software complete / HIL PASS 2026-08-25
 Sprint 13  Software complete / HIL PASS 2026-08-25
-Sprint 14  Software complete / Build PASS / HIL pending
+Sprint 14  Software complete / Build PASS / golden-path HIL PASS
 Sprint 15  NOT STARTED
 ```
 
@@ -41,7 +41,9 @@ Phase 14:
 - production branch `phase/14-ptt-voice-mvp`;
 - HIL plan `AI_Stored_Data/PHASE14_HIL_TEST_PLAN.md`;
 - test branch `test/phase14-ptt-voice-e2e-hil`;
-- full physical PTT -> mic -> Xiaozhi -> response -> speaker -> repeated-turn evidence still pending.
+- golden-path physical PTT -> mic -> Xiaozhi -> response -> speaker ->
+  repeated-turn evidence PASS on 2026-08-26; fault-injection cases remain
+  SKIP/deferred.
 
 ## Sprint 14 — final software architecture
 
@@ -143,14 +145,18 @@ Before intentionally enabling competing audio clients, add/review a centralized 
 
 Do not allow a new component to solve contention by calling I2S directly.
 
-## Known Phase-14 acceptance risks
+## Known Phase-14 acceptance boundaries
 
-1. Target HIL not yet run.
-2. Actual Xiaozhi response codec must be proven. The MVP currently assumes PCM16-compatible downlink after PCM negotiation; Opus evidence requires adding a decoder before speaker acceptance.
+1. Golden-path target HIL and three repeated turns passed on GPIO38 with
+   operator-confirmed audible response.
+2. Stalled-response, network-loss, SD-unavailable and queue-pressure fault
+   cases were not injected and remain SKIP/deferred.
 3. Response playback is aggregated/SD-backed, not low-latency direct streaming.
-4. GPIO38 PTT wiring and active-high pull-down behavior are not yet target-verified.
-5. `session_generation` identifies the long-lived session, not a unique PTT turn; turn serialization is part of the safety boundary.
-6. Firebase/cloud + Xiaozhi simultaneous network/resource load has not yet been measured on target hardware.
+4. The LCD `Starting...` route remains a Phase-15 UI concern.
+5. `session_generation` identifies the long-lived session, not a unique PTT
+   turn; turn serialization is part of the safety boundary.
+6. Firebase/cloud + Xiaozhi simultaneous network/resource load has not yet
+   been measured as a dedicated stress case on target hardware.
 7. General multi-client audio arbitration is not yet implemented.
 
 ## Next-work guidance
@@ -158,10 +164,11 @@ Do not allow a new component to solve contention by calling I2S directly.
 When asked **"hiện tại nên làm gì tiếp theo?"**:
 
 - State that Phase-12 and Phase-13 HIL are closed with PASS evidence.
-- Mention Phase-14 HIL test-branch pending status.
+- State that Phase-14 golden-path HIL passed and fault cases are deferred.
+- Complete the Phase-14 Git checkpoint, then route the production commit into Phase 15 HIL/UI work.
 - Mention the post-Phase-14 audio-arbitration/integration follow-up before enabling competing notification/alarm/recorder clients.
-- If hardware is unavailable, keep Phase-14 HIL marked pending/deferred; do not downgrade accepted Phase-12/13 evidence.
+- If hardware is unavailable for a future rerun, preserve the recorded Phase-14 golden-path PASS and mark only new fault cases pending/deferred.
 - Phase 14 software is complete.
-- Do not start Sprint 15 automatically; wait for explicit user direction.
+- Do not start Sprint 15 implementation until the Phase-14 Git checkpoint is closed.
 
-When hardware becomes available, run Phase 14 full PTT voice HIL, then a full-Gateway/Firebase integration regression using production branches only. The integration regression should include simultaneous Firebase/cloud and Xiaozhi traffic and any enabled competing audio-client scenarios.
+After Phase-14 closure, run Phase-15 voice/UI HIL, then a full-Gateway/Firebase integration regression using production branches only. The integration regression should include simultaneous Firebase/cloud and Xiaozhi traffic and any enabled competing audio-client scenarios.

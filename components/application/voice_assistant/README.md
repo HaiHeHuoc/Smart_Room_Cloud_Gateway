@@ -198,8 +198,9 @@ over Wi-Fi, provisioning, cloud, reset, storage, audio hardware or GUI lifecycle
 
 ## Verification boundary
 
-Static/source review is complete. Final `idf.py build`, target runtime,
-WebSocket/session HIL and resource measurements are not claimed in the current
-environment and remain explicitly deferred.
-
-Use `AI_Stored_Data/PHASE13_HIL_TEST_PLAN.md` when target hardware is available.
+Static/source review and the Phase-14 golden-path target HIL are complete. The
+corrected ESP32-S3 image built and flashed successfully, and three GPIO38 PTT
+turns completed Opus uplink, response decode, SD-backed WAV playback and
+operator-confirmed audible output before returning to `IDLE`. Fault-injection
+cases (stalled response, network loss, SD unavailable and queue pressure) are
+explicitly deferred; see `AI_Stored_Data/PHASE14_HIL_TEST_PLAN.md`.
