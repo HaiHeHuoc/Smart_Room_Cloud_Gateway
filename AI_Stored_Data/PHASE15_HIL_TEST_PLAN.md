@@ -1,28 +1,33 @@
 # Phase 15 Voice Assistant UI — HIL Acceptance Plan
 
-Updated: 2026-08-25
+Updated: 2026-08-26
 Production branch: `phase/15-voice-assistant-ui`
 Recommended test branch: `test/phase15-voice-ui-hil`
-Status: **PLAN READY / BUILD + TARGET HIL NOT RUN**
+Status: **PLAN READY / BUILD PASS / TARGET HIL NOT RUN**
 
 ## Goal
 
-Prove that the Phase-15 production presentation layer shows real Xiaozhi lifecycle and semantic conversation text without breaking the already-deferred Phase-14 PTT/audio path or LVGL ownership.
+Prove that the Phase-15 production presentation layer shows real Xiaozhi lifecycle and semantic conversation text without breaking the Phase-14 golden-path PTT/audio behavior or LVGL ownership.
 
-This plan does not replace Phase-12/13/14 HIL. Run older acceptance first when practical, then Phase 15.
+Phase 12 and Phase 13 are closed baselines. Phase 14 golden-path PTT/audio
+HIL passed on GPIO38; its fault-injection cases remain deferred. This plan
+verifies the additional Phase-15 text/UI contract without conflating those
+inherited audio boundaries with UI failures.
 
 ## Hardware / prerequisites
 
 - ESP32-S3 Smart Room Cloud Gateway target.
 - Existing LCD/ST7735 + LVGL path working.
 - INMP441 and MAX98357 connected as required by Phase 14.
-- Temporary Phase-14 PTT GPIO5 wiring if unchanged:
+- Phase-14 PTT GPIO38 wiring:
 
 ```text
-3V3 ---- push button ---- GPIO5
+3V3 ---- push button ---- GPIO38
 internal pull-down
 released LOW / pressed HIGH
 ```
+
+GPIO48 remains reserved for the NeoPixel.
 
 - Internet/Wi-Fi available for Xiaozhi.
 - SD card available for current Phase-14 response WAV path.
@@ -41,7 +46,9 @@ HIL PASS          target behavior/log/GUI evidence satisfies the case
 
 ## Test 1 — build/link
 
-Run a clean ESP-IDF build on the Phase-15 production/test branch.
+Run a clean ESP-IDF build on the Phase-15 production/test branch. The merged
+production checkpoint already passed this gate on 2026-08-26:
+`idf.py build`, ESP-IDF 6.0.1, binary `0x21c250`, 47% app partition free.
 
 Acceptance:
 
@@ -51,7 +58,12 @@ Acceptance:
 - no duplicate/undefined callback/init symbol;
 - no warning promoted to error.
 
-Special review point: the Phase-15 source-scoped semantic init bridge is a controlled seam and must be proven by this build.
+Recorded result for the merged production branch: **PASS**. Target boot/HIL
+remains pending.
+
+The Phase-15 source-scoped semantic init bridge is a controlled seam; the
+merged production build has proven compilation, while target callback behavior
+remains part of the HIL cases below.
 
 ## Test 2 — production boot / validation isolation
 
@@ -70,7 +82,9 @@ Phase-15 voice stack READY ...
 Acceptance:
 
 - no boot loop;
-- no `Starting...` regression;
+- startup must leave the boot route when the voice lifecycle requests the
+  Voice/Xiaozhi screen; a persistent `Starting...` screen is recorded as a
+  Phase-15 routing failure, not as a Phase-14 audio failure;
 - no LVGL watchdog/freeze;
 - no duplicate Xiaozhi owner;
 - dashboard remains available before an active voice transaction.
@@ -237,7 +251,7 @@ These do not fail Phase 15 unless the observed behavior differs from the documen
 1. CONNECTING/THINKING/RECOVERING share the legacy `PROCESSING` visual label.
 2. UI keeps only the latest USER/ASSISTANT turn, not scrollable full conversation history.
 3. No waveform/audio-level visualization.
-4. No GUI PTT button; physical GPIO5 remains the Phase-14 temporary input.
+4. No GUI PTT button; physical GPIO38 is the Phase-14 PTT input and GPIO48 is reserved for NeoPixel.
 5. Audio response codec/SD-backed playback belong to Phase-14 acceptance and may block full voice E2E independently of text/UI correctness.
 
 ## Suggested Codex activation for future test branch
