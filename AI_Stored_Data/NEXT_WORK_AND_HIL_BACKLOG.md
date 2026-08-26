@@ -73,7 +73,7 @@ physical PTT
 Important acceptance risks:
 
 - actual downlink codec must be proven compatible with the current PCM16 assumption;
-- temporary GPIO5 pull-down/active-high PTT wiring must be verified;
+- GPIO38 pull-down/active-high PTT wiring must be verified; GPIO48 remains reserved for NeoPixel;
 - SD-backed response WAV handoff must work under `sd_card_manager` ownership;
 - repeated turns must not race mic/speaker I2S ownership;
 - source-scoped CMake composition/tap redirects have build evidence; runtime ownership still requires HIL.

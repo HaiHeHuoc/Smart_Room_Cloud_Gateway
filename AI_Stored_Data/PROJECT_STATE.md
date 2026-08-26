@@ -47,15 +47,15 @@ Phase 14:
 
 ### User input
 
-Temporary PTT hardware reservation:
+Current PTT hardware assignment:
 
 ```text
-GPIO5 ---- push button ---- 3V3
+GPIO38 ---- push button ---- 3V3
 internal pull-down
 released LOW / pressed HIGH
 ```
 
-GPIO5 is intentionally temporary and will be changed later by Hải.
+GPIO38 is selected for PTT; GPIO48 remains reserved for the board's NeoPixel LED.
 
 The factory-reset button remains independently owned on GPIO9 and is not reused for PTT.
 
@@ -148,7 +148,7 @@ Do not allow a new component to solve contention by calling I2S directly.
 1. Target HIL not yet run.
 2. Actual Xiaozhi response codec must be proven. The MVP currently assumes PCM16-compatible downlink after PCM negotiation; Opus evidence requires adding a decoder before speaker acceptance.
 3. Response playback is aggregated/SD-backed, not low-latency direct streaming.
-4. GPIO5 is temporary.
+4. GPIO38 PTT wiring and active-high pull-down behavior are not yet target-verified.
 5. `session_generation` identifies the long-lived session, not a unique PTT turn; turn serialization is part of the safety boundary.
 6. Firebase/cloud + Xiaozhi simultaneous network/resource load has not yet been measured on target hardware.
 7. General multi-client audio arbitration is not yet implemented.

@@ -22,7 +22,7 @@ typedef struct {
  * The adapter owns only GPIO sampling/debounce. It does not own the factory
  * reset button and forwards stable edges to voice_assistant_ptt_press/release.
  * GPIO is configured as input with the ESP32-S3 internal pull-down enabled;
- * Phase 14's temporary board assignment is active-high GPIO5.
+ * Phase 14's current board assignment is active-high GPIO38.
  */
 esp_err_t voice_assistant_ptt_gpio_init(
     const voice_assistant_ptt_gpio_config_t *config);

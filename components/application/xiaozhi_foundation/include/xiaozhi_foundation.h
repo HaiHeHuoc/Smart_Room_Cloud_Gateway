@@ -72,7 +72,9 @@ const char *xiaozhi_foundation_session_state_to_string(
 
 #define XIAOZHI_FOUNDATION_UPLINK_SAMPLE_RATE_HZ 16000U
 #define XIAOZHI_FOUNDATION_UPLINK_CHANNELS       1U
-#define XIAOZHI_FOUNDATION_UPLINK_FRAME_SAMPLES  256U
+#define XIAOZHI_FOUNDATION_OPUS_FRAME_DURATION_MS 60U
+#define XIAOZHI_FOUNDATION_OPUS_FRAME_SAMPLES    960U
+#define XIAOZHI_FOUNDATION_OPUS_MAX_PACKET_BYTES 2048U
 
 typedef struct {
     bool audio_channel_open;
@@ -87,11 +89,11 @@ typedef struct {
 /** Open the shared production audio channel and enter MANUAL listening. */
 esp_err_t xiaozhi_foundation_audio_uplink_start(uint32_t client_generation);
 
-/** Send one PCM16 microphone frame from a non-audio callback task. */
-esp_err_t xiaozhi_foundation_audio_uplink_send_pcm16(
+/** Send one complete Opus packet from a non-audio callback task. */
+esp_err_t xiaozhi_foundation_audio_uplink_send_opus_packet(
     uint32_t client_generation,
-    const int16_t *samples,
-    size_t sample_count);
+    const uint8_t *packet,
+    size_t packet_size);
 
 /**
  * Stop MANUAL listening after PTT release but keep the audio channel open.
@@ -116,8 +118,8 @@ typedef enum {
 
 /**
  * Borrowed response event. `data` is valid only during the callback and is
- * non-NULL only for RESPONSE_AUDIO. The current Phase-14 PCM channel requests
- * 16-kHz mono PCM; HIL must verify server downlink interoperability.
+ * non-NULL only for RESPONSE_AUDIO. One RESPONSE_AUDIO callback contains one
+ * complete Opus packet; callers must preserve that packet boundary.
  */
 typedef struct {
     xiaozhi_foundation_response_event_kind_t kind;
