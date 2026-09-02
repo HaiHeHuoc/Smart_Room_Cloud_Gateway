@@ -14,7 +14,11 @@ extern "C" {
 typedef struct {
     bool initialized;
     bool running;
+    /** A completed local uplink is waiting for the server's TTS_START/error. */
+    bool awaiting_response;
     bool collecting;
+    /** True while TTS_STOP is being closed, written to WAV, or handed to I2S. */
+    bool finalizing;
     bool playback_requested;
     uint32_t session_generation;
     /** Encoded Opus bytes copied from complete response packet callbacks. */
@@ -36,12 +40,34 @@ esp_err_t voice_assistant_downlink_init(void);
 /** Register the Xiaozhi response callback and start the downlink worker. */
 esp_err_t voice_assistant_downlink_start(void);
 
+/**
+ * @brief Reserve the shared audio channel for the response to a completed
+ *        local uplink.
+ *
+ * Call this before sending stop-listening for a non-empty PTT turn. It makes
+ * subsequent PTT presses busy until TTS starts, an error arrives, or the
+ * bounded response timeout aborts the channel. Thread-safe; it does not call
+ * Xiaozhi or I2S.
+ */
+esp_err_t voice_assistant_downlink_begin_response_wait(uint32_t session_generation);
+
+/**
+ * @brief Cancel a response wait whose stop-listening request failed.
+ *
+ * This changes copied downlink state only. The caller remains responsible for
+ * closing the Xiaozhi audio channel when appropriate.
+ */
+esp_err_t voice_assistant_downlink_cancel_response_wait(
+    uint32_t session_generation,
+    esp_err_t error);
+
 /** Copy current scalar diagnostics. */
 esp_err_t voice_assistant_downlink_get_status(
     voice_assistant_downlink_status_t *status);
 
 /**
- * @brief True while a prior PTT turn is still receiving or playing a response.
+ * @brief True while a prior PTT turn is awaiting, receiving, finalizing, or
+ *        playing a response.
  *
  * Higher-level turn coordination uses this to serialize repeated turns. This
  * function only reads copied project state; it never touches Xiaozhi or I2S.

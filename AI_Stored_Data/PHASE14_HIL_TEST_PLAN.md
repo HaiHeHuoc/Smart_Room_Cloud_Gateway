@@ -1,8 +1,8 @@
 # Phase 14 HIL Test Plan — Push-To-Talk Voice MVP
 
-Updated: 2026-08-26
+Updated: 2026-09-02
 Production branch: `phase/14-ptt-voice-mvp`
-Status: **GOLDEN-PATH HIL PASS / BUILD + FLASH PASS / FAULT CASES NOT RUN**
+Status: **BUILD PASS / ORIGINAL GOLDEN-PATH HIL PASS / TARGETED REGRESSION HIL PARTIAL / FAULT CASES NOT RUN**
 
 Retest closure note: the first Opus firmware run exposed a 5-KiB uplink-task
 stack failure, and the next run exposed a 2-KiB response-item stack overflow on
@@ -85,6 +85,7 @@ failure evidence are recorded in `AI_Stored_Data/PHASE14_HIL_TEST_BRANCH.md`.
 | T14_09 SD unavailable | SKIP | Not injected during this run |
 | T14_10 queue pressure | SKIP | Not injected during this run |
 | T14_11 resource trend | PASS (observed) | Three turns completed; no monotonic failure or crash observed |
+| T14_12 response-pending PTT | PARTIAL | 2026-09-02 target trace rejected a press before the prior response started; repeat it on the final image |
 
 Representative corrected-run markers:
 
@@ -107,7 +108,10 @@ VOICE_UPLINK: coordinator started
 VOICE_DOWNLINK: coordinator started ...
 VOICE_PTT_GPIO: initialized gpio=38 active_level=1 poll=10ms debounce=40ms
 VOICE_PTT_GPIO: started gpio=38 active_level=1 pull=down initial=released
-PH14_COMPOSE: Phase-14 voice stack READY ptt_gpio=38 active_level=1 pull=down
+VOICE_ASSISTANT: IDLE -> CONNECTING
+XZ_SESSION: WebSocket production session CONNECTED
+VOICE_ASSISTANT: CONNECTING -> READY
+PH14_COMPOSE: Phase-14 voice stack READY; boot Xiaozhi connection queued
 ```
 
 Acceptance:
@@ -121,10 +125,10 @@ Acceptance:
 
 Action:
 
-1. Hold PTT.
-2. Speak one short known phrase.
-3. Keep holding until real READY/LISTENING/capture evidence appears.
-4. Release PTT.
+1. Wait for the boot session to report `READY`, then hold PTT. If it is still
+   `CONNECTING`, hold PTT and wait for real READY/LISTENING/capture evidence.
+2. Speak one short known phrase only after capture has started.
+3. Release PTT after speaking.
 
 Expected logical sequence:
 
@@ -193,6 +197,11 @@ Acceptance:
 - no monotonic resource loss that clearly grows per completed turn;
 - no I2S ownership conflict.
 
+While the first turn is in `response WAIT`, press and release GPIO38 once.
+The log must report that the prior server response is active; no microphone
+capture, new audio channel, or second uplink may start. Repeat the press only
+after playback returns to IDLE.
+
 ## Case 4 — Release before READY
 
 1. Press PTT while a new session must connect.
@@ -213,9 +222,12 @@ Acceptance: microphone transmission must never become authorized after the early
 
 ## Case 5 — Missing/stalled response
 
-Inject or naturally reproduce a server/network condition where TTS response stalls after response collection starts.
+Inject or naturally reproduce a server/network condition where the server
+never sends TTS after a completed uplink, or stops making progress after
+response collection starts.
 
-Expected after 15 seconds of inactivity:
+Expected after 15 seconds of inactivity (or after the 90-second complete
+await/collection deadline):
 
 ```text
 VOICE_DOWNLINK: response ABORT generation=N timeout=yes error=ESP_ERR_TIMEOUT
@@ -235,14 +247,17 @@ Externally remove AP/Internet/service during an active turn. Do not simulate wit
 Expected ownership:
 
 - Xiaozhi/session reports transport failure;
-- uplink/downlink stop using the failed session;
+- uplink/downlink stop using the failed session; a copied response error must
+  clear any response wait even though the voice state is already CONNECTING;
 - Phase-13 voice-assistant recovery remains the session-recovery owner;
-- no automatic unbounded reconnect loop;
+- no project-owned unbounded reconnect loop; the upstream retained WebSocket
+  session is allowed to reconnect first;
 - no stuck I2S capture/playback.
 
-After restoring network, press PTT once to request the bounded recovery. Wait
-for `RECOVERING -> IDLE` and PTT `CANCEL_PENDING -> IDLE`, then press again for
-a new turn. Recovery must not silently authorize capture on the first press.
+After restoring network, wait for the retained session to return to `READY`.
+If it has entered `ERROR`, hold PTT once through `RECOVERING -> IDLE`; the PTT
+policy starts a fresh session and may authorize that same still-held press only
+after real READY. Releasing first must cancel and must never authorize capture.
 
 ## Case 7 — SD unavailable during response
 

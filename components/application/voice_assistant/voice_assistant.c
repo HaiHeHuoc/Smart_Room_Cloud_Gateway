@@ -204,7 +204,8 @@ static void voice_assistant_foundation_status_callback(
     if ((status == NULL) || (s_command_queue == NULL)) {
         return;
     }
-    if ((status->state != XIAOZHI_FOUNDATION_SESSION_READY) &&
+    if ((status->state != XIAOZHI_FOUNDATION_SESSION_CONNECTING) &&
+        (status->state != XIAOZHI_FOUNDATION_SESSION_READY) &&
         (status->state != XIAOZHI_FOUNDATION_SESSION_ERROR)) {
         return;
     }
@@ -241,9 +242,36 @@ static void voice_assistant_handle_foundation_status(
         voice_assistant_get_state_unlocked_copy();
 
     switch (command->foundation_status.state) {
+        case XIAOZHI_FOUNDATION_SESSION_CONNECTING:
+            /* session_start() publishes its initial inactive CONNECTING
+             * snapshot before the actual WebSocket CONNECTED callback. The
+             * asynchronous voice queue may consume that older snapshot after
+             * READY, so it must not briefly regress the production state or
+             * create a PTT arming race at boot. Transport-loss reconnects
+             * retain active=true and remain observable below. */
+            if ((current == VOICE_ASSISTANT_STATE_READY) &&
+                !command->foundation_status.active) {
+                ESP_LOGD(TAG,
+                         "Ignored stale inactive CONNECTING generation=%u",
+                         (unsigned)command->generation);
+                break;
+            }
+            if ((current != VOICE_ASSISTANT_STATE_IDLE) &&
+                (current != VOICE_ASSISTANT_STATE_INITIALIZED) &&
+                (current != VOICE_ASSISTANT_STATE_UNINITIALIZED) &&
+                (current != VOICE_ASSISTANT_STATE_RECOVERING)) {
+                voice_assistant_set_status(
+                    VOICE_ASSISTANT_STATE_CONNECTING,
+                    command->foundation_status.active,
+                    ESP_OK);
+            }
+            break;
+
         case XIAOZHI_FOUNDATION_SESSION_READY:
             if ((current == VOICE_ASSISTANT_STATE_CONNECTING) ||
-                (current == VOICE_ASSISTANT_STATE_READY)) {
+                (current == VOICE_ASSISTANT_STATE_READY) ||
+                ((current == VOICE_ASSISTANT_STATE_ERROR) &&
+                 command->foundation_status.active)) {
                 if (current != VOICE_ASSISTANT_STATE_READY) {
                     voice_assistant_set_status(
                         VOICE_ASSISTANT_STATE_READY,
@@ -329,8 +357,17 @@ static void voice_assistant_task(void *argument)
                 const esp_err_t ret =
                     xiaozhi_foundation_session_start(command.generation);
                 if (ret == ESP_OK) {
+                    xiaozhi_foundation_session_status_t foundation = {0};
+                    const esp_err_t status_ret =
+                        xiaozhi_foundation_session_get_status(&foundation);
                     voice_assistant_set_status(
-                        VOICE_ASSISTANT_STATE_READY, true, ESP_OK);
+                        ((status_ret == ESP_OK) &&
+                         (foundation.state ==
+                          XIAOZHI_FOUNDATION_SESSION_CONNECTING)) ?
+                            VOICE_ASSISTANT_STATE_CONNECTING :
+                            VOICE_ASSISTANT_STATE_READY,
+                        (status_ret == ESP_OK) ? foundation.active : true,
+                        ESP_OK);
                 } else {
                     voice_assistant_set_status(
                         VOICE_ASSISTANT_STATE_ERROR, false, ret);

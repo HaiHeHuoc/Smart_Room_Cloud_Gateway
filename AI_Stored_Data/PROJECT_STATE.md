@@ -1,7 +1,7 @@
 # Smart Room Cloud Gateway — AI Project State
 
 Updated from branch: `phase/15-voice-assistant-ui`
-Snapshot date: 2026-08-26
+Snapshot date: 2026-09-02
 
 ## Working Constitution
 
@@ -17,8 +17,8 @@ Snapshot date: 2026-08-26
 ```text
 Sprint 12  Software complete / HIL PASS
 Sprint 13  Software complete / HIL PASS
-Sprint 14  Software complete / Build PASS / golden-path HIL PASS
-Sprint 15  Software complete / Build + HIL pending
+Sprint 14  Software complete / Build PASS / golden-path HIL PASS / targeted regression HIL partial
+Sprint 15  Software complete / Build PASS / targeted regression HIL partial
 Sprint 16  NOT STARTED
 ```
 
@@ -45,7 +45,9 @@ Phase 14:
 - plan `AI_Stored_Data/PHASE14_HIL_TEST_PLAN.md`;
 - recommended test branch `test/phase14-ptt-voice-e2e-hil`;
 - golden-path PASS: three GPIO38 PTT turns reached audible response playback;
-- fault-injection cases remain deferred; LCD `Starting...` routing belongs to Phase 15 UI HIL.
+- targeted regression evidence proves boot/reconnect, response-pending press
+  rejection and playback completion; fresh audible confirmation on that exact
+  image plus fault-injection cases remain deferred.
 
 Phase 15:
 
@@ -53,7 +55,10 @@ Phase 15:
 - plan `AI_Stored_Data/PHASE15_HIL_TEST_PLAN.md`;
 - recommended test branch `test/phase15-voice-ui-hil`;
 - suggested activation `RUN PHASE 15 HIL`;
-- real USER/ASSISTANT semantic text, repeated latest-turn UX, recovery presentation and LVGL ownership evidence pending.
+- target serial evidence proves boot/reconnect, capture, response wait and
+  playback completion; visible USER/ASSISTANT text, RECORDING timer,
+  repeated latest-turn UX, recovery presentation and LVGL ownership evidence
+  remain pending.
 
 ## Sprint 14 — voice/audio production architecture
 
@@ -77,9 +82,9 @@ voice_assistant_ptt_gpio
 -> audio_manager live PCM16 stream
 -> voice_assistant_uplink bounded queue/task
 -> Xiaozhi MANUAL audio uplink
--> release stops listening but retains response channel
+-> reserve bounded response wait, then release stops listening
 -> Xiaozhi response callback
--> voice_assistant_downlink bounded queue + PSRAM aggregation
+-> voice_assistant_downlink 128-packet queue + 2 MiB PSRAM aggregation
 -> SD-managed PCM16 WAV
 -> audio_manager_play_wav()
 -> MAX98357 speaker
@@ -95,6 +100,14 @@ Ownership remains:
 - `voice_assistant_ptt`: user authorization policy;
 - `app_gui`/`ui_manager_lvgl`: GUI/LVGL owner;
 - `sd_card_manager`: SD lifecycle/lease owner.
+
+Phase-14 response hardening additionally keeps a retained session through an
+unexpected disconnect, accepts TTS/error callbacks only while the matching
+response wait owns the long-lived session generation, and ignores GPIO38 while
+a response is awaiting, collecting, finalizing, or playing. The 15-second
+inactivity timeout and 90-second total response deadline release a stuck wait.
+Provider text/binary WebSocket sends that requested `portMAX_DELAY` are wrapped
+to 8 seconds through public APIs only; provider source remains unchanged.
 
 ## Sprint 15 — final software architecture
 
@@ -187,7 +200,11 @@ This is an accepted Phase-15 MVP presentation limitation. Do not claim exact CON
 
 ## Production composition / validation isolation
 
-The main composition still starts the real audio manager first, then production voice/UI/PTT/uplink/downlink/GPIO stack. It does not auto-begin a Xiaozhi session at boot.
+The main composition starts the real audio manager first, then production
+voice/UI/PTT/uplink/downlink/GPIO stack. Once network `ONLINE` and all callback
+consumers are ready, it queues one long-lived Xiaozhi service session; this
+establishes transport readiness only and does not authorize capture or open an
+audio channel.
 
 When `CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE=y`, the production Phase-14/15 voice stack is suppressed so validation does not intentionally compete with production voice/UI ownership.
 
@@ -210,7 +227,8 @@ This remains a post-Phase-14/15 architecture enhancement, not a reason to reopen
 
 ## Known acceptance/build risks
 
-1. Phase-15 build/link and target HIL are not yet verified on the merged Phase-15 branch.
+1. Phase-15 target HIL remains partial: the final merged branch built on
+   2026-09-02, but still needs visible LCD/text acceptance evidence.
 2. Phase-14 fault-injection cases were not run and remain deferred.
 3. Phase-14 response codec/decode and audible speaker path passed the recorded golden run; SD-backed latency remains a boundary.
 4. Phase-14 response playback is PSRAM/SD-backed rather than low-latency streaming.
@@ -219,6 +237,7 @@ This remains a post-Phase-14/15 architecture enhancement, not a reason to reopen
 7. General multi-client audio arbitration is not implemented.
 8. Phase-15 source-scoped `esp_xiaozhi_chat_init` semantic bridge requires real build compatibility evidence against pinned `esp_xiaozhi` 0.1.2.
 9. Phase-15 exact CONNECTING/THINKING/RECOVERING GUI labels are intentionally not implemented in the reused legacy visual enum.
+10. A fresh audible-speaker confirmation is still required for the exact 2026-09-02 regression image, despite the recorded Phase-14 golden-path PASS.
 
 ## Next-work guidance
 

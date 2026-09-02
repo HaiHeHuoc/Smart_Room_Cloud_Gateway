@@ -1,9 +1,9 @@
 # Phase 14 Push-To-Talk Voice MVP Progress
 
-Updated: 2026-08-26
+Updated: 2026-09-02
 Branch: `phase/14-ptt-voice-mvp`
 Current checkpoint: **14-F — FINAL Review / Production Composition / Docs**
-Status: **SOFTWARE COMPLETE / BUILD PASS / GOLDEN-PATH HIL PASS / CLOSURE IN PROGRESS**
+Status: **SOFTWARE COMPLETE / BUILD PASS / ORIGINAL GOLDEN-PATH HIL PASS / TARGETED REGRESSION HIL PARTIAL / CLOSURE IN PROGRESS**
 
 ## Final checkpoint status
 
@@ -19,17 +19,18 @@ No additional Phase-14 software implementation prompt is required unless build/H
 ## Final production flow
 
 ```text
-Dedicated PTT GPIO38 (pull-down, active-high)
--> voice_assistant_ptt authorization
--> long-lived voice_assistant / xiaozhi_foundation session
+Network ONLINE + audio startup
+-> composition queues one long-lived voice_assistant / xiaozhi_foundation session
 -> real READY evidence
+-> dedicated PTT GPIO38 (pull-down, active-high)
+-> voice_assistant_ptt authorization
 -> audio_manager live PCM16 capture contract
 -> bounded voice_uplink queue/task
 -> aggregate 960 PCM16 samples and encode one 60-ms Opus packet
 -> Xiaozhi Opus audio channel
--> stop MANUAL listening on release while response channel remains open
+-> reserve bounded response wait before stop MANUAL listening on release
 -> Xiaozhi TTS/audio response callback
--> bounded voice_downlink queue + 1 MiB PSRAM aggregation
+-> bounded 128-packet voice_downlink queue + 2 MiB PSRAM PCM aggregation
 -> SD-managed canonical PCM16 WAV handoff
 -> audio_manager_play_wav()
 -> MAX98357 speaker
@@ -69,9 +70,12 @@ The wrapper:
    - `voice_assistant_ptt`;
    - `voice_assistant_uplink`;
    - `voice_assistant_downlink`;
-   - dedicated PTT GPIO adapter.
+   - dedicated PTT GPIO adapter;
+5. queues one service-session connection after the complete stack is ready.
 
-Production voice does not auto-begin a session at boot. A physical PTT press remains the user authorization trigger.
+The boot connection establishes service readiness only; it does not open an
+audio channel or capture. A physical PTT press remains the user authorization
+trigger for each conversation turn.
 
 ## Dedicated PTT input
 
@@ -156,13 +160,24 @@ No Phase-14 callback directly owns LVGL or I2S.
 - uplink queue is bounded/non-blocking from the audio callback;
 - downlink callback is bounded/non-blocking;
 - downlink queue loss taints response and prevents false successful playback;
-- response inactivity timeout: 15 s;
+- a non-empty uplink reserves `awaiting_response` before stop-listening, so a
+  second GPIO38 press cannot be falsely authorized while server TTS has not
+  yet started;
+- a press remains ignored while response is awaiting, collecting, finalizing,
+  or playing;
+- response inactivity timeout: 15 s; entire await/collection deadline: 90 s;
+- copied response errors bypass the normal READY-only gate and release the
+  in-flight response after transport loss;
+- project wrappers bound provider text/binary WebSocket sends that requested
+  `portMAX_DELAY` to 8 s without using provider-private transport handles;
 - speaker-idle wait: 10 s;
 - playback completion wait: 60 s;
 - repeated turns are serialized until prior downlink/playback is finished;
 - stale/non-current long-lived session items are rejected;
-- no unbounded reconnect loop;
-- a press in voice ERROR requests one bounded recovery and requires a fresh press after IDLE;
+- no project-owned unbounded reconnect loop; the retained upstream WebSocket
+  session may reconnect after unexpected transport loss;
+- a continuously held press in voice ERROR survives one bounded recovery and
+  starts a fresh session after IDLE; releasing before READY still cancels;
 - SD failures stay under `sd_card_manager` ownership.
 
 ## HIL result and remaining boundaries
@@ -180,6 +195,23 @@ deferred: stalled response, network loss during a turn, SD unavailable during
 response, and queue-pressure/corrupt-response injection. The LCD `Starting...`
 route is a separate Phase-15 UI concern; it does not invalidate the accepted
 voice transport/speaker path.
+
+Targeted regression evidence from the Phase-15 HIL image (2026-09-02) confirms
+the boot-queued production session reaches READY, an unexpected disconnect
+returns through CONNECTING to READY without power cycling, and one GPIO38 turn
+reaches capture, response wait, playback request, and PLAYBACK_COMPLETE. A
+press during that response wait was rejected before recording. This does not
+replace the full Phase-14 HIL matrix: fresh audible-speaker acceptance and all
+deferred fault cases must be accepted again on the exact regression image
+before they can be reported as a fresh full HIL PASS.
+
+## Regression build evidence — 2026-09-02
+
+- `idf.py build` on `phase/14-ptt-voice-mvp`: **PASS**;
+- app binary: `0x21c1f0` bytes, `0x1e3e10` bytes (47%) free in the smallest
+  app partition;
+- the final link contains both public WebSocket `--wrap` directives and the
+  project-owned `__wrap_*` implementations from `xiaozhi_foundation`.
 
 Other retained boundaries:
 

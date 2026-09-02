@@ -180,9 +180,29 @@ static esp_err_t uplink_end_turn(uint32_t generation)
     portEXIT_CRITICAL(&s_lock);
 
     esp_err_t first_error = ESP_OK;
+    bool response_wait_started = false;
+    bool close_after_stop = (s_turn_packets == 0U);
     esp_err_t ret = audio_manager_stream_disarm(generation);
     if ((ret != ESP_OK) && (ret != ESP_ERR_INVALID_STATE)) {
         first_error = ret;
+    }
+
+    /* Reserve the still-open shared channel before stop-listening reaches the
+     * server. This closes the former gap where a second PTT press could be
+     * authorized while the prior turn had sent audio but had not yet received
+     * TTS_START. */
+    if (s_turn_packets > 0U) {
+        ret = voice_assistant_downlink_begin_response_wait(generation);
+        if (ret == ESP_OK) {
+            response_wait_started = true;
+        } else {
+            /* Never retain an untracked audio channel: if downlink cannot
+             * own the response wait, close it after stop-listening instead. */
+            close_after_stop = true;
+            if (first_error == ESP_OK) {
+                first_error = ret;
+            }
+        }
     }
 
     ret = audio_manager_stop_recording();
@@ -191,16 +211,27 @@ static esp_err_t uplink_end_turn(uint32_t generation)
         first_error = ret;
     }
 
-    /* Stop listening and retain the channel only when at least one complete
-     * Opus packet reached the server. A zero-packet turn cannot produce a
-     * valid response and must not block the next PTT attempt. */
+    /* Stop listening and retain the channel only while downlink owns the
+     * bounded response wait. A zero-packet turn cannot produce a valid
+     * response and must not block the next PTT attempt. */
     ret = xiaozhi_foundation_audio_uplink_stop(generation);
     if ((ret != ESP_OK) && (ret != ESP_ERR_INVALID_STATE) &&
         (first_error == ESP_OK)) {
         first_error = ret;
     }
 
-    if (s_turn_packets == 0U) {
+    if ((ret != ESP_OK) && response_wait_started) {
+        /* No successful stop-listening means the server cannot be relied on
+         * to produce a response. Clear the local wait before closing the
+         * channel; if TTS_START won the race, cancellation returns
+         * INVALID_STATE and the downlink worker remains its owner. */
+        if (voice_assistant_downlink_cancel_response_wait(generation, ret) ==
+            ESP_OK) {
+            close_after_stop = true;
+        }
+    }
+
+    if (close_after_stop) {
         ret = xiaozhi_foundation_audio_channel_close(generation);
         if ((ret != ESP_OK) && (ret != ESP_ERR_INVALID_STATE) &&
             (first_error == ESP_OK)) {
@@ -217,7 +248,7 @@ static esp_err_t uplink_end_turn(uint32_t generation)
              (unsigned)s_turn_packets,
              (unsigned)s_turn_opus_bytes,
              (unsigned)s_turn_pcm_samples,
-             (s_turn_packets > 0U) ? "yes" : "no");
+             (response_wait_started && !close_after_stop) ? "yes" : "no");
     return first_error;
 }
 
