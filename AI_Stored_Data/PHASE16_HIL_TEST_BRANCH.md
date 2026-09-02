@@ -1,14 +1,18 @@
 # Phase 16 Audio Arbitration HIL Test Branch
 
-Updated: 2026-08-25
+Updated: 2026-09-02
 Test branch: `test/phase16-audio-arbitration-hil`
 Base/production branch: `phase/16-audio-arbitration`
 Activation command: `RUN PHASE 16 HIL`
-Status: **TEST BRANCH CREATED / CODEX RUNBOOK READY / HARDWARE EXECUTION PENDING**
+Status: **TEST BRANCH SYNCHRONIZED / BUILD VERIFIED / HARDWARE EXECUTION PENDING**
 
 ## Purpose
 
 This is the dedicated Phase-16 board-acceptance branch. Production architecture/fixes belong on `phase/16-audio-arbitration`; test-only instrumentation, deterministic stimulus, expected logs and acceptance evidence belong here.
+
+This branch is synchronized through production checkpoint `7faeed8` and its
+test merge `de39dfb` passed `idf.py build` with ESP-IDF 6.0.1 on 2026-09-02
+(binary `0x21e7b0`, 47% app partition free). This is host build evidence only.
 
 Read `AI_Stored_Data/PHASE16_HIL_TEST_PLAN.md` together with this file.
 
@@ -250,10 +254,10 @@ These are semantic expected markers for the test harness; do not claim they have
 ## Current evidence
 
 ```text
-Production Phase-16 SW        COMPLETE / STATIC REVIEW COMPLETE
-Dedicated Phase-16 test branch CREATED
+Production Phase-16 SW        COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED
+Dedicated Phase-16 test branch SYNCHRONIZED through 7faeed8
 Codex HIL command/runbook      READY
-Hardware build                 NOT YET CLAIMED
+Test-branch idf.py build       PASS (ESP-IDF 6.0.1; 0x21e7b0; 47% app free)
 Flash/run                      NOT YET CLAIMED
 Phase-16 HIL acceptance        PENDING
 ```
