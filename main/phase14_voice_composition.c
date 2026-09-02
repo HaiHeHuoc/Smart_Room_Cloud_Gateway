@@ -130,9 +130,21 @@ static esp_err_t phase14_start_voice_stack(void)
         return ret;
     }
 
+    /* Composition reaches this point only after app_main has observed network
+     * ONLINE and every production callback consumer is registered. Queue the
+     * long-lived session now so PTT controls one ready connection instead of
+     * using the first button press as a transport-start race. */
+    ret = voice_assistant_begin_session();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG,
+                 "Phase-14 boot Xiaozhi connection request failed: %s",
+                 esp_err_to_name(ret));
+        return ret;
+    }
+
     s_voice_started = true;
     ESP_LOGI(TAG,
-             "Phase-14 voice stack READY ptt_gpio=%d active_level=%u pull=down",
+             "Phase-14 voice stack READY; boot Xiaozhi connection queued ptt_gpio=%d active_level=%u pull=down",
              (int)PTT_BUTTON_GPIO,
              (unsigned)PTT_BUTTON_ACTIVE_LEVEL);
     return ESP_OK;

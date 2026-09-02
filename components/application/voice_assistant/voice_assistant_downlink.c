@@ -20,9 +20,16 @@
 /* esp_audio_codec documents about 20 KiB of task stack for decoder coverage;
  * keep additional coordinator headroom for queue/WAV orchestration. */
 #define DOWNLINK_TASK_STACK_BYTES          (24U * 1024U)
-#define DOWNLINK_TASK_PRIORITY             5U
-#define DOWNLINK_QUEUE_LENGTH              8U
-#define DOWNLINK_CHUNK_BYTES               2048U
+/* The upstream WebSocket dispatch task runs at priority 5. Keep the consumer
+ * one level higher so a successful callback enqueue immediately runs decode
+ * work before dispatch can drain a burst of additional response frames. */
+#define DOWNLINK_TASK_PRIORITY             6U
+#define DOWNLINK_QUEUE_LENGTH              16U
+/* Server packets are complete Opus frames and must never be split. A prior
+ * target trace recorded a 2100-byte frame. 2304 B retains that headroom while
+ * doubling the burst depth with nearly the same internal-RAM queue footprint
+ * as the previous 8 x 4096 B configuration. */
+#define DOWNLINK_CHUNK_BYTES               2304U
 #define DOWNLINK_RESPONSE_CAPACITY_BYTES   (1024U * 1024U)
 #define DOWNLINK_RESPONSE_TIMEOUT_MS       15000U
 #define DOWNLINK_QUEUE_POLL_MS             100U
@@ -45,6 +52,11 @@ typedef struct {
 static const char *const TAG = "VOICE_DOWNLINK";
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static QueueHandle_t s_queue = NULL;
+/* The queue is used exclusively from task callbacks/tasks, never from an ISR.
+ * Keep its control block in internal RAM while placing its large copied-packet
+ * ring in PSRAM so microphone/DMA allocations retain internal-RAM headroom. */
+static StaticQueue_t s_queue_control = {0};
+static uint8_t *s_queue_storage = NULL;
 static TaskHandle_t s_task = NULL;
 static uint8_t *s_response = NULL;
 static size_t s_response_size = 0U;
@@ -68,6 +80,24 @@ static void downlink_set_error(esp_err_t error)
     s_status.last_error = (error == ESP_OK) ? ESP_FAIL : error;
     ++s_status.responses_failed;
     portEXIT_CRITICAL(&s_lock);
+}
+
+static void downlink_mark_response_tainted(
+    const char *reason,
+    uint32_t generation,
+    size_t data_len)
+{
+    const bool already_tainted = atomic_exchange_explicit(
+        &s_response_tainted,
+        true,
+        memory_order_acq_rel);
+    if (!already_tainted) {
+        ESP_LOGW(TAG,
+                 "response tainted generation=%u reason=%s packet_bytes=%u",
+                 (unsigned)generation,
+                 reason,
+                 (unsigned)data_len);
+    }
 }
 
 static void downlink_finish_turn_state(void)
@@ -220,6 +250,22 @@ static esp_err_t downlink_finalize_response(uint32_t generation)
         memory_order_acquire);
     if ((generation == 0U) || (s_response_size == 0U) ||
         ((s_response_size % sizeof(int16_t)) != 0U) || tainted) {
+        uint32_t queued = 0U;
+        uint32_t dropped_queue_full = 0U;
+        uint32_t dropped_stale = 0U;
+        portENTER_CRITICAL(&s_lock);
+        queued = s_status.chunks_queued;
+        dropped_queue_full = s_status.chunks_dropped_queue_full;
+        dropped_stale = s_status.chunks_dropped_stale;
+        portEXIT_CRITICAL(&s_lock);
+        ESP_LOGE(TAG,
+                 "response rejected generation=%u pcm_bytes=%u tainted=%s queued=%u dropped_queue_full=%u dropped_stale=%u",
+                 (unsigned)generation,
+                 (unsigned)s_response_size,
+                 tainted ? "yes" : "no",
+                 (unsigned)queued,
+                 (unsigned)dropped_queue_full,
+                 (unsigned)dropped_stale);
         return tainted ? ESP_ERR_INVALID_RESPONSE : ESP_ERR_INVALID_SIZE;
     }
 
@@ -283,10 +329,10 @@ static void downlink_response_callback(
         portENTER_CRITICAL(&s_lock);
         ++s_status.chunks_dropped_queue_full;
         portEXIT_CRITICAL(&s_lock);
-        atomic_store_explicit(
-            &s_response_tainted,
-            true,
-            memory_order_release);
+        downlink_mark_response_tainted(
+            "callback-reentry",
+            event->client_generation,
+            event->data_len);
         return;
     }
 
@@ -299,7 +345,10 @@ static void downlink_response_callback(
             portENTER_CRITICAL(&s_lock);
             ++s_status.chunks_dropped_queue_full;
             portEXIT_CRITICAL(&s_lock);
-            atomic_store_explicit(&s_response_tainted, true, memory_order_release);
+            downlink_mark_response_tainted(
+                "control-queue-full",
+                event->client_generation,
+                0U);
         }
         if ((event->kind == XIAOZHI_FOUNDATION_RESPONSE_TTS_START) &&
             !atomic_exchange_explicit(
@@ -325,7 +374,10 @@ static void downlink_response_callback(
         portENTER_CRITICAL(&s_lock);
         ++s_status.chunks_dropped_queue_full;
         portEXIT_CRITICAL(&s_lock);
-        atomic_store_explicit(&s_response_tainted, true, memory_order_release);
+        downlink_mark_response_tainted(
+            "packet-oversize",
+            event->client_generation,
+            event->data_len);
         ESP_LOGE(TAG,
                  "Opus packet dropped: size=%u exceeds capacity=%u",
                  (unsigned)event->data_len,
@@ -343,7 +395,10 @@ static void downlink_response_callback(
         portENTER_CRITICAL(&s_lock);
         ++s_status.chunks_dropped_queue_full;
         portEXIT_CRITICAL(&s_lock);
-        atomic_store_explicit(&s_response_tainted, true, memory_order_release);
+        downlink_mark_response_tainted(
+            "audio-queue-full",
+            event->client_generation,
+            event->data_len);
         atomic_flag_clear_explicit(&s_callback_busy, memory_order_release);
         return;
     }
@@ -522,10 +577,11 @@ static void downlink_task(void *argument)
             }
             const esp_err_t ret = downlink_finalize_response(item.generation);
             if (ret != ESP_OK) {
-                downlink_set_error(ret);
                 ESP_LOGE(TAG, "response finalize failed generation=%u error=%s",
                          (unsigned)item.generation,
                          esp_err_to_name(ret));
+                downlink_abort_response(item.generation, ret, false);
+                continue;
             }
             downlink_finish_turn_state();
         }
@@ -546,8 +602,23 @@ esp_err_t voice_assistant_downlink_init(void)
         return codec_ret;
     }
 
-    s_queue = xQueueCreate(DOWNLINK_QUEUE_LENGTH, sizeof(downlink_item_t));
+    const size_t queue_storage_bytes =
+        (size_t)DOWNLINK_QUEUE_LENGTH * sizeof(downlink_item_t);
+    s_queue_storage = (uint8_t *)heap_caps_malloc(
+        queue_storage_bytes,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_queue_storage == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    s_queue = xQueueCreateStatic(
+        DOWNLINK_QUEUE_LENGTH,
+        sizeof(downlink_item_t),
+        s_queue_storage,
+        &s_queue_control);
     if (s_queue == NULL) {
+        heap_caps_free(s_queue_storage);
+        s_queue_storage = NULL;
         return ESP_ERR_NO_MEM;
     }
 
@@ -557,6 +628,8 @@ esp_err_t voice_assistant_downlink_init(void)
     if (s_response == NULL) {
         vQueueDelete(s_queue);
         s_queue = NULL;
+        heap_caps_free(s_queue_storage);
+        s_queue_storage = NULL;
         return ESP_ERR_NO_MEM;
     }
 

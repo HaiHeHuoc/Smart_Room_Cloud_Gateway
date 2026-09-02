@@ -17,7 +17,7 @@
 #define PTT_LOCK_TIMEOUT_MS           100U
 #define PTT_TASK_START_TIMEOUT_MS     2000U
 #define PTT_POLL_MS                   50U
-#define PTT_ARMING_TIMEOUT_MS         20000U
+#define PTT_ARMING_TIMEOUT_MS         45000U
 
 typedef enum {
     PTT_COMMAND_PRESS = 0,
@@ -198,6 +198,33 @@ static void ptt_reconcile_voice_state(void)
         return;
     }
 
+    /* A retained press that requested recovery has no session generation until
+     * cleanup reaches IDLE. Start one fresh session and continue arming the
+     * same physical press instead of requiring a second button press. */
+    if ((voice.state == VOICE_ASSISTANT_STATE_IDLE) &&
+        (ptt.session_generation == 0U)) {
+        const esp_err_t begin_ret = voice_assistant_begin_session();
+        if (begin_ret != ESP_OK) {
+            ptt_set_status(VOICE_ASSISTANT_PTT_ERROR,
+                           false,
+                           false,
+                           voice.session_generation,
+                           begin_ret);
+            return;
+        }
+
+        voice_assistant_status_t updated = {0};
+        const esp_err_t updated_ret = voice_assistant_get_status(&updated);
+        ptt_set_status(VOICE_ASSISTANT_PTT_ARMING_SESSION,
+                       true,
+                       false,
+                       (updated_ret == ESP_OK) ?
+                           updated.session_generation : voice.session_generation,
+                       ESP_OK);
+        ESP_LOGI(TAG, "recovery started a fresh session while press remains held");
+        return;
+    }
+
     if ((xTaskGetTickCount() - s_arming_started) >=
         pdMS_TO_TICKS(PTT_ARMING_TIMEOUT_MS)) {
         ptt_set_status(VOICE_ASSISTANT_PTT_ERROR,
@@ -236,14 +263,28 @@ static void ptt_handle_press(const ptt_command_t *command)
                            recover_ret);
             return;
         }
-        ptt_set_status(VOICE_ASSISTANT_PTT_CANCEL_PENDING,
+        s_arming_started = xTaskGetTickCount();
+        ptt_set_status(VOICE_ASSISTANT_PTT_ARMING_SESSION,
+                       true,
                        false,
+                       0U,
+                       ESP_OK);
+        ESP_LOGI(TAG,
+                 "press retained through bounded recovery generation=%u",
+                 (unsigned)command->generation);
+        return;
+    }
+
+    if (voice.state == VOICE_ASSISTANT_STATE_CONNECTING) {
+        s_arming_started = xTaskGetTickCount();
+        ptt_set_status(VOICE_ASSISTANT_PTT_ARMING_SESSION,
+                       true,
                        false,
                        voice.session_generation,
                        ESP_OK);
         ESP_LOGI(TAG,
-                 "press requested bounded recovery generation=%u; press again after IDLE",
-                 (unsigned)command->generation);
+                 "press waiting for boot/reconnect session generation=%u",
+                 (unsigned)voice.session_generation);
         return;
     }
 
