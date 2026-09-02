@@ -83,7 +83,16 @@ DISCONNECTED clears the stale audio-channel state and leaves the session in
 `CONNECTING` so the upstream WebSocket client's bounded reconnect can return it
 to `READY`; the project does not create a second reconnect loop. A
 `SERVER_GOODBYE` after a completed audio turn closes only that audio channel and
-does not poison the still-connected WebSocket session.
+does not poison the still-connected WebSocket session. If transport loss
+interrupts an in-flight response, the copied foundation error bypasses the
+READY-only downlink gate and aborts that incomplete response before the next
+turn is allowed.
+
+The pinned provider sends WebSocket text and binary frames with
+`portMAX_DELAY`. Project link wrappers change only those public API requests to
+an 8-second timeout; provider source and private transport handles remain
+unchanged, while the existing session-close and reconnect policies remain
+independent.
 
 After network `ONLINE` and audio startup, the Phase-14 composition queues one
 `voice_assistant_begin_session()` call. This establishes the long-lived service
@@ -128,6 +137,11 @@ PTT additionally retains a still-held press across one bounded `ERROR` recovery:
 when cleanup returns the voice state to `IDLE`, it starts the fresh session and
 waits for real `READY`. Releasing before `READY` always cancels and never
 authorizes capture.
+
+For a non-empty turn, uplink reserves a downlink-owned response wait before it
+sends stop-listening. The wait serializes PTT until TTS starts, an error arrives,
+or its finite timeout aborts the channel; it also covers finalization and
+playback, so an ignored busy press is never reported as capture-authorized.
 
 ## Audio contract
 
@@ -228,6 +242,7 @@ cases (stalled response, network loss, SD unavailable and queue pressure) are
 explicitly deferred; see `AI_Stored_Data/PHASE14_HIL_TEST_PLAN.md`.
 
 The current targeted transport regression trace has verified boot connection,
-unexpected-disconnect reconnect, and a GPIO38 turn through playback completion.
-Audible speaker acceptance and the remaining Phase-14 fault matrix on that
-exact image remain separate hardware checks.
+unexpected-disconnect reconnect, a response-pending GPIO38 press rejection,
+and a GPIO38 turn through playback completion. Audible speaker acceptance and
+the remaining Phase-14 fault matrix on that exact image remain separate
+hardware checks.
