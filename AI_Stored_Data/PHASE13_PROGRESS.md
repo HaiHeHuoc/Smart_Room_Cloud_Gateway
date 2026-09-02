@@ -3,7 +3,7 @@
 Updated: 2026-08-25
 Branch: `phase/13-voice-assistant`
 Current checkpoint: **13-E — FINAL CLOSURE**
-Status: **SOFTWARE COMPLETE / BUILD NOT CLAIMED / HIL DEFERRED**
+Status: **SOFTWARE COMPLETE / BUILD PASS / HIL PASS**
 
 ## Collaboration result
 
@@ -60,7 +60,7 @@ Implemented:
 - one-public-command-at-a-time gating;
 - latest-value audio-status coalescing so audio callback bursts cannot fill the lifecycle command queue.
 
-Deferred HIL procedures and expected logs are recorded in:
+HIL procedures and accepted evidence are recorded in:
 
 `AI_Stored_Data/PHASE13_HIL_TEST_PLAN.md`
 
@@ -147,27 +147,28 @@ Confirmed by source/static review:
 
 ## Verification boundary
 
-Not claimed in this environment:
+Target HIL confirmed on 2026-08-25:
 
-- `idf.py build` / link success for the final Phase-13 diff;
-- target ESP32-S3 runtime behavior;
-- real WebSocket session start/stop through `voice_assistant`;
-- real network-loss recovery;
-- runtime heap/DMA/PSRAM/stack trend;
-- mic/Opus/response-audio flow (Sprint 14).
+- ESP-IDF 6.0.1 build/link;
+- ESP32-S3 boot and steady Gateway runtime;
+- real WebSocket start/stop across repeated generations;
+- two 20-cycle stress runs plus a final 3-cycle regression;
+- real AP loss, explicit recovery and bounded failed-connect recovery;
+- duplicate gates, audio coalescing, generation isolation and resource checkpoints;
+- automatic return to ONLINE after AP restoration without reset.
 
-These are not silently marked PASS.
+Mic/uplink/response-audio flow remains Phase-14 HIL scope.
 
-## Deferred HIL
+## HIL acceptance
 
-When hardware becomes available, use:
+Accepted plan:
 
 `AI_Stored_Data/PHASE13_HIL_TEST_PLAN.md`
 
-Expected cases include repeated session start/stop, failed connect, transport loss after READY, intentional-stop late callbacks, explicit recovery, stale generations, queue-pressure behavior and resource observations.
+The documented repeated lifecycle, failed-connect, transport-loss, intentional-stop, explicit-recovery, generation, queue-pressure and resource cases passed on target.
 
 ## Phase 13 final state
 
-**PHASE 13 = SOFTWARE COMPLETE / HARDWARE ACCEPTANCE PENDING**
+**PHASE 13 = SOFTWARE COMPLETE / BUILD PASS / HIL PASS (2026-08-25)**
 
 Do not reopen Phase 13 for Sprint-14 PTT/audio features unless a build/static/HIL finding proves a Phase-13 bug. The next software development phase is Sprint 14 — Push-To-Talk Voice MVP.

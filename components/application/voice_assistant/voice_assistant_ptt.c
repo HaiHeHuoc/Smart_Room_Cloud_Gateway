@@ -9,6 +9,7 @@
 #include "freertos/task.h"
 
 #include "voice_assistant.h"
+#include "voice_assistant_downlink.h"
 
 #define PTT_TASK_NAME                 "voice_ptt"
 #define PTT_TASK_STACK_BYTES          4096U
@@ -17,7 +18,7 @@
 #define PTT_LOCK_TIMEOUT_MS           100U
 #define PTT_TASK_START_TIMEOUT_MS     2000U
 #define PTT_POLL_MS                   50U
-#define PTT_ARMING_TIMEOUT_MS         20000U
+#define PTT_ARMING_TIMEOUT_MS         45000U
 
 typedef enum {
     PTT_COMMAND_PRESS = 0,
@@ -144,14 +145,16 @@ static void ptt_reconcile_voice_state(void)
 
     if (ptt.state == VOICE_ASSISTANT_PTT_CANCEL_PENDING) {
         if (voice.state == VOICE_ASSISTANT_STATE_READY) {
-            const esp_err_t stop_ret = voice_assistant_end_session();
-            if ((stop_ret != ESP_OK) && (stop_ret != ESP_ERR_INVALID_STATE)) {
-                ptt_set_status(VOICE_ASSISTANT_PTT_ERROR,
-                               false,
-                               false,
-                               voice.session_generation,
-                               stop_ret);
-            }
+            /* A boot-owned session remains available between PTT turns. If a
+             * press is released while that session is reconnecting, READY
+             * means only that pending turn is cancelled; stopping the session
+             * here would turn a transient transport loss into a second-press
+             * requirement. */
+            ptt_set_status(VOICE_ASSISTANT_PTT_RELEASED,
+                           false,
+                           false,
+                           voice.session_generation,
+                           ESP_OK);
             return;
         }
         if (voice.state == VOICE_ASSISTANT_STATE_IDLE) {
@@ -198,6 +201,33 @@ static void ptt_reconcile_voice_state(void)
         return;
     }
 
+    /* A retained press that requested recovery has no session generation until
+     * cleanup reaches IDLE. Start one fresh session and continue arming the
+     * same physical press instead of requiring a second button press. */
+    if ((voice.state == VOICE_ASSISTANT_STATE_IDLE) &&
+        (ptt.session_generation == 0U)) {
+        const esp_err_t begin_ret = voice_assistant_begin_session();
+        if (begin_ret != ESP_OK) {
+            ptt_set_status(VOICE_ASSISTANT_PTT_ERROR,
+                           false,
+                           false,
+                           voice.session_generation,
+                           begin_ret);
+            return;
+        }
+
+        voice_assistant_status_t updated = {0};
+        const esp_err_t updated_ret = voice_assistant_get_status(&updated);
+        ptt_set_status(VOICE_ASSISTANT_PTT_ARMING_SESSION,
+                       true,
+                       false,
+                       (updated_ret == ESP_OK) ?
+                           updated.session_generation : voice.session_generation,
+                       ESP_OK);
+        ESP_LOGI(TAG, "recovery started a fresh session while press remains held");
+        return;
+    }
+
     if ((xTaskGetTickCount() - s_arming_started) >=
         pdMS_TO_TICKS(PTT_ARMING_TIMEOUT_MS)) {
         ptt_set_status(VOICE_ASSISTANT_PTT_ERROR,
@@ -217,12 +247,60 @@ static void ptt_handle_press(const ptt_command_t *command)
         return;
     }
 
+    /* A response owns the shared Xiaozhi audio channel until its terminal
+     * callback and any WAV playback complete. Do not advertise a new press as
+     * authorized when uplink will correctly refuse to start it. */
+    if (voice_assistant_downlink_is_busy()) {
+        ESP_LOGW(TAG, "press ignored: prior server response is still active");
+        ptt_set_status(VOICE_ASSISTANT_PTT_RELEASED,
+                       false,
+                       false,
+                       voice.session_generation,
+                       ESP_OK);
+        return;
+    }
+
     if (voice.state == VOICE_ASSISTANT_STATE_READY) {
         ptt_set_status(VOICE_ASSISTANT_PTT_AUTHORIZED,
                        true,
                        true,
                        voice.session_generation,
                        ESP_OK);
+        return;
+    }
+
+    if (voice.state == VOICE_ASSISTANT_STATE_ERROR) {
+        const esp_err_t recover_ret = voice_assistant_recover();
+        if (recover_ret != ESP_OK) {
+            ptt_set_status(VOICE_ASSISTANT_PTT_ERROR,
+                           false,
+                           false,
+                           voice.session_generation,
+                           recover_ret);
+            return;
+        }
+        s_arming_started = xTaskGetTickCount();
+        ptt_set_status(VOICE_ASSISTANT_PTT_ARMING_SESSION,
+                       true,
+                       false,
+                       0U,
+                       ESP_OK);
+        ESP_LOGI(TAG,
+                 "press retained through bounded recovery generation=%u",
+                 (unsigned)command->generation);
+        return;
+    }
+
+    if (voice.state == VOICE_ASSISTANT_STATE_CONNECTING) {
+        s_arming_started = xTaskGetTickCount();
+        ptt_set_status(VOICE_ASSISTANT_PTT_ARMING_SESSION,
+                       true,
+                       false,
+                       voice.session_generation,
+                       ESP_OK);
+        ESP_LOGI(TAG,
+                 "press waiting for boot/reconnect session generation=%u",
+                 (unsigned)voice.session_generation);
         return;
     }
 
@@ -283,6 +361,11 @@ static void ptt_handle_release(void)
                            current.session_generation,
                            ESP_OK);
             break;
+        case VOICE_ASSISTANT_PTT_IDLE:
+        case VOICE_ASSISTANT_PTT_RELEASED:
+            /* A busy-response press is deliberately ignored, so its matching
+             * physical release has no PTT turn to cancel. */
+            break;
         default:
             ESP_LOGW(TAG, "release ignored in state=%s",
                      voice_assistant_ptt_state_to_string(current.state));
@@ -311,21 +394,15 @@ static void ptt_handle_cancel(void)
         return;
     }
 
-    if (voice.state == VOICE_ASSISTANT_STATE_READY) {
-        const esp_err_t end_ret = voice_assistant_end_session();
-        if (end_ret == ESP_OK) {
-            ptt_set_status(VOICE_ASSISTANT_PTT_CANCEL_PENDING,
-                           false,
-                           false,
-                           voice.session_generation,
-                           ESP_OK);
-        } else {
-            ptt_set_status(VOICE_ASSISTANT_PTT_ERROR,
-                           false,
-                           false,
-                           voice.session_generation,
-                           end_ret);
-        }
+    if ((voice.state == VOICE_ASSISTANT_STATE_READY) ||
+        (voice.state == VOICE_ASSISTANT_STATE_CONNECTING)) {
+        /* Cancellation revokes the current PTT intent only. The production
+         * session is deliberately long-lived and reconnects independently. */
+        ptt_set_status(VOICE_ASSISTANT_PTT_CANCEL_PENDING,
+                       false,
+                       false,
+                       voice.session_generation,
+                       ESP_OK);
         return;
     }
 
@@ -415,7 +492,8 @@ static esp_err_t ptt_queue_command(ptt_command_type_t type)
 
     if (type == PTT_COMMAND_PRESS) {
         if ((s_status.state != VOICE_ASSISTANT_PTT_IDLE) &&
-            (s_status.state != VOICE_ASSISTANT_PTT_RELEASED)) {
+            (s_status.state != VOICE_ASSISTANT_PTT_RELEASED) &&
+            (s_status.state != VOICE_ASSISTANT_PTT_ERROR)) {
             xSemaphoreGive(s_lock);
             return ESP_ERR_INVALID_STATE;
         }

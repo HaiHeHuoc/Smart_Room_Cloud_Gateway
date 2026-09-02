@@ -95,6 +95,8 @@ static void gui_model_callback(
     const ui_xiaozhi_state_t gui_state = gui_map_state(model->state);
     ui_xiaozhi_status_t gui = {
         .state = gui_state,
+        .listening_started_at_us = model->listening_started_at_us,
+        .listening_stopped_at_us = model->listening_stopped_at_us,
         .last_error = gui_map_error(gui_state, model->last_error),
         .user_text_truncated = model->user_text_truncated,
         .assistant_text_truncated = model->assistant_text_truncated,

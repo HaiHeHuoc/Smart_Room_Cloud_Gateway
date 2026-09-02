@@ -1,25 +1,25 @@
 # Next Work + Deferred HIL Backlog
 
-Updated: 2026-08-25
+Updated: 2026-09-02
 Authoritative development branch: `phase/16-audio-arbitration`
 Purpose: cross-session/Codex routing for **"hiện tại nên làm gì tiếp theo?"** and HIL activation from any clean working branch.
 
 ## Current software state
 
 ```text
-Phase 12 SW -> COMPLETE / selected HIL deferred
-Phase 13 SW -> COMPLETE / HIL deferred
-Phase 14 SW -> COMPLETE / Build + HIL pending
-Phase 15 SW -> COMPLETE / Build + HIL pending
-Phase 16 SW -> COMPLETE / Static review complete / Build + HIL pending
+Phase 12 SW  -> COMPLETE / HIL PASS
+Phase 13 SW  -> COMPLETE / HIL PASS
+Phase 14 SW  -> COMPLETE / BUILD PASS / golden-path HIL PASS / targeted regression partial
+Phase 15 SW  -> COMPLETE / BUILD VERIFIED / targeted HIL partial
+Phase 16 SW  -> COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / HIL pending
 Major feature coding -> COMPLETE through Phase 16
 ```
 
-Do not start Phase 17 automatically. The next project stage is acceptance/integration/hardening unless Hải explicitly expands feature scope.
+Do not start Phase 17 automatically. The next project stage is acceptance, integration, hardening, and evidence-driven fixes unless Hải explicitly expands feature scope.
 
 ## Global Codex HIL routing
 
-All Phase 12-16 HIL commands may be entered from the latest clean branch. Codex must route to the dedicated test branch before testing:
+All Phase 12-16 HIL commands may be entered from the latest clean branch. Codex must inspect `git status`, route to the dedicated test branch, and read the phase HIL plan/runbook before editing, building, flashing, or monitoring.
 
 ```text
 RUN PHASE 12 HIL -> test/xiaozhi-p2f-known-audio-e2e
@@ -29,146 +29,73 @@ RUN PHASE 15 HIL -> test/phase15-voice-ui-hil
 RUN PHASE 16 HIL -> test/phase16-audio-arbitration-hil
 ```
 
-Before checkout, inspect git status. If local work could be lost, stop and report; never auto-stash/reset/delete. After routing, read the phase HIL plan/runbook before editing/building/flashing.
+Never auto-stash, reset, delete, or test an older phase on an arbitrary production branch. All phases use PASS / FAIL / SKIP evidence discipline; expected logs are contracts, not observed hardware evidence.
 
-## Synchronized HIL status
-
-```text
-P12 test branch -> READY / expected logs documented
-P13 test branch -> READY / automatic supervisor + expected PASS/FAIL logs documented
-P14 test branch -> CREATED / standardized PH14_TEST markers + expected E2E log story
-P15 test branch -> READY / standardized PH15_TEST markers + expected UI/text/audio log story
-P16 test branch -> READY / standardized PH16_TEST markers + expected arbitration log story
-```
-
-All phases use PASS / FAIL / SKIP evidence discipline. Expected logs are contracts, not observed hardware evidence.
+## Phase acceptance state
 
 ### Phase 12
 
-Branch: `test/xiaozhi-p2f-known-audio-e2e`
-Activation: `RUN PHASE 12 HIL`
-Primary docs: `PHASE12_HIL_TEST_PLAN.md`, `P2F_KNOWN_AUDIO_HIL.md`, `CODEX_HIL_RUNBOOK.md`.
-Expected evidence includes BOOT transition markers, P2-F fixture READY, audio channel open, frames sent, USER/ASSISTANT CHAT_TEXT and validation summary PASS.
+`test/xiaozhi-p2f-known-audio-e2e` is a closed HIL regression baseline. Rerun it only when an explicit regression requires it.
 
 ### Phase 13
 
-Branch: `test/phase13-voice-assistant-hil`
-Activation: `RUN PHASE 13 HIL`
-Primary doc: `PHASE13_HIL_TEST_BRANCH.md`.
-Expected evidence includes `PH13_HIL` steady-state, audio burst, repeated lifecycle cycles, duplicate guards, optional manual network recovery and final summary.
+`test/phase13-voice-assistant-hil` is a closed HIL regression baseline. Rerun it only when an explicit regression requires it.
 
 ### Phase 14
 
-Branch: `test/phase14-ptt-voice-e2e-hil`
-Activation: `RUN PHASE 14 HIL`
-Primary docs: `PHASE14_HIL_TEST_PLAN.md`, `PHASE14_HIL_TEST_BRANCH.md`.
-Standard markers:
-
-```text
-PH14_TEST T14_XX BEGIN
-PH14_TEST T14_XX PASS
-PH14_TEST T14_XX FAIL reason=...
-PH14_TEST T14_XX SKIP reason=...
-PH14_TEST SUMMARY pass=<n> fail=<n> skip=<n>
-```
+`phase/14-ptt-voice-mvp` and `test/phase14-ptt-voice-e2e-hil` carry the PTT voice baseline. Three GPIO38 turns reached audible Xiaozhi response playback in the recorded golden-path run. The later targeted regression proves boot/reconnect, capture, response wait, busy-response rejection, and playback completion, but the exact image still needs fresh audible confirmation and deferred fault-injection cases remain unexecuted.
 
 ### Phase 15
 
-Branch: `test/phase15-voice-ui-hil`
-Activation: `RUN PHASE 15 HIL`
-Primary docs: `PHASE15_HIL_TEST_PLAN.md`, `PHASE15_HIL_TEST_BRANCH.md`.
-Standard markers:
-
-```text
-PH15_TEST T15_XX BEGIN
-PH15_TEST T15_XX PASS
-PH15_TEST T15_XX FAIL reason=...
-PH15_TEST T15_XX SKIP reason=...
-PH15_TEST SUMMARY pass=<n> fail=<n> skip=<n>
-```
+`phase/15-voice-assistant-ui` and `test/phase15-voice-ui-hil` are synchronized. The build-verified target trace covers boot/reconnect, actual capture, response wait, playback completion, and busy-response PTT rejection. Visible LCD `RECORDING`/duration, USER/ASSISTANT semantic text, latest-turn UX, recovery presentation, truncation, and UI resource stress remain pending HIL evidence.
 
 ### Phase 16
 
-Branch: `test/phase16-audio-arbitration-hil`
-Activation: `RUN PHASE 16 HIL`
-Primary docs: `PHASE16_HIL_TEST_PLAN.md`, `PHASE16_HIL_TEST_BRANCH.md`.
-Standard markers:
-
-```text
-PH16_TEST T16_XX BEGIN
-PH16_TEST T16_XX PASS
-PH16_TEST T16_XX FAIL reason=...
-PH16_TEST T16_XX SKIP reason=...
-PH16_TEST SUMMARY pass=<n> fail=<n> skip=<n>
-```
-
-## Common Codex execution contract
-
-For `RUN PHASE N HIL`:
-
-```text
-inspect current branch + git status
--> route to phase N dedicated test branch
--> read AGENTS.md + phase HIL plan/runbook
--> inspect before editing
--> clean/reconfigure build
--> flash connected ESP32-S3
--> monitor from reset
--> run phase test matrix independently
--> request only genuinely manual physical actions
--> report PASS / FAIL / SKIP with runtime evidence
-```
-
-Do not mark PASS from source inspection. Do not test older phases directly using whatever production branch is currently checked out.
+`phase/16-audio-arbitration` retains the production arbitration architecture; `test/phase16-audio-arbitration-hil` is its dedicated HIL branch. The forward merge from Phase 15 built successfully on 2026-09-02; this is build evidence only, not Phase-16 HIL. Its plan covers arbitration startup, Xiaozhi capture/playback ownership, notification queueing, alarm preemption, equal-priority protection, and resource behavior.
 
 ## Production-vs-test fix policy
 
 ```text
 Test harness/config/expected-log defect
--> fix on test branch
+-> fix on the test branch
 
 Production component/architecture defect
--> fix on owning production branch first
--> propagate forward/test branch
--> retest
+-> fix on the owning production branch first
+-> propagate forward to later production branches and their test branches
+-> rebuild and retest the affected acceptance case
 ```
 
-Never merge HIL/test harness history as production feature history.
+Never merge HIL/test-harness history as production feature history.
 
-## Recommended acceptance order when hardware returns
+## Common HIL execution contract
 
 ```text
-Phase 12 HIL
--> Phase 13 HIL
--> Phase 14 HIL
--> Phase 15 HIL
--> Phase 16 HIL
--> fix production defects on owning phase branch and propagate forward
--> integrate production history into full Gateway/Firebase branch
--> full system regression
--> performance/resource/stability hardening
--> final documentation/release/portfolio closure
+inspect branch + worktree
+-> route to the dedicated test branch
+-> read AGENTS.md + HIL plan/runbook
+-> clean/reconfigure build
+-> flash the connected ESP32-S3
+-> monitor from reset
+-> run the independent test matrix
+-> request only genuine manual physical actions
+-> report runtime-backed PASS / FAIL / SKIP
 ```
 
-Full regression must include Wi-Fi/provisioning + sensor + Firebase + GUI + SD + audio + Xiaozhi, simultaneous Firebase/Xiaozhi traffic, repeated PTT turns, notification queueing and critical-alarm preemption.
+## Recommended next acceptance order
 
-## What to answer when asked "làm gì tiếp theo?"
-
-If hardware is unavailable:
-
-1. P12-P16 HIL are deferred but routable through their dedicated commands/test branches.
-2. Major feature coding is complete through Phase 16.
-3. Do not propose Phase 17 automatically.
-4. Useful work is documentation/review/test-harness preparation until hardware is available.
-
-If hardware is available, start from Phase 12 HIL and follow the acceptance order above.
+1. Synchronize the build-verified Phase-16 production checkpoint to its test branch.
+2. On available hardware, complete Phase-15 visible UI/text HIL on its dedicated test branch.
+3. Run Phase-16 arbitration HIL after the inherited Phase-15 voice path is stable.
+4. Preserve Phase 12/13 as regression baselines and Phase 14's recorded golden-path PASS; rerun them only for a relevant regression.
+5. After independent phase acceptance, run full Gateway/Firebase integration regression: Wi-Fi/provisioning, sensor, Firebase, GUI, SD, audio, Xiaozhi, simultaneous cloud/Xiaozhi traffic, repeated PTT, notification queueing, and critical-alarm preemption.
 
 ## Evidence discipline
 
-- `IMPLEMENTED` — code exists;
-- `STATIC REVIEW COMPLETE` — source review performed;
-- `BUILD VERIFIED` — real ESP-IDF build evidence exists;
-- `HIL PASS` — target evidence satisfies documented contract;
-- `DEFERRED HIL` — hardware acceptance intentionally postponed.
+- `IMPLEMENTED` — code exists.
+- `STATIC REVIEW COMPLETE` — source review performed.
+- `BUILD VERIFIED` — a real ESP-IDF build passed.
+- `HIL PASS` — target evidence satisfies the documented contract.
+- `TARGETED HIL PARTIAL` — only the named runtime cases have evidence.
+- `DEFERRED HIL` — acceptance is intentionally not yet run.
 
 `AI_Stored_Data/` is cross-session metadata only and must never become a firmware/build dependency.
