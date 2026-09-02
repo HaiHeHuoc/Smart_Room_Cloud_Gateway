@@ -1,10 +1,10 @@
 # Phase 16 HIL Test Plan — Audio Arbitration
 
-Updated: 2026-08-25
+Updated: 2026-09-02
 Production branch: `phase/16-audio-arbitration`
 Recommended test branch: `test/phase16-audio-arbitration-hil`
 Activation label: `RUN PHASE 16 HIL`
-Status: **PLAN READY / BUILD + HIL PENDING**
+Status: **PLAN READY / BUILD VERIFIED / HIL PENDING**
 
 ## Purpose
 
@@ -21,6 +21,10 @@ Prove that Phase-16 multi-client audio arbitration works on the real ESP32-S3 wh
 - Sensor/Firebase/UI continue to run; Phase 16 does not globally pause unrelated tasks.
 
 ## T16-01 — clean build/link
+
+The Phase-15 forward merge passed `idf.py build` with ESP-IDF 6.0.1 on
+2026-09-02 (binary `0x21e7b0`, 47% app partition free). This is build/link
+evidence only; it is not target HIL evidence.
 
 Acceptance:
 - arbitration model/policy compiles;
@@ -172,7 +176,7 @@ For each case preserve:
 2. recorded-audio playback is not migrated into arbitration;
 3. capture/playback arbiters are separate and do not guarantee global cross-resource fairness;
 4. Phase-14 Xiaozhi downlink waits for manager IDLE before submitting playback, so queue-behind-current-playback is not exercised there;
-5. source-local CMake bridge remains a maintainability seam and needs real build evidence;
+5. source-local CMake bridge remains a maintenance seam; its Phase-15/16 link integration is build verified;
 6. Phase-14 codec/SD-backed playback limitations remain outside Phase-16 arbitration ownership.
 
 No Phase-16 HIL PASS is claimed until target evidence satisfies this plan.

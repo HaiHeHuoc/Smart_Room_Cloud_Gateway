@@ -1,10 +1,10 @@
 # Phase 16 — Audio Arbitration & Multi-Client Audio Policy
 
-Updated: 2026-08-25
+Updated: 2026-09-02
 Branch: `phase/16-audio-arbitration`
 Base branch: `phase/15-voice-assistant-ui`
 Current checkpoint: **16-F — FINAL REVIEW / CLOSURE**
-Status: **SOFTWARE COMPLETE / STATIC REVIEW COMPLETE / BUILD + HIL PENDING**
+Status: **SOFTWARE COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / HIL PENDING**
 
 ## Collaboration result
 
@@ -224,16 +224,15 @@ Contention in CPU/network/heap must be measured in full integration HIL. Do not 
 
 These do not reopen Phase 16 software scope by themselves:
 
-1. no ESP-IDF build evidence yet;
-2. no target HIL evidence yet;
-3. playback/capture arbiters have init/start but no dedicated stop/deinit lifecycle API;
-4. cross-resource global fairness is not guaranteed;
-5. recorded-audio playback is not migrated into arbitration;
-6. source-local CMake compatibility redirects are a maintainability seam and require real build evidence;
-7. Xiaozhi downlink pre-waits for IDLE before playback submit, limiting queue usefulness at that call site;
-8. Phase-14 codec/SD-backed playback risks remain separate dependencies;
-9. notification/alarm helpers require HIL instrumentation/use to prove priority/preemption timing;
-10. simultaneous Firebase/cloud + Xiaozhi + arbitration load remains unmeasured.
+1. no target HIL evidence yet;
+2. playback/capture arbiters have init/start but no dedicated stop/deinit lifecycle API;
+3. cross-resource global fairness is not guaranteed;
+4. recorded-audio playback is not migrated into arbitration;
+5. source-local CMake compatibility redirects are a maintainability seam; their Phase-15/16 link integration is build verified but remains a future maintenance boundary;
+6. Xiaozhi downlink pre-waits for IDLE before playback submit, limiting queue usefulness at that call site;
+7. Phase-14 codec/SD-backed playback risks remain separate dependencies;
+8. notification/alarm helpers require HIL instrumentation/use to prove priority/preemption timing;
+9. simultaneous Firebase/cloud + Xiaozhi + arbitration load remains unmeasured.
 
 ## Phase-16 HIL
 
@@ -262,7 +261,7 @@ Phase 16 is closed as:
 ```text
 Software implementation       COMPLETE
 Static review                 COMPLETE
-ESP-IDF build verification    PENDING
+ESP-IDF build verification    PASS (ESP-IDF 6.0.1; binary 0x21e7b0; 47% app free)
 Hardware acceptance           PENDING
 Full integration regression   PENDING
 ```
