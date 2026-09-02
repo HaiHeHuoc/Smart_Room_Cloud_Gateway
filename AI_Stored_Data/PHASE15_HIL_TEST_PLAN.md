@@ -48,7 +48,7 @@ HIL PASS          target behavior/log/GUI evidence satisfies the case
 
 Run a clean ESP-IDF build on the Phase-15 production/test branch. The merged
 production checkpoint passed this gate on 2026-09-02: `idf.py build`, ESP-IDF
-6.0.1, binary `0x21ccc0`, 47% app partition free.
+6.0.1, binary `0x21cdd0`, 47% app partition free.
 
 Acceptance:
 
