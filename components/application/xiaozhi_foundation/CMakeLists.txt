@@ -1,7 +1,8 @@
 set(xiaozhi_foundation_sources
     "xiaozhi_foundation.c"
     "xiaozhi_session.c"
-    "xiaozhi_text_bridge.c")
+    "xiaozhi_text_bridge.c"
+    "xiaozhi_websocket_tx_timeout.c")
 
 set(xiaozhi_foundation_private_requires
     esp_event
@@ -10,6 +11,7 @@ set(xiaozhi_foundation_private_requires
     freertos
     log
     esp_xiaozhi
+    esp_websocket_client
     mcp-c-sdk)
 
 if(CONFIG_XIAOZHI_FOUNDATION_P2F_SD_FIXTURE)
@@ -43,6 +45,17 @@ set_source_files_properties(
     COMPILE_DEFINITIONS
         "esp_xiaozhi_chat_init=xiaozhi_foundation_chat_init_bridge")
 
+# esp_xiaozhi 0.1.2 calls the public WebSocket send APIs with portMAX_DELAY.
+# Wrap only those public symbols at final link so project-owned finite-timeout
+# shims protect text control frames and Opus frames without mutating the
+# managed provider or using its private transport handles.
+target_link_options(
+    ${COMPONENT_LIB}
+    INTERFACE
+    "LINKER:--wrap=esp_websocket_client_send_text"
+    "LINKER:--wrap=esp_websocket_client_send_bin"
+    "LINKER:-u,__wrap_esp_websocket_client_send_text"
+    "LINKER:-u,__wrap_esp_websocket_client_send_bin")
 if(CONFIG_XIAOZHI_FOUNDATION_P2F_SD_FIXTURE)
     # The validation-only wrapper loads the SD fixture immediately before the
     # existing public transport-validation request reaches xiaozhi_foundation.

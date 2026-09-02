@@ -43,8 +43,13 @@ esp_err_t voice_assistant_ptt_start(void);
  * Queue an authorized-user press intent.
  *
  * If the production voice session is IDLE, the PTT policy asks
- * voice_assistant to begin one session and waits asynchronously for READY.
- * Capture authorization becomes true only after real READY evidence exists.
+ * voice_assistant to begin one session and waits asynchronously for READY. If
+ * it is already CONNECTING, the press is armed and waits for that same READY
+ * evidence. From ERROR, one continuously held press is retained through
+ * bounded recovery and starts a fresh session after IDLE. Capture authorization
+ * becomes true only after real READY evidence exists. A press while a prior
+ * turn is awaiting, receiving, finalizing, or playing its server response is
+ * ignored and never reported as capture-authorized.
  */
 esp_err_t voice_assistant_ptt_press(void);
 
@@ -55,9 +60,9 @@ esp_err_t voice_assistant_ptt_press(void);
 esp_err_t voice_assistant_ptt_release(void);
 
 /**
- * Cancel the current PTT intent/session. If a transport start is still pending,
- * cancellation remains pending until the bounded start resolves, then closes
- * the session without ever authorizing capture.
+ * Cancel the current PTT intent. If a transport start is still pending,
+ * cancellation remains pending until the bounded start resolves, then revokes
+ * capture authorization without closing the long-lived production session.
  */
 esp_err_t voice_assistant_ptt_cancel(void);
 
