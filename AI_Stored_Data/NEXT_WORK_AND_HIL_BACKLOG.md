@@ -1,6 +1,6 @@
 # Next Work + Deferred HIL Backlog
 
-Updated: 2026-08-26
+Updated: 2026-09-02
 Authoritative development branch: `phase/15-voice-assistant-ui`
 Purpose: cross-session/Codex routing for **"hiện tại nên làm gì tiếp theo?"**
 
@@ -15,8 +15,8 @@ Current software state:
 Phase 12 SW -> COMPLETE / HIL PASS
 Phase 13 SW -> COMPLETE / HIL PASS
 Phase 14 SW -> COMPLETE / BUILD PASS
-Phase 14 HIL -> GOLDEN-PATH PASS / fault cases deferred
-Phase 15 SW -> COMPLETE / Build + HIL pending
+Phase 14 HIL -> GOLDEN-PATH PASS / targeted regression partial / fault cases deferred
+Phase 15 SW -> COMPLETE / BUILD VERIFIED / targeted HIL partial
 Phase 16    -> NOT STARTED
 ```
 
@@ -106,7 +106,7 @@ golden-path PASS and mark only unexecuted fault cases **DEFERRED**.
 
 ---
 
-## Phase 15 HIL — deferred / plan ready
+## Phase 15 HIL — targeted regression partial / full UI-text plan ready
 
 Production branch: `phase/15-voice-assistant-ui`
 
@@ -142,6 +142,11 @@ Important Phase-15 risks:
 - legacy screen intentionally maps CONNECTING/THINKING/RECOVERING to `PROCESSING`;
 - Phase-14 audio/codec failures must not be misdiagnosed as Phase-15 text/UI failures.
 
+Recorded target evidence (2026-09-02) confirms boot/reconnect, actual capture,
+response wait, playback completion and busy-response PTT rejection. It does
+not yet prove visible `RECORDING`/timer, USER/ASSISTANT text, latest-turn UX,
+recovery presentation, truncation, or UI resource stress.
+
 When hardware is unavailable: **DEFERRED / TEST PLAN READY**.
 
 ---
@@ -173,7 +178,7 @@ Answer in this order:
 1. Phase 12 HIL is closed and retained as a regression baseline.
 2. Phase 13 HIL is closed and retained as a regression baseline.
 3. Phase 14 golden-path HIL is PASS; fault cases remain deferred.
-4. Phase 15 HIL remains deferred; plan/test branch ready.
+4. Phase 15 target HIL is partial; visible UI/text cases remain pending.
 5. Phase 14 and Phase 15 software are complete.
 6. General audio arbitration remains a future integration/architecture follow-up.
 7. Phase 16 is not started; only plan/start it after explicit request.
@@ -184,9 +189,9 @@ Concise state:
 P12 HIL -> PASS / closed baseline
 P13 HIL -> PASS / closed baseline
 P14 HIL -> GOLDEN-PATH PASS / fault cases deferred
-P15 HIL -> DEFERRED / test branch ready
+P15 HIL -> TARGETED PARTIAL / visible UI-text cases pending
 P14 SW  -> COMPLETE / BUILD PASS
-P15 SW  -> COMPLETE / build/HIL pending
+P15 SW  -> COMPLETE / BUILD VERIFIED
 P16     -> NOT STARTED
 ```
 

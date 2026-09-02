@@ -1,9 +1,9 @@
 # Phase 15 Voice Assistant UI — HIL Acceptance Plan
 
-Updated: 2026-08-26
+Updated: 2026-09-02
 Production branch: `phase/15-voice-assistant-ui`
 Recommended test branch: `test/phase15-voice-ui-hil`
-Status: **PLAN READY / BUILD PASS / TARGET HIL NOT RUN**
+Status: **PLAN READY / BUILD PASS / TARGETED TRANSPORT HIL PARTIAL / FULL UI-TEXT HIL PENDING**
 
 ## Goal
 
@@ -47,8 +47,8 @@ HIL PASS          target behavior/log/GUI evidence satisfies the case
 ## Test 1 — build/link
 
 Run a clean ESP-IDF build on the Phase-15 production/test branch. The merged
-production checkpoint already passed this gate on 2026-08-26:
-`idf.py build`, ESP-IDF 6.0.1, binary `0x21c250`, 47% app partition free.
+production checkpoint passed this gate on 2026-09-02: `idf.py build`, ESP-IDF
+6.0.1, binary `0x21ccc0`, 47% app partition free.
 
 Acceptance:
 
@@ -58,8 +58,9 @@ Acceptance:
 - no duplicate/undefined callback/init symbol;
 - no warning promoted to error.
 
-Recorded result for the merged production branch: **PASS**. Target boot/HIL
-remains pending.
+Recorded result for the merged production branch: **PASS**. A target serial
+trace proves boot/reconnect/capture/response/playback and busy-response PTT
+rejection, but the visible LCD/text cases below remain pending.
 
 The Phase-15 source-scoped semantic init bridge is a controlled seam; the
 merged production build has proven compilation, while target callback behavior
@@ -76,7 +77,7 @@ audio manager READY
 voice_assistant started
 production voice UI model started with semantic text observer
 production voice GUI adapter started
-Phase-15 voice stack READY ...
+Phase-15 voice stack READY; boot Xiaozhi connection queued ...
 ```
 
 Acceptance:
@@ -101,6 +102,9 @@ Acceptance:
 - no Xiaozhi/voice callback calls LVGL directly;
 - screen update occurs without crash/freeze;
 - IDLE does not continuously steal the dashboard route.
+- when microphone capture has actually begun, the LCD must show `RECORDING`
+  (or the documented `RECORD` form) and a duration that advances; `READY`
+  alone is not evidence that PTT capture works.
 
 Current MVP visual mapping is intentionally:
 
