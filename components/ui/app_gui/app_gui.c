@@ -1370,7 +1370,7 @@ static const char *app_gui_xiaozhi_state_to_string(
             return "READY";
 
         case UI_XIAOZHI_STATE_LISTENING:
-            return "LISTENING";
+            return "RECORDING";
 
         case UI_XIAOZHI_STATE_PROCESSING:
             return "PROCESSING";
@@ -1399,7 +1399,7 @@ static const char *app_gui_xiaozhi_detail_text(
             return "Ready for validation";
 
         case UI_XIAOZHI_STATE_LISTENING:
-            return "Speak now";
+            return "Recording microphone";
 
         case UI_XIAOZHI_STATE_PROCESSING:
             return "Waiting for response";
@@ -2582,7 +2582,8 @@ static void app_gui_render_xiaozhi_status(
     (void)snprintf(
         duration_text,
         sizeof(duration_text),
-        "LISTEN %s",
+        "%s %s",
+        (status->state == UI_XIAOZHI_STATE_LISTENING) ? "RECORD" : "LISTEN",
         duration);
 
     app_gui_set_label_text_if_changed(

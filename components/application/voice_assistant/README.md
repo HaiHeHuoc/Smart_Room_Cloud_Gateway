@@ -28,7 +28,13 @@ UNINITIALIZED -> INITIALIZED -> IDLE
                               v
                             READY
 
-transport/session failure -> ERROR
+READY -- unexpected WebSocket loss --> CONNECTING
+                                      |
+                                      | upstream WebSocket reconnect
+                                      v
+                                    READY
+
+initial or unrecoverable session failure -> ERROR
                               |
                               | recover()
                               v
@@ -71,10 +77,27 @@ chat stop
 ```
 
 The session layer distinguishes intentional stop from unexpected transport loss.
-DISCONNECTED/SERVER_GOODBYE generated during explicit stop are treated as
-teardown evidence instead of false runtime failures. A connection failure before
-READY preserves `active=false`; an established-session failure preserves
-`active=true` until recovery/cleanup.
+DISCONNECTED generated during explicit stop is teardown evidence instead of a
+false runtime failure. During an active production session, an unexpected
+DISCONNECTED clears the stale audio-channel state and leaves the session in
+`CONNECTING` so the upstream WebSocket client's bounded reconnect can return it
+to `READY`; the project does not create a second reconnect loop. A
+`SERVER_GOODBYE` after a completed audio turn closes only that audio channel and
+does not poison the still-connected WebSocket session. If transport loss
+interrupts an in-flight response, the copied foundation error bypasses the
+READY-only downlink gate and aborts that incomplete response before the next
+turn is allowed.
+
+The pinned provider sends WebSocket text and binary frames with
+`portMAX_DELAY`. Project link wrappers change only those public API requests to
+an 8-second timeout; provider source and private transport handles remain
+unchanged, while the existing session-close and reconnect policies remain
+independent.
+
+After network `ONLINE` and audio startup, the Phase-14 composition queues one
+`voice_assistant_begin_session()` call. This establishes the long-lived service
+connection without opening a microphone/audio channel; GPIO38 remains the sole
+user authorization for a conversation turn.
 
 ## Callback and stale-event policy
 
@@ -105,8 +128,20 @@ ERROR -> RECOVERING
       -> ERROR on cleanup failure
 ```
 
-There is no automatic reconnect loop. A later explicit `begin_session()` starts
+There is no project-owned automatic reconnect loop. The upstream WebSocket
+client reconnects the retained active session after transport loss. When an
+initial session cannot be recovered, a later explicit `begin_session()` starts
 a fresh generation.
+
+PTT additionally retains a still-held press across one bounded `ERROR` recovery:
+when cleanup returns the voice state to `IDLE`, it starts the fresh session and
+waits for real `READY`. Releasing before `READY` always cancels and never
+authorizes capture.
+
+For a non-empty turn, uplink reserves a downlink-owned response wait before it
+sends stop-listening. The wait serializes PTT until TTS starts, an error arrives,
+or its finite timeout aborts the channel; it also covers finalization and
+playback, so an ignored busy press is never reported as capture-authorized.
 
 ## Audio contract
 
@@ -183,9 +218,10 @@ CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE=n
 so normal Phase-13 firmware does not automatically run the temporary validator.
 Dedicated HIL/test branches may opt in explicitly.
 
-Phase 13 also deliberately does not auto-call `voice_assistant_begin_session()`
-at boot. A conversation must be user-authorized; Sprint 14 owns the PTT trigger,
-voice-session start, mic uplink and response-audio lifecycle.
+Phase 13 deliberately did not auto-call `voice_assistant_begin_session()` at
+boot. The current Phase-14 composition queues the connection after `ONLINE`,
+but a conversation remains user-authorized: Sprint 14 owns the GPIO38 PTT
+trigger, mic uplink and response-audio lifecycle.
 
 ## Security boundary
 
@@ -198,8 +234,15 @@ over Wi-Fi, provisioning, cloud, reset, storage, audio hardware or GUI lifecycle
 
 ## Verification boundary
 
-Static/source review is complete. Final `idf.py build`, target runtime,
-WebSocket/session HIL and resource measurements are not claimed in the current
-environment and remain explicitly deferred.
+Static/source review and the Phase-14 golden-path target HIL are complete. The
+corrected ESP32-S3 image built and flashed successfully, and three GPIO38 PTT
+turns completed Opus uplink, response decode, SD-backed WAV playback and
+operator-confirmed audible output before returning to `IDLE`. Fault-injection
+cases (stalled response, network loss, SD unavailable and queue pressure) are
+explicitly deferred; see `AI_Stored_Data/PHASE14_HIL_TEST_PLAN.md`.
 
-Use `AI_Stored_Data/PHASE13_HIL_TEST_PLAN.md` when target hardware is available.
+The current targeted transport regression trace has verified boot connection,
+unexpected-disconnect reconnect, a response-pending GPIO38 press rejection,
+and a GPIO38 turn through playback completion. Audible speaker acceptance and
+the remaining Phase-14 fault matrix on that exact image remain separate
+hardware checks.

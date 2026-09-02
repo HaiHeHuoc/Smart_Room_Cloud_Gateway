@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "xiaozhi_foundation.h"
@@ -13,6 +14,7 @@ static const char *const TAG = "VOICE_UI_MODEL";
 
 static SemaphoreHandle_t s_lock = NULL;
 static bool s_started = false;
+static bool s_capture_active = false;
 static voice_assistant_ui_model_t s_model = {
     .state = VOICE_ASSISTANT_UI_IDLE,
     .last_error = ESP_OK,
@@ -41,6 +43,60 @@ static voice_assistant_ui_state_t ui_map_voice_state(voice_assistant_state_t sta
         case VOICE_ASSISTANT_STATE_IDLE:
         default: return VOICE_ASSISTANT_UI_IDLE;
     }
+}
+
+static voice_assistant_ui_state_t ui_map_presentation_state(
+    const voice_assistant_status_t *status)
+{
+    if (status == NULL) {
+        return VOICE_ASSISTANT_UI_IDLE;
+    }
+
+    if ((status->state == VOICE_ASSISTANT_STATE_ERROR) ||
+        (status->audio.state == VOICE_ASSISTANT_AUDIO_ERROR)) {
+        return VOICE_ASSISTANT_UI_ERROR;
+    }
+
+    switch (status->audio.state) {
+        case VOICE_ASSISTANT_AUDIO_RECORDING:
+            /* Do not report RECORDING until microphone capture is real. */
+            return status->audio.capture_active
+                       ? VOICE_ASSISTANT_UI_LISTENING
+                       : ui_map_voice_state(status->state);
+
+        case VOICE_ASSISTANT_AUDIO_PROCESSING:
+            return VOICE_ASSISTANT_UI_THINKING;
+
+        case VOICE_ASSISTANT_AUDIO_PLAYBACK:
+            return VOICE_ASSISTANT_UI_SPEAKING;
+
+        case VOICE_ASSISTANT_AUDIO_ERROR:
+            return VOICE_ASSISTANT_UI_ERROR;
+
+        case VOICE_ASSISTANT_AUDIO_UNAVAILABLE:
+        case VOICE_ASSISTANT_AUDIO_INITIALIZED:
+        case VOICE_ASSISTANT_AUDIO_IDLE:
+        default:
+            return ui_map_voice_state(status->state);
+    }
+}
+
+static void ui_update_capture_timestamps_locked(
+    const voice_assistant_status_t *status)
+{
+    const bool capture_active =
+        (status->audio.state == VOICE_ASSISTANT_AUDIO_RECORDING) &&
+        status->audio.capture_active;
+
+    if (capture_active && !s_capture_active) {
+        s_model.listening_started_at_us = esp_timer_get_time();
+        s_model.listening_stopped_at_us = 0;
+    } else if (!capture_active && s_capture_active &&
+               (s_model.listening_started_at_us > 0)) {
+        s_model.listening_stopped_at_us = esp_timer_get_time();
+    }
+
+    s_capture_active = capture_active;
 }
 
 static void ui_clear_assistant_locked(void)
@@ -95,10 +151,20 @@ static void ui_voice_status_callback(
         (status->session_generation != s_model.session_generation)) {
         ui_clear_text_locked();
         s_model.turn_sequence = 0U;
+        s_model.listening_started_at_us = 0;
+        s_model.listening_stopped_at_us = 0;
+        s_capture_active = false;
     }
-    s_model.state = ui_map_voice_state(status->state);
+    ui_update_capture_timestamps_locked(status);
+    s_model.state = ui_map_presentation_state(status);
     s_model.session_generation = status->session_generation;
     s_model.last_error = status->last_error;
+    if ((s_model.state == VOICE_ASSISTANT_UI_ERROR) &&
+        (s_model.last_error == ESP_OK)) {
+        s_model.last_error = (status->audio.last_error == ESP_OK)
+                                 ? ESP_FAIL
+                                 : status->audio.last_error;
+    }
     xSemaphoreGive(s_lock);
     ui_publish();
 }
@@ -207,6 +273,7 @@ esp_err_t voice_assistant_ui_model_init(void)
     memset(&s_model, 0, sizeof(s_model));
     s_model.state = VOICE_ASSISTANT_UI_IDLE;
     s_model.last_error = ESP_OK;
+    s_capture_active = false;
     xSemaphoreGive(s_lock);
     return ESP_OK;
 }
