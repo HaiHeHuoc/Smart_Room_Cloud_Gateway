@@ -154,7 +154,7 @@ When `CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE=y`, the Phase-14/15 production
 The bridge preserves the original production callback/context, forwards all events unchanged, and additionally publishes CHAT_TEXT semantic events. This is a controlled integration seam rather than a transport rewrite.
 
 The merged Phase-15 production branch built with ESP-IDF 6.0.1 on 2026-09-02
-(binary `0x21ccc0`, 47% app partition free). The source-local bridge compiled
+(binary `0x21cdd0`, 47% app partition free). The source-local bridge compiled
 successfully against pinned `esp_xiaozhi` 0.1.2 alongside the bounded public
 WebSocket-send wrappers. Refactor to a direct/public integration point later
 only if maintenance/build evidence shows the seam is fragile.
@@ -181,10 +181,12 @@ CONNECTING -> PROCESSING
 THINKING   -> PROCESSING
 RECOVERING -> PROCESSING
 READY      -> READY
-LISTENING  -> LISTENING
+LISTENING  -> RECORDING (only while microphone capture is active)
 SPEAKING   -> RESPONDING
 ERROR      -> ERROR
 ```
+
+The UI model now derives `LISTENING` from the actual `VOICE_ASSISTANT_AUDIO_RECORDING` and `capture_active` values, rather than the button authorization alone. It timestamps capture start/stop with the monotonic ESP timer; the UI task renders `RECORD <duration>` while capture is active and preserves the final `LISTEN <duration>` after it stops. This is **build verified**, but visible LCD evidence remains a Phase-15 HIL requirement.
 
 This is accepted as a documented **MVP presentation limitation**, not an architecture blocker. Do not claim exact CONNECTING/THINKING/RECOVERING LCD labels. A later small GUI refinement may split those labels after build/HIL evidence if worthwhile.
 
@@ -248,7 +250,7 @@ Static review        COMPLETE
 Production composition COMPLETE
 HIL plan             READY
 GitHub CI/checks     NONE PRESENT FOR CURRENT REVIEW HEAD
-idf.py build         PASS (ESP-IDF 6.0.1; binary 0x21ccc0; 47% app free)
+idf.py build         PASS (ESP-IDF 6.0.1; binary 0x21cdd0; 47% app free)
 Target runtime       TARGETED PARTIAL (transport/audio path only)
 RECORDING/timer HIL  PENDING VISIBLE LCD EVIDENCE
 USER transcript HIL  PENDING

@@ -38,7 +38,7 @@ assistant, microphone, speaker, or independent GUI task.
 | `APP_GUI_SCREEN_PROVISIONING` | Stable provisioning layout with a scannable QR code, instruction/status labels, and state indicator. |
 | `APP_GUI_SCREEN_WIFI_STATUS` | Existing Wi-Fi mode, SSID, and IPv4 screen. |
 | `APP_GUI_SCREEN_SENSOR_DASHBOARD` | Sensor dashboard with synchronized local time/date in its left header, temperature/humidity below, and Wi-Fi, cloud, sensor, and audio summaries in the right status column. |
-| `APP_GUI_SCREEN_XIAOZHI` | Temporary Phase 12.5 WebSocket validation state, listening duration, and bounded USER/ASSISTANT transcript. It is entered only through the existing explicit screen-request API; coordinator auto-routing is compiled only with `CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE=y`. |
+| `APP_GUI_SCREEN_XIAOZHI` | Project-owned Xiaozhi voice presentation: connection state, actual-microphone recording duration, and bounded USER/ASSISTANT transcript. It is entered through the existing explicit screen-request API. |
 | `APP_GUI_SCREEN_RESET_RESULT` | Factory-reset success or failure result; entered only through `app_gui_show_reset_result()`. |
 
 The old `APP_GUI_SCREEN_WIFI` and `APP_GUI_SCREEN_SENSOR` identifiers were
@@ -213,8 +213,9 @@ or restart Xiaozhi validation. Returning to it renders the latest cached
 snapshot.
 
 ```text
-xiaozhi_foundation copied validation snapshot
-    -> main composition callback copies project GUI model
+voice_assistant copied session/audio snapshot
+    -> voice_assistant_ui_model derives presentation state and capture timestamps
+    -> voice_assistant_ui_gui_adapter copies project GUI model
     -> app_gui_post_xiaozhi_status() length-one overwrite queue
     -> app_gui UI task caches status
     -> render only while APP_GUI_SCREEN_XIAOZHI is active
@@ -223,15 +224,17 @@ xiaozhi_foundation copied validation snapshot
 `ui_xiaozhi_status_t` has the states `DISCONNECTED`, `READY`, `LISTENING`,
 `PROCESSING`, `RESPONDING`, and `ERROR`, start/stop timestamps from
 `esp_timer_get_time()`, a non-sensitive `esp_err_t`, and separate 192-byte
-NUL-terminated USER/ASSISTANT buffers. The GUI timer computes the displayed
-duration from a `LISTENING` start timestamp; background code never sends
-100 ms duration messages.
+NUL-terminated USER/ASSISTANT buffers. `LISTENING` is rendered as
+`RECORDING` only after real microphone capture is active. The GUI timer
+computes the live duration from that start timestamp and freezes it after
+capture stops; background code never sends 100 ms duration messages.
 
 The 160x128 layout has a connection/state indicator, state/detail line,
-`LISTEN mm:ss.t`, and fixed USER/XZ transcript regions. The model keeps at
-most 191 bytes per role plus NUL. The on-screen regions use fixed-size clipping
-so long text cannot grow, relocate, or retain a stale LVGL object; truncation
-flags remain available for diagnostics without printing text in logs.
+`RECORD mm:ss.t` while capture is active (then the frozen `LISTEN` duration),
+and fixed USER/XZ transcript regions. The model keeps at most 191 bytes per
+role plus NUL. The on-screen regions use fixed-size clipping so long text
+cannot grow, relocate, or retain a stale LVGL object; truncation flags remain
+available for diagnostics without printing text in logs.
 
 One LVGL timer runs every 100 ms only while `XIAOZHI` is active. It stores no
 widget pointer in user data, is paused before another root is deleted, and is
@@ -663,8 +666,9 @@ Run any temporary state driver outside the UI task, call only public
 23. Request `XIAOZHI`, then inject each copied state through the public API;
     verify connection/state/color, safe disconnected/error text, and no
     automatic route away from the current screen.
-24. During P2-F hardware validation, verify `LISTENING` advances near 100 ms
-    resolution, freezes after `PROCESSING`/`RESPONDING`/`ERROR`, and shows
+24. During Phase-15 hardware validation, verify actual-microphone `RECORDING`
+    advances near 100 ms resolution, freezes after `PROCESSING`/`RESPONDING`/
+    `ERROR`, and shows
     bounded USER and XZ transcript snippets without new object creation.
 25. Navigate `XIAOZHI -> SENSOR_DASHBOARD -> XIAOZHI` during a validation
     attempt. Verify the validation continues independently, latest status is

@@ -28,6 +28,9 @@ typedef struct {
     voice_assistant_ui_state_t state;
     uint32_t session_generation;
     uint32_t turn_sequence;
+    /** Monotonic actual-microphone capture interval; zero means no capture. */
+    int64_t listening_started_at_us;
+    int64_t listening_stopped_at_us;
     esp_err_t last_error;
 
     bool user_text_valid;

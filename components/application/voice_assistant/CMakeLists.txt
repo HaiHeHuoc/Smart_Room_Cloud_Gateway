@@ -23,6 +23,7 @@ idf_component_register(
 
     PRIV_REQUIRES
         esp_audio_codec
+        esp_timer
         freertos
         log
         heap
