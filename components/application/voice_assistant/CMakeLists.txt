@@ -6,6 +6,7 @@ idf_component_register(
         "voice_assistant_ui_gui_adapter.c"
         "voice_assistant_ptt.c"
         "voice_assistant_ptt_gpio.c"
+        "voice_assistant_opus.c"
         "voice_assistant_uplink.c"
         "voice_assistant_downlink.c"
         "voice_assistant_audio_arbitration_bridge.c"
@@ -22,6 +23,8 @@ idf_component_register(
         app_gui
 
     PRIV_REQUIRES
+        esp_audio_codec
+        esp_timer
         freertos
         log
         heap
