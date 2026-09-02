@@ -243,6 +243,19 @@ static void voice_assistant_handle_foundation_status(
 
     switch (command->foundation_status.state) {
         case XIAOZHI_FOUNDATION_SESSION_CONNECTING:
+            /* session_start() publishes its initial inactive CONNECTING
+             * snapshot before the actual WebSocket CONNECTED callback. The
+             * asynchronous voice queue may consume that older snapshot after
+             * READY, so it must not briefly regress the production state or
+             * create a PTT arming race at boot. Transport-loss reconnects
+             * retain active=true and remain observable below. */
+            if ((current == VOICE_ASSISTANT_STATE_READY) &&
+                !command->foundation_status.active) {
+                ESP_LOGD(TAG,
+                         "Ignored stale inactive CONNECTING generation=%u",
+                         (unsigned)command->generation);
+                break;
+            }
             if ((current != VOICE_ASSISTANT_STATE_IDLE) &&
                 (current != VOICE_ASSISTANT_STATE_INITIALIZED) &&
                 (current != VOICE_ASSISTANT_STATE_UNINITIALIZED) &&

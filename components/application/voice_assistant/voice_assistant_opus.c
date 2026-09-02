@@ -184,6 +184,10 @@ esp_err_t voice_assistant_opus_decode(
     const esp_audio_err_t codec_ret =
         esp_opus_dec_decode(s_decoder, &input, &output, &info);
     if (codec_ret != ESP_AUDIO_ERR_OK) {
+        ESP_LOGW(TAG,
+                 "decoder rejected packet codec_error=%d packet_bytes=%u",
+                 (int)codec_ret,
+                 (unsigned)packet_size);
         return opus_error_to_esp(codec_ret);
     }
     if ((input.consumed != packet_size) || (output.decoded_size == 0U) ||

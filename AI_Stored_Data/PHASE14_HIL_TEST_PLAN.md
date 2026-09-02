@@ -2,7 +2,7 @@
 
 Updated: 2026-09-02
 Production branch: `phase/14-ptt-voice-mvp`
-Status: **ORIGINAL GOLDEN-PATH HIL PASS / TARGETED REGRESSION HIL PARTIAL / FAULT CASES NOT RUN**
+Status: **BUILD PASS / ORIGINAL GOLDEN-PATH HIL PASS / TARGETED REGRESSION HIL PARTIAL / FAULT CASES NOT RUN**
 
 Retest closure note: the first Opus firmware run exposed a 5-KiB uplink-task
 stack failure, and the next run exposed a 2-KiB response-item stack overflow on
@@ -85,6 +85,7 @@ failure evidence are recorded in `AI_Stored_Data/PHASE14_HIL_TEST_BRANCH.md`.
 | T14_09 SD unavailable | SKIP | Not injected during this run |
 | T14_10 queue pressure | SKIP | Not injected during this run |
 | T14_11 resource trend | PASS (observed) | Three turns completed; no monotonic failure or crash observed |
+| T14_12 response-pending PTT | PARTIAL | 2026-09-02 target trace rejected a press before the prior response started; repeat it on the final image |
 
 Representative corrected-run markers:
 
@@ -196,6 +197,11 @@ Acceptance:
 - no monotonic resource loss that clearly grows per completed turn;
 - no I2S ownership conflict.
 
+While the first turn is in `response WAIT`, press and release GPIO38 once.
+The log must report that the prior server response is active; no microphone
+capture, new audio channel, or second uplink may start. Repeat the press only
+after playback returns to IDLE.
+
 ## Case 4 — Release before READY
 
 1. Press PTT while a new session must connect.
@@ -216,9 +222,12 @@ Acceptance: microphone transmission must never become authorized after the early
 
 ## Case 5 — Missing/stalled response
 
-Inject or naturally reproduce a server/network condition where TTS response stalls after response collection starts.
+Inject or naturally reproduce a server/network condition where the server
+never sends TTS after a completed uplink, or stops making progress after
+response collection starts.
 
-Expected after 15 seconds of inactivity:
+Expected after 15 seconds of inactivity (or after the 90-second complete
+await/collection deadline):
 
 ```text
 VOICE_DOWNLINK: response ABORT generation=N timeout=yes error=ESP_ERR_TIMEOUT
@@ -238,7 +247,8 @@ Externally remove AP/Internet/service during an active turn. Do not simulate wit
 Expected ownership:
 
 - Xiaozhi/session reports transport failure;
-- uplink/downlink stop using the failed session;
+- uplink/downlink stop using the failed session; a copied response error must
+  clear any response wait even though the voice state is already CONNECTING;
 - Phase-13 voice-assistant recovery remains the session-recovery owner;
 - no project-owned unbounded reconnect loop; the upstream retained WebSocket
   session is allowed to reconnect first;

@@ -175,11 +175,15 @@ static void xiaozhi_session_protocol_callback(
     if (event == ESP_XIAOZHI_CHAT_EVENT_CHAT_ERROR) {
         const esp_xiaozhi_chat_error_info_t *const info =
             (const esp_xiaozhi_chat_error_info_t *)event_data;
+        const esp_err_t error =
+            (info != NULL && info->code != ESP_OK) ? info->code : ESP_FAIL;
+        ESP_LOGW(TAG, "CHAT_ERROR delivered to response path: %s",
+                 esp_err_to_name(error));
         xiaozhi_session_publish_response(
             XIAOZHI_FOUNDATION_RESPONSE_ERROR,
             NULL,
             0U,
-            (info != NULL && info->code != ESP_OK) ? info->code : ESP_FAIL);
+            error);
     }
 }
 

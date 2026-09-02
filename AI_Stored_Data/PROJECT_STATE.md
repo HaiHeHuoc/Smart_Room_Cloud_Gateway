@@ -1,7 +1,7 @@
 # Smart Room Cloud Gateway — AI Project State
 
 Updated from branch: `test/phase14-ptt-voice-e2e-hil`
-Snapshot date: 2026-08-26
+Snapshot date: 2026-09-02
 
 ## Working Constitution
 
@@ -17,7 +17,7 @@ Snapshot date: 2026-08-26
 ```text
 Sprint 12  Software complete / HIL PASS 2026-08-25
 Sprint 13  Software complete / HIL PASS 2026-08-25
-Sprint 14  Software complete / Build PASS / golden-path HIL PASS
+Sprint 14  Software complete / Build PASS / golden-path HIL PASS / targeted regression HIL partial
 Sprint 15  NOT STARTED
 ```
 
@@ -103,7 +103,9 @@ The wrapper:
 - fans copied audio status into the voice adapter;
 - starts the real audio manager first;
 - then initializes/starts voice, PTT policy, uplink, downlink and PTT GPIO input;
-- does not auto-begin a Xiaozhi session at boot;
+- queues one long-lived Xiaozhi service session after the complete stack is
+  ready; this establishes readiness only and does not open an audio channel or
+  capture microphone data;
 - suppresses Phase-14 production voice when Phase-12 Xiaozhi validation mode is explicitly enabled.
 
 ## Sprint 14 robustness
@@ -112,12 +114,16 @@ The wrapper:
 - callbacks remain non-blocking/copy-only;
 - uplink/downlink queues are bounded;
 - queue loss is diagnostic and corrupt downlink is not falsely played as success;
-- response inactivity timeout is 15 s;
+- a non-empty uplink reserves its response wait before stop-listening, and a
+  press while waiting/collecting/finalizing/playing is ignored;
+- response inactivity timeout is 15 s; the complete wait/collection deadline
+  is 90 s;
 - audio-idle wait is bounded to 10 s;
 - response playback completion wait is bounded to 60 s;
 - repeated turns are serialized against prior downlink/playback;
-- transport recovery remains owned by Phase-13 voice-assistant recovery;
-- no unbounded reconnect loop;
+- transport loss retains the upstream WebSocket session for its reconnect;
+- public provider text/binary sends that request `portMAX_DELAY` are wrapped
+  with an 8-second project-owned timeout;
 - SD failure remains under `sd_card_manager` ownership.
 
 ## Cross-system concurrency conclusion
@@ -158,6 +164,9 @@ Do not allow a new component to solve contention by calling I2S directly.
 6. Firebase/cloud + Xiaozhi simultaneous network/resource load has not yet
    been measured as a dedicated stress case on target hardware.
 7. General multi-client audio arbitration is not yet implemented.
+8. The 2026-09-02 regression trace proves boot/reconnect, response-pending PTT
+   rejection and playback completion; fresh audible-speaker confirmation on
+   that exact image remains pending.
 
 ## Next-work guidance
 
