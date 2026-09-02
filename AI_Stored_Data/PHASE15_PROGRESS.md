@@ -1,9 +1,9 @@
 # Phase 15 Voice Assistant UI / Conversation Presentation Progress
 
-Updated: 2026-08-26
+Updated: 2026-09-02
 Branch: `phase/15-voice-assistant-ui`
 Current checkpoint: **15-F — FINAL Review / Closure**
-Status: **SOFTWARE COMPLETE / STATIC REVIEW COMPLETE / BUILD PASS / HIL PENDING**
+Status: **SOFTWARE COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / TARGETED HIL PARTIAL / UI-TEXT HIL PENDING**
 
 ## Collaboration result
 
@@ -142,6 +142,7 @@ audio_manager READY
 -> uplink
 -> downlink
 -> PTT GPIO
+-> queue one long-lived Xiaozhi service session
 ```
 
 When `CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE=y`, the Phase-14/15 production voice stack remains suppressed. Phase-12 validation and Phase-15 production presentation therefore do not intentionally run as competing application owners.
@@ -152,9 +153,10 @@ When `CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE=y`, the Phase-14/15 production
 
 The bridge preserves the original production callback/context, forwards all events unchanged, and additionally publishes CHAT_TEXT semantic events. This is a controlled integration seam rather than a transport rewrite.
 
-The merged Phase-15 production branch was built with ESP-IDF 6.0.1 after
-Phase-14 propagation. The source-local bridge compiled successfully against
-pinned `esp_xiaozhi` 0.1.2. Refactor to a direct/public integration point later
+The merged Phase-15 production branch built with ESP-IDF 6.0.1 on 2026-09-02
+(binary `0x21ccc0`, 47% app partition free). The source-local bridge compiled
+successfully against pinned `esp_xiaozhi` 0.1.2 alongside the bounded public
+WebSocket-send wrappers. Refactor to a direct/public integration point later
 only if maintenance/build evidence shows the seam is fragile.
 
 ## Final presentation-state decision
@@ -223,6 +225,19 @@ The plan covers:
 - new hardware behavior;
 - general multi-client audio arbitration (already tracked as a post-Phase-14 architecture follow-up).
 
+## Targeted target evidence — 2026-09-02
+
+The target serial trace confirms the boot-queued session reaches `READY`, an
+unexpected disconnect returns through `CONNECTING` to `READY`, and one GPIO38
+turn reaches actual capture, `response WAIT`, playback request and
+`PLAYBACK_COMPLETE`. A GPIO38 press during that response wait was rejected
+before another recording starts.
+
+This is **targeted transport/audio HIL**, not Phase-15 UI HIL PASS. It does not
+visibly prove the LCD `RECORDING` label/timer, real USER/ASSISTANT semantic
+text, repeated latest-turn behavior, recovery presentation, truncation, or UI
+resource stress.
+
 ## Evidence boundary
 
 At the merged Phase-15 production checkpoint:
@@ -233,8 +248,9 @@ Static review        COMPLETE
 Production composition COMPLETE
 HIL plan             READY
 GitHub CI/checks     NONE PRESENT FOR CURRENT REVIEW HEAD
-idf.py build         PASS (ESP-IDF 6.0.1; binary 0x21c250; 47% app free)
-Target runtime       NOT VERIFIED
+idf.py build         PASS (ESP-IDF 6.0.1; binary 0x21ccc0; 47% app free)
+Target runtime       TARGETED PARTIAL (transport/audio path only)
+RECORDING/timer HIL  PENDING VISIBLE LCD EVIDENCE
 USER transcript HIL  PENDING
 ASSISTANT text HIL   PENDING
 Repeated-turn UI HIL PENDING
@@ -244,6 +260,6 @@ No target runtime/HIL PASS is claimed yet.
 
 ## Closure
 
-**Phase 15 = Software Complete / Static Review Complete / Build PASS / Hardware Acceptance Pending.**
+**Phase 15 = Software Complete / Static Review Complete / Build PASS / Targeted HIL Partial / UI-Text Acceptance Pending.**
 
 Do not automatically start Phase 16. When hardware is available, preserve the acceptance sequence and distinguish inherited Phase-12/13/14 transport/audio failures from Phase-15 UI/text defects.
