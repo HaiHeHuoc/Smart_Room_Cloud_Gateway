@@ -1,9 +1,9 @@
 # Phase 14 Push-To-Talk Voice MVP Progress
 
-Updated: 2026-08-26
+Updated: 2026-09-02
 Branch: `phase/14-ptt-voice-mvp`
 Current checkpoint: **14-F — FINAL Review / Production Composition / Docs**
-Status: **SOFTWARE COMPLETE / BUILD PASS / GOLDEN-PATH HIL PASS / CLOSURE IN PROGRESS**
+Status: **SOFTWARE COMPLETE / ORIGINAL GOLDEN-PATH HIL PASS / TARGETED REGRESSION HIL PARTIAL / CLOSURE IN PROGRESS**
 
 ## Final checkpoint status
 
@@ -19,10 +19,11 @@ No additional Phase-14 software implementation prompt is required unless build/H
 ## Final production flow
 
 ```text
-Dedicated PTT GPIO38 (pull-down, active-high)
--> voice_assistant_ptt authorization
--> long-lived voice_assistant / xiaozhi_foundation session
+Network ONLINE + audio startup
+-> composition queues one long-lived voice_assistant / xiaozhi_foundation session
 -> real READY evidence
+-> dedicated PTT GPIO38 (pull-down, active-high)
+-> voice_assistant_ptt authorization
 -> audio_manager live PCM16 capture contract
 -> bounded voice_uplink queue/task
 -> aggregate 960 PCM16 samples and encode one 60-ms Opus packet
@@ -69,9 +70,12 @@ The wrapper:
    - `voice_assistant_ptt`;
    - `voice_assistant_uplink`;
    - `voice_assistant_downlink`;
-   - dedicated PTT GPIO adapter.
+   - dedicated PTT GPIO adapter;
+5. queues one service-session connection after the complete stack is ready.
 
-Production voice does not auto-begin a session at boot. A physical PTT press remains the user authorization trigger.
+The boot connection establishes service readiness only; it does not open an
+audio channel or capture. A physical PTT press remains the user authorization
+trigger for each conversation turn.
 
 ## Dedicated PTT input
 
@@ -161,8 +165,10 @@ No Phase-14 callback directly owns LVGL or I2S.
 - playback completion wait: 60 s;
 - repeated turns are serialized until prior downlink/playback is finished;
 - stale/non-current long-lived session items are rejected;
-- no unbounded reconnect loop;
-- a press in voice ERROR requests one bounded recovery and requires a fresh press after IDLE;
+- no project-owned unbounded reconnect loop; the retained upstream WebSocket
+  session may reconnect after unexpected transport loss;
+- a continuously held press in voice ERROR survives one bounded recovery and
+  starts a fresh session after IDLE; releasing before READY still cancels;
 - SD failures stay under `sd_card_manager` ownership.
 
 ## HIL result and remaining boundaries
@@ -180,6 +186,14 @@ deferred: stalled response, network loss during a turn, SD unavailable during
 response, and queue-pressure/corrupt-response injection. The LCD `Starting...`
 route is a separate Phase-15 UI concern; it does not invalidate the accepted
 voice transport/speaker path.
+
+Targeted regression evidence from the Phase-15 HIL image (2026-09-02) confirms
+the boot-queued production session reaches READY, an unexpected disconnect
+returns through CONNECTING to READY without power cycling, and one GPIO38 turn
+reaches capture, response wait, playback request, and PLAYBACK_COMPLETE.
+This does not replace the full Phase-14 HIL matrix: audible speaker behavior
+and all deferred fault cases must be accepted again on the exact regression
+image before they can be reported as a fresh full HIL PASS.
 
 Other retained boundaries:
 

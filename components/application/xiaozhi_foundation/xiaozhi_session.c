@@ -51,6 +51,9 @@ static bool s_chat_started = false;
 static bool s_event_handler_registered = false;
 static esp_event_handler_instance_t s_event_handler_instance = NULL;
 
+/* Called only while s_lock is held. */
+static void xiaozhi_session_reset_uplink_locked(void);
+
 #if CONFIG_LOG_DYNAMIC_LEVEL_CONTROL
 static bool s_payload_logs_suppressed = false;
 static esp_log_level_t s_chat_log_level = ESP_LOG_INFO;
@@ -209,10 +212,14 @@ static void xiaozhi_session_event_handler(
     EventGroupHandle_t events = NULL;
     bool active = false;
     bool intentional_stop = false;
+    bool lifecycle_busy = false;
+    bool had_audio_channel = false;
     portENTER_CRITICAL(&s_lock);
     events = s_events;
     active = s_status.active;
     intentional_stop = s_intentional_stop;
+    lifecycle_busy = s_lifecycle_busy;
+    had_audio_channel = s_uplink.audio_channel_open;
     portEXIT_CRITICAL(&s_lock);
 
     if (events == NULL) {
@@ -221,35 +228,93 @@ static void xiaozhi_session_event_handler(
 
     switch (event_id) {
         case ESP_XIAOZHI_CHAT_EVENT_CONNECTED:
-            (void)xEventGroupSetBits(events, XIAOZHI_SESSION_EVENT_CONNECTED);
+            /* A reconnect reuses this chat/EventGroup. Clear terminal bits
+             * from the old transport attempt before publishing READY. */
+            (void)xEventGroupClearBits(
+                events,
+                XIAOZHI_SESSION_EVENT_DISCONNECTED |
+                    XIAOZHI_SESSION_EVENT_GOODBYE);
             xiaozhi_session_set_status(
                 XIAOZHI_FOUNDATION_SESSION_READY,
                 true,
                 ESP_OK);
+            (void)xEventGroupSetBits(events, XIAOZHI_SESSION_EVENT_CONNECTED);
             break;
 
         case ESP_XIAOZHI_CHAT_EVENT_DISCONNECTED:
-            (void)xEventGroupSetBits(events, XIAOZHI_SESSION_EVENT_DISCONNECTED);
             if (intentional_stop) {
+                (void)xEventGroupSetBits(
+                    events, XIAOZHI_SESSION_EVENT_DISCONNECTED);
                 ESP_LOGI(TAG, "DISCONNECTED observed during intentional stop");
                 break;
             }
+
+            /* esp_xiaozhi keeps this WebSocket client alive and reconnects it
+             * after five seconds. Do not destroy the chat instance here: a
+             * teardown/recreate cycle can misattribute late global events to a
+             * new generation. */
+            (void)xEventGroupClearBits(
+                events,
+                XIAOZHI_SESSION_EVENT_CONNECTED |
+                    XIAOZHI_SESSION_EVENT_AUDIO_OPENED |
+                    XIAOZHI_SESSION_EVENT_AUDIO_CLOSED);
+            portENTER_CRITICAL(&s_lock);
+            active = s_status.active;
+            lifecycle_busy = s_lifecycle_busy;
+            had_audio_channel = s_uplink.audio_channel_open;
+            xiaozhi_session_reset_uplink_locked();
+            portEXIT_CRITICAL(&s_lock);
+
+            if (!active && !lifecycle_busy) {
+                (void)xEventGroupSetBits(
+                    events, XIAOZHI_SESSION_EVENT_DISCONNECTED);
+                ESP_LOGW(TAG, "Ignored late DISCONNECTED without an active session");
+                break;
+            }
+
             xiaozhi_session_set_status(
-                XIAOZHI_FOUNDATION_SESSION_ERROR,
+                XIAOZHI_FOUNDATION_SESSION_CONNECTING,
                 active,
-                ESP_ERR_INVALID_STATE);
+                ESP_OK);
+            if (had_audio_channel) {
+                xiaozhi_session_publish_response(
+                    XIAOZHI_FOUNDATION_RESPONSE_ERROR,
+                    NULL,
+                    0U,
+                    ESP_ERR_INVALID_STATE);
+            }
+            (void)xEventGroupSetBits(
+                events, XIAOZHI_SESSION_EVENT_DISCONNECTED);
+            ESP_LOGW(TAG,
+                     "DISCONNECTED; retaining session for upstream auto-reconnect");
             break;
 
         case ESP_XIAOZHI_CHAT_EVENT_SERVER_GOODBYE:
-            (void)xEventGroupSetBits(events, XIAOZHI_SESSION_EVENT_GOODBYE);
             if (intentional_stop) {
+                (void)xEventGroupSetBits(
+                    events, XIAOZHI_SESSION_EVENT_GOODBYE);
                 ESP_LOGI(TAG, "SERVER_GOODBYE observed during intentional stop");
                 break;
             }
-            xiaozhi_session_set_status(
-                XIAOZHI_FOUNDATION_SESSION_ERROR,
-                active,
-                ESP_FAIL);
+
+            /* Xiaozhi uses goodbye to end an audio/MCP session. It does not
+             * mean the WebSocket transport was lost, so it must not poison the
+             * long-lived production connection after a successful turn. */
+            if (!active && lifecycle_busy) {
+                (void)xEventGroupSetBits(
+                    events, XIAOZHI_SESSION_EVENT_GOODBYE);
+                ESP_LOGW(TAG, "SERVER_GOODBYE before initial CONNECTED");
+                break;
+            }
+            (void)xEventGroupClearBits(
+                events,
+                XIAOZHI_SESSION_EVENT_GOODBYE |
+                    XIAOZHI_SESSION_EVENT_AUDIO_OPENED);
+            portENTER_CRITICAL(&s_lock);
+            xiaozhi_session_reset_uplink_locked();
+            portEXIT_CRITICAL(&s_lock);
+            ESP_LOGI(TAG,
+                     "SERVER_GOODBYE treated as audio-channel completion; WebSocket retained");
             break;
 
         case ESP_XIAOZHI_CHAT_EVENT_AUDIO_CHANNEL_OPENED:
@@ -257,6 +322,9 @@ static void xiaozhi_session_event_handler(
             break;
 
         case ESP_XIAOZHI_CHAT_EVENT_AUDIO_CHANNEL_CLOSED:
+            portENTER_CRITICAL(&s_lock);
+            xiaozhi_session_reset_uplink_locked();
+            portEXIT_CRITICAL(&s_lock);
             (void)xEventGroupSetBits(events, XIAOZHI_SESSION_EVENT_AUDIO_CLOSED);
             break;
 
@@ -513,6 +581,14 @@ esp_err_t xiaozhi_foundation_session_start(uint32_t client_generation)
     }
     s_event_handler_registered = true;
 
+    (void)xEventGroupClearBits(
+        s_events,
+        XIAOZHI_SESSION_EVENT_CONNECTED |
+            XIAOZHI_SESSION_EVENT_DISCONNECTED |
+            XIAOZHI_SESSION_EVENT_GOODBYE |
+            XIAOZHI_SESSION_EVENT_AUDIO_OPENED |
+            XIAOZHI_SESSION_EVENT_AUDIO_CLOSED);
+
     ret = esp_xiaozhi_chat_start(s_chat);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "chat_start failed: %s", esp_err_to_name(ret));
@@ -523,16 +599,11 @@ esp_err_t xiaozhi_foundation_session_start(uint32_t client_generation)
     const EventBits_t bits = xEventGroupWaitBits(
         s_events,
         XIAOZHI_SESSION_EVENT_CONNECTED |
-            XIAOZHI_SESSION_EVENT_DISCONNECTED |
             XIAOZHI_SESSION_EVENT_GOODBYE,
         pdFALSE,
         pdFALSE,
         pdMS_TO_TICKS(XIAOZHI_SESSION_CONNECT_TIMEOUT_MS));
 
-    if ((bits & XIAOZHI_SESSION_EVENT_DISCONNECTED) != 0U) {
-        ret = ESP_ERR_INVALID_STATE;
-        goto fail;
-    }
     if ((bits & XIAOZHI_SESSION_EVENT_GOODBYE) != 0U) {
         ret = ESP_FAIL;
         goto fail;
@@ -549,11 +620,7 @@ esp_err_t xiaozhi_foundation_session_start(uint32_t client_generation)
     s_status.active = true;
     portEXIT_CRITICAL(&s_lock);
 
-    xiaozhi_session_set_status(
-        XIAOZHI_FOUNDATION_SESSION_READY,
-        true,
-        ESP_OK);
-    ESP_LOGI(TAG, "WebSocket production session READY generation=%u",
+    ESP_LOGI(TAG, "WebSocket production session CONNECTED generation=%u",
              (unsigned)client_generation);
     return ESP_OK;
 
@@ -591,19 +658,29 @@ esp_err_t xiaozhi_foundation_audio_uplink_start(uint32_t client_generation)
         return ESP_ERR_INVALID_ARG;
     }
 
+    EventGroupHandle_t events = NULL;
     portENTER_CRITICAL(&s_lock);
     const bool valid =
         !s_lifecycle_busy && s_status.active &&
         (s_status.state == XIAOZHI_FOUNDATION_SESSION_READY) &&
         (s_status.client_generation == client_generation) &&
         !s_uplink.audio_channel_open && !s_uplink.listening &&
-        (s_chat != 0);
+        (s_chat != 0) && (s_events != NULL);
+    events = s_events;
     portEXIT_CRITICAL(&s_lock);
     if (!valid) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    (void)xEventGroupClearBits(s_events, XIAOZHI_SESSION_EVENT_AUDIO_OPENED);
+    /* The EventGroup lives for the long-lived WebSocket session. Each audio
+     * channel open must start with fresh evidence, not stale disconnect or
+     * goodbye bits from a previous turn. */
+    (void)xEventGroupClearBits(
+        events,
+        XIAOZHI_SESSION_EVENT_AUDIO_OPENED |
+            XIAOZHI_SESSION_EVENT_AUDIO_CLOSED |
+            XIAOZHI_SESSION_EVENT_DISCONNECTED |
+            XIAOZHI_SESSION_EVENT_GOODBYE);
     esp_xiaozhi_chat_audio_t audio = {
         .format = "opus",
         .sample_rate = XIAOZHI_FOUNDATION_UPLINK_SAMPLE_RATE_HZ,
@@ -617,7 +694,7 @@ esp_err_t xiaozhi_foundation_audio_uplink_start(uint32_t client_generation)
     }
 
     const EventBits_t bits = xEventGroupWaitBits(
-        s_events,
+        events,
         XIAOZHI_SESSION_EVENT_AUDIO_OPENED |
             XIAOZHI_SESSION_EVENT_DISCONNECTED |
             XIAOZHI_SESSION_EVENT_GOODBYE,

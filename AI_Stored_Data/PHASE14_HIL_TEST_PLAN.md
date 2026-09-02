@@ -1,8 +1,8 @@
 # Phase 14 HIL Test Plan — Push-To-Talk Voice MVP
 
-Updated: 2026-08-26
+Updated: 2026-09-02
 Production branch: `phase/14-ptt-voice-mvp`
-Status: **GOLDEN-PATH HIL PASS / BUILD + FLASH PASS / FAULT CASES NOT RUN**
+Status: **ORIGINAL GOLDEN-PATH HIL PASS / TARGETED REGRESSION HIL PARTIAL / FAULT CASES NOT RUN**
 
 Retest closure note: the first Opus firmware run exposed a 5-KiB uplink-task
 stack failure, and the next run exposed a 2-KiB response-item stack overflow on
@@ -107,7 +107,10 @@ VOICE_UPLINK: coordinator started
 VOICE_DOWNLINK: coordinator started ...
 VOICE_PTT_GPIO: initialized gpio=38 active_level=1 poll=10ms debounce=40ms
 VOICE_PTT_GPIO: started gpio=38 active_level=1 pull=down initial=released
-PH14_COMPOSE: Phase-14 voice stack READY ptt_gpio=38 active_level=1 pull=down
+VOICE_ASSISTANT: IDLE -> CONNECTING
+XZ_SESSION: WebSocket production session CONNECTED
+VOICE_ASSISTANT: CONNECTING -> READY
+PH14_COMPOSE: Phase-14 voice stack READY; boot Xiaozhi connection queued
 ```
 
 Acceptance:
@@ -121,10 +124,10 @@ Acceptance:
 
 Action:
 
-1. Hold PTT.
-2. Speak one short known phrase.
-3. Keep holding until real READY/LISTENING/capture evidence appears.
-4. Release PTT.
+1. Wait for the boot session to report `READY`, then hold PTT. If it is still
+   `CONNECTING`, hold PTT and wait for real READY/LISTENING/capture evidence.
+2. Speak one short known phrase only after capture has started.
+3. Release PTT after speaking.
 
 Expected logical sequence:
 
@@ -237,12 +240,14 @@ Expected ownership:
 - Xiaozhi/session reports transport failure;
 - uplink/downlink stop using the failed session;
 - Phase-13 voice-assistant recovery remains the session-recovery owner;
-- no automatic unbounded reconnect loop;
+- no project-owned unbounded reconnect loop; the upstream retained WebSocket
+  session is allowed to reconnect first;
 - no stuck I2S capture/playback.
 
-After restoring network, press PTT once to request the bounded recovery. Wait
-for `RECOVERING -> IDLE` and PTT `CANCEL_PENDING -> IDLE`, then press again for
-a new turn. Recovery must not silently authorize capture on the first press.
+After restoring network, wait for the retained session to return to `READY`.
+If it has entered `ERROR`, hold PTT once through `RECOVERING -> IDLE`; the PTT
+policy starts a fresh session and may authorize that same still-held press only
+after real READY. Releasing first must cancel and must never authorize capture.
 
 ## Case 7 — SD unavailable during response
 
