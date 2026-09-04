@@ -1,7 +1,7 @@
 # Smart Room Cloud Gateway — AI Project State
 
 Updated from branch: `phase/16-audio-arbitration`
-Snapshot date: 2026-09-02
+Snapshot date: 2026-09-05
 
 ## Working Constitution
 
@@ -19,12 +19,13 @@ Sprint 12  Software complete / HIL PASS
 Sprint 13  Software complete / HIL PASS
 Sprint 14  Software complete / BUILD PASS / golden-path HIL PASS / targeted regression partial
 Sprint 15  Software complete / BUILD VERIFIED / targeted HIL partial
-Sprint 16  SOFTWARE COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / HIL pending
+Sprint 16  SOFTWARE COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / BOUNDED HIL ACCEPTED
 Major feature-coding stage through Phase 16  COMPLETE
 ```
 
 Authoritative Phase-16 closure: `AI_Stored_Data/PHASE16_PROGRESS.md`.
 Phase-16 HIL plan: `AI_Stored_Data/PHASE16_HIL_TEST_PLAN.md`.
+Phase-16 HIL evidence: `AI_Stored_Data/PHASE16_HIL_EVIDENCE.md`.
 
 ## HIL routing
 
@@ -129,22 +130,22 @@ NOTIFICATION priority=50  PLAYBACK=QUEUE  interruptible=true
 ALARM        priority=100 PLAYBACK=PREEMPT_LOWER_PRIORITY interruptible=false
 ```
 
-The Phase-14 downlink still waits for manager IDLE before requesting Xiaozhi playback, so queue-behind-current-playback is not yet used at that call site. This is accepted MVP behavior pending HIL evidence.
+The Phase-14 downlink still waits for manager IDLE before requesting Xiaozhi playback, so queue-behind-current-playback is not yet used at that call site. This is accepted MVP behavior with Phase-16 HIL accepted; streaming optimization remains deferred.
 
 ## Known pending acceptance / technical debt
 
-1. Phase-16 forward-merge build is verified; all Phase-16 target HIL remains pending.
+1. Phase-16 bounded target HIL is accepted; endurance and full integration regression remain deferred.
 2. Phase-15 visible LCD/text HIL remains partial: `RECORDING` timer, USER/ASSISTANT text, latest-turn behavior, recovery presentation, truncation, and UI-resource evidence need target confirmation.
 3. Phase-14 fault-injection cases remain deferred; the exact regression image still needs fresh audible speaker confirmation.
 4. Phase-14 response playback remains PSRAM/SD-backed rather than low-latency streaming.
-5. Firebase/cloud plus Xiaozhi simultaneous load remains unmeasured.
+5. Long-duration Firebase/cloud plus Xiaozhi simultaneous-traffic regression remains deferred.
 6. Playback/capture arbiters have no dedicated stop/deinit lifecycle API yet; recorded-audio playback is not migrated to arbitration.
-7. Notification/alarm priority/preemption timing requires real instrumentation and HIL.
+7. Notification/alarm priority/preemption passed the bounded target matrix; repeated timing/endurance coverage remains deferred.
 
 ## Next-work guidance
 
-1. Synchronize the build-verified Phase-16 production checkpoint to its test branch, and do not claim HIL.
-2. With hardware available, finish the pending Phase-15 visible UI/text acceptance before Phase-16 arbitration HIL.
+1. Retain the Phase-16 HIL branch as a regression baseline.
+2. Finish the still-pending Phase-15 visible UI/text acceptance.
 3. Treat Phase 12 and Phase 13 as closed regression baselines; retain Phase 14's recorded golden-path result and run only relevant regressions.
 4. Do not start Phase 17 automatically.
 5. After independent acceptance, enter full Gateway/Firebase integration regression, bug fixing, hardening, performance/resource validation, documentation, and release/portfolio closure.

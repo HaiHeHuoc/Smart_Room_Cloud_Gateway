@@ -1,0 +1,5 @@
+# Dedicated test-branch reproducibility reference. An existing local
+# sdkconfig must explicitly enable these symbols (menuconfig or scoped edit);
+# defaults fragments do not override an already-set sdkconfig value.
+CONFIG_APP_PHASE16_AUTO_HIL_TEST=y
+CONFIG_APP_PHASE16_AUTO_HIL_WAV_PATH="/sdcard/audio/input_long.wav"

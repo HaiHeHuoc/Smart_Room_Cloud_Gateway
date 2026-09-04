@@ -1,10 +1,10 @@
 # Phase 16 Audio Arbitration HIL Test Branch
 
-Updated: 2026-09-02
+Updated: 2026-09-05
 Test branch: `test/phase16-audio-arbitration-hil`
 Base/production branch: `phase/16-audio-arbitration`
 Activation command: `RUN PHASE 16 HIL`
-Status: **TEST BRANCH SYNCHRONIZED / BUILD VERIFIED / HARDWARE EXECUTION PENDING**
+Status: **TEST BRANCH SYNCHRONIZED / BUILD VERIFIED / BOUNDED HIL ACCEPTED**
 
 ## Purpose
 
@@ -65,17 +65,16 @@ Do not rewrite production architecture merely to make a test pass.
 
 Use the repository's normal ESP-IDF workflow. Prefer a clean/reconfigure build when branch/config changed.
 
-Minimum evidence:
+Minimum host-build evidence:
 
 ```text
-PH16_TEST BUILD_BEGIN
-PH16_TEST BUILD_PASS
+idf.py build -> Project build complete
 ```
 
 If build fails:
 
 ```text
-PH16_TEST BUILD_FAIL reason=<short reason>
+idf.py build -> nonzero exit and the short build failure reason
 ```
 
 Stop before flash and classify T16-01 FAIL.
@@ -91,7 +90,7 @@ audio_manager READY
 Phase-16 playback arbiter READY
 Phase-16 capture arbiter READY
 Phase-15 voice stack READY
-PH16_TEST BOOT_PASS
+PH16_TEST T16_02 PASS
 ```
 
 Exact ESP_LOG formatting/tag text may differ; judge the semantic state transition, not whitespace.
@@ -114,6 +113,57 @@ PH16_TEST T16_01 SKIP reason=<reason>
 ```
 
 Use the same format for T16_02 ... T16_12.
+
+### 6a. Default-off automated arbitration coordinator
+
+`main/phase16_auto_hil_test.c` is a one-shot, test-branch-only coordinator.
+It begins only after the production audio manager has started and waits for
+the voice-assistant/Xiaozhi session to become READY before running the
+arbitration cases. It uses public capture/playback-arbiter APIs and copied
+status snapshots only; it never owns GPIO/PTT, I2S, DMA, WAV file handles, or
+raw audio buffers.
+
+If T16-02 cannot establish the voice/Xiaozhi READY precondition, the
+coordinator records the later synthetic cases as `SKIP` and stops rather than
+creating arbitration-only PASS evidence.
+
+Enable it locally through:
+
+```text
+Smart Room Cloud Gateway
+-> Phase 16 automated HIL test (test branch only)
+-> Run bounded Phase-16 automatic arbitration HIL
+```
+
+Set `APP_PHASE16_AUTO_HIL_WAV_PATH` to an existing managed-SD PCM16 mono
+16-kHz WAV. The default is `/sdcard/audio/input_long.wav`. Reconfigure,
+build, flash, and monitor from reset. The Kconfig default remains `n` and the
+test is mutually exclusive with the older continuous audio public-API stress
+task; never enable either test mode in a production image.
+
+`sdkconfig.phase16-auto-hil` is a reproducibility reference for an isolated
+test configuration. With an existing local `sdkconfig`, explicitly enable the
+symbol through menuconfig or a scoped local configuration edit; defaults do
+not override an already-set sdkconfig value.
+
+| Cases | Automated evidence | Limitation |
+|---|---|---|
+| T16-01 | Actual host build; runtime marker is supplemental only | Runtime marker alone is not build evidence |
+| T16-02 | GUI/audio/arbiters quiescent and voice/Xiaozhi READY | Bounded 30-second connect window |
+| T16-03, T16-04 | Explicit `SKIP` | Still require a real PTT, remote Xiaozhi TTS, and speaker evidence |
+| T16-05 | Synthetic Xiaozhi playback plus notification queue/no preempt | Requires the WAV asset |
+| T16-06 | Synthetic Xiaozhi playback plus alarm cooperative preempt/promotion | Requires the WAV asset |
+| T16-07 | Equal-priority PREEMPT rejected without preemption | Requires the WAV asset |
+| T16-08 | Current plus pending plus deterministic third reject | Requires the WAV asset |
+| T16-09 | Synthetic capture contention: equal reject and higher known client preempts | No GPIO/PTT; microphone hardware is still exercised |
+| T16-10 | Back-to-back requests measured under 20 ms; winner ACTIVE, loser either sees busy/retries or remains retained while the opposite resource is active, then becomes ACTIVE | Does not prove every arbitrary multi-task interleaving |
+| T16-11 | Pending-before-start, pending, and active cancellation | Requires the WAV asset |
+| T16-12 | Sensor/cloud/SD/UI/voice/audio snapshots and bounded resource trend | Not a long-duration leak test |
+
+If the SD VFS is unavailable, WAV-dependent cases are SKIP. If the SD is
+mounted but the configured WAV is absent or malformed, the affected case is
+FAIL because the playback prerequisite itself failed; inspect the audio-manager
+error evidence before classifying it as an arbitration-policy defect.
 
 ### 7. Manual-action protocol
 
@@ -236,28 +286,35 @@ Then report:
 ## Expected high-level successful log story
 
 ```text
-PH16_TEST BUILD_PASS
+PH16_TEST T16_01 PASS evidence=build_linked_auto_harness
 PH16_TEST T16_02 PASS
-PH16_TEST XIAOZHI_CAPTURE owner=XIAOZHI priority=70 state=ACTIVE
-PH16_TEST XIAOZHI_PLAYBACK owner=XIAOZHI priority=70 state=ACTIVE
-PH16_TEST NOTIFICATION decision=WAIT_OR_QUEUE preempt=0
-PH16_TEST ALARM decision=PREEMPT priority=100
-PH16_TEST EQUAL_PRIORITY preempt=0
-PH16_TEST QUEUE third_request=REJECT
-PH16_TEST RACE duplicate_hardware_owner=0
+PH16_TEST T16_03 SKIP reason=requires_real_xiaozhi_ptt_and_microphone_turn
+PH16_TEST T16_04 SKIP reason=requires_real_xiaozhi_network_tts_and_speaker_evidence
+PH16_TEST T16_05 PASS
+PH16_TEST T16_06 PASS
+PH16_TEST T16_07 PASS
+PH16_TEST T16_08 PASS
+PH16_TEST T16_09 PASS
+PH16_TEST T16_10 winner=<CAPTURE|PLAYBACK> loser=<PLAYBACK|CAPTURE> wait=<WAIT_STATUS_BUSY|RETRY_AFTER_INVALID_STATE>
+PH16_TEST T16_10 PASS
+PH16_TEST T16_11 PASS
 PH16_TEST T16_12 PASS
 PH16_TEST SUMMARY pass=<n> fail=0 skip=<n>
 ```
 
-These are semantic expected markers for the test harness; do not claim they have already been observed on hardware.
+These are expected case-completion markers, not a literal serial transcript.
+Actual sanitized target results are recorded in
+`AI_Stored_Data/PHASE16_HIL_EVIDENCE.md`.
 
 ## Current evidence
 
 ```text
 Production Phase-16 SW        COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED
 Dedicated Phase-16 test branch SYNCHRONIZED through 7faeed8
-Codex HIL command/runbook      READY
-Test-branch idf.py build       PASS (ESP-IDF 6.0.1; 0x21e7b0; 47% app free)
-Flash/run                      NOT YET CLAIMED
-Phase-16 HIL acceptance        PENDING
+Codex HIL command/runbook      EXECUTED
+Test-branch idf.py build       PASS (test-enabled 0x221b30; final default-off 0x21e7b0; 47% app free)
+Flash/run                      PASS (automatic target summary: pass=10 fail=0 skip=2)
+Real PTT/speaker cases         PASS (prior operator-confirmed Phase-16 HIL)
+Phase-16 HIL acceptance        ACCEPTED (bounded matrix)
+Evidence record                AI_Stored_Data/PHASE16_HIL_EVIDENCE.md
 ```

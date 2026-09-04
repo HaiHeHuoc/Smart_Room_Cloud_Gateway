@@ -1,10 +1,10 @@
 # Phase 16 — Audio Arbitration & Multi-Client Audio Policy
 
-Updated: 2026-09-02
+Updated: 2026-09-05
 Branch: `phase/16-audio-arbitration`
 Base branch: `phase/15-voice-assistant-ui`
-Current checkpoint: **16-F — FINAL REVIEW / CLOSURE**
-Status: **SOFTWARE COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / HIL PENDING**
+Current checkpoint: **16-F — CLOSED**
+Status: **SOFTWARE COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / HIL ACCEPTED**
 
 ## Collaboration result
 
@@ -125,7 +125,7 @@ manager == IDLE
 -> an arbiter may submit
 ```
 
-If capture and playback race for IDLE, the existing manager command serialization is the final hardware gate. One wins; the other receives busy/invalid-state behavior and waits/retries according to its arbiter state.
+If capture and playback race for IDLE, the existing manager command serialization is the final hardware gate. One wins; the other either receives busy/invalid-state behavior and retries, or observes the active opposite resource before command submission and retains its request until manager IDLE.
 
 This is safe for hardware ownership, but **global fairness between the two independent arbiter tasks is not guaranteed**. Do not claim fairness. If HIL proves sustained starvation, the evidence-based next architecture is a unified audio scheduler above both resources.
 
@@ -224,15 +224,15 @@ Contention in CPU/network/heap must be measured in full integration HIL. Do not 
 
 These do not reopen Phase 16 software scope by themselves:
 
-1. no target HIL evidence yet;
+1. bounded target HIL is accepted; long-duration endurance/leak testing remains deferred;
 2. playback/capture arbiters have init/start but no dedicated stop/deinit lifecycle API;
 3. cross-resource global fairness is not guaranteed;
 4. recorded-audio playback is not migrated into arbitration;
 5. source-local CMake compatibility redirects are a maintainability seam; their Phase-15/16 link integration is build verified but remains a future maintenance boundary;
 6. Xiaozhi downlink pre-waits for IDLE before playback submit, limiting queue usefulness at that call site;
 7. Phase-14 codec/SD-backed playback risks remain separate dependencies;
-8. notification/alarm helpers require HIL instrumentation/use to prove priority/preemption timing;
-9. simultaneous Firebase/cloud + Xiaozhi + arbitration load remains unmeasured.
+8. notification/alarm priority/preemption passed bounded HIL; repeated timing/endurance coverage remains deferred;
+9. long-duration Firebase/cloud + Xiaozhi traffic regression remains deferred; T16-12 did not prove cloud upload progress or a GUI-task heartbeat.
 
 ## Phase-16 HIL
 
@@ -252,7 +252,10 @@ RUN PHASE 16 HIL
 
 The plan covers build/link, boot regression, real Xiaozhi capture/playback ownership, notification queueing, alarm preemption, equal-priority protection, bounded queue pressure, capture contention, cross-resource race, cancellation edge cases and full Gateway coexistence/resource trend.
 
-No HIL PASS is claimed until real target evidence satisfies the plan.
+Target evidence is recorded in `AI_Stored_Data/PHASE16_HIL_EVIDENCE.md`.
+The 2026-09-04 automatic target run produced `pass=10 fail=0 skip=2`; the two
+SKIP cases were the intentionally manual T16-03/T16-04 cases, whose real
+PTT/speaker acceptance was confirmed by the operator in the prior Phase-16 HIL.
 
 ## Closure
 
@@ -261,9 +264,10 @@ Phase 16 is closed as:
 ```text
 Software implementation       COMPLETE
 Static review                 COMPLETE
-ESP-IDF build verification    PASS (ESP-IDF 6.0.1; binary 0x21e7b0; 47% app free)
-Hardware acceptance           PENDING
-Full integration regression   PENDING
+ESP-IDF build verification       PASS (ESP-IDF 6.0.1; test-enabled 0x221b30; final default-off 0x21e7b0; 47% app free)
+Hardware arbitration acceptance  PASS (combined manual PTT/speaker + automated target matrix)
+Bounded Gateway coexistence      PASS (sensor progress; cloud/UI status observability; SD/voice/audio clean)
+Long-duration integration        DEFERRED
 ```
 
 This closes the planned **major feature-coding stage** through Phase 16. The next project stage should be acceptance/integration/hardening rather than opening another major feature phase automatically.
