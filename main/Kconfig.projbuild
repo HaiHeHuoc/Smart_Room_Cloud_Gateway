@@ -31,4 +31,29 @@ menu "Smart Room Cloud Gateway"
 
     endmenu
 
+    menu "Phase 16 automated HIL test (test branch only)"
+
+        config APP_PHASE16_AUTO_HIL_TEST
+            bool "Run bounded Phase-16 automatic arbitration HIL"
+            default n
+            depends on !AUDIO_MANAGER_PUBLIC_API_TEST
+            help
+                Starts one default-off, test-branch-only coordinator after the
+                production audio manager, capture/playback arbiters, and voice
+                stack reach their normal startup boundary. It uses only public
+                arbitration APIs and copied status snapshots; it does not use
+                GPIO/PTT input or own I2S, DMA, SD file handles, or raw audio
+                buffers. Do not enable in a production image.
+
+        config APP_PHASE16_AUTO_HIL_WAV_PATH
+            string "Phase-16 automatic HIL WAV path"
+            default "/sdcard/audio/input_long.wav"
+            depends on APP_PHASE16_AUTO_HIL_TEST
+            help
+                Existing canonical PCM16 mono 16-kHz WAV on the managed SD
+                filesystem. The harness passes this copied path to the public
+                playback arbiter; it does not open or write the file itself.
+
+    endmenu
+
 endmenu

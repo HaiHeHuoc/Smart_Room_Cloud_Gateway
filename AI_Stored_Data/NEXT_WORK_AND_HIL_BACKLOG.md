@@ -1,6 +1,6 @@
 # Next Work + Deferred HIL Backlog
 
-Updated: 2026-09-02
+Updated: 2026-09-05
 Authoritative development branch: `phase/16-audio-arbitration`
 Purpose: cross-session/Codex routing for **"hiện tại nên làm gì tiếp theo?"** and HIL activation from any clean working branch.
 
@@ -11,7 +11,7 @@ Phase 12 SW  -> COMPLETE / HIL PASS
 Phase 13 SW  -> COMPLETE / HIL PASS
 Phase 14 SW  -> COMPLETE / BUILD PASS / golden-path HIL PASS / targeted regression partial
 Phase 15 SW  -> COMPLETE / BUILD VERIFIED / targeted HIL partial
-Phase 16 SW  -> COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / HIL pending
+Phase 16 SW  -> COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / BOUNDED HIL ACCEPTED
 Major feature coding -> COMPLETE through Phase 16
 ```
 
@@ -51,7 +51,7 @@ Never auto-stash, reset, delete, or test an older phase on an arbitrary producti
 
 ### Phase 16
 
-`phase/16-audio-arbitration` retains the production arbitration architecture; `test/phase16-audio-arbitration-hil` is its dedicated HIL branch. The forward merge from Phase 15 built successfully on 2026-09-02; this is build evidence only, not Phase-16 HIL. Its plan covers arbitration startup, Xiaozhi capture/playback ownership, notification queueing, alarm preemption, equal-priority protection, and resource behavior.
+`phase/16-audio-arbitration` retains the production arbitration architecture; `test/phase16-audio-arbitration-hil` is its dedicated HIL branch. The combined operator-confirmed PTT/speaker evidence and 2026-09-04 automatic target matrix passed; see `PHASE16_HIL_EVIDENCE.md`. Long-duration/full-Gateway regression remains deferred.
 
 ## Production-vs-test fix policy
 
@@ -83,11 +83,11 @@ inspect branch + worktree
 
 ## Recommended next acceptance order
 
-1. Synchronize the build-verified Phase-16 production checkpoint to its test branch.
+1. Keep Phase 16 as a closed HIL regression baseline.
 2. On available hardware, complete Phase-15 visible UI/text HIL on its dedicated test branch.
-3. Run Phase-16 arbitration HIL after the inherited Phase-15 voice path is stable.
+3. Run the full Gateway/Firebase integration regression.
 4. Preserve Phase 12/13 as regression baselines and Phase 14's recorded golden-path PASS; rerun them only for a relevant regression.
-5. After independent phase acceptance, run full Gateway/Firebase integration regression: Wi-Fi/provisioning, sensor, Firebase, GUI, SD, audio, Xiaozhi, simultaneous cloud/Xiaozhi traffic, repeated PTT, notification queueing, and critical-alarm preemption.
+5. The next full Gateway/Firebase integration regression should cover Wi-Fi/provisioning, sensor, Firebase, GUI, SD, audio, Xiaozhi, simultaneous cloud/Xiaozhi traffic, repeated PTT, notification queueing, and critical-alarm preemption.
 
 ## Evidence discipline
 

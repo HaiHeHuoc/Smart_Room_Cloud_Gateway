@@ -70,6 +70,9 @@
 #if CONFIG_AUDIO_MANAGER_PUBLIC_API_TEST
 #include "audio_api_test_task.h"
 #endif
+#if CONFIG_APP_PHASE16_AUTO_HIL_TEST
+#include "phase16_auto_hil_test.h"
+#endif
 
 /* Macros ------------------------------------------------------------------- */
 #define PERFORMANCE_MONITOR 0
@@ -1710,6 +1713,23 @@ static esp_err_t app_start_audio_manager_after_network_online(void)
         ESP_LOGI(
             TAG,
             "Public audio API validation task started at priority 6");
+    }
+#endif
+
+#if CONFIG_APP_PHASE16_AUTO_HIL_TEST
+    const esp_err_t phase16_test_ret = app_phase16_auto_hil_test_start();
+    if (phase16_test_ret != ESP_OK)
+    {
+        ESP_LOGW(
+            TAG,
+            "Failed to start Phase-16 automatic HIL coordinator: %s",
+            esp_err_to_name(phase16_test_ret));
+    }
+    else
+    {
+        ESP_LOGI(
+            TAG,
+            "Phase-16 automatic HIL coordinator started (test branch only)");
     }
 #endif
 

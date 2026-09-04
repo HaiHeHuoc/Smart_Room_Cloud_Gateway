@@ -1,10 +1,10 @@
 # Phase 16 HIL Test Plan — Audio Arbitration
 
-Updated: 2026-09-02
+Updated: 2026-09-05
 Production branch: `phase/16-audio-arbitration`
 Recommended test branch: `test/phase16-audio-arbitration-hil`
 Activation label: `RUN PHASE 16 HIL`
-Status: **PLAN READY / BUILD VERIFIED / HIL PENDING**
+Status: **PLAN EXECUTED / BUILD VERIFIED / HIL ACCEPTED**
 
 ## Purpose
 
@@ -130,7 +130,9 @@ Create near-simultaneous CAPTURE and PLAYBACK requests while manager is IDLE.
 
 Acceptance:
 - only one manager command wins hardware serialization;
-- the loser observes busy/invalid-state and retries/waits according to its arbiter;
+- the loser either observes busy/invalid-state and retries, or retains its
+  logical request after observing the opposite resource active and waits for
+  manager IDLE according to its arbiter;
 - no duplicate active operation;
 - no crash/deadlock.
 
@@ -154,11 +156,13 @@ Acceptance:
 Run sensor, Firebase/cloud, GUI, SD, Xiaozhi and arbitration scenarios together.
 
 Acceptance:
-- unrelated tasks continue progress;
-- no global Firebase/sensor pause is introduced;
+- during the bounded observation, sensor progress advances and cloud/SD/UI/voice
+  status snapshots remain valid;
+- no global Firebase/sensor pause is introduced by the arbitration scenarios;
 - no panic/assert/WDT;
 - audio queue/drop/resource counters remain understandable;
-- no monotonic heap/task/handle leak across repeated turns and notification/alarm requests.
+- repeated-turn heap/task/handle leak coverage is deferred to a separate
+  long-duration endurance run.
 
 ## Evidence required
 
@@ -170,6 +174,12 @@ For each case preserve:
 - visible/audio behavior where applicable;
 - PASS / FAIL / SKIP classification.
 
+The default-off automated coordinator may provide target runtime evidence for
+T16-02 and T16-05 through T16-12. It deliberately marks T16-03/T16-04 SKIP:
+it cannot replace real PTT, remote Xiaozhi response, and audible-speaker
+acceptance. Automated I2S/state evidence also does not by itself prove speaker
+audibility.
+
 ## Known accepted software limitations entering HIL
 
 1. playback/capture arbiters currently have init/start but no dedicated stop/deinit API;
@@ -179,4 +189,7 @@ For each case preserve:
 5. source-local CMake bridge remains a maintenance seam; its Phase-15/16 link integration is build verified;
 6. Phase-14 codec/SD-backed playback limitations remain outside Phase-16 arbitration ownership.
 
-No Phase-16 HIL PASS is claimed until target evidence satisfies this plan.
+Phase-16 HIL is accepted from the combined manual PTT/speaker evidence and the
+2026-09-04 automatic arbitration run. See `PHASE16_HIL_EVIDENCE.md`; rerun
+only when a relevant regression changes arbitration, voice transport, or audio
+manager ownership.

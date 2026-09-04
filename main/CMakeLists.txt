@@ -2,6 +2,7 @@ idf_component_register(
     SRCS
         "main.c"
         "phase14_voice_composition.c"
+        "phase16_auto_hil_test.c"
     INCLUDE_DIRS
         "."
     REQUIRES
