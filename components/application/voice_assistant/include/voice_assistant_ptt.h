@@ -54,8 +54,10 @@ esp_err_t voice_assistant_ptt_start(void);
 esp_err_t voice_assistant_ptt_press(void);
 
 /**
- * Queue release intent. Authorization is revoked immediately by the PTT task.
- * 14-A does not start/stop microphone capture; Phase 14-B consumes this policy.
+ * Queue release intent. Authorization is revoked by the PTT task. A release
+ * remains FIFO-deliverable behind its still-pending press, so a short physical
+ * tap cannot leave capture authorized after the button is already released.
+ * Phase 14-B consumes this policy to start/stop microphone capture.
  */
 esp_err_t voice_assistant_ptt_release(void);
 

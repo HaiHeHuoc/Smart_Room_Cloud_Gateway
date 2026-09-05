@@ -138,6 +138,10 @@ when cleanup returns the voice state to `IDLE`, it starts the fresh session and
 waits for real `READY`. Releasing before `READY` always cancels and never
 authorizes capture.
 
+A physical release remains FIFO-deliverable behind a pending press. Therefore a
+short GPIO38 tap that ends before the PTT policy task processes its press is
+reported as released and never authorizes microphone capture.
+
 For a non-empty turn, uplink reserves a downlink-owned response wait before it
 sends stop-listening. The wait serializes PTT until TTS starts, an error arrives,
 or its finite timeout aborts the channel; it also covers finalization and

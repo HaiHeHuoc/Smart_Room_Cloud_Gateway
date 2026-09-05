@@ -206,7 +206,9 @@ Screen routing follows the final result:
 - Inspection failures and non-provisionable integrity states make a
   best-effort `BOOT` request before returning the existing policy error.
 - A normal stored-credential `CONNECTING -> ONLINE` transition queues
-  `WIFI_STATUS` immediately, without waiting for the 60-second fallback.
+  `WIFI_STATUS` immediately only while `BOOT` is active, without waiting for
+  the 60-second fallback. Runtime reconnects preserve any explicit
+  provisioning, reset, dashboard, or voice route.
 - Provisioning Wi-Fi events update progress only; the verified success path
   requests `WIFI_STATUS` after cleanup, adoption, and a 1500 ms success dwell.
 
@@ -220,8 +222,9 @@ Screen routing follows the final result:
   critical section is held.
 - `app_network_coordinator_notify_wifi_event()` performs no allocation,
   blocking wait, Wi-Fi call, or LVGL call. A verified normal transition to
-  `ONLINE` may post one non-blocking `WIFI_STATUS` screen request, so the API
-  remains suitable for the normal task-context Wi-Fi status callback.
+  `ONLINE` may post one non-blocking `WIFI_STATUS` screen request only when
+  `BOOT` remains active, so the API remains suitable for the normal
+  task-context Wi-Fi status callback.
 - The manager progress callback posts only copied latest-value GUI messages.
   It performs no wait, persistence, Wi-Fi operation, or LVGL call.
 - `PROVISIONING_MANAGER_PROGRESS_WIFI_CONNECTED` publishes
