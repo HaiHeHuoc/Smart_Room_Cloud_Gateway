@@ -74,8 +74,18 @@ static atomic_bool s_callback_stack_reported = false;
 static int16_t s_decoded_pcm[VOICE_ASSISTANT_OPUS_PCM_SAMPLES] = {0};
 static TickType_t s_last_response_activity = 0U;
 static TickType_t s_response_started_at = 0U;
-static atomic_bool s_response_tainted = false;
+/* A damaged callback packet must invalidate only the response generation that
+ * owned it. A late packet from a completed turn is expected during transport
+ * teardown and must not poison the next PTT response. */
+static atomic_uint_fast32_t s_response_tainted_generation = 0U;
 static voice_assistant_downlink_status_t s_status = {0};
+
+static bool downlink_response_is_tainted(uint32_t generation)
+{
+    return (generation != 0U) &&
+           (atomic_load_explicit(&s_response_tainted_generation,
+                                 memory_order_acquire) == generation);
+}
 
 static void downlink_set_error(esp_err_t error)
 {
@@ -90,11 +100,26 @@ static void downlink_mark_response_tainted(
     uint32_t generation,
     size_t data_len)
 {
-    const bool already_tainted = atomic_exchange_explicit(
-        &s_response_tainted,
-        true,
+    bool owns_response = false;
+    portENTER_CRITICAL(&s_lock);
+    owns_response = (generation != 0U) &&
+                    (generation == s_status.session_generation) &&
+                    (s_status.awaiting_response || s_status.collecting ||
+                     s_status.finalizing || s_status.playback_requested);
+    portEXIT_CRITICAL(&s_lock);
+    if (!owns_response) {
+        ESP_LOGD(TAG,
+                 "Ignored stale response taint generation=%u reason=%s",
+                 (unsigned)generation,
+                 reason);
+        return;
+    }
+
+    const uint32_t previous = (uint32_t)atomic_exchange_explicit(
+        &s_response_tainted_generation,
+        generation,
         memory_order_acq_rel);
-    if (!already_tainted) {
+    if (previous != generation) {
         ESP_LOGW(TAG,
                  "response tainted generation=%u reason=%s packet_bytes=%u",
                  (unsigned)generation,
@@ -105,7 +130,8 @@ static void downlink_mark_response_tainted(
 
 static void downlink_finish_turn_state(void)
 {
-    atomic_store_explicit(&s_response_tainted, false, memory_order_release);
+    atomic_store_explicit(
+        &s_response_tainted_generation, 0U, memory_order_release);
     portENTER_CRITICAL(&s_lock);
     s_last_response_activity = 0U;
     s_response_started_at = 0U;
@@ -147,8 +173,7 @@ static esp_err_t downlink_write_pcm_with_backpressure(
     bool backpressured = false;
 
     for (;;) {
-        if (atomic_load_explicit(&s_response_tainted,
-                                 memory_order_acquire)) {
+        if (downlink_response_is_tainted(generation)) {
             return ESP_ERR_INVALID_RESPONSE;
         }
         const esp_err_t result = phase16_xiaozhi_stream_write(
@@ -157,8 +182,7 @@ static esp_err_t downlink_write_pcm_with_backpressure(
         /* A callback can mark the response tainted while the arbiter write
          * takes its lock. Do not accept a successful retry after a dropped or
          * oversized Opus packet: terminate the incomplete response instead. */
-        if (atomic_load_explicit(&s_response_tainted,
-                                 memory_order_acquire)) {
+        if (downlink_response_is_tainted(generation)) {
             return ESP_ERR_INVALID_RESPONSE;
         }
         if (result != ESP_ERR_TIMEOUT) {
@@ -181,8 +205,7 @@ static esp_err_t downlink_write_pcm_with_backpressure(
             backpressured = true;
         }
 
-        if (atomic_load_explicit(&s_response_tainted,
-                                 memory_order_acquire)) {
+        if (downlink_response_is_tainted(generation)) {
             ESP_LOGW(TAG,
                      "PCM ingress stopped generation=%u: response tainted while backpressured",
                      (unsigned)generation);
@@ -356,7 +379,8 @@ static void downlink_abort_response(
     /* Once a response is aborting, reject any queued audio until the arbiter
      * has accepted the terminal intent. This prevents stale PCM from being
      * appended if the first bounded cleanup attempt meets lock contention. */
-    atomic_store_explicit(&s_response_tainted, true, memory_order_release);
+    atomic_store_explicit(
+        &s_response_tainted_generation, generation, memory_order_release);
     const esp_err_t stream_fail_ret =
         phase16_xiaozhi_stream_fail(normalized_error);
     if ((stream_fail_ret != ESP_OK) &&
@@ -406,15 +430,7 @@ static void downlink_check_timeout(void)
     }
 
     const TickType_t now = xTaskGetTickCount();
-    if (finalizing &&
-        ((now - last_activity) >=
-         pdMS_TO_TICKS(DOWNLINK_STREAM_DRAIN_TIMEOUT_MS))) {
-        ESP_LOGE(TAG,
-                 "PCM stream drain timeout generation=%u elapsed_ms=%u",
-                 (unsigned)generation,
-                 (unsigned)pdTICKS_TO_MS(now - last_activity));
-        downlink_abort_response(generation, ESP_ERR_TIMEOUT, true);
-    } else if ((now - response_started_at) >=
+    if ((now - response_started_at) >=
         pdMS_TO_TICKS(DOWNLINK_RESPONSE_MAX_DURATION_MS)) {
         ESP_LOGE(TAG,
                  "response deadline exceeded generation=%u awaiting=%s elapsed_ms=%u",
@@ -422,6 +438,18 @@ static void downlink_check_timeout(void)
                  awaiting_response ? "yes" : "no",
                  (unsigned)pdTICKS_TO_MS(now - response_started_at));
         downlink_abort_response(generation, ESP_ERR_TIMEOUT, true);
+    } else if (finalizing) {
+        /* TTS_STOP starts a PCM drain. Do not fall through to the short
+         * server-inactivity watchdog: playback can legitimately outlive the
+         * last network packet by much more than 15 seconds. */
+        if ((now - last_activity) >=
+            pdMS_TO_TICKS(DOWNLINK_STREAM_DRAIN_TIMEOUT_MS)) {
+            ESP_LOGE(TAG,
+                     "PCM stream drain timeout generation=%u elapsed_ms=%u",
+                     (unsigned)generation,
+                     (unsigned)pdTICKS_TO_MS(now - last_activity));
+            downlink_abort_response(generation, ESP_ERR_TIMEOUT, true);
+        }
     } else if ((now - last_activity) >=
                pdMS_TO_TICKS(DOWNLINK_RESPONSE_TIMEOUT_MS)) {
         downlink_abort_response(generation, ESP_ERR_TIMEOUT, true);
@@ -518,7 +546,8 @@ static void downlink_task(void *argument)
                 portEXIT_CRITICAL(&s_lock);
                 continue;
             }
-            atomic_store_explicit(&s_response_tainted, false, memory_order_release);
+            atomic_store_explicit(
+                &s_response_tainted_generation, 0U, memory_order_release);
             const esp_err_t reset_ret = voice_assistant_opus_decoder_reset();
             if (reset_ret != ESP_OK) {
                 downlink_abort_response(item.generation, reset_ret, false);
@@ -614,9 +643,7 @@ static void downlink_task(void *argument)
                 portEXIT_CRITICAL(&s_lock);
                 continue;
             }
-            const bool tainted = atomic_load_explicit(
-                &s_response_tainted,
-                memory_order_acquire);
+            const bool tainted = downlink_response_is_tainted(item.generation);
             uint64_t pcm_bytes = 0U;
             portENTER_CRITICAL(&s_lock);
             pcm_bytes = s_status.response_bytes_buffered;
@@ -681,7 +708,8 @@ esp_err_t voice_assistant_downlink_init(void)
         return ESP_ERR_NO_MEM;
     }
 
-    atomic_store_explicit(&s_response_tainted, false, memory_order_release);
+    atomic_store_explicit(
+        &s_response_tainted_generation, 0U, memory_order_release);
     portENTER_CRITICAL(&s_lock);
     s_last_response_activity = 0U;
     s_response_started_at = 0U;

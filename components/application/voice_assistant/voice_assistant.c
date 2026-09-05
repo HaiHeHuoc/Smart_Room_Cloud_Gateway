@@ -57,6 +57,18 @@ static voice_assistant_status_t s_status = {
 static voice_assistant_status_callback_t s_status_callback = NULL;
 static void *s_status_callback_context = NULL;
 static bool s_command_pending = false;
+/* Foundation and audio producers may run while the bounded command queue is
+ * full. Keep one latest copied snapshot for each source; a queue marker only
+ * wakes the coordinator, while the task also drains these snapshots after
+ * every command. */
+static portMUX_TYPE s_pending_status_lock = portMUX_INITIALIZER_UNLOCKED;
+static bool s_foundation_status_pending = false;
+static xiaozhi_foundation_session_status_t s_pending_foundation_status = {
+    .state = XIAOZHI_FOUNDATION_SESSION_STOPPED,
+    .client_generation = 0U,
+    .active = false,
+    .last_error = ESP_OK,
+};
 static bool s_audio_status_pending = false;
 static voice_assistant_audio_status_t s_pending_audio_status = {
     .state = VOICE_ASSISTANT_AUDIO_UNAVAILABLE,
@@ -213,38 +225,60 @@ static void voice_assistant_foundation_status_callback(
         return;
     }
 
+    bool enqueue_marker = false;
+    portENTER_CRITICAL(&s_pending_status_lock);
+    s_pending_foundation_status = *status;
+    if (!s_foundation_status_pending) {
+        s_foundation_status_pending = true;
+        enqueue_marker = true;
+    }
+    portEXIT_CRITICAL(&s_pending_status_lock);
+
+    if (!enqueue_marker) {
+        return;
+    }
+
     const voice_assistant_command_t command = {
         .type = VOICE_ASSISTANT_COMMAND_FOUNDATION_STATUS,
-        .generation = status->client_generation,
-        .foundation_status = *status,
     };
     if (xQueueSend(s_command_queue, &command, 0U) != pdTRUE) {
         ESP_LOGW(TAG,
-                 "Dropped Xiaozhi status generation=%u state=%s: queue full",
+                 "Deferred Xiaozhi status generation=%u state=%s: queue full",
                  (unsigned)status->client_generation,
                  xiaozhi_foundation_session_state_to_string(status->state));
     }
 }
 
-static void voice_assistant_handle_foundation_status(
-    const voice_assistant_command_t *command)
+static void voice_assistant_handle_foundation_status(void)
 {
-    if (command == NULL) {
+    xiaozhi_foundation_session_status_t foundation_status = {0};
+    bool pending = false;
+
+    portENTER_CRITICAL(&s_pending_status_lock);
+    pending = s_foundation_status_pending;
+    if (pending) {
+        foundation_status = s_pending_foundation_status;
+        s_foundation_status_pending = false;
+    }
+    portEXIT_CRITICAL(&s_pending_status_lock);
+
+    if (!pending) {
         return;
     }
-    if (!voice_assistant_generation_is_current(command->generation)) {
+    if (!voice_assistant_generation_is_current(
+            foundation_status.client_generation)) {
         ESP_LOGW(TAG,
                  "Dropped stale Xiaozhi status generation=%u state=%s",
-                 (unsigned)command->generation,
+                 (unsigned)foundation_status.client_generation,
                  xiaozhi_foundation_session_state_to_string(
-                     command->foundation_status.state));
+                     foundation_status.state));
         return;
     }
 
     const voice_assistant_state_t current =
         voice_assistant_get_state_unlocked_copy();
 
-    switch (command->foundation_status.state) {
+    switch (foundation_status.state) {
         case XIAOZHI_FOUNDATION_SESSION_CONNECTING:
             /* session_start() publishes its initial inactive CONNECTING
              * snapshot before the actual WebSocket CONNECTED callback. The
@@ -253,10 +287,10 @@ static void voice_assistant_handle_foundation_status(
              * create a PTT arming race at boot. Transport-loss reconnects
              * retain active=true and remain observable below. */
             if ((current == VOICE_ASSISTANT_STATE_READY) &&
-                !command->foundation_status.active) {
+                !foundation_status.active) {
                 ESP_LOGD(TAG,
                          "Ignored stale inactive CONNECTING generation=%u",
-                         (unsigned)command->generation);
+                         (unsigned)foundation_status.client_generation);
                 break;
             }
             if ((current != VOICE_ASSISTANT_STATE_IDLE) &&
@@ -265,7 +299,7 @@ static void voice_assistant_handle_foundation_status(
                 (current != VOICE_ASSISTANT_STATE_RECOVERING)) {
                 voice_assistant_set_status(
                     VOICE_ASSISTANT_STATE_CONNECTING,
-                    command->foundation_status.active,
+                    foundation_status.active,
                     ESP_OK);
             }
             break;
@@ -274,7 +308,7 @@ static void voice_assistant_handle_foundation_status(
             if ((current == VOICE_ASSISTANT_STATE_CONNECTING) ||
                 (current == VOICE_ASSISTANT_STATE_READY) ||
                 ((current == VOICE_ASSISTANT_STATE_ERROR) &&
-                 command->foundation_status.active)) {
+                 foundation_status.active)) {
                 if (current != VOICE_ASSISTANT_STATE_READY) {
                     voice_assistant_set_status(
                         VOICE_ASSISTANT_STATE_READY,
@@ -285,7 +319,7 @@ static void voice_assistant_handle_foundation_status(
                 ESP_LOGW(TAG,
                          "Ignored READY in voice state=%s generation=%u",
                          voice_assistant_state_to_string(current),
-                         (unsigned)command->generation);
+                         (unsigned)foundation_status.client_generation);
             }
             break;
 
@@ -296,16 +330,16 @@ static void voice_assistant_handle_foundation_status(
             if ((current == VOICE_ASSISTANT_STATE_IDLE) ||
                 (current == VOICE_ASSISTANT_STATE_RECOVERING)) {
                 ESP_LOGI(TAG,
-                         "Ignored late Xiaozhi ERROR in state=%s generation=%u",
-                         voice_assistant_state_to_string(current),
-                         (unsigned)command->generation);
+                          "Ignored late Xiaozhi ERROR in state=%s generation=%u",
+                          voice_assistant_state_to_string(current),
+                          (unsigned)foundation_status.client_generation);
                 break;
             }
             voice_assistant_set_status(
                 VOICE_ASSISTANT_STATE_ERROR,
-                command->foundation_status.active,
-                (command->foundation_status.last_error == ESP_OK) ?
-                    ESP_FAIL : command->foundation_status.last_error);
+                foundation_status.active,
+                (foundation_status.last_error == ESP_OK) ?
+                    ESP_FAIL : foundation_status.last_error);
             break;
 
         default:
@@ -316,13 +350,19 @@ static void voice_assistant_handle_foundation_status(
 static void voice_assistant_handle_audio_marker(void)
 {
     voice_assistant_audio_status_t latest = {0};
-    if (!voice_assistant_take_lock()) {
-        ESP_LOGE(TAG, "Audio marker dropped: lock timeout");
+    bool pending = false;
+
+    portENTER_CRITICAL(&s_pending_status_lock);
+    pending = s_audio_status_pending;
+    if (pending) {
+        latest = s_pending_audio_status;
+        s_audio_status_pending = false;
+    }
+    portEXIT_CRITICAL(&s_pending_status_lock);
+
+    if (!pending) {
         return;
     }
-    latest = s_pending_audio_status;
-    s_audio_status_pending = false;
-    xSemaphoreGive(s_status_lock);
     voice_assistant_set_audio_status(&latest);
 }
 
@@ -428,7 +468,7 @@ static void voice_assistant_task(void *argument)
             }
 
             case VOICE_ASSISTANT_COMMAND_FOUNDATION_STATUS:
-                voice_assistant_handle_foundation_status(&command);
+                voice_assistant_handle_foundation_status();
                 break;
 
             case VOICE_ASSISTANT_COMMAND_AUDIO_STATUS:
@@ -441,6 +481,12 @@ static void voice_assistant_task(void *argument)
                     VOICE_ASSISTANT_STATE_ERROR, false, ESP_ERR_INVALID_ARG);
                 break;
         }
+
+        /* A full queue can prevent a source marker from being inserted. The
+         * command just consumed guarantees forward progress for the latest
+         * copied source snapshots without running callback work here. */
+        voice_assistant_handle_foundation_status();
+        voice_assistant_handle_audio_marker();
     }
 }
 
@@ -468,9 +514,22 @@ esp_err_t voice_assistant_init(void)
     s_status.audio.state = VOICE_ASSISTANT_AUDIO_UNAVAILABLE;
     s_status.audio.last_error = ESP_OK;
     s_command_pending = false;
+    portENTER_CRITICAL(&s_pending_status_lock);
+    s_foundation_status_pending = false;
+    s_pending_foundation_status = (xiaozhi_foundation_session_status_t) {
+        .state = XIAOZHI_FOUNDATION_SESSION_STOPPED,
+        .client_generation = 0U,
+        .active = false,
+        .last_error = ESP_OK,
+    };
     s_audio_status_pending = false;
-    s_pending_audio_status.state = VOICE_ASSISTANT_AUDIO_UNAVAILABLE;
-    s_pending_audio_status.last_error = ESP_OK;
+    s_pending_audio_status = (voice_assistant_audio_status_t) {
+        .state = VOICE_ASSISTANT_AUDIO_UNAVAILABLE,
+        .capture_active = false,
+        .playback_active = false,
+        .last_error = ESP_OK,
+    };
+    portEXIT_CRITICAL(&s_pending_status_lock);
 
     const esp_err_t observer_ret =
         xiaozhi_foundation_session_register_status_callback(
@@ -657,15 +716,13 @@ esp_err_t voice_assistant_notify_audio_status(
     }
 
     bool enqueue_marker = false;
-    if (!voice_assistant_take_lock()) {
-        return ESP_ERR_TIMEOUT;
-    }
+    portENTER_CRITICAL(&s_pending_status_lock);
     s_pending_audio_status = *status;
     if (!s_audio_status_pending) {
         s_audio_status_pending = true;
         enqueue_marker = true;
     }
-    xSemaphoreGive(s_status_lock);
+    portEXIT_CRITICAL(&s_pending_status_lock);
 
     if (!enqueue_marker) {
         return ESP_OK;
@@ -675,11 +732,7 @@ esp_err_t voice_assistant_notify_audio_status(
         .type = VOICE_ASSISTANT_COMMAND_AUDIO_STATUS,
     };
     if (xQueueSend(s_command_queue, &command, 0U) != pdTRUE) {
-        if (voice_assistant_take_lock()) {
-            s_audio_status_pending = false;
-            xSemaphoreGive(s_status_lock);
-        }
-        return ESP_ERR_TIMEOUT;
+        ESP_LOGW(TAG, "Deferred audio status: command queue full");
     }
     return ESP_OK;
 }
