@@ -209,9 +209,11 @@ latest snapshot, but only a real `READY -> LISTENING` microphone-capture
 transition may select `XIAOZHI`. When that interaction reaches terminal
 `READY`, `CONNECTING`, or `IDLE`, the adapter returns to the sensor dashboard
 after three seconds. A temporarily full GUI command queue is retried without
-abandoning this return. Startup and reconnect states never claim the
-interaction screen. Leaving the screen does not stop, cancel, or restart the
-Xiaozhi session; returning to it renders the latest cached snapshot.
+abandoning this return. Repeated transcript updates in one state do not queue
+duplicate screen routes, and a callback delayed by adapter-lock contention
+re-reads the newest model snapshot. Startup and reconnect states never claim
+the interaction screen. Leaving the screen does not stop, cancel, or restart
+the Xiaozhi session; returning to it renders the latest cached snapshot.
 
 ```text
 voice_assistant copied session/audio snapshot

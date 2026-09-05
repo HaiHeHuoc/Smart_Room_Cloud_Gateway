@@ -12,6 +12,7 @@
 
 #define VOICE_UI_DASHBOARD_RETURN_DELAY_US   (3LL * 1000LL * 1000LL)
 #define VOICE_UI_ROUTE_RETRY_DELAY_US        (100LL * 1000LL)
+#define VOICE_UI_ROUTE_DEFERRED_RETRY_US     (3LL * 1000LL * 1000LL)
 #define VOICE_UI_ROUTE_RETRY_MAX_ATTEMPTS    10U
 #define VOICE_UI_CALLBACK_LOCK_TIMEOUT_MS    50U
 
@@ -24,6 +25,7 @@ static voice_assistant_ui_state_t s_previous_state = VOICE_ASSISTANT_UI_IDLE;
 static SemaphoreHandle_t s_callback_lock = NULL;
 static esp_timer_handle_t s_dashboard_return_timer = NULL;
 static esp_timer_handle_t s_xiaozhi_open_retry_timer = NULL;
+static esp_timer_handle_t s_model_sync_retry_timer = NULL;
 static uint32_t s_dashboard_retry_attempts = 0U;
 static uint32_t s_xiaozhi_open_retry_attempts = 0U;
 
@@ -135,8 +137,9 @@ static void gui_cancel_xiaozhi_open_retry_locked(void)
     s_xiaozhi_open_retry_attempts = 0U;
 }
 
-static void gui_arm_retry_timer(
+static void gui_arm_timer_once(
     esp_timer_handle_t timer,
+    int64_t delay_us,
     const char *name)
 {
     if (timer == NULL) {
@@ -156,8 +159,7 @@ static void gui_arm_retry_timer(
         }
     }
 
-    const esp_err_t ret =
-        esp_timer_start_once(timer, VOICE_UI_ROUTE_RETRY_DELAY_US);
+    const esp_err_t ret = esp_timer_start_once(timer, delay_us);
     if (ret != ESP_OK) {
         ESP_LOGW(
             TAG,
@@ -167,14 +169,26 @@ static void gui_arm_retry_timer(
     }
 }
 
+static void gui_arm_retry_timer(
+    esp_timer_handle_t timer,
+    const char *name)
+{
+    gui_arm_timer_once(timer, VOICE_UI_ROUTE_RETRY_DELAY_US, name);
+}
+
 static void gui_schedule_xiaozhi_open_retry_locked(void)
 {
     if (s_xiaozhi_open_retry_attempts >=
         VOICE_UI_ROUTE_RETRY_MAX_ATTEMPTS) {
-        ESP_LOGE(
+        ESP_LOGW(
             TAG,
-            "Xiaozhi screen route retry exhausted after %u attempts",
+            "Xiaozhi screen route retry deferred after %u attempts",
             (unsigned)s_xiaozhi_open_retry_attempts);
+        s_xiaozhi_open_retry_attempts = 0U;
+        gui_arm_timer_once(
+            s_xiaozhi_open_retry_timer,
+            VOICE_UI_ROUTE_DEFERRED_RETRY_US,
+            "Xiaozhi open deferred");
         return;
     }
 
@@ -353,7 +367,10 @@ static void gui_apply_screen_policy_locked(voice_assistant_ui_state_t state)
     if (gui_state_belongs_to_active_turn(state)) {
         gui_cancel_dashboard_return_locked();
 
-        if (s_interaction_screen_owned) {
+        /* Text updates may republish the same state many times. One screen
+         * route per state transition is sufficient and avoids filling the GUI
+         * command queue before its task can render Xiaozhi. */
+        if (s_interaction_screen_owned && (previous != state)) {
             (void)gui_request_xiaozhi_screen_locked(false);
         }
         return;
@@ -388,6 +405,24 @@ static void gui_apply_screen_policy_locked(voice_assistant_ui_state_t state)
     }
 }
 
+static void gui_schedule_model_sync_retry(void)
+{
+    if ((s_model_sync_retry_timer == NULL) ||
+        esp_timer_is_active(s_model_sync_retry_timer)) {
+        return;
+    }
+
+    const esp_err_t ret = esp_timer_start_once(
+        s_model_sync_retry_timer,
+        VOICE_UI_ROUTE_RETRY_DELAY_US);
+    if ((ret != ESP_OK) && (ret != ESP_ERR_INVALID_STATE)) {
+        ESP_LOGW(
+            TAG,
+            "voice GUI model retry timer start failed: %s",
+            esp_err_to_name(ret));
+    }
+}
+
 static void gui_model_callback(
     const voice_assistant_ui_model_t *model,
     void *user_context)
@@ -397,7 +432,11 @@ static void gui_model_callback(
 
     if (!gui_take_callback_lock(
             pdMS_TO_TICKS(VOICE_UI_CALLBACK_LOCK_TIMEOUT_MS))) {
-        ESP_LOGW(TAG, "voice GUI callback dropped: adapter lock timeout");
+        /* The model retains the newest snapshot. Retry it rather than losing a
+         * terminal READY/IDLE update that may be the only dashboard-return
+         * trigger for this interaction. */
+        ESP_LOGW(TAG, "voice GUI callback deferred: adapter lock timeout");
+        gui_schedule_model_sync_retry();
         return;
     }
 
@@ -447,6 +486,15 @@ static void gui_model_callback(
     gui_release_callback_lock();
 }
 
+static void gui_model_sync_retry_timer_cb(void *argument)
+{
+    (void)argument;
+
+    if (s_started) {
+        gui_model_callback(NULL, NULL);
+    }
+}
+
 esp_err_t voice_assistant_ui_gui_adapter_init(void)
 {
     if (s_initialized) {
@@ -487,6 +535,27 @@ esp_err_t voice_assistant_ui_gui_adapter_init(void)
         &open_retry_timer_args,
         &s_xiaozhi_open_retry_timer);
     if (ret != ESP_OK) {
+        (void)esp_timer_delete(s_dashboard_return_timer);
+        s_dashboard_return_timer = NULL;
+        vSemaphoreDelete(s_callback_lock);
+        s_callback_lock = NULL;
+        return ret;
+    }
+
+    const esp_timer_create_args_t model_sync_retry_timer_args = {
+        .callback = gui_model_sync_retry_timer_cb,
+        .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "xiaozhi_ui_sync",
+        .skip_unhandled_events = true,
+    };
+
+    ret = esp_timer_create(
+        &model_sync_retry_timer_args,
+        &s_model_sync_retry_timer);
+    if (ret != ESP_OK) {
+        (void)esp_timer_delete(s_xiaozhi_open_retry_timer);
+        s_xiaozhi_open_retry_timer = NULL;
         (void)esp_timer_delete(s_dashboard_return_timer);
         s_dashboard_return_timer = NULL;
         vSemaphoreDelete(s_callback_lock);
