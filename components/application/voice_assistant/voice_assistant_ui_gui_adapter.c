@@ -100,6 +100,13 @@ static bool gui_state_belongs_to_active_turn(voice_assistant_ui_state_t state)
            (state == VOICE_ASSISTANT_UI_ERROR);
 }
 
+static bool gui_state_allows_dashboard_return(voice_assistant_ui_state_t state)
+{
+    return (state == VOICE_ASSISTANT_UI_READY) ||
+           (state == VOICE_ASSISTANT_UI_CONNECTING) ||
+           (state == VOICE_ASSISTANT_UI_IDLE);
+}
+
 static void gui_cancel_timer(esp_timer_handle_t timer, const char *name)
 {
     if ((timer == NULL) || !esp_timer_is_active(timer)) {
@@ -253,10 +260,14 @@ static void gui_schedule_dashboard_retry_locked(void)
 {
     if (s_dashboard_retry_attempts >=
         VOICE_UI_ROUTE_RETRY_MAX_ATTEMPTS) {
-        ESP_LOGE(
+        ESP_LOGW(
             TAG,
-            "dashboard return retry exhausted after %u attempts",
+            "dashboard return retry deferred after %u attempts",
             (unsigned)s_dashboard_retry_attempts);
+        /* Keep attempting at the normal post-turn cadence while the adapter
+         * still owns Xiaozhi. A full GUI queue is transient; abandoning the
+         * route here leaves the completed interaction screen visible forever. */
+        gui_schedule_dashboard_return_locked();
         return;
     }
 
@@ -279,7 +290,7 @@ static void gui_dashboard_return_timer_cb(void *argument)
     }
 
     if (!s_interaction_screen_owned ||
-        (s_previous_state != VOICE_ASSISTANT_UI_READY)) {
+        !gui_state_allows_dashboard_return(s_previous_state)) {
         s_dashboard_retry_attempts = 0U;
         gui_release_callback_lock();
         return;
@@ -364,12 +375,16 @@ static void gui_apply_screen_policy_locked(voice_assistant_ui_state_t state)
         return;
     }
 
-    /* Startup/reconnect status never claims the interaction screen. */
+    /* Startup/reconnect status never claims the interaction screen. If it
+     * follows an owned turn, however, return to the dashboard instead of
+     * silently abandoning Xiaozhi as the visible root. */
     if ((state == VOICE_ASSISTANT_UI_CONNECTING) ||
         (state == VOICE_ASSISTANT_UI_IDLE)) {
-        gui_cancel_dashboard_return_locked();
         gui_cancel_xiaozhi_open_retry_locked();
-        s_interaction_screen_owned = false;
+
+        if (s_interaction_screen_owned && (previous != state)) {
+            gui_schedule_dashboard_return_locked();
+        }
     }
 }
 

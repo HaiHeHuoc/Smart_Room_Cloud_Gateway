@@ -511,7 +511,6 @@ static void app_network_coordinator_wait_for_stored_wifi_boot_grace(void)
 
     if (app_is_factory_reset_requested() ||
         (app_network_coordinator_get_state(&state) != ESP_OK) ||
-        (state == APP_NETWORK_COORDINATOR_STATE_ONLINE) ||
         (app_gui_get_screen_id(&screen_id) != ESP_OK) ||
         (screen_id != APP_GUI_SCREEN_BOOT))
     {
@@ -533,7 +532,8 @@ static void app_network_coordinator_wait_for_stored_wifi_boot_grace(void)
 
     ESP_LOGI(
         TAG,
-        "Stored Wi-Fi is still unavailable; leaving boot screen");
+        "Boot grace expired while BOOT remained active; leaving boot screen state=%s",
+        app_network_coordinator_state_to_string(state));
 }
 
 static void app_network_coordinator_set_state(
@@ -3348,6 +3348,44 @@ esp_err_t app_network_coordinator_notify_wifi_event(
                 previous_state),
             app_network_coordinator_state_to_string(
                 next_state));
+
+        /*
+         * A normal stored-Wi-Fi boot begins on BOOT. Once IPv4 is confirmed,
+         * leave that transient screen immediately, but never override an
+         * explicit provisioning, reset, dashboard, or voice UI route during a
+         * later reconnect.
+         */
+        if (next_state == APP_NETWORK_COORDINATOR_STATE_ONLINE)
+        {
+            app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
+            const esp_err_t screen_state_ret =
+                app_gui_get_screen_id(&screen_id);
+
+            if (screen_state_ret == ESP_OK)
+            {
+                if (screen_id == APP_GUI_SCREEN_BOOT)
+                {
+                    const esp_err_t screen_ret =
+                        app_gui_request_screen(
+                            APP_GUI_SCREEN_WIFI_STATUS);
+
+                    if (screen_ret != ESP_OK)
+                    {
+                        ESP_LOGW(
+                            TAG,
+                            "Failed to leave BOOT screen after Wi-Fi ONLINE: %s",
+                            esp_err_to_name(screen_ret));
+                    }
+                }
+            }
+            else
+            {
+                ESP_LOGW(
+                    TAG,
+                    "Failed to inspect active screen after Wi-Fi ONLINE: %s",
+                    esp_err_to_name(screen_state_ret));
+            }
+        }
 
     }
 

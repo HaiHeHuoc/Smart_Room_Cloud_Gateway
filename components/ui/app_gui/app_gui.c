@@ -1423,8 +1423,8 @@ static const char *app_gui_xiaozhi_detail_text(
 
         case UI_XIAOZHI_STATE_ERROR:
             return (status->last_error == ESP_ERR_TIMEOUT)
-                ? "Validation timeout"
-                : "Validation failed";
+                ? "Response timeout"
+                : "Voice session failed";
 
         case UI_XIAOZHI_STATE_DISCONNECTED:
         default:
