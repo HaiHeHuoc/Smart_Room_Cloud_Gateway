@@ -386,6 +386,8 @@ static void app_gui_render_sensor_status(
 static void app_gui_render_sensor_clock(void);
 static void app_gui_render_audio_status(
     const ui_audio_status_t *status);
+static void app_gui_render_dashboard_xiaozhi_status(
+    const ui_xiaozhi_status_t *status);
 static void app_gui_render_sensor_wifi_status(
     const ui_wifi_status_t *status);
 static void app_gui_render_cloud_status(
@@ -1366,6 +1368,9 @@ static const char *app_gui_xiaozhi_state_to_string(
     ui_xiaozhi_state_t state)
 {
     switch (state) {
+        case UI_XIAOZHI_STATE_CONNECTING:
+            return "CONNECTING";
+
         case UI_XIAOZHI_STATE_READY:
             return "READY";
 
@@ -1376,7 +1381,10 @@ static const char *app_gui_xiaozhi_state_to_string(
             return "PROCESSING";
 
         case UI_XIAOZHI_STATE_RESPONDING:
-            return "RESPONDING";
+            return "SPEAKING";
+
+        case UI_XIAOZHI_STATE_RECOVERING:
+            return "RECOVERING";
 
         case UI_XIAOZHI_STATE_ERROR:
             return "ERROR";
@@ -1395,8 +1403,11 @@ static const char *app_gui_xiaozhi_detail_text(
     }
 
     switch (status->state) {
+        case UI_XIAOZHI_STATE_CONNECTING:
+            return "Connecting to Xiaozhi";
+
         case UI_XIAOZHI_STATE_READY:
-            return "Ready for validation";
+            return "Ready for interaction";
 
         case UI_XIAOZHI_STATE_LISTENING:
             return "Recording microphone";
@@ -1406,6 +1417,9 @@ static const char *app_gui_xiaozhi_detail_text(
 
         case UI_XIAOZHI_STATE_RESPONDING:
             return "Xiaozhi replying";
+
+        case UI_XIAOZHI_STATE_RECOVERING:
+            return "Recovering session";
 
         case UI_XIAOZHI_STATE_ERROR:
             return (status->last_error == ESP_ERR_TIMEOUT)
@@ -1422,6 +1436,9 @@ static lv_color_t app_gui_xiaozhi_state_color(
     ui_xiaozhi_state_t state)
 {
     switch (state) {
+        case UI_XIAOZHI_STATE_CONNECTING:
+            return lv_color_hex(0x4DB6E5);
+
         case UI_XIAOZHI_STATE_READY:
             return lv_color_hex(0x49C978);
 
@@ -1433,6 +1450,9 @@ static lv_color_t app_gui_xiaozhi_state_color(
 
         case UI_XIAOZHI_STATE_RESPONDING:
             return lv_color_hex(0xA987FF);
+
+        case UI_XIAOZHI_STATE_RECOVERING:
+            return lv_color_hex(0xFFC857);
 
         case UI_XIAOZHI_STATE_ERROR:
             return lv_color_hex(0xF06464);
@@ -2220,7 +2240,7 @@ static esp_err_t app_gui_create_sensor_screen(
         app_gui_create_sensor_value_label(
             screen,
             APP_GUI_DASHBOARD_STATUS_AUDIO_Y_PX,
-            "Audio: --");
+            "Xiaozhi: --");
     s_sensor_wifi_label =
         app_gui_create_sensor_value_label(
             screen,
@@ -2569,7 +2589,8 @@ static void app_gui_render_xiaozhi_status(
         (status->state == UI_XIAOZHI_STATE_READY) ||
         (status->state == UI_XIAOZHI_STATE_LISTENING) ||
         (status->state == UI_XIAOZHI_STATE_PROCESSING) ||
-        (status->state == UI_XIAOZHI_STATE_RESPONDING);
+        (status->state == UI_XIAOZHI_STATE_RESPONDING) ||
+        (status->state == UI_XIAOZHI_STATE_RECOVERING);
     const lv_color_t state_color =
         app_gui_xiaozhi_state_color(status->state);
     char duration[APP_GUI_XIAOZHI_DURATION_BUFFER_SIZE] = {0};
@@ -3046,17 +3067,73 @@ static void app_gui_render_sensor_clock(void)
 static void app_gui_render_audio_status(
     const ui_audio_status_t *status)
 {
-    if ((status == NULL) || (s_sensor_audio_label == NULL))
-    {
+    /*
+     * Audio telemetry remains cached for diagnostics/compatibility, but it
+     * no longer owns the dashboard row. Xiaozhi lifecycle is the sole
+     * presentation source for that row. Keep these helpers referenced so the
+     * legacy formatting remains available without producing unused warnings.
+     */
+    if (status == NULL) {
         return;
     }
 
-    lv_label_set_text(
+    (void)app_gui_audio_status_to_string(status);
+    (void)app_gui_audio_status_color(status);
+}
+
+static void app_gui_render_dashboard_xiaozhi_status(
+    const ui_xiaozhi_status_t *status)
+{
+    if (!app_gui_is_valid_xiaozhi_status(status) ||
+        (s_sensor_audio_label == NULL)) {
+        return;
+    }
+
+    const char *text = "Xiaozhi: --";
+
+    switch (status->state) {
+        case UI_XIAOZHI_STATE_DISCONNECTED:
+            text = "Xiaozhi: Off";
+            break;
+
+        case UI_XIAOZHI_STATE_CONNECTING:
+            text = "Xiaozhi: Conn";
+            break;
+
+        case UI_XIAOZHI_STATE_READY:
+            text = "Xiaozhi: Ready";
+            break;
+
+        case UI_XIAOZHI_STATE_LISTENING:
+            text = "Xiaozhi: Rec";
+            break;
+
+        case UI_XIAOZHI_STATE_PROCESSING:
+            text = "Xiaozhi: Proc";
+            break;
+
+        case UI_XIAOZHI_STATE_RESPONDING:
+            text = "Xiaozhi: Speak";
+            break;
+
+        case UI_XIAOZHI_STATE_RECOVERING:
+            text = "Xiaozhi: Recov";
+            break;
+
+        case UI_XIAOZHI_STATE_ERROR:
+            text = "Xiaozhi: Error";
+            break;
+
+        default:
+            break;
+    }
+
+    app_gui_set_label_text_if_changed(
         s_sensor_audio_label,
-        app_gui_audio_status_to_string(status));
+        text);
     lv_obj_set_style_text_color(
         s_sensor_audio_label,
-        app_gui_audio_status_color(status),
+        app_gui_xiaozhi_state_color(status->state),
         LV_PART_MAIN);
 }
 
@@ -3268,6 +3345,10 @@ static bool app_gui_render_cached_status(
 
     if (cloud_available) {
         app_gui_render_cloud_status(&cloud_status);
+    }
+
+    if (xiaozhi_available) {
+        app_gui_render_dashboard_xiaozhi_status(&xiaozhi_status);
     }
 
     return true;
@@ -3907,11 +3988,17 @@ static void app_gui_process_xiaozhi_status(void)
 
     app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
 
-    if ((app_gui_get_screen_id(&screen_id) == ESP_OK) &&
-        (screen_id == APP_GUI_SCREEN_XIAOZHI)) {
-        ui_manager_lvgl_wait_for_mutex();
-        app_gui_render_xiaozhi_status(&status);
-        ui_manager_lvgl_release_mutex();
+    if (app_gui_get_screen_id(&screen_id) == ESP_OK) {
+        if (screen_id == APP_GUI_SCREEN_XIAOZHI) {
+            ui_manager_lvgl_wait_for_mutex();
+            app_gui_render_xiaozhi_status(&status);
+            ui_manager_lvgl_release_mutex();
+        }
+        else if (screen_id == APP_GUI_SCREEN_SENSOR_DASHBOARD) {
+            ui_manager_lvgl_wait_for_mutex();
+            app_gui_render_dashboard_xiaozhi_status(&status);
+            ui_manager_lvgl_release_mutex();
+        }
     }
 
     ESP_LOGD(
