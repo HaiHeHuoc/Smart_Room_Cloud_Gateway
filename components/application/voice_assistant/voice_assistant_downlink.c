@@ -30,9 +30,10 @@
 #define DOWNLINK_RESPONSE_TIMEOUT_MS       15000U
 /* Bound the server collection too, so duplicate protocol events or a missing
  * TTS_STOP cannot hold the next PTT turn forever. */
-/* Keep a finite turn bound, but allow long cloud answers to finish draining.
- * HIL observed valid PCM still arriving at the old 90-second ceiling. */
-#define DOWNLINK_RESPONSE_MAX_DURATION_MS 180000U
+/* Keep a finite turn bound, but allow unusually long cloud answers to finish
+ * draining. The independent inactivity and drain timeouts still recover a
+ * stalled response before this ten-minute absolute ceiling. */
+#define DOWNLINK_RESPONSE_MAX_DURATION_MS 600000U
 #define DOWNLINK_QUEUE_POLL_MS             100U
 #define DOWNLINK_STREAM_DRAIN_TIMEOUT_MS   90000U
 /* The decoded ingress ring is deliberately smaller than the copied WebSocket
