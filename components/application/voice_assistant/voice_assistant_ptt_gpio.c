@@ -11,6 +11,7 @@
 #define PTT_GPIO_TASK_NAME        "voice_ptt_gpio"
 #define PTT_GPIO_TASK_STACK_BYTES 3072U
 #define PTT_GPIO_TASK_PRIORITY    4U
+#define PTT_GPIO_DELIVERY_RETRY_MS 50U
 
 static const char *const TAG = "VOICE_PTT_GPIO";
 
@@ -30,7 +31,13 @@ static void ptt_gpio_task(void *argument)
 
     bool stable = ptt_gpio_is_pressed();
     bool candidate = stable;
+    /* Keep physical debounce separate from policy delivery. A policy queue
+     * can briefly reject an otherwise valid edge while it drains a prior PTT
+     * command; do not lose the physical edge in that interval. */
+    bool delivered = stable;
+    bool delivery_attempted = false;
     TickType_t candidate_since = xTaskGetTickCount();
+    TickType_t last_delivery_attempt = candidate_since;
 
     ESP_LOGI(TAG,
              "started gpio=%d active_level=%u pull=down initial=%s",
@@ -46,17 +53,35 @@ static void ptt_gpio_task(void *argument)
             candidate = sampled;
             candidate_since = now;
         } else if ((candidate != stable) &&
-                   ((now - candidate_since) >=
-                    pdMS_TO_TICKS(s_config.debounce_ms))) {
+                    ((now - candidate_since) >=
+                     pdMS_TO_TICKS(s_config.debounce_ms))) {
             stable = candidate;
+            delivery_attempted = false;
+        }
+
+        if (stable == delivered) {
+            delivery_attempted = false;
+        } else if (!delivery_attempted ||
+                   ((now - last_delivery_attempt) >=
+                    pdMS_TO_TICKS(PTT_GPIO_DELIVERY_RETRY_MS))) {
+            const bool retry = delivery_attempted;
+            delivery_attempted = true;
+            last_delivery_attempt = now;
             const esp_err_t ret = stable
                                       ? voice_assistant_ptt_press()
                                       : voice_assistant_ptt_release();
             if (ret == ESP_OK) {
+                delivered = stable;
+                delivery_attempted = false;
                 ESP_LOGI(TAG, "edge=%s", stable ? "PRESS" : "RELEASE");
-            } else {
+            } else if (!retry) {
                 ESP_LOGW(TAG,
-                         "edge=%s rejected: %s",
+                         "edge=%s deferred: %s",
+                         stable ? "PRESS" : "RELEASE",
+                         esp_err_to_name(ret));
+            } else {
+                ESP_LOGD(TAG,
+                         "edge=%s retry pending: %s",
                          stable ? "PRESS" : "RELEASE",
                          esp_err_to_name(ret));
             }

@@ -200,17 +200,20 @@ the UI ownership and screen-lifecycle rules. The dependency direction is
 read-only: `app_gui -> time_manager`; `time_manager` remains independent of
 GUI/LVGL.
 
-## Phase 12.5 Xiaozhi Validation UI
+## Xiaozhi Lifecycle UI
 
-The temporary screen is deliberately separate from provisioning, Wi-Fi status,
-and the sensor dashboard. It uses the existing `app_gui_request_screen()` API;
-there is no new touch/menu/button path. The current Phase 12.5 hardware-test
-route is the sole temporary exception: when the network reaches `ONLINE`, the
-coordinator requests `XIAOZHI` instead of `WIFI_STATUS` so copied validation
-status is visible. Remove that route after manual acceptance; ordinary Xiaozhi
-status updates never select a screen. Leaving the screen does not stop, cancel,
-or restart Xiaozhi validation. Returning to it renders the latest cached
-snapshot.
+The interaction screen is separate from provisioning, Wi-Fi status, and the
+sensor dashboard. It uses the existing `app_gui_request_screen()` API; there
+is no new touch/menu/button path. Production lifecycle updates always copy the
+latest snapshot, but only a real `READY -> LISTENING` microphone-capture
+transition may select `XIAOZHI`. When that interaction reaches terminal
+`READY`, `CONNECTING`, or `IDLE`, the adapter returns to the sensor dashboard
+after three seconds. A temporarily full GUI command queue is retried without
+abandoning this return. Repeated transcript updates in one state do not queue
+duplicate screen routes, and a callback delayed by adapter-lock contention
+re-reads the newest model snapshot. Startup and reconnect states never claim
+the interaction screen. Leaving the screen does not stop, cancel, or restart
+the Xiaozhi session; returning to it renders the latest cached snapshot.
 
 ```text
 voice_assistant copied session/audio snapshot
@@ -221,8 +224,8 @@ voice_assistant copied session/audio snapshot
     -> render only while APP_GUI_SCREEN_XIAOZHI is active
 ```
 
-`ui_xiaozhi_status_t` has the states `DISCONNECTED`, `READY`, `LISTENING`,
-`PROCESSING`, `RESPONDING`, and `ERROR`, start/stop timestamps from
+`ui_xiaozhi_status_t` has the states `DISCONNECTED`, `CONNECTING`, `READY`,
+`LISTENING`, `PROCESSING`, `RESPONDING`, `RECOVERING`, and `ERROR`, start/stop timestamps from
 `esp_timer_get_time()`, a non-sensitive `esp_err_t`, and separate 192-byte
 NUL-terminated USER/ASSISTANT buffers. `LISTENING` is rendered as
 `RECORDING` only after real microphone capture is active. The GUI timer

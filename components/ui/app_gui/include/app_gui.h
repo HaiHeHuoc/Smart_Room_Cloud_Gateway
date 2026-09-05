@@ -25,7 +25,7 @@ typedef enum
     /** Temperature and humidity sensor screen. */
     APP_GUI_SCREEN_SENSOR_DASHBOARD,
 
-    /** Temporary Xiaozhi interaction-validation status screen. */
+    /** Xiaozhi interaction status screen. */
     APP_GUI_SCREEN_XIAOZHI,
 
     /** Factory-reset success or failure result. */
@@ -157,7 +157,7 @@ typedef struct
 
 /* Audio UI Types ---------------------------------------------------------- */
 
-/** @brief Audio pipeline states rendered in the sensor dashboard status column. */
+/** @brief Audio pipeline states retained for legacy/internal GUI telemetry. */
 typedef enum
 {
     /** Audio status has not been received by the GUI yet. */
@@ -189,24 +189,26 @@ typedef struct
     esp_err_t last_error;
 } ui_audio_status_t;
 
-/* Xiaozhi Validation UI Types ------------------------------------------- */
+/* Xiaozhi UI Types -------------------------------------------------------- */
 
 /** Maximum bytes, including NUL, retained in each Xiaozhi transcript line. */
 #define UI_XIAOZHI_TEXT_BUFFER_SIZE 192U
 
-/** @brief Temporary Xiaozhi validation states rendered by the GUI task. */
+/** @brief Xiaozhi lifecycle states rendered by the GUI task. */
 typedef enum
 {
     UI_XIAOZHI_STATE_DISCONNECTED = 0,
+    UI_XIAOZHI_STATE_CONNECTING,
     UI_XIAOZHI_STATE_READY,
     UI_XIAOZHI_STATE_LISTENING,
     UI_XIAOZHI_STATE_PROCESSING,
     UI_XIAOZHI_STATE_RESPONDING,
+    UI_XIAOZHI_STATE_RECOVERING,
     UI_XIAOZHI_STATE_ERROR,
 } ui_xiaozhi_state_t;
 
 /**
- * @brief Bounded Xiaozhi validation snapshot copied into the GUI queue.
+ * @brief Bounded Xiaozhi snapshot copied into the GUI queue.
  *
  * Timestamps use esp_timer_get_time() monotonic microseconds. The GUI owns
  * duration formatting locally and this structure contains no audio buffer,
@@ -397,11 +399,12 @@ esp_err_t app_gui_post_audio_status(
     const ui_audio_status_t *status);
 
 /**
- * @brief Replace the pending Xiaozhi validation snapshot without waiting.
+ * @brief Replace the pending Xiaozhi lifecycle snapshot without waiting.
  *
  * This API copies one bounded snapshot into a length-one latest-value queue;
  * it never calls LVGL, changes screen routing, or retains @p status. It is
  * safe from normal task and task-context callback code, but is not ISR-safe.
+ * The dashboard and Xiaozhi interaction screen both consume this snapshot.
  *
  * @param[in] status Null-terminated, non-sensitive UI snapshot to copy.
  * @return ESP_OK on success, ESP_ERR_INVALID_ARG for invalid status/text or
