@@ -18,7 +18,7 @@ Snapshot date: 2026-09-05
 Sprint 12  Software complete / HIL PASS
 Sprint 13  Software complete / HIL PASS
 Sprint 14  Software complete / BUILD PASS / golden-path HIL PASS / targeted regression partial
-Sprint 15  Software complete / BUILD VERIFIED / targeted HIL partial
+Sprint 15  COMPLETE / BUILD VERIFIED / HIL ACCEPTED
 Sprint 16  SOFTWARE COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / BOUNDED HIL ACCEPTED
 Phase 16.1  PCM streaming downlink IMPLEMENTED / BUILD VERIFIED / automated HIL PASS / audible recovery confirmed
 Major feature-coding stage through Phase 16  COMPLETE
@@ -71,7 +71,7 @@ PTT
 
 Phase 14 retains the production Xiaozhi session through unexpected disconnects, protects response ownership by session generation, rejects PTT while a response is awaiting/collecting/finalizing/playing, and bounds response wait to 15 seconds inactivity / 600 seconds total. Phase 16.1 replaces response aggregation plus SD/WAV handoff with a 7.68-second bounded PCM16 ring and a 1.44-second streaming prefill: the downlink worker decodes and copies each complete frame, while `audio_manager` remains the only I2S/DMA owner. A post-start dry ingress supplies explicit silence for up to eight seconds so transient jitter does not replay the prior DMA block. The automated target matrix passed and audible recovery was confirmed; endurance remains pending.
 
-Phase 15 adds copied lifecycle plus USER/ASSISTANT text presentation through the UI task. The UI reports `RECORDING` only when actual microphone capture is active, renders a live `RECORD` duration during capture, and freezes the duration afterward. Exact CONNECTING/THINKING/RECOVERING labels remain intentionally coalesced by the reused legacy GUI surface. The visible UI/text behavior still requires HIL evidence.
+Phase 15 adds copied lifecycle plus USER/ASSISTANT text presentation through the UI task. The UI reports `RECORDING` only when actual microphone capture is active, renders a live `RECORD` duration during capture, and freezes the duration afterward. Exact CONNECTING/THINKING/RECOVERING labels remain intentionally coalesced by the reused legacy GUI surface. Phase-15 HIL acceptance was confirmed by the user on 2026-09-06; the unattended target lifecycle regression passed 7/7 at `fc5a3fa`. That suite verifies state/queue/timer routing, while physical LCD/audio/GPIO and real semantic-text observations remain operator-confirmed evidence.
 
 ## Phase 16 — audio arbitration architecture
 

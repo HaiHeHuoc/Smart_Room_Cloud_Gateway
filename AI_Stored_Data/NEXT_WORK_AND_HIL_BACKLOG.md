@@ -10,7 +10,7 @@ Purpose: cross-session/Codex routing for **"hiện tại nên làm gì tiếp th
 Phase 12 SW  -> COMPLETE / HIL PASS
 Phase 13 SW  -> COMPLETE / HIL PASS
 Phase 14 SW  -> COMPLETE / BUILD PASS / golden-path HIL PASS / targeted regression partial
-Phase 15 SW  -> COMPLETE / BUILD VERIFIED / targeted HIL partial
+Phase 15 SW  -> COMPLETE / BUILD VERIFIED / HIL ACCEPTED
 Phase 16 SW  -> COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / BOUNDED HIL ACCEPTED
 Phase 16.1 SW -> IMPLEMENTED / BUILD VERIFIED / HIL PENDING
 Major feature coding -> COMPLETE through Phase 16
@@ -49,7 +49,7 @@ Never auto-stash, reset, delete, or test an older phase on an arbitrary producti
 
 ### Phase 15
 
-`phase/15-voice-assistant-ui` and `test/phase15-voice-ui-hil` are synchronized. The build-verified target trace covers boot/reconnect, actual capture, response wait, playback completion, and busy-response PTT rejection. Visible LCD `RECORDING`/duration, USER/ASSISTANT semantic text, latest-turn UX, recovery presentation, truncation, and UI resource stress remain pending HIL evidence.
+Phase 15 is closed. Hardware/manual acceptance was confirmed by the user on 2026-09-06, and the current unattended Xiaozhi UI lifecycle target regression passed all seven cases on `test/xiaozhi-ui-lifecycle-hil` at `fc5a3fa`. Retain `test/phase15-voice-ui-hil` as a regression route when a future UI/text defect requires it; do not list Phase 15 as pending acceptance work.
 
 ### Phase 16
 
@@ -91,10 +91,9 @@ inspect branch + worktree
 
 1. Keep Phase 16 as a closed HIL regression baseline.
 2. On available hardware, run Phase-16.1 streaming HIL on `phase/16.1-streaming-downlink` before merging it forward.
-3. On available hardware, complete Phase-15 visible UI/text HIL on its dedicated test branch.
-4. Run the full Gateway/Firebase integration regression.
-5. Preserve Phase 12/13 as regression baselines and Phase 14's recorded golden-path PASS; rerun them only for a relevant regression.
-6. The next full Gateway/Firebase integration regression should cover Wi-Fi/provisioning, sensor, Firebase, GUI, SD, audio, Xiaozhi, simultaneous cloud/Xiaozhi traffic, repeated PTT, notification queueing, and critical-alarm preemption.
+3. Run the full Gateway/Firebase integration regression.
+4. Preserve Phase 12/13/15 as regression baselines and Phase 14's recorded golden-path PASS; rerun them only for a relevant regression.
+5. The next full Gateway/Firebase integration regression should cover Wi-Fi/provisioning, sensor, Firebase, GUI, SD, audio, Xiaozhi, simultaneous cloud/Xiaozhi traffic, repeated PTT, notification queueing, and critical-alarm preemption.
 
 ## Evidence discipline
 

@@ -1,9 +1,9 @@
 # Phase 15 Voice Assistant UI — HIL Acceptance Plan
 
-Updated: 2026-09-02
+Updated: 2026-09-06
 Production branch: `phase/15-voice-assistant-ui`
 Recommended test branch: `test/phase15-voice-ui-hil`
-Status: **PLAN READY / BUILD PASS / TARGETED TRANSPORT HIL PARTIAL / FULL UI-TEXT HIL PENDING**
+Status: **REGRESSION PLAN / BUILD PASS / HIL ACCEPTED**
 
 ## Goal
 
@@ -13,6 +13,14 @@ Phase 12 and Phase 13 are closed baselines. Phase 14 golden-path PTT/audio
 HIL passed on GPIO38; its fault-injection cases remain deferred. This plan
 verifies the additional Phase-15 text/UI contract without conflating those
 inherited audio boundaries with UI failures.
+
+## Closure evidence
+
+Phase-15 manual hardware acceptance was confirmed by the user on 2026-09-06
+through `ENDPHASE 15`. Separately, the unattended target UI lifecycle suite
+passed all seven cases at `fc5a3fa` on `test/xiaozhi-ui-lifecycle-hil`.
+This plan is retained for a future focused UI/text regression; its individual
+checks must not be represented as fresh evidence until they are rerun.
 
 ## Hardware / prerequisites
 

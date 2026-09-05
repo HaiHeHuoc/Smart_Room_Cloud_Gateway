@@ -1,9 +1,9 @@
 # Phase 15 Voice Assistant UI / Conversation Presentation Progress
 
-Updated: 2026-09-02
+Updated: 2026-09-06
 Branch: `phase/15-voice-assistant-ui`
 Current checkpoint: **15-F — FINAL Review / Closure**
-Status: **SOFTWARE COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / TARGETED HIL PARTIAL / UI-TEXT HIL PENDING**
+Status: **COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / HIL ACCEPTED**
 
 ## Collaboration result
 
@@ -235,33 +235,44 @@ turn reaches actual capture, `response WAIT`, playback request and
 `PLAYBACK_COMPLETE`. A GPIO38 press during that response wait was rejected
 before another recording starts.
 
-This is **targeted transport/audio HIL**, not Phase-15 UI HIL PASS. It does not
-visibly prove the LCD `RECORDING` label/timer, real USER/ASSISTANT semantic
-text, repeated latest-turn behavior, recovery presentation, truncation, or UI
-resource stress.
+This trace was **targeted transport/audio HIL** and was not, by itself, the
+Phase-15 UI/text acceptance evidence.
+
+## HIL acceptance — 2026-09-06
+
+The Phase-15 hardware/manual acceptance was confirmed by the operator through
+`ENDPHASE 15`. The current target-derived UI lifecycle regression also passed
+unattended on `test/xiaozhi-ui-lifecycle-hil` at `fc5a3fa`:
+
+```text
+XIAOZHI_UI_HIL SUMMARY pass=7 fail=0
+XIAOZHI_UI_HIL OVERALL PASS
+```
+
+The seven target cases cover boot-to-READY/Dashboard routing, capture-route
+entry, full lifecycle and delayed dashboard return, timer re-entry race,
+repeated turns, status/transcript queue pressure, and error recovery. The
+unattended suite deliberately injects copied public audio statuses; it does
+not independently prove LCD pixels, microphone/speaker acoustics, GPIO38
+electrical behavior, or server-originated semantic text. Those physical
+acceptance observations are the operator-confirmed portion of this closure.
 
 ## Evidence boundary
 
-At the merged Phase-15 production checkpoint:
+At Phase-15 closure:
 
 ```text
-Implementation       COMPLETE
-Static review        COMPLETE
-Production composition COMPLETE
-HIL plan             READY
-GitHub CI/checks     NONE PRESENT FOR CURRENT REVIEW HEAD
-idf.py build         PASS (ESP-IDF 6.0.1; binary 0x21cdd0; 47% app free)
-Target runtime       TARGETED PARTIAL (transport/audio path only)
-RECORDING/timer HIL  PENDING VISIBLE LCD EVIDENCE
-USER transcript HIL  PENDING
-ASSISTANT text HIL   PENDING
-Repeated-turn UI HIL PENDING
+Implementation             COMPLETE
+Static review              COMPLETE
+Production composition     COMPLETE
+idf.py build               PASS (ESP-IDF 6.0.1; 2026-09-06)
+Automated lifecycle target PASS (7/7; `fc5a3fa`)
+Hardware/manual acceptance CONFIRMED BY USER (`ENDPHASE 15`)
 ```
-
-No target runtime/HIL PASS is claimed yet.
 
 ## Closure
 
-**Phase 15 = Software Complete / Static Review Complete / Build PASS / Targeted HIL Partial / UI-Text Acceptance Pending.**
+**Phase 15 = COMPLETE / Static Review Complete / Build PASS / HIL Accepted.**
 
-Do not automatically start Phase 16. When hardware is available, preserve the acceptance sequence and distinguish inherited Phase-12/13/14 transport/audio failures from Phase-15 UI/text defects.
+The HIL plan remains a regression checklist. Do not automatically start a new
+phase from this closure.
