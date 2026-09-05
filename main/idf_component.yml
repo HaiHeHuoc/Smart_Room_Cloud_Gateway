@@ -22,3 +22,7 @@ dependencies:
   esp-idf-lib/dht: ^1.2.0
   espressif/cjson: ^1.7.19
   espressif/network_provisioning: ^1.2.4
+  espressif/esp_xiaozhi: ^0.1.1
+  # Keep the existing resolved MQTT dependency stable while adding the
+  # project-owned Opus codec dependency for Phase 14.
+  espressif/mqtt: "1.0.0"

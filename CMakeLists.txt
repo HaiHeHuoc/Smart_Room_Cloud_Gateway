@@ -19,3 +19,8 @@ set(EXTRA_COMPONENT_DIRS
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(Smart_Room_Cloud_Gateway)
+
+# ESP-IDF v6.0.1 leaks cross-signed certificate name allocations after each
+# TLS handshake. Keep cross-signed verification enabled for Firebase and apply
+# the exact upstream lifetime fix to the pinned SDK source at configure time.
+include("${CMAKE_CURRENT_LIST_DIR}/cmake/esp_idf_6_0_1_crt_bundle_fix.cmake")
