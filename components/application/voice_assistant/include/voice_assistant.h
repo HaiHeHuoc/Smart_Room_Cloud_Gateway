@@ -88,7 +88,9 @@ esp_err_t voice_assistant_recover(void);
  *
  * Audio updates are coalesced so rapid status publication cannot consume the
  * command queue needed by session/control events. The latest copied snapshot
- * wins while one audio-status marker is pending.
+ * wins while one audio-status marker is pending. If the bounded command queue
+ * is temporarily full, the snapshot remains pending for the voice task to
+ * drain after its next command instead of being discarded.
  */
 esp_err_t voice_assistant_notify_audio_status(
     const voice_assistant_audio_status_t *status);
