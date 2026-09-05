@@ -13,6 +13,8 @@
 
 #define XIAOZHI_ARB_WAIT_POLL_MS 20U
 #define XIAOZHI_ARB_START_TIMEOUT_MS 3000U
+#define XIAOZHI_ARB_TERMINAL_RETRY_MS 20U
+#define XIAOZHI_ARB_TERMINAL_TIMEOUT_MS 1000U
 #define XIAOZHI_CAPTURE_REQUEST_BASE 0x160C0000U
 #define XIAOZHI_PLAYBACK_REQUEST_BASE 0x160E0000U
 
@@ -167,17 +169,37 @@ esp_err_t phase16_xiaozhi_stream_fail(esp_err_t error)
     if (error == ESP_OK) {
         error = ESP_FAIL;
     }
-    const uint32_t request_id = (uint32_t)atomic_exchange_explicit(
+    uint32_t request_id = (uint32_t)atomic_load_explicit(
         &s_playback_request_id,
-        0U,
-        memory_order_acq_rel);
+        memory_order_acquire);
     if (request_id == 0U) {
         return ESP_ERR_INVALID_STATE;
     }
-    const esp_err_t ret = audio_manager_playback_arbiter_fail_pcm16_stream(
-        request_id,
-        error);
-    return (ret == ESP_ERR_NOT_FOUND) ? ESP_OK : ret;
+    esp_err_t ret = ESP_ERR_TIMEOUT;
+    uint32_t waited_ms = 0U;
+    do {
+        ret = audio_manager_playback_arbiter_fail_pcm16_stream(request_id,
+                                                                error);
+        if (ret != ESP_ERR_TIMEOUT) {
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(XIAOZHI_ARB_TERMINAL_RETRY_MS));
+        waited_ms += XIAOZHI_ARB_TERMINAL_RETRY_MS;
+    } while (waited_ms <= XIAOZHI_ARB_TERMINAL_TIMEOUT_MS);
+    if ((ret != ESP_OK) && (ret != ESP_ERR_NOT_FOUND)) {
+        /* Do not forget the request until the arbiter accepted its terminal
+         * intent. The bounded retry handles normal lock contention; retaining
+         * the handle after its deadline keeps a current PCM stream stoppable. */
+        return ret;
+    }
+
+    (void)atomic_compare_exchange_strong_explicit(
+        &s_playback_request_id,
+        &request_id,
+        0U,
+        memory_order_acq_rel,
+        memory_order_acquire);
+    return ESP_OK;
 }
 
 esp_err_t phase16_xiaozhi_stream_get_status(
