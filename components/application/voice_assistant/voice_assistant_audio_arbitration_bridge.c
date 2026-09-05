@@ -2,6 +2,7 @@
 #include "audio_manager_arbitration.h"
 #include "audio_manager_capture_arbiter.h"
 #include "audio_manager_playback_arbiter.h"
+#include "voice_assistant_audio_arbitration_bridge.h"
 
 #include <stdatomic.h>
 #include <stdint.h>
@@ -97,10 +98,11 @@ esp_err_t phase16_xiaozhi_stop_recording(void)
     return (ret == ESP_ERR_NOT_FOUND) ? ESP_ERR_INVALID_STATE : ret;
 }
 
-esp_err_t phase16_xiaozhi_play_wav(const char *path)
+esp_err_t phase16_xiaozhi_stream_begin(void)
 {
-    if (path == NULL) {
-        return ESP_ERR_INVALID_ARG;
+    if (atomic_load_explicit(&s_playback_request_id,
+                             memory_order_acquire) != 0U) {
+        return ESP_ERR_INVALID_STATE;
     }
 
     const uint32_t request_id = next_request_id(
@@ -122,35 +124,81 @@ esp_err_t phase16_xiaozhi_play_wav(const char *path)
     request.priority = AUDIO_MANAGER_PRIORITY_XIAOZHI;
     request.interruptible = true;
 
-    ret = audio_manager_playback_arbiter_submit_wav(&request, path);
+    ret = audio_manager_playback_arbiter_submit_pcm16_stream(&request);
     if (ret != ESP_OK) {
         return ret;
     }
     atomic_store_explicit(&s_playback_request_id, request_id, memory_order_release);
+    /* Do not wait for ACTIVE here: the manager starts I2S only after this
+     * downlink worker has supplied a bounded PCM prefill. */
+    ESP_LOGI(TAG, "Xiaozhi PCM stream reserved request=%u", (unsigned)request_id);
+    return ESP_OK;
+}
 
-    uint32_t waited = 0U;
-    while (waited <= XIAOZHI_ARB_START_TIMEOUT_MS) {
-        audio_manager_playback_arbiter_status_t status = {0};
-        ret = audio_manager_playback_arbiter_get_status(&status);
-        if (ret != ESP_OK) {
-            break;
-        }
-        if (status.current_valid &&
-            status.current.request_id == request_id &&
-            status.state == AUDIO_MANAGER_PLAYBACK_ARBITER_ACTIVE) {
-            ESP_LOGI(TAG, "Xiaozhi playback granted request=%u", (unsigned)request_id);
-            return ESP_OK;
-        }
-        if ((!status.current_valid || status.current.request_id != request_id) &&
-            (!status.pending_valid || status.pending.request_id != request_id)) {
-            ret = (status.last_error == ESP_OK) ? ESP_FAIL : status.last_error;
-            break;
-        }
-        vTaskDelay(pdMS_TO_TICKS(XIAOZHI_ARB_WAIT_POLL_MS));
-        waited += XIAOZHI_ARB_WAIT_POLL_MS;
+esp_err_t phase16_xiaozhi_stream_write(
+    const int16_t *samples,
+    size_t sample_count)
+{
+    const uint32_t request_id = (uint32_t)atomic_load_explicit(
+        &s_playback_request_id,
+        memory_order_acquire);
+    if (request_id == 0U) {
+        return ESP_ERR_INVALID_STATE;
     }
+    return audio_manager_playback_arbiter_write_pcm16(
+        request_id,
+        samples,
+        sample_count);
+}
 
-    (void)audio_manager_playback_arbiter_cancel(request_id);
-    atomic_store_explicit(&s_playback_request_id, 0U, memory_order_release);
-    return (ret == ESP_OK) ? ESP_ERR_TIMEOUT : ret;
+esp_err_t phase16_xiaozhi_stream_finish(void)
+{
+    const uint32_t request_id = (uint32_t)atomic_load_explicit(
+        &s_playback_request_id,
+        memory_order_acquire);
+    if (request_id == 0U) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    return audio_manager_playback_arbiter_finish_pcm16_stream(request_id);
+}
+
+esp_err_t phase16_xiaozhi_stream_fail(esp_err_t error)
+{
+    if (error == ESP_OK) {
+        error = ESP_FAIL;
+    }
+    const uint32_t request_id = (uint32_t)atomic_exchange_explicit(
+        &s_playback_request_id,
+        0U,
+        memory_order_acq_rel);
+    if (request_id == 0U) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    const esp_err_t ret = audio_manager_playback_arbiter_fail_pcm16_stream(
+        request_id,
+        error);
+    return (ret == ESP_ERR_NOT_FOUND) ? ESP_OK : ret;
+}
+
+esp_err_t phase16_xiaozhi_stream_get_status(
+    audio_manager_playback_request_status_t *status)
+{
+    if (status == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    const uint32_t request_id = (uint32_t)atomic_load_explicit(
+        &s_playback_request_id,
+        memory_order_acquire);
+    if (request_id == 0U) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    return audio_manager_playback_arbiter_get_request_status(request_id, status);
+}
+
+void phase16_xiaozhi_stream_release(void)
+{
+    (void)atomic_exchange_explicit(
+        &s_playback_request_id,
+        0U,
+        memory_order_acq_rel);
 }

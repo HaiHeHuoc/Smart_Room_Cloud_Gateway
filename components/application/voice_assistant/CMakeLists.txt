@@ -19,7 +19,6 @@ idf_component_register(
         esp_driver_gpio
         xiaozhi_foundation
         audio_manager
-        sd_card_manager
         app_gui
 
     PRIV_REQUIRES
@@ -30,18 +29,11 @@ idf_component_register(
         heap
 )
 
-# Phase 16 migration: only the production Xiaozhi uplink/downlink sources are
-# redirected through arbitration-aware compatibility bridges. The public
-# audio_manager APIs remain unchanged for other legacy callers until they are
-# explicitly migrated.
+# Phase 16 migration: Xiaozhi uplink is redirected through the capture bridge.
+# Phase 16.1 downlink calls its streaming bridge explicitly so it cannot bypass
+# playback arbitration or take ownership of I2S/DMA.
 set_source_files_properties(
     "voice_assistant_uplink.c"
     PROPERTIES COMPILE_DEFINITIONS
     "audio_manager_start_recording=phase16_xiaozhi_start_recording;audio_manager_stop_recording=phase16_xiaozhi_stop_recording"
-)
-
-set_source_files_properties(
-    "voice_assistant_downlink.c"
-    PROPERTIES COMPILE_DEFINITIONS
-    "audio_manager_play_wav=phase16_xiaozhi_play_wav"
 )

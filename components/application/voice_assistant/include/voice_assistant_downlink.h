@@ -10,20 +10,20 @@
 extern "C" {
 #endif
 
-/** Phase-14 bounded server-response aggregation status. */
+/** Phase-16.1 bounded server-response streaming status. */
 typedef struct {
     bool initialized;
     bool running;
     /** A completed local uplink is waiting for the server's TTS_START/error. */
     bool awaiting_response;
     bool collecting;
-    /** True while TTS_STOP is being closed, written to WAV, or handed to I2S. */
+    /** True after TTS_STOP while the manager-owned PCM stream drains. */
     bool finalizing;
     bool playback_requested;
     uint32_t session_generation;
     /** Encoded Opus bytes copied from complete response packet callbacks. */
     uint64_t response_bytes_received;
-    /** Decoded PCM16 bytes currently buffered for the WAV handoff. */
+    /** Decoded PCM16 bytes accepted into the bounded manager-owned stream. */
     uint64_t response_bytes_buffered;
     uint32_t chunks_queued;
     uint32_t chunks_dropped_queue_full;
@@ -34,7 +34,7 @@ typedef struct {
     esp_err_t last_error;
 } voice_assistant_downlink_status_t;
 
-/** Allocate the bounded downlink queue and PSRAM response buffer. */
+/** Allocate the bounded copied-packet downlink queue. */
 esp_err_t voice_assistant_downlink_init(void);
 
 /** Register the Xiaozhi response callback and start the downlink worker. */

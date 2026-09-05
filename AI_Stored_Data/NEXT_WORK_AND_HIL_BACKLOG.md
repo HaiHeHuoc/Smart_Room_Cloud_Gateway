@@ -1,7 +1,7 @@
 # Next Work + Deferred HIL Backlog
 
 Updated: 2026-09-05
-Authoritative development branch: `phase/16-audio-arbitration`
+Authoritative development branch: `phase/16.1-streaming-downlink`
 Purpose: cross-session/Codex routing for **"hiện tại nên làm gì tiếp theo?"** and HIL activation from any clean working branch.
 
 ## Current software state
@@ -12,6 +12,7 @@ Phase 13 SW  -> COMPLETE / HIL PASS
 Phase 14 SW  -> COMPLETE / BUILD PASS / golden-path HIL PASS / targeted regression partial
 Phase 15 SW  -> COMPLETE / BUILD VERIFIED / targeted HIL partial
 Phase 16 SW  -> COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / BOUNDED HIL ACCEPTED
+Phase 16.1 SW -> IMPLEMENTED / BUILD VERIFIED / HIL PENDING
 Major feature coding -> COMPLETE through Phase 16
 ```
 
@@ -27,6 +28,7 @@ RUN PHASE 13 HIL -> test/phase13-voice-assistant-hil
 RUN PHASE 14 HIL -> test/phase14-ptt-voice-e2e-hil
 RUN PHASE 15 HIL -> test/phase15-voice-ui-hil
 RUN PHASE 16 HIL -> test/phase16-audio-arbitration-hil
+RUN PHASE 16.1 HIL -> phase/16.1-streaming-downlink
 ```
 
 Never auto-stash, reset, delete, or test an older phase on an arbitrary production branch. All phases use PASS / FAIL / SKIP evidence discipline; expected logs are contracts, not observed hardware evidence.
@@ -52,6 +54,10 @@ Never auto-stash, reset, delete, or test an older phase on an arbitrary producti
 ### Phase 16
 
 `phase/16-audio-arbitration` retains the production arbitration architecture; `test/phase16-audio-arbitration-hil` is its dedicated HIL branch. The combined operator-confirmed PTT/speaker evidence and 2026-09-04 automatic target matrix passed; see `PHASE16_HIL_EVIDENCE.md`. Long-duration/full-Gateway regression remains deferred.
+
+### Phase 16.1
+
+`phase/16.1-streaming-downlink` replaces Xiaozhi's full-response PSRAM/SD/WAV handoff with bounded decoded PCM16 ingress to the manager-owned playback ring. The public foundation callback remains copy-only; the downlink worker is the single decoder/producer and `audio_manager` remains the sole I2S/DMA owner. Required HIL: first `PCM_STREAM START`/PLAYBACK before TTS_STOP, audible continuity through a normal answer, EOS drain to `PLAYBACK_COMPLETE`, clean failure on ingress backpressure/starvation, and alarm-preemption recovery without stale PCM.
 
 ## Production-vs-test fix policy
 
@@ -84,10 +90,11 @@ inspect branch + worktree
 ## Recommended next acceptance order
 
 1. Keep Phase 16 as a closed HIL regression baseline.
-2. On available hardware, complete Phase-15 visible UI/text HIL on its dedicated test branch.
-3. Run the full Gateway/Firebase integration regression.
-4. Preserve Phase 12/13 as regression baselines and Phase 14's recorded golden-path PASS; rerun them only for a relevant regression.
-5. The next full Gateway/Firebase integration regression should cover Wi-Fi/provisioning, sensor, Firebase, GUI, SD, audio, Xiaozhi, simultaneous cloud/Xiaozhi traffic, repeated PTT, notification queueing, and critical-alarm preemption.
+2. On available hardware, run Phase-16.1 streaming HIL on `phase/16.1-streaming-downlink` before merging it forward.
+3. On available hardware, complete Phase-15 visible UI/text HIL on its dedicated test branch.
+4. Run the full Gateway/Firebase integration regression.
+5. Preserve Phase 12/13 as regression baselines and Phase 14's recorded golden-path PASS; rerun them only for a relevant regression.
+6. The next full Gateway/Firebase integration regression should cover Wi-Fi/provisioning, sensor, Firebase, GUI, SD, audio, Xiaozhi, simultaneous cloud/Xiaozhi traffic, repeated PTT, notification queueing, and critical-alarm preemption.
 
 ## Evidence discipline
 
