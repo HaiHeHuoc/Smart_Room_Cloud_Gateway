@@ -6,7 +6,7 @@
 Implementation       COMPLETE
 Host contracts       PASS
 ESP-IDF build        PASS
-Target HIL           PENDING
+Target HIL           AUTOMATED MATRIX PASS / AUDIBLE RECOVERY CONFIRMED
 ```
 
 ## Scope
@@ -29,9 +29,9 @@ WebSocket callback (copy only)
 ```
 
 The ring accepts complete signed PCM16/16 kHz/mono packets only. It uses a
-240 ms prefill before TX, preserves the existing fixed PCM16 output scale plus
-volume mapping, and starts a short response at EOS even if it does not reach
-the prefill watermark.
+1.44-second prefill before TX, preserves the existing fixed PCM16 output scale
+plus volume mapping, and starts a short response at EOS even if it does not
+reach the prefill watermark. Its bounded PSRAM capacity is 7.68 seconds.
 
 ## Arbitration and failure contract
 
@@ -43,6 +43,10 @@ the prefill watermark.
   unchanged decoded packet; it fails only after that deadline, a tainted
   callback queue, decode/protocol error, or playback starvation. No PCM is
   silently dropped or partially copied.
+- A post-start dry ingress feeds 16 ms PCM-silence blocks for up to eight
+  seconds. This preserves I2S continuity through transient cloud jitter
+  without replaying the preceding DMA block; a longer outage remains a
+  bounded playback failure.
 - Generic cancellation, priority preemption, normal EOS completion, and
   producer failure retain distinct terminal request states.
 - A higher-priority alarm can preempt only an interruptible Xiaozhi stream;
@@ -70,6 +74,9 @@ the prefill watermark.
 - Host PCM stream-core contracts: 3/3 PASS (copy ownership/wrap, atomic
   backpressure and stale generation, EOS/abort generation isolation).
 - ESP-IDF 6.0.1 build: PASS; app binary `0x2203b0`, 47% partition free.
+- Target automated HIL matrix T16.1-01 through T16.1-05: PASS. A live
+  recoverable downlink gap emitted bounded silence then resumed, and operator
+  audible continuity was confirmed after the recovery hardening.
 
-No streaming target/audible PASS is claimed until serial and operator evidence
-are captured on the flashed board.
+Long-duration cloud/Firebase coexistence and endurance remain separate
+integration acceptance work; this document does not claim them as complete.

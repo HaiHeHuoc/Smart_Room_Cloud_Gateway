@@ -52,12 +52,14 @@
 #define AUDIO_MANAGER_WAV_PREFETCH_WAIT_POLL_MS          100U
 #define AUDIO_MANAGER_WAV_PREFETCH_READER_PRIORITY         5U
 #define AUDIO_MANAGER_PCM_STREAM_RING_SAMPLES \
-    (16U * AUDIO_MANAGER_PCM_STREAM_MAX_WRITE_SAMPLES)
+    (128U * AUDIO_MANAGER_PCM_STREAM_MAX_WRITE_SAMPLES)
 #define AUDIO_MANAGER_PCM_STREAM_PREFILL_SAMPLES \
-    (4U * AUDIO_MANAGER_PCM_STREAM_MAX_WRITE_SAMPLES)
+    (24U * AUDIO_MANAGER_PCM_STREAM_MAX_WRITE_SAMPLES)
 #define AUDIO_MANAGER_PCM_STREAM_INITIAL_WAIT_MS        5000U
-#define AUDIO_MANAGER_PCM_STREAM_STARVATION_WAIT_MS      400U
-#define AUDIO_MANAGER_PCM_STREAM_WAIT_POLL_MS             20U
+#define AUDIO_MANAGER_PCM_STREAM_INITIAL_WAIT_POLL_MS     20U
+#define AUDIO_MANAGER_PCM_STREAM_STARVATION_WAIT_MS     8000U
+#define AUDIO_MANAGER_PCM_STREAM_SILENCE_BLOCK_MS \
+    ((AUDIO_MANAGER_FRAMES_PER_BLOCK * 1000U) / AUDIO_MANAGER_SAMPLE_RATE_HZ)
 #define AUDIO_MANAGER_PCM_STREAM_PRE_PLAYBACK_SILENCE_BLOCKS 4U
 #define AUDIO_MANAGER_WAV_PREFETCH_BYTES_PER_SECOND \
     (AUDIO_MANAGER_SAMPLE_RATE_HZ * sizeof(int16_t))
@@ -122,6 +124,8 @@ _Static_assert((AUDIO_MANAGER_WAV_PREFETCH_SLOT_BYTES % sizeof(int16_t)) == 0U,
 _Static_assert(AUDIO_MANAGER_PCM_STREAM_PREFILL_SAMPLES <=
                    AUDIO_MANAGER_PCM_STREAM_RING_SAMPLES,
                "PCM stream prefill must fit its bounded ring");
+_Static_assert(AUDIO_MANAGER_PCM_STREAM_SILENCE_BLOCK_MS > 0U,
+               "PCM stream silence block duration must be nonzero");
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "AUDIO_MANAGER";
@@ -2175,9 +2179,11 @@ static esp_err_t play_wav_stream(
  *        conversion path.
  *
  * The producer never touches I2S: it only wakes this task after a bounded
- * copy. A short prefill absorbs normal WebSocket/Opus scheduling jitter. If
- * ingress later runs dry before EOS, fail rather than silently declaring a
- * complete response after an audible gap.
+ * copy. A 1.44 s prefill and 7.68 s bounded PSRAM ring absorb ordinary
+ * WebSocket/Opus burst and scheduling jitter without reverting to full-file
+ * buffering. A later dry ingress is still reported and bounded, but feeds
+ * explicit silence to I2S until it recovers. This prevents a DMA-held audio
+ * block from sounding like repeated speech during a short cloud gap.
  */
 static esp_err_t play_pcm16_stream(
     uint32_t generation,
@@ -2229,8 +2235,8 @@ static esp_err_t play_pcm16_stream(
         }
         (void)ulTaskNotifyTake(
             pdTRUE,
-            pdMS_TO_TICKS(AUDIO_MANAGER_PCM_STREAM_WAIT_POLL_MS));
-        initial_waited_ms += AUDIO_MANAGER_PCM_STREAM_WAIT_POLL_MS;
+            pdMS_TO_TICKS(AUDIO_MANAGER_PCM_STREAM_INITIAL_WAIT_POLL_MS));
+        initial_waited_ms += AUDIO_MANAGER_PCM_STREAM_INITIAL_WAIT_POLL_MS;
     }
 
     ESP_LOGI(TAG,
@@ -2259,6 +2265,7 @@ static esp_err_t play_pcm16_stream(
     }
 
     uint32_t starvation_waited_ms = 0U;
+    bool starvation_active = false;
     while ((result == ESP_OK) && !*cancelled)
     {
         if (audio_manager_cancel_is_requested())
@@ -2286,9 +2293,11 @@ static esp_err_t play_pcm16_stream(
         ended = s_runtime.pcm_stream.ended;
         aborted = s_runtime.pcm_stream.aborted;
         active = s_runtime.pcm_stream.active;
-        if (result == ESP_ERR_NOT_FOUND && active && !ended && !aborted)
+        if ((result == ESP_ERR_NOT_FOUND) && active && !ended && !aborted &&
+            !starvation_active)
         {
             ++s_runtime.pcm_stream.starvation_count;
+            starvation_active = true;
         }
         xSemaphoreGive(s_runtime.pcm_stream_mutex);
 
@@ -2305,6 +2314,13 @@ static esp_err_t play_pcm16_stream(
                 result = ESP_OK;
                 break;
             }
+            result = write_silence_blocks(1U, cancelled);
+            if ((result != ESP_OK) || *cancelled)
+            {
+                break;
+            }
+
+            starvation_waited_ms += AUDIO_MANAGER_PCM_STREAM_SILENCE_BLOCK_MS;
             if (starvation_waited_ms >=
                 AUDIO_MANAGER_PCM_STREAM_STARVATION_WAIT_MS)
             {
@@ -2315,10 +2331,6 @@ static esp_err_t play_pcm16_stream(
                 result = ESP_ERR_TIMEOUT;
                 break;
             }
-            (void)ulTaskNotifyTake(
-                pdTRUE,
-                pdMS_TO_TICKS(AUDIO_MANAGER_PCM_STREAM_WAIT_POLL_MS));
-            starvation_waited_ms += AUDIO_MANAGER_PCM_STREAM_WAIT_POLL_MS;
             result = ESP_OK;
             continue;
         }
@@ -2333,6 +2345,14 @@ static esp_err_t play_pcm16_stream(
             break;
         }
 
+        if (starvation_active)
+        {
+            ESP_LOGW(TAG,
+                     "PCM stream ingress resumed generation=%u silence=%ums",
+                     (unsigned)generation,
+                     (unsigned)starvation_waited_ms);
+            starvation_active = false;
+        }
         starvation_waited_ms = 0U;
         for (size_t frame = 0U; frame < samples_read; ++frame)
         {

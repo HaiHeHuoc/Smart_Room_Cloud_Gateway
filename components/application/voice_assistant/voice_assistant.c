@@ -11,7 +11,10 @@
 #include "xiaozhi_foundation.h"
 
 #define VOICE_ASSISTANT_TASK_NAME            "voice_assistant"
-#define VOICE_ASSISTANT_TASK_STACK_BYTES     4096U
+/* HIL observed the session/status worker exhausting 4 KiB while WebSocket,
+ * SNTP, and playback-arbitration activity overlapped. Keep 8 KiB internal
+ * stack so this coordinator cannot reboot the board mid-response. */
+#define VOICE_ASSISTANT_TASK_STACK_BYTES     8192U
 #define VOICE_ASSISTANT_TASK_PRIORITY        4U
 #define VOICE_ASSISTANT_COMMAND_QUEUE_LENGTH 8U
 #define VOICE_ASSISTANT_LOCK_TIMEOUT_MS      100U

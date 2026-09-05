@@ -20,7 +20,7 @@ Sprint 13  Software complete / HIL PASS
 Sprint 14  Software complete / BUILD PASS / golden-path HIL PASS / targeted regression partial
 Sprint 15  Software complete / BUILD VERIFIED / targeted HIL partial
 Sprint 16  SOFTWARE COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / BOUNDED HIL ACCEPTED
-Phase 16.1  PCM streaming downlink IMPLEMENTED / BUILD VERIFIED / HIL PENDING
+Phase 16.1  PCM streaming downlink IMPLEMENTED / BUILD VERIFIED / automated HIL PASS / audible recovery confirmed
 Major feature-coding stage through Phase 16  COMPLETE
 ```
 
@@ -69,7 +69,7 @@ PTT
 -> MAX98357
 ```
 
-Phase 14 retains the production Xiaozhi session through unexpected disconnects, protects response ownership by session generation, rejects PTT while a response is awaiting/collecting/finalizing/playing, and bounds response wait to 15 seconds inactivity / 90 seconds total. Phase 16.1 replaces response aggregation plus SD/WAV handoff with a bounded PCM16 ring: the downlink worker decodes and copies each complete frame, while `audio_manager` remains the only I2S/DMA owner. The recorded golden-path run gives real audible evidence for the prior path; fresh streaming HIL remains pending.
+Phase 14 retains the production Xiaozhi session through unexpected disconnects, protects response ownership by session generation, rejects PTT while a response is awaiting/collecting/finalizing/playing, and bounds response wait to 15 seconds inactivity / 180 seconds total. Phase 16.1 replaces response aggregation plus SD/WAV handoff with a 7.68-second bounded PCM16 ring and a 1.44-second streaming prefill: the downlink worker decodes and copies each complete frame, while `audio_manager` remains the only I2S/DMA owner. A post-start dry ingress supplies explicit silence for up to eight seconds so transient jitter does not replay the prior DMA block. The automated target matrix passed and audible recovery was confirmed; endurance remains pending.
 
 Phase 15 adds copied lifecycle plus USER/ASSISTANT text presentation through the UI task. The UI reports `RECORDING` only when actual microphone capture is active, renders a live `RECORD` duration during capture, and freezes the duration afterward. Exact CONNECTING/THINKING/RECOVERING labels remain intentionally coalesced by the reused legacy GUI surface. The visible UI/text behavior still requires HIL evidence.
 
@@ -133,14 +133,14 @@ NOTIFICATION priority=50  PLAYBACK=QUEUE  interruptible=true
 ALARM        priority=100 PLAYBACK=PREEMPT_LOWER_PRIORITY interruptible=false
 ```
 
-Phase 16.1's Xiaozhi downlink reserves the bounded stream through the playback arbiter at TTS_START. It begins I2S only after a 240 ms PCM prefill (or a short response EOS), then drains asynchronously after TTS_STOP. A full ingress ring retains and retries the same decoded packet through a finite backpressure window rather than dropping it; the arbiter retains terminal state per request so cancellation, alarm preemption, and stream failures cannot be misreported as normal completion.
+Phase 16.1's Xiaozhi downlink reserves the bounded stream through the playback arbiter at TTS_START. It begins I2S only after a 1.44-second PCM prefill (or a short response EOS), then drains asynchronously after TTS_STOP. A full ingress ring retains and retries the same decoded packet through a finite backpressure window rather than dropping it; the arbiter retains terminal state per request so cancellation, alarm preemption, and stream failures cannot be misreported as normal completion. A temporary empty ingress writes explicit silence rather than allowing I2S/DMA to repeat its preceding block, with an eight-second bounded recovery window.
 
 ## Known pending acceptance / technical debt
 
 1. Phase-16 bounded target HIL is accepted; endurance and full integration regression remain deferred.
 2. Phase-15 visible LCD/text HIL remains partial: `RECORDING` timer, USER/ASSISTANT text, latest-turn behavior, recovery presentation, truncation, and UI-resource evidence need target confirmation.
 3. Phase-14 fault-injection cases remain deferred; the exact regression image still needs fresh audible speaker confirmation.
-4. Phase-16.1 low-latency streaming needs target HIL: prove first PLAYBACK before TTS_STOP, audible continuity, EOS drain, bounded ingress-backpressure recovery/failure, and alarm-preemption recovery.
+4. Phase-16.1 automated target matrix and audible recovery are accepted. Endurance coverage remains pending.
 5. Long-duration Firebase/cloud plus Xiaozhi simultaneous-traffic regression remains deferred.
 6. Playback/capture arbiters have no dedicated stop/deinit lifecycle API yet; recorded-audio playback is not migrated to arbitration.
 7. Notification/alarm priority/preemption passed the bounded target matrix; repeated timing/endurance coverage remains deferred.

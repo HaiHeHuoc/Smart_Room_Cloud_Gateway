@@ -30,7 +30,9 @@
 #define DOWNLINK_RESPONSE_TIMEOUT_MS       15000U
 /* Bound the server collection too, so duplicate protocol events or a missing
  * TTS_STOP cannot hold the next PTT turn forever. */
-#define DOWNLINK_RESPONSE_MAX_DURATION_MS  90000U
+/* Keep a finite turn bound, but allow long cloud answers to finish draining.
+ * HIL observed valid PCM still arriving at the old 90-second ceiling. */
+#define DOWNLINK_RESPONSE_MAX_DURATION_MS 180000U
 #define DOWNLINK_QUEUE_POLL_MS             100U
 #define DOWNLINK_STREAM_DRAIN_TIMEOUT_MS   90000U
 /* The decoded ingress ring is deliberately smaller than the copied WebSocket
@@ -144,9 +146,20 @@ static esp_err_t downlink_write_pcm_with_backpressure(
     bool backpressured = false;
 
     for (;;) {
+        if (atomic_load_explicit(&s_response_tainted,
+                                 memory_order_acquire)) {
+            return ESP_ERR_INVALID_RESPONSE;
+        }
         const esp_err_t result = phase16_xiaozhi_stream_write(
             samples,
             sample_count);
+        /* A callback can mark the response tainted while the arbiter write
+         * takes its lock. Do not accept a successful retry after a dropped or
+         * oversized Opus packet: terminate the incomplete response instead. */
+        if (atomic_load_explicit(&s_response_tainted,
+                                 memory_order_acquire)) {
+            return ESP_ERR_INVALID_RESPONSE;
+        }
         if (result != ESP_ERR_TIMEOUT) {
             if (backpressured && (result == ESP_OK)) {
                 ESP_LOGI(TAG,
@@ -339,7 +352,20 @@ static void downlink_abort_response(
 {
     const esp_err_t normalized_error =
         (error == ESP_OK) ? ESP_FAIL : error;
-    (void)phase16_xiaozhi_stream_fail(normalized_error);
+    /* Once a response is aborting, reject any queued audio until the arbiter
+     * has accepted the terminal intent. This prevents stale PCM from being
+     * appended if the first bounded cleanup attempt meets lock contention. */
+    atomic_store_explicit(&s_response_tainted, true, memory_order_release);
+    const esp_err_t stream_fail_ret =
+        phase16_xiaozhi_stream_fail(normalized_error);
+    if ((stream_fail_ret != ESP_OK) &&
+        (stream_fail_ret != ESP_ERR_INVALID_STATE)) {
+        ESP_LOGW(TAG,
+                 "response cleanup pending generation=%u error=%s",
+                 (unsigned)generation,
+                 esp_err_to_name(stream_fail_ret));
+        return;
+    }
     (void)xiaozhi_foundation_audio_channel_close(generation);
     if (timeout) {
         portENTER_CRITICAL(&s_lock);
