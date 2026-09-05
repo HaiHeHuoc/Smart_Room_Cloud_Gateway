@@ -36,6 +36,7 @@ typedef struct {
     uint64_t consumed_samples;
     uint32_t high_water_samples;
     uint32_t full_count;
+    /** Number of distinct post-start ingress-empty episodes. */
     uint32_t starvation_count;
 } audio_manager_pcm_stream_core_t;
 
