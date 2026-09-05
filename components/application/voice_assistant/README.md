@@ -13,7 +13,8 @@ Ownership remains:
 - `voice_assistant`: conversation generation, state, command ordering and recovery policy;
 - `app_gui` / `ui_manager_lvgl`: sole GUI/LVGL ownership.
 
-Phase 13 status: **Software Complete / HIL Pending**.
+Phase 13 status: **Software Complete / HIL Passed**. The later Phase-16.1
+streaming path has separate target acceptance requirements.
 
 ## State machine
 
@@ -106,7 +107,7 @@ Xiaozhi callbacks never mutate voice state directly:
 ```text
 Xiaozhi event loop
 -> copied foundation status
--> bounded voice queue
+-> bounded voice queue / one latest pending snapshot
 -> voice task
 -> session-generation check
 -> state transition
@@ -114,7 +115,10 @@ Xiaozhi event loop
 
 Late events from an older generation are dropped. A same-generation late ERROR
 after an intentional stop has already returned to IDLE is ignored rather than
-regressing IDLE back to ERROR.
+regressing IDLE back to ERROR. Foundation and audio producers retain one latest
+copied snapshot if the command queue is temporarily full; after consuming any
+command, the voice task drains that snapshot. A queue-pressure transient
+therefore cannot leave the UI with an obsolete terminal state.
 
 ## Explicit recovery policy
 
@@ -138,6 +142,15 @@ when cleanup returns the voice state to `IDLE`, it starts the fresh session and
 waits for real `READY`. Releasing before `READY` always cancels and never
 authorizes capture.
 
+A physical release remains FIFO-deliverable behind a pending press. Therefore a
+short GPIO38 tap that ends before the PTT policy task processes its press is
+reported as released and never authorizes microphone capture.
+
+The GPIO adapter separately tracks a debounced electrical level and its PTT
+policy delivery. If a stable edge is temporarily rejected while the PTT queue
+drains, it retries at a bounded interval while the physical level remains
+unchanged; it does not invent another button edge.
+
 For a non-empty turn, uplink reserves a downlink-owned response wait before it
 sends stop-listening. The wait serializes PTT until TTS starts, an error arrives,
 or its finite timeout aborts the channel; it also covers finalization and
@@ -151,12 +164,20 @@ DMA descriptor, PCM pointer or private recording storage crosses the boundary.
 
 Audio notifications use latest-value coalescing. While one audio marker is
 pending in the command queue, newer audio snapshots overwrite the private copied
-pending value instead of consuming additional queue slots.
+pending value instead of consuming additional queue slots. If the queue is full
+when the first marker is posted, that pending value is retained and drained by
+the next command instead of being dropped.
 
-The current `audio_manager` does not expose a public live PCM streaming API.
-Phase 13 therefore does not bypass private audio storage. Real mic -> Opus ->
-Xiaozhi uplink and response-audio playback are Sprint-14 work while
-`audio_manager` remains the sole I2S owner.
+Phase 16.1 routes decoded Xiaozhi response PCM16 through the public streaming
+and playback-arbiter contracts. The downlink worker is the sole decoder and
+producer; `audio_manager` remains the sole I2S/DMA owner. Its copied Opus queue
+is bounded, the manager-owned PCM ingress ring is bounded in PSRAM, and a
+damaged packet taints only its owning response generation.
+
+Response control uses three separate bounds: a 15-second server-inactivity
+watchdog while waiting/collecting, a 90-second post-`TTS_STOP` PCM drain
+watchdog, and a ten-minute absolute response ceiling. Finalizing never falls
+through to the short inactivity watchdog.
 
 ## GUI contract
 
@@ -176,13 +197,13 @@ final GUI voice queue/rendering belong to Sprint 15.
 ## Task and queue
 
 - one long-lived `voice_assistant` task;
-- stack: 4096 bytes;
+- stack: 8192 bytes in Internal RAM;
 - priority: 4;
 - command queue length: 8;
 - bounded mutex wait: 100 ms;
 - task-start readiness wait: 2 seconds;
 - one public lifecycle command pending at a time;
-- audio updates coalesced latest-value style;
+- foundation and audio updates coalesced latest-value style, including queue-full deferral;
 - status callbacks run only after releasing the voice status mutex.
 
 ## Public API

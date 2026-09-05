@@ -39,6 +39,10 @@ static TaskHandle_t s_task = NULL;
 static TaskHandle_t s_start_waiter = NULL;
 static TickType_t s_arming_started = 0U;
 static bool s_command_pending = false;
+/* A physical RELEASE must not be discarded just because its matching PRESS is
+ * still waiting in the policy queue. The release is queued after that press
+ * and prevents a fast tap from becoming an indefinitely authorized capture. */
+static bool s_release_queued = false;
 
 static voice_assistant_ptt_status_t s_status = {
     .state = VOICE_ASSISTANT_PTT_UNINITIALIZED,
@@ -108,13 +112,30 @@ static void ptt_set_status(
     ptt_publish();
 }
 
-static void ptt_finish_command(void)
+static void ptt_finish_command(ptt_command_type_t type)
 {
     if (!ptt_take_lock()) {
         return;
     }
-    s_command_pending = false;
+    if (type == PTT_COMMAND_RELEASE) {
+        s_release_queued = false;
+    }
+    /* A matching RELEASE may already be queued behind the command that just
+     * completed. Keep producer serialization active until it is consumed. */
+    s_command_pending = s_release_queued;
     xSemaphoreGive(s_lock);
+}
+
+static bool ptt_release_is_queued(void)
+{
+    bool queued = false;
+
+    if (ptt_take_lock()) {
+        queued = s_release_queued;
+        xSemaphoreGive(s_lock);
+    }
+
+    return queued;
 }
 
 static void ptt_reconcile_voice_state(void)
@@ -244,6 +265,21 @@ static void ptt_handle_press(const ptt_command_t *command)
     const esp_err_t get_ret = voice_assistant_get_status(&voice);
     if (get_ret != ESP_OK) {
         ptt_set_status(VOICE_ASSISTANT_PTT_ERROR, false, false, 0U, get_ret);
+        return;
+    }
+
+    /* The physical button was released before this queued PRESS reached the
+     * policy task. Its FIFO RELEASE will follow, so never briefly authorize
+     * microphone capture for a completed tap. */
+    if (ptt_release_is_queued()) {
+        ptt_set_status(VOICE_ASSISTANT_PTT_RELEASED,
+                       false,
+                       false,
+                       voice.session_generation,
+                       ESP_OK);
+        ESP_LOGI(TAG,
+                 "press cancelled before processing generation=%u",
+                 (unsigned)command->generation);
         return;
     }
 
@@ -468,7 +504,7 @@ static void ptt_task(void *argument)
                                    ESP_ERR_INVALID_ARG);
                     break;
             }
-            ptt_finish_command();
+            ptt_finish_command(command.type);
         }
         ptt_reconcile_voice_state();
     }
@@ -485,9 +521,19 @@ static esp_err_t ptt_queue_command(ptt_command_type_t type)
         return ESP_ERR_TIMEOUT;
     }
 
+    const bool command_was_pending = s_command_pending;
+
     if (s_command_pending) {
-        xSemaphoreGive(s_lock);
-        return ESP_ERR_INVALID_STATE;
+        if (type != PTT_COMMAND_RELEASE) {
+            xSemaphoreGive(s_lock);
+            return ESP_ERR_INVALID_STATE;
+        }
+
+        if (s_release_queued || !s_status.pressed) {
+            /* Repeated GPIO samples of one released level are idempotent. */
+            xSemaphoreGive(s_lock);
+            return ESP_OK;
+        }
     }
 
     if (type == PTT_COMMAND_PRESS) {
@@ -505,17 +551,27 @@ static esp_err_t ptt_queue_command(ptt_command_type_t type)
         s_status.pressed = true;
         s_status.capture_authorized = false;
     } else {
+        if ((type == PTT_COMMAND_RELEASE) && !s_status.pressed) {
+            xSemaphoreGive(s_lock);
+            return ESP_OK;
+        }
         command.generation = s_status.ptt_generation;
     }
 
+    if (type == PTT_COMMAND_RELEASE) {
+        s_release_queued = true;
+    }
     s_command_pending = true;
     xSemaphoreGive(s_lock);
 
     if (xQueueSend(s_queue, &command, 0U) != pdTRUE) {
         if (ptt_take_lock()) {
-            s_command_pending = false;
+            s_command_pending = command_was_pending;
             if (type == PTT_COMMAND_PRESS) {
                 s_status.pressed = false;
+            }
+            if (type == PTT_COMMAND_RELEASE) {
+                s_release_queued = false;
             }
             xSemaphoreGive(s_lock);
         }
@@ -543,6 +599,7 @@ esp_err_t voice_assistant_ptt_init(void)
     s_status.state = VOICE_ASSISTANT_PTT_IDLE;
     s_status.last_error = ESP_OK;
     s_command_pending = false;
+    s_release_queued = false;
     ESP_LOGI(TAG, "initialized without GPIO ownership");
     return ESP_OK;
 }

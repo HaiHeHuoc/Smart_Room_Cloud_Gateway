@@ -21,6 +21,9 @@ typedef struct {
  *
  * The adapter owns only GPIO sampling/debounce. It does not own the factory
  * reset button and forwards stable edges to voice_assistant_ptt_press/release.
+ * A stable edge that is temporarily rejected by the bounded policy queue is
+ * retried while the sampled level remains unchanged, so queue pressure cannot
+ * silently discard one physical press or release.
  * GPIO is configured as input with the ESP32-S3 internal pull-down enabled;
  * Phase 14's current board assignment is active-high GPIO38.
  */
