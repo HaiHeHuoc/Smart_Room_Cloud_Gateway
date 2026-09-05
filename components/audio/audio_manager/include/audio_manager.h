@@ -34,7 +34,7 @@ typedef enum
     /** The recorded PCM24 buffer is being processed. */
     AUDIO_MANAGER_STATE_PROCESSING,
 
-    /** A manager-owned recorded or WAV source is playing through MAX98357A. */
+    /** A manager-owned recorded, WAV, or live PCM16 source is playing through MAX98357A. */
     AUDIO_MANAGER_STATE_PLAYBACK,
 
     /** The latest manager audio operation failed and will recover to IDLE. */
@@ -49,8 +49,9 @@ typedef struct
 
     /**
      * Playback volume in range 0..100. Recorded audio then uses its existing
-     * conditioning. WAV audio first uses a fixed full-scale PCM16 mapping to
-     * the shared output ceiling, then this value applies its linear scale.
+     * conditioning. WAV and live PCM16 stream audio first use a fixed
+     * full-scale PCM16 mapping to the shared output ceiling, then this value
+     * applies its linear scale.
      */
     uint32_t playback_volume_percent;
 } audio_manager_config_t;
@@ -117,6 +118,18 @@ typedef struct
 
     /** Number of WAV commands cancelled by playback stop or manager stop. */
     uint32_t wav_playback_cancelled;
+
+    /** Number of bounded live PCM16-stream commands accepted by the manager. */
+    uint32_t pcm_stream_playback_started;
+
+    /** Number of live PCM16 streams that reached EOS and drained normally. */
+    uint32_t pcm_stream_playback_completed;
+
+    /** Number of live PCM16 streams that failed before EOS/normal drain. */
+    uint32_t pcm_stream_playback_failed;
+
+    /** Number of live PCM16 streams cancelled or preempted cooperatively. */
+    uint32_t pcm_stream_playback_cancelled;
 
     /** Number of PCM24 samples captured by the most recent recording. */
     size_t last_samples_recorded;
@@ -189,9 +202,10 @@ audio_manager_config_t audio_manager_default_config(void);
  *
  * The function copies configuration, allocates one whole-recording PCM24
  * buffer large enough for both fixed recording and the configured manual
- * recording maximum, allocates the DSP workspace in PSRAM, creates bounded
- * command/lifecycle synchronization, and places MAX98357A data in its safe LOW
- * state. No task or I2S channel remains active when initialization returns.
+ * recording maximum, allocates the DSP workspace plus a bounded live-PCM
+ * ingress ring in PSRAM, creates bounded command/lifecycle synchronization,
+ * and places MAX98357A data in its safe LOW state. No task or I2S channel
+ * remains active when initialization returns.
  * Task context only; do not call from an ISR.
  */
 esp_err_t audio_manager_init(
@@ -217,8 +231,10 @@ esp_err_t audio_manager_register_status_callback(
  * On success the task reaches IDLE and waits for bounded commands. Normal
  * production start does not begin capture, DSP, or playback. All source and
  * I2S ownership remains private to the component: the manager task owns I2S,
- * while an active private reader owns its WAV file and SD lease. A default-off
- * Kconfig regression mode may run the existing golden stability cycle instead.
+ * while an active private reader owns its WAV file and SD lease. A live PCM16
+ * producer can only copy packets into a bounded manager-owned PSRAM ring;
+ * this task remains its sole I2S/TX consumer. A default-off Kconfig regression
+ * mode may run the existing golden stability cycle instead.
  * Its optional continuous WAV-stress coordinator is a separate test task that
  * only polls status and submits commands; it never owns I2S, a WAV stream, or
  * SD access. Active WAV playback uses a private bounded SD-to-PSRAM prefetch
@@ -292,14 +308,15 @@ esp_err_t audio_manager_play_recorded(void);
 esp_err_t audio_manager_play_wav(const char *path);
 
 /**
- * @brief Request cancellation of pending/active recorded or WAV playback.
+ * @brief Request cancellation of pending/active recorded, WAV, or live-stream playback.
  *
  * The caller only sets a bounded cancellation request. The manager task owns
  * source/TX cleanup; WAV's private reader owns its file and checks cancellation
  * between bounded raw reads. Recorded playback checks cancellation between
- * bounded TX blocks. Returns ESP_ERR_INVALID_STATE when no cancellable playback
- * is pending/active. A controlled cancellation completes with IDLE and ESP_OK
- * in status. Task context only.
+ * bounded TX blocks, while live PCM16 ingress is flushed before manager-owned
+ * TX cleanup. Returns ESP_ERR_INVALID_STATE when no cancellable playback is
+ * pending/active. A controlled cancellation completes with IDLE and ESP_OK in
+ * status. Task context only.
  */
 esp_err_t audio_manager_stop_playback(void);
 
@@ -308,7 +325,8 @@ esp_err_t audio_manager_stop_playback(void);
  *
  * Active production recording/playback is asked to stop cooperatively. Active
  * WAV playback is cancelled by the manager task, which stops I2S then joins
- * the private reader before its source is released. When the default-off
+ * the private reader before its source is released; active live PCM16 playback
+ * flushes ingress and stops the same manager-owned TX path. When the default-off
  * continuous WAV stress test is selected, this also wakes and joins its non-I2S
  * coordinator task. On success the state becomes INITIALIZED and
  * audio_manager_start() may be called again. The function returns
@@ -329,7 +347,8 @@ esp_err_t audio_manager_get_status(
  *
  * Call audio_manager_stop() first when the manager task is running. This
  * releases the command queue, lifecycle synchronization, PSRAM recording
- * buffer, DSP workspace, and status mutex after defensive audio cleanup. Task
+ * buffer, DSP workspace, live PCM ingress ring, and status mutex after
+ * defensive audio cleanup. Task
  * context only; application code must ensure no concurrent lifecycle/status
  * call is using the manager when deinit begins.
  */

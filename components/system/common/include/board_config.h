@@ -124,6 +124,27 @@
 #define FACTORY_RESET_BUTTON_DEBOUNCE_MS        40U
 #define FACTORY_RESET_BUTTON_LONG_PRESS_MS      5000U
 
+/* =========================================================================
+ * Phase 14 Push-To-Talk input
+ * =========================================================================
+ * Dedicated PTT button assignment for the current board.
+ *
+ * Wiring:
+ *     GPIO38 ---- push button ---- 3V3
+ *
+ * The input is intended to use the ESP32-S3 internal pull-down, therefore:
+ *     released -> LOW
+ *     pressed  -> HIGH
+ *
+ * GPIO48 remains reserved for the board's NeoPixel LED. GPIO38 is not a
+ * strapping, native-USB, UART0, or external-JTAG pin on ESP32-S3.
+ */
+#define PTT_BUTTON_GPIO                         GPIO_NUM_38
+#define PTT_BUTTON_ACTIVE_LEVEL                 1
+#define PTT_BUTTON_USE_INTERNAL_PULLDOWN        1
+#define PTT_BUTTON_POLL_PERIOD_MS               10U
+#define PTT_BUTTON_DEBOUNCE_MS                  40U
+
 /* Audio */
 #define AUDIO_GPIO_BCLK        GPIO_NUM_47
 #define AUDIO_GPIO_WS          GPIO_NUM_21

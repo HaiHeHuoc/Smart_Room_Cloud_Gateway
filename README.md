@@ -267,6 +267,8 @@ Test/                    host and component test utilities
 - [Known limitations and future work](docs/KNOWN_LIMITATIONS.md)
 - [Historical implementation roadmap](ESP32S3_Smart_Room_Cloud_Gateway_Roadmap.md)
 - [Version 2 Xiaozhi roadmap](XIAOZHI_IMPLEMENTATION_ROADMAP.md)
+- [Xiaozhi WebSocket transport ADR](docs/ADR_XIAOZHI_WEBSOCKET_TRANSPORT.md)
+- [Xiaozhi Phase 12 hardware acceptance data](docs/XIAOZHI_HARDWARE_ACCEPTANCE.md)
 
 ## Known Product Boundaries
 

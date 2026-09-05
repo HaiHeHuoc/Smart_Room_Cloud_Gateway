@@ -54,6 +54,11 @@
 /* app network coordinator ------------------------------------------------- */
 #include "app_network_coordinator.h"
 
+/* Xiaozhi validation foundation ------------------------------------------- */
+#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+#include "xiaozhi_foundation.h"
+#endif
+
 /* app reset coordinator --------------------------------------------------- */
 #include "app_reset_coordinator.h"
 
@@ -65,9 +70,23 @@
 #if CONFIG_AUDIO_MANAGER_PUBLIC_API_TEST
 #include "audio_api_test_task.h"
 #endif
+#if CONFIG_APP_PHASE16_AUTO_HIL_TEST
+#include "phase16_auto_hil_test.h"
+#endif
 
 /* Macros ------------------------------------------------------------------- */
-#define PERFORMANCE_MONITOR 1
+#define PERFORMANCE_MONITOR 0
+
+#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+#define APP_XIAOZHI_VALIDATION_QUIESCENCE_MS \
+    5000U
+
+#define APP_XIAOZHI_VALIDATION_READY_TIMEOUT_MS \
+    60000U
+
+#define APP_XIAOZHI_VALIDATION_READY_POLL_MS \
+    250U
+#endif
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "MAIN_APP";
@@ -151,6 +170,18 @@ static const firebase_auth_config_t FIREBASE_AUTH_CONFIG =
 static esp_err_t network_platform_init(void);
 
 /**
+ * @brief Best-effort route away from BOOT before a fatal startup return.
+ *
+ * The helper never changes manager state and never overrides an explicit
+ * provisioning, reset, or other application screen that has already replaced
+ * BOOT. It exists only to prevent a stale "Starting..." screen from surviving
+ * after app_main has abandoned startup.
+ */
+static void app_route_boot_failure_to_wifi_status(
+    const char *stage,
+    esp_err_t error);
+
+/**
  * @brief Forward one button-manager event to the reset coordinator queue.
  *
  * Runs in button task context and must not directly access storage or LVGL.
@@ -200,6 +231,17 @@ static void app_cloud_status_callback(
     const cloud_manager_status_t *status,
     void *user_context);
 
+#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+/** @brief Map a foundation validation state to its GUI equivalent. */
+static ui_xiaozhi_state_t app_map_xiaozhi_state(
+    xiaozhi_foundation_ui_state_t state);
+
+/** @brief Copy a foundation snapshot to the GUI queue without calling LVGL. */
+static void app_xiaozhi_ui_status_callback(
+    const xiaozhi_foundation_ui_status_t *status,
+    void *user_context);
+#endif
+
 /**
  * @brief Convert one Wi-Fi manager snapshot into a coordinator runtime event.
  *
@@ -247,6 +289,20 @@ static bool app_network_state_allows_audio_start(
  *         manager initialization or startup error.
  */
 static esp_err_t app_start_audio_manager_after_network_online(void);
+
+#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+/** @brief Check whether the cloud task has left startup/network work. */
+static bool app_cloud_state_allows_xiaozhi_validation(
+    cloud_manager_state_t state);
+
+/**
+ * @brief Start validation after application-owned managers and UI are stable.
+ *
+ * Runs only from app_main task context. It observes public component snapshots
+ * and never takes ownership of audio, cloud, Wi-Fi, or LVGL lifecycles.
+ */
+static esp_err_t app_request_xiaozhi_validation_after_steady_state(void);
+#endif
 
 /* Application -------------------------------------------------------------- */
 /** @brief Initialize the current application services and run diagnostics. */
@@ -375,6 +431,26 @@ void app_main(void)
 
         return;
     }
+
+#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+    /*
+     * The foundation borrows this callback for application lifetime. It only
+     * copies bounded status into app_gui; it cannot route screens or access
+     * LVGL from Xiaozhi worker/event-loop context.
+     */
+    const esp_err_t xiaozhi_ui_ret =
+        xiaozhi_foundation_register_ui_status_callback(
+            app_xiaozhi_ui_status_callback,
+            NULL);
+
+    if (xiaozhi_ui_ret != ESP_OK)
+    {
+        ESP_LOGW(
+            TAG,
+            "Xiaozhi validation UI observer unavailable: %s",
+            esp_err_to_name(xiaozhi_ui_ret));
+    }
+#endif
 
     ESP_LOGI(TAG, "LVGL display initialized successfully");
 
@@ -506,7 +582,9 @@ void app_main(void)
             TAG,
             "Failed to initialize Wi-Fi manager: %s",
             esp_err_to_name(wifi_ret));
-
+        app_route_boot_failure_to_wifi_status(
+            "wifi_manager_init",
+            wifi_ret);
         return;
     }
 
@@ -525,7 +603,9 @@ void app_main(void)
             TAG,
             "Failed to register Wi-Fi status callback: %s",
             esp_err_to_name(callback_ret));
-
+        app_route_boot_failure_to_wifi_status(
+            "wifi_manager_register_status_callback",
+            callback_ret);
         return;
     }
 
@@ -539,7 +619,9 @@ void app_main(void)
             TAG,
             "Failed to initialize network coordinator: %s",
             esp_err_to_name(coordinator_ret));
-
+        app_route_boot_failure_to_wifi_status(
+            "app_network_coordinator_init",
+            coordinator_ret);
         return;
     }
 
@@ -558,6 +640,9 @@ void app_main(void)
             TAG,
             "Failed to initialize Firebase Authentication: %s",
             esp_err_to_name(service_ret));
+        app_route_boot_failure_to_wifi_status(
+            "firebase_auth_init",
+            service_ret);
         return;
     }
 
@@ -571,6 +656,9 @@ void app_main(void)
             TAG,
             "Failed to initialize cloud manager: %s",
             esp_err_to_name(service_ret));
+        app_route_boot_failure_to_wifi_status(
+            "cloud_manager_init",
+            service_ret);
         return;
     }
 
@@ -585,6 +673,9 @@ void app_main(void)
             TAG,
             "Failed to register cloud manager status callback: %s",
             esp_err_to_name(service_ret));
+        app_route_boot_failure_to_wifi_status(
+            "cloud_manager_register_status_callback",
+            service_ret);
         return;
     }
 
@@ -602,6 +693,9 @@ void app_main(void)
             TAG,
             "Failed to initialize sensor manager: %s",
             esp_err_to_name(service_ret));
+        app_route_boot_failure_to_wifi_status(
+            "sensor_manager_init",
+            service_ret);
         return;
     }
 
@@ -616,6 +710,9 @@ void app_main(void)
             TAG,
             "Failed to register sensor callback: %s",
             esp_err_to_name(service_ret));
+        app_route_boot_failure_to_wifi_status(
+            "sensor_manager_register_callback",
+            service_ret);
         return;
     }
 
@@ -627,6 +724,9 @@ void app_main(void)
             TAG,
             "Failed to start sensor manager: %s",
             esp_err_to_name(service_ret));
+        app_route_boot_failure_to_wifi_status(
+            "sensor_manager_start",
+            service_ret);
         return;
     }
 
@@ -644,13 +744,20 @@ void app_main(void)
             TAG,
             "Failed to start network coordinator: %s",
             esp_err_to_name(coordinator_ret));
-
+        app_route_boot_failure_to_wifi_status(
+            "app_network_coordinator_start",
+            coordinator_ret);
         return;
     }
 
     bool cloud_started = false;
     /* Preserve the prior one-shot audio lifecycle attempt after the new gate. */
     bool audio_start_attempted = false;
+    bool network_failure_screen_requested = false;
+#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+    bool audio_started = false;
+    bool xiaozhi_validation_attempted = false;
+#endif
 
     while (1)
     {
@@ -670,6 +777,49 @@ void app_main(void)
                     "Failed to inspect network readiness for deferred startup: %s",
                     esp_err_to_name(service_ret));
             }
+            else if ((network_state == APP_NETWORK_COORDINATOR_STATE_FAILED) &&
+                     !network_failure_screen_requested)
+            {
+                app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
+                const esp_err_t screen_state_ret =
+                    app_gui_get_screen_id(&screen_id);
+
+                if ((screen_state_ret == ESP_OK) &&
+                    (screen_id == APP_GUI_SCREEN_BOOT))
+                {
+                    const esp_err_t screen_ret =
+                        app_gui_request_screen(
+                            APP_GUI_SCREEN_WIFI_STATUS);
+
+                    if (screen_ret == ESP_OK)
+                    {
+                        network_failure_screen_requested = true;
+                        ESP_LOGW(
+                            TAG,
+                            "Network coordinator entered FAILED while BOOT was active; WIFI_STATUS queued to prevent an indefinite Starting screen");
+                    }
+                    else
+                    {
+                        ESP_LOGW(
+                            TAG,
+                            "Failed to route BOOT screen after network failure: %s",
+                            esp_err_to_name(screen_ret));
+                    }
+                }
+                else if ((screen_state_ret == ESP_OK) &&
+                         (screen_id != APP_GUI_SCREEN_BOOT))
+                {
+                    /* Preserve provisioning/reset/other explicit UI routes. */
+                    network_failure_screen_requested = true;
+                }
+                else if (screen_state_ret != ESP_OK)
+                {
+                    ESP_LOGW(
+                        TAG,
+                        "Failed to inspect active screen after network failure: %s",
+                        esp_err_to_name(screen_state_ret));
+                }
+            }
             else if (!audio_start_attempted &&
                      app_network_state_allows_audio_start(
                          network_state))
@@ -681,6 +831,10 @@ void app_main(void)
 
                 if (audio_ret == ESP_OK)
                 {
+#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+                    audio_started = true;
+#endif
+
                     ESP_LOGI(
                         TAG,
                         "Audio manager started after network handoff: state=%s",
@@ -727,6 +881,26 @@ void app_main(void)
             }
         }
 
+#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+        if (!xiaozhi_validation_attempted &&
+            cloud_started &&
+            audio_started)
+        {
+            xiaozhi_validation_attempted = true;
+
+            const esp_err_t xiaozhi_ret =
+                app_request_xiaozhi_validation_after_steady_state();
+
+            if (xiaozhi_ret != ESP_OK)
+            {
+                ESP_LOGE(
+                    TAG,
+                    "Xiaozhi steady-state validation was not started: %s",
+                    esp_err_to_name(xiaozhi_ret));
+            }
+        }
+#endif
+
         vTaskDelay(
             pdMS_TO_TICKS(
                 (cloud_started && audio_start_attempted)
@@ -736,6 +910,60 @@ void app_main(void)
 }
 
 /* Static Functions --------------------------------------------------------- */
+static void app_route_boot_failure_to_wifi_status(
+    const char *stage,
+    esp_err_t error)
+{
+    const char *const safe_stage =
+        (stage != NULL) ? stage : "unknown";
+    app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
+    const esp_err_t screen_state_ret =
+        app_gui_get_screen_id(&screen_id);
+
+    if (screen_state_ret != ESP_OK)
+    {
+        ESP_LOGW(
+            TAG,
+            "Startup failure stage=%s error=%s; unable to inspect active screen: %s",
+            safe_stage,
+            esp_err_to_name(error),
+            esp_err_to_name(screen_state_ret));
+        return;
+    }
+
+    if (screen_id != APP_GUI_SCREEN_BOOT)
+    {
+        ESP_LOGW(
+            TAG,
+            "Startup failure stage=%s error=%s; preserving active screen=%d",
+            safe_stage,
+            esp_err_to_name(error),
+            (int)screen_id);
+        return;
+    }
+
+    const esp_err_t screen_ret =
+        app_gui_request_screen(
+            APP_GUI_SCREEN_WIFI_STATUS);
+
+    if (screen_ret != ESP_OK)
+    {
+        ESP_LOGW(
+            TAG,
+            "Startup failure stage=%s error=%s; failed to leave BOOT screen: %s",
+            safe_stage,
+            esp_err_to_name(error),
+            esp_err_to_name(screen_ret));
+        return;
+    }
+
+    ESP_LOGW(
+        TAG,
+        "Startup failure stage=%s error=%s; WIFI_STATUS queued to prevent an indefinite BOOT Starting screen",
+        safe_stage,
+        esp_err_to_name(error));
+}
+
 static esp_err_t network_platform_init(void)
 {
     esp_err_t ret = nvs_flash_init();
@@ -1226,6 +1454,90 @@ static ui_cloud_state_t app_map_cloud_state(
     }
 }
 
+#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+static ui_xiaozhi_state_t app_map_xiaozhi_state(
+    xiaozhi_foundation_ui_state_t state)
+{
+    switch (state)
+    {
+        case XIAOZHI_FOUNDATION_UI_READY:
+            return UI_XIAOZHI_STATE_READY;
+
+        case XIAOZHI_FOUNDATION_UI_LISTENING:
+            return UI_XIAOZHI_STATE_LISTENING;
+
+        case XIAOZHI_FOUNDATION_UI_PROCESSING:
+            return UI_XIAOZHI_STATE_PROCESSING;
+
+        case XIAOZHI_FOUNDATION_UI_RESPONDING:
+            return UI_XIAOZHI_STATE_RESPONDING;
+
+        case XIAOZHI_FOUNDATION_UI_ERROR:
+            return UI_XIAOZHI_STATE_ERROR;
+
+        case XIAOZHI_FOUNDATION_UI_DISCONNECTED:
+        default:
+            return UI_XIAOZHI_STATE_DISCONNECTED;
+    }
+}
+
+static void app_xiaozhi_ui_status_callback(
+    const xiaozhi_foundation_ui_status_t *status,
+    void *user_context)
+{
+    (void)user_context;
+
+    if (status == NULL)
+    {
+        return;
+    }
+
+    const ui_xiaozhi_state_t ui_state =
+        app_map_xiaozhi_state(status->state);
+    ui_xiaozhi_status_t ui_status =
+    {
+        .state = ui_state,
+        .listening_started_at_us = status->listening_started_at_us,
+        .listening_stopped_at_us = status->listening_stopped_at_us,
+        .last_error =
+            (ui_state == UI_XIAOZHI_STATE_ERROR)
+                ? ((status->last_error == ESP_OK)
+                    ? ESP_FAIL
+                    : status->last_error)
+                : ESP_OK,
+        .user_text_truncated = status->user_text_truncated,
+        .assistant_text_truncated = status->assistant_text_truncated,
+    };
+
+    _Static_assert(
+        sizeof(ui_status.user_text) == sizeof(status->user_text),
+        "Xiaozhi UI text bounds must match at the composition boundary");
+
+    memcpy(
+        ui_status.user_text,
+        status->user_text,
+        sizeof(ui_status.user_text));
+    memcpy(
+        ui_status.assistant_text,
+        status->assistant_text,
+        sizeof(ui_status.assistant_text));
+    ui_status.user_text[sizeof(ui_status.user_text) - 1U] = '\0';
+    ui_status.assistant_text[sizeof(ui_status.assistant_text) - 1U] = '\0';
+
+    const esp_err_t ret = app_gui_post_xiaozhi_status(&ui_status);
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGD(
+            TAG,
+            "Xiaozhi GUI update dropped: state=%d, error=%s, post=%s",
+            (int)ui_state,
+            esp_err_to_name(ui_status.last_error),
+            esp_err_to_name(ret));
+    }
+}
+#endif
+
 static void app_cloud_status_callback(
     const cloud_manager_status_t *status,
     void *user_context)
@@ -1404,8 +1716,144 @@ static esp_err_t app_start_audio_manager_after_network_online(void)
     }
 #endif
 
+#if CONFIG_APP_PHASE16_AUTO_HIL_TEST
+    const esp_err_t phase16_test_ret = app_phase16_auto_hil_test_start();
+    if (phase16_test_ret != ESP_OK)
+    {
+        ESP_LOGW(
+            TAG,
+            "Failed to start Phase-16 automatic HIL coordinator: %s",
+            esp_err_to_name(phase16_test_ret));
+    }
+    else
+    {
+        ESP_LOGI(
+            TAG,
+            "Phase-16 automatic HIL coordinator started (test branch only)");
+    }
+#endif
+
     return ESP_OK;
 }
+
+#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+static bool app_cloud_state_allows_xiaozhi_validation(
+    cloud_manager_state_t state)
+{
+    switch (state)
+    {
+        case CLOUD_MANAGER_STATE_WAITING_FOR_DATA:
+        case CLOUD_MANAGER_STATE_ONLINE:
+        case CLOUD_MANAGER_STATE_RETRY_WAIT:
+        case CLOUD_MANAGER_STATE_AUTH_ERROR:
+        case CLOUD_MANAGER_STATE_ERROR:
+            return true;
+
+        case CLOUD_MANAGER_STATE_UNINITIALIZED:
+        case CLOUD_MANAGER_STATE_INITIALIZED:
+        case CLOUD_MANAGER_STATE_WAITING_FOR_NETWORK:
+        case CLOUD_MANAGER_STATE_UPLOADING:
+        default:
+            return false;
+    }
+}
+
+static esp_err_t app_request_xiaozhi_validation_after_steady_state(void)
+{
+    esp_err_t ret =
+        app_gui_request_screen(
+            APP_GUI_SCREEN_XIAOZHI);
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGW(
+            TAG,
+            "Failed to queue Xiaozhi validation screen: %s",
+            esp_err_to_name(ret));
+        return ret;
+    }
+
+    const TickType_t wait_started_at =
+        xTaskGetTickCount();
+    TickType_t quiescence_started_at = 0U;
+    bool quiescence_active = false;
+
+    ESP_LOGI(
+        TAG,
+        "Waiting for Xiaozhi validation steady state: timeout_ms=%lu "
+        "quiescence_ms=%lu",
+        (unsigned long)APP_XIAOZHI_VALIDATION_READY_TIMEOUT_MS,
+        (unsigned long)APP_XIAOZHI_VALIDATION_QUIESCENCE_MS);
+
+    while ((xTaskGetTickCount() - wait_started_at) <
+           pdMS_TO_TICKS(APP_XIAOZHI_VALIDATION_READY_TIMEOUT_MS))
+    {
+        app_network_coordinator_state_t network_state =
+            APP_NETWORK_COORDINATOR_STATE_UNINITIALIZED;
+        audio_manager_status_t audio_status = {0};
+        cloud_manager_status_t cloud_status = {0};
+        app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
+
+        const bool snapshots_valid =
+            (app_network_coordinator_get_state(&network_state) == ESP_OK) &&
+            (audio_manager_get_status(&audio_status) == ESP_OK) &&
+            (cloud_manager_get_status(&cloud_status) == ESP_OK) &&
+            (app_gui_get_screen_id(&screen_id) == ESP_OK);
+        const bool prerequisites_ready =
+            snapshots_valid &&
+            (network_state == APP_NETWORK_COORDINATOR_STATE_ONLINE) &&
+            (audio_status.state == AUDIO_MANAGER_STATE_IDLE) &&
+            !audio_status.capture_i2s_active &&
+            !audio_status.playback_i2s_active &&
+            app_cloud_state_allows_xiaozhi_validation(
+                cloud_status.state) &&
+            (screen_id == APP_GUI_SCREEN_XIAOZHI);
+        const TickType_t now = xTaskGetTickCount();
+
+        if (!prerequisites_ready)
+        {
+            quiescence_active = false;
+        }
+        else if (!quiescence_active)
+        {
+            quiescence_active = true;
+            quiescence_started_at = now;
+        }
+        else if ((now - quiescence_started_at) >=
+                 pdMS_TO_TICKS(APP_XIAOZHI_VALIDATION_QUIESCENCE_MS))
+        {
+            ESP_LOGI(
+                TAG,
+                "XIAOZHI_STEADY_STATE ready network=ONLINE audio=IDLE "
+                "cloud_state=%d screen=XIAOZHI quiescence_ms=%lu",
+                (int)cloud_status.state,
+                (unsigned long)APP_XIAOZHI_VALIDATION_QUIESCENCE_MS);
+
+            ret =
+                xiaozhi_foundation_request_transport_validation(
+                    XIAOZHI_FOUNDATION_TRANSPORT_AUTO);
+
+            if (ret == ESP_OK)
+            {
+                ESP_LOGI(
+                    TAG,
+                    "Xiaozhi validation requested from steady-state composition layer");
+            }
+
+            return ret;
+        }
+
+        vTaskDelay(
+            pdMS_TO_TICKS(
+                APP_XIAOZHI_VALIDATION_READY_POLL_MS));
+    }
+
+    ESP_LOGE(
+        TAG,
+        "XIAOZHI_STEADY_STATE timeout; validation baseline not captured");
+    return ESP_ERR_TIMEOUT;
+}
+#endif
 
 static void app_button_event_callback(
     const button_manager_event_data_t *event_data,

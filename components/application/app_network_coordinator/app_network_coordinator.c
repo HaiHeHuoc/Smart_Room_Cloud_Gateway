@@ -334,6 +334,8 @@ static void app_network_coordinator_task(
     void *argument);
 
 /* Static Functions --------------------------------------------------------- */
+
+
 static void app_network_coordinator_task(
     void *argument)
 {
@@ -3250,7 +3252,6 @@ esp_err_t app_network_coordinator_notify_wifi_event(
     app_network_coordinator_state_t previous_state;
     bool state_changed = false;
     bool provisioning_active = false;
-    bool success_dwell_active = false;
     bool reset_requested = false;
     uint32_t provisioning_generation = 0U;
 
@@ -3260,8 +3261,6 @@ esp_err_t app_network_coordinator_notify_wifi_event(
     provisioning_active =
         (s_state ==
          APP_NETWORK_COORDINATOR_STATE_PROVISIONING);
-    success_dwell_active =
-        s_provisioning_success_dwell_active;
     provisioning_generation =
         s_active_provisioning_generation;
 
@@ -3350,22 +3349,6 @@ esp_err_t app_network_coordinator_notify_wifi_event(
             app_network_coordinator_state_to_string(
                 next_state));
 
-        if (next_state ==
-            APP_NETWORK_COORDINATOR_STATE_ONLINE &&
-            !success_dwell_active)
-        {
-            const esp_err_t screen_ret =
-                app_gui_request_screen(
-                    APP_GUI_SCREEN_WIFI_STATUS);
-
-            if (screen_ret != ESP_OK)
-            {
-                ESP_LOGW(
-                    TAG,
-                    "Failed to queue Wi-Fi status screen: %s",
-                    esp_err_to_name(screen_ret));
-            }
-        }
     }
 
     return ESP_OK;

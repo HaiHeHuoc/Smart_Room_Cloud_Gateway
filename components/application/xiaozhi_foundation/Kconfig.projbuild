@@ -1,0 +1,151 @@
+menu "Xiaozhi Phase 12 validation"
+
+config XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+    bool "Enable temporary Phase 12 Xiaozhi validation runtime"
+    default n
+    help
+        Enable the temporary Phase 12 Xiaozhi validation runtime. This is not
+        the future production voice assistant. When disabled, normal Gateway
+        startup and network routing do not automatically start Xiaozhi
+        validation. P2-E and P2-F options are meaningful only while this
+        validation gate is enabled.
+
+config XIAOZHI_FOUNDATION_P2F_EMBED_FIXTURE
+    bool "Enable the legacy embedded P2-F fixture provider"
+    depends on XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+    default n
+    help
+        Provide the test-only XZF1 P2-F fixture through the legacy linker-symbol
+        boundary used by xiaozhi_foundation. When SD fixture mode is disabled,
+        this embeds test_assets/p2f_fixture.bin into firmware. SD fixture mode
+        selects this provider internally but fills the same bounded buffer from
+        /sdcard/xiaozhi/p2f_fixture.xzf immediately before validation.
+
+config XIAOZHI_FOUNDATION_P2F_SD_FIXTURE
+    bool "Load the P2-F known-audio fixture from SD card"
+    depends on XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+    select XIAOZHI_FOUNDATION_P2F_EMBED_FIXTURE
+    default n
+    help
+        Validation-only SD mode. The board waits up to 30 seconds for the
+        existing sd_card_manager mount, acquires its VFS lease, and loads the
+        exact 6030-byte test fixture from
+        /sdcard/xiaozhi/p2f_fixture.xzf. No microphone or production audio
+        ownership is added. The mode is disabled by default and is intended for
+        the dedicated P2-F hardware-test branch.
+
+config XIAOZHI_FOUNDATION_P2F_E2E_ONLINE_VALIDATION
+    bool "Run P2-F known-audio E2E instead of default P2-E"
+    depends on XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+    depends on XIAOZHI_FOUNDATION_P2F_EMBED_FIXTURE
+    default n
+    help
+        After the application composition layer observes network, audio,
+        cloud, and the validation GUI in a bounded steady state, run the
+        independent P2-F WebSocket audio/STT/TTS validation. Leave this
+        disabled to run the default P2-E audio-channel lifecycle validation.
+
+config XIAOZHI_FOUNDATION_P26_LIFECYCLE_MATRIX
+    bool "Run Phase 12.6 repeated lifecycle matrix"
+    depends on XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+    depends on !XIAOZHI_FOUNDATION_P2F_E2E_ONLINE_VALIDATION
+    default n
+    help
+        Run the Phase 12.6 WebSocket lifecycle matrix only after the
+        application composition layer establishes a bounded steady state.
+        Each cycle owns a new Xiaozhi context, EventGroup, event handler, chat
+        handle, MCP engine, counters, and resource snapshots. Cleanup is
+        sampled at 0, 250, 1000, 3000, and 5000 ms. The matrix uses the P2-E
+        audio-channel lifecycle for every cycle and stops after the first
+        failure. It is validation infrastructure only; it does not enable a
+        production voice feature.
+
+config XIAOZHI_FOUNDATION_P26_LIFECYCLE_CYCLE_COUNT
+    int "Phase 12.6 lifecycle matrix cycle count"
+    depends on XIAOZHI_FOUNDATION_P26_LIFECYCLE_MATRIX
+    range 1 100
+    default 1
+    help
+        Number of full WebSocket init/start/connected/open-close/stop/deinit
+        cycles requested for one explicit Phase 12.6 run. Start with 1, then
+        progress through 3, 10, 20, and 100 only after target evidence is
+        clean. The worker stops at the first failed cycle.
+
+config XIAOZHI_FOUNDATION_P26_FAULT_MATRIX
+    bool "Run Phase 12.6 controlled fault/recovery matrix"
+    depends on XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+    depends on !XIAOZHI_FOUNDATION_P2F_E2E_ONLINE_VALIDATION
+    depends on !XIAOZHI_FOUNDATION_P26_LIFECYCLE_MATRIX
+    default n
+    help
+        Run one explicitly selected, project-controlled lifecycle abort followed
+        by one clean P2-E recovery lifecycle. The injection never changes
+        private esp_xiaozhi state, Wi-Fi ownership, provisioning, NVS, cloud,
+        LVGL, or audio hardware. This is validation-only infrastructure and is
+        disabled in normal Gateway operation.
+
+choice XIAOZHI_FOUNDATION_P26_FAULT_SELECTOR
+    prompt "Phase 12.6 controlled fault selector"
+    depends on XIAOZHI_FOUNDATION_P26_FAULT_MATRIX
+    default XIAOZHI_FOUNDATION_P26_FAULT_SELECTOR_NONE
+    help
+        Select a deterministic project-owned lifecycle boundary. NONE leaves
+        injection disabled. ALL_SUPPORTED runs each safe boundary serially and
+        stops after the first unexpected result or failed recovery.
+
+config XIAOZHI_FOUNDATION_P26_FAULT_SELECTOR_NONE
+    bool "None (do not inject a fault)"
+
+config XIAOZHI_FOUNDATION_P26_FAULT_SELECTOR_AFTER_GET_INFO
+    bool "Abort after Xiaozhi service info acquisition"
+
+config XIAOZHI_FOUNDATION_P26_FAULT_SELECTOR_AFTER_MCP_CREATE
+    bool "Abort after MCP engine creation"
+
+config XIAOZHI_FOUNDATION_P26_FAULT_SELECTOR_AFTER_EVENT_GROUP_CREATE
+    bool "Abort after validation EventGroup creation"
+
+config XIAOZHI_FOUNDATION_P26_FAULT_SELECTOR_AFTER_CHAT_INIT
+    bool "Abort after chat initialization"
+
+config XIAOZHI_FOUNDATION_P26_FAULT_SELECTOR_AFTER_EVENT_HANDLER_REGISTER
+    bool "Abort after ESP event-handler registration"
+
+config XIAOZHI_FOUNDATION_P26_FAULT_SELECTOR_AFTER_CHAT_START
+    bool "Abort after chat start"
+
+config XIAOZHI_FOUNDATION_P26_FAULT_SELECTOR_AFTER_AUDIO_CHANNEL_OPEN
+    bool "Abort after P2-E audio-channel open"
+
+config XIAOZHI_FOUNDATION_P26_FAULT_SELECTOR_ALL_SUPPORTED
+    bool "Run all supported controlled fault cases"
+
+endchoice
+
+config XIAOZHI_FOUNDATION_P26_RESOURCE_ATTRIBUTION_MATRIX
+    bool "Run Phase 12.6 source-specific resource attribution"
+    depends on XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+    depends on !XIAOZHI_FOUNDATION_P2F_E2E_ONLINE_VALIDATION
+    depends on !XIAOZHI_FOUNDATION_P26_LIFECYCLE_MATRIX
+    depends on !XIAOZHI_FOUNDATION_P26_FAULT_MATRIX
+    default n
+    help
+        Run three iterations of each public, supported lifecycle layer:
+        get_info/free_info, MCP create/destroy, chat init/deinit without start,
+        WebSocket connect/stop/deinit without audio, and normal P2-E. Stages
+        with material settled Internal-RAM decline receive a bounded 125-second
+        follow-up sample, matching the configured lwIP two-MSL TIME_WAIT
+        lifetime. This diagnostic path is not a production feature.
+
+config XIAOZHI_FOUNDATION_P26_WEBSOCKET_HEAP_TRACE
+    bool "Trace retained WebSocket allocations during attribution"
+    depends on XIAOZHI_FOUNDATION_P26_RESOURCE_ATTRIBUTION_MATRIX
+    depends on HEAP_TRACING_STANDALONE
+    default n
+    help
+        Record a bounded standalone leak trace around attribution Stage D,
+        including its long-settle sample. This is a source-attribution aid,
+        not an acceptance workaround. It increases diagnostic image/RAM cost
+        and remains disabled unless standalone heap tracing is also selected.
+
+endmenu

@@ -2,7 +2,7 @@
 
 **Status:** Approved syllabus / Not started  
 **Target:** ESP32-S3 N16R8, ESP-IDF 6.0.1  
-**Dependency baseline:** `espressif/esp_xiaozhi: "0.1.1"`  
+**Resolved dependency:** `espressif/esp_xiaozhi: 0.1.2` (manifest constraint: `^0.1.1`)
 **Voice MVP closure:** End of Sprint 15  
 **Advanced voice closure:** End of Sprint 18
 
@@ -413,38 +413,96 @@ SD card
 
 ## Phase 12.4 — Side Effects And Storage
 
-- [ ] Audit and initially disable Xiaozhi-owned system-time sync unless assigned.
-- [ ] Review timeout, response size, UDP buffers, task stack/core/allocation and
+- [x] 12.4.2: Audit and disable Xiaozhi-owned system-time sync unless assigned.
+- [x] 12.4.2: Review timeout, response size, UDP buffers, task stack/core/allocation and
       hello-message Kconfig.
-- [ ] Route NVS through an internal-stack service where PSRAM stacks would enter
-      cache-off storage paths.
+- [x] 12.4.3: Audit NVS/cache-off execution paths and require every Xiaozhi
+      lifecycle caller that may access NVS to use an internal-stack task.
+- [x] 12.4.3: Keep the component NVS-operations service unregistered: static
+      internal Xiaozhi audio stack removes the identified PSRAM-stack path.
 
 ## Phase 12.5 — Transport Decision
 
 ```text
 get_info()
-    -> WebSocket only: validate WebSocket
-    -> MQTT only: validate MQTT + UDP
-    -> both: validate component-preferred path, then fallback
+    -> WebSocket available: validate WebSocket only
+    -> WebSocket unavailable: report unavailable; no MQTT fallback
 ```
 
+- [x] P1/P2-C: Select and validate only the WebSocket control lifecycle on
+      target hardware; MQTT+UDP is closed/not selected.
+- [x] P2-D: Audit the resolved 0.1.2 public chat API. It has no arbitrary
+      typed-text TX API; `CHAT_TEXT` receive callback plumbing uses bounded
+      copied storage for USER and ASSISTANT roles.
+- [x] P2.1: Add a temporary copied-status UI bridge and dedicated `XIAOZHI`
+      screen for `DISCONNECTED`, `READY`, `LISTENING`, `PROCESSING`,
+      `RESPONDING`, and `ERROR`. The existing GUI task owns the 100 ms local
+      duration timer and cached transcript rendering; build is verified while
+      LCD/P2-F interaction acceptance remains pending (P2-E serial lifecycle
+      is accepted separately).
+- [x] Phase 12 validation master feature gate: implemented with default `n`.
+      It guards temporary ONLINE validation routing, Xiaozhi UI observer
+      registration, and automatic `XIAOZHI` screen routing; P2-F sub-options
+      depend on it. **IMPLEMENTED / BUILD VERIFIED.**
+- [x] Feature-off compile regression: **BUILD VERIFIED.** With the master gate
+      disabled, application composition makes no automatic Xiaozhi validation
+      request, service probe, observer registration, or screen route.
+- [x] Feature-off target-hardware behavior: **HARDWARE PASS 2026-08-25.** A
+      clean gate-off image booted normal network/UI/cloud/audio services and
+      Firebase for 120 seconds with no Xiaozhi worker, screen route,
+      lifecycle/fault/P2 marker, panic, assert, or watchdog.
+- [x] P2-E hardware acceptance: WebSocket `CONNECTED -> open -> observed
+      OPENED -> bounded hold -> close -> observed CLOSED -> stop -> deinit ->
+      MCP destroy`, stable cleanup, and `P2-E RESULT: PASS` captured on target.
+- [ ] P2-F hardware acceptance: validation-only, fixed 16 kHz mono 60 ms Opus
+      fixture infrastructure streams one embedded packet per send and records
+      bounded USER/ASSISTANT text plus audio callback evidence. A lawful local
+      fixture and target serial evidence are still required; do not add a
+      private/raw typed-text path.
 - [ ] Compare connection/reconnect, sockets, heap, CPU, audio loss, cleanup, and
       network failures.
-- [ ] Record the selected MVP transport in an ADR.
+- [x] Record the selected MVP transport in an ADR.
 
-## Phase 12.6 — Lifecycle Matrix
+## Phase 12.6 — Fault Injection + Recovery + Cleanup Validation
 
-- [ ] Validate get_info -> init -> start -> connected -> stop -> deinit.
-- [ ] Run at least 100 lifecycle cycles.
-- [ ] Test Wi-Fi loss, repeated/invalid calls, partial failure, server goodbye,
-      malformed response, and allocation failure.
+- [x] Default-off repeated WebSocket lifecycle matrix: fresh context,
+      EventGroup, handler, chat, MCP, generation, counters, and resource
+      snapshots per cycle. **BUILD VERIFIED / prior target progression 1, 3,
+      10, 20, and 100 recorded.**
+- [x] Default-off controlled fault/recovery selector at safe project-owned
+      continuation boundaries after get-info, MCP, EventGroup, chat init,
+      handler registration, chat start, or audio-channel open. It preserves the
+      first primary error, records cleanup errors separately, uses shared
+      ordered cleanup, then runs a fresh P2-E recovery cycle. **BUILD VERIFIED.**
+- [x] First target controlled fault `AFTER_CHAT_INIT`: expected injection,
+      cleanup, fresh recovery, and aggregate fault summary passed; no captured
+      panic/watchdog/assert/stale-callback or raw payload-tag marker.
+- [x] Root-cause/resource acceptance: **HARDWARE PASS 2026-08-25.** The old
+      sample was a contaminated pre-manager baseline. A-E attribution also
+      found one-time fragmentation and a repeated ESP-IDF 6.0.1 cross-signed
+      certificate-bundle leak. A source-hash-gated upstream-compatible build
+      backport removed the Stage-D slope without disabling Firebase-required
+      cross-signed verification. Post-fix 1/3/10/20/100 runs passed; cycle 100
+      retained the 81920-byte largest-block plateau and ended +6392 Internal
+      bytes versus the first settled sample.
+- [x] Full controlled fault/recovery acceptance: `ALL_SUPPORTED` passed all
+      seven safe boundaries with seven expected failures, seven cleanups,
+      seven fresh P2-E recoveries, zero unexpected results, and stable t+5000
+      resources.
+- [ ] Real Wi-Fi/AP loss, Internet/DNS/TLS/service loss, server goodbye, remote
+      timeout, malformed response, and allocation-pressure validation: source
+      audited or target-hardware pending. Do not simulate them with Wi-Fi code,
+      private transport calls, raw protocol messages, or unsafe lifecycle use.
+- [ ] P2-F fault coverage: pending a valid lawful fixture and prior P2-F HIL
+      proof; no fixture/audio workaround is authorized here.
 
 ## Acceptance
 
 - [ ] Pinned component builds on ESP-IDF 6.0.1 and target hardware.
 - [ ] Activation, storage, transport, and side effects are documented.
-- [ ] No lifecycle leak trend or duplicate resources.
-- [ ] Feature-off restores pre-Xiaozhi behavior.
+- [x] No post-warm-up lifecycle leak/fragmentation trend or duplicate
+      resources across 100 target cycles after the proven upstream fix.
+- [x] Feature-off restores pre-Xiaozhi behavior on target hardware.
 
 ---
 

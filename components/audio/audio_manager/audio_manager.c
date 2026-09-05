@@ -12,6 +12,8 @@
 /* Includes ----------------------------------------------------------------- */
 #include "audio_manager.h"
 #include "audio_dsp.h"
+#include "audio_manager_pcm_stream.h"
+#include "audio_manager_pcm_stream_core.h"
 #include "audio_wav.h"
 #include "audio_wav_prefetch.h"
 #include "sd_card_manager.h"
@@ -49,6 +51,14 @@
 #define AUDIO_MANAGER_TASK_STOP_TIMEOUT_MS             5000U
 #define AUDIO_MANAGER_WAV_PREFETCH_WAIT_POLL_MS          100U
 #define AUDIO_MANAGER_WAV_PREFETCH_READER_PRIORITY         5U
+#define AUDIO_MANAGER_PCM_STREAM_RING_SAMPLES \
+    (16U * AUDIO_MANAGER_PCM_STREAM_MAX_WRITE_SAMPLES)
+#define AUDIO_MANAGER_PCM_STREAM_PREFILL_SAMPLES \
+    (4U * AUDIO_MANAGER_PCM_STREAM_MAX_WRITE_SAMPLES)
+#define AUDIO_MANAGER_PCM_STREAM_INITIAL_WAIT_MS        5000U
+#define AUDIO_MANAGER_PCM_STREAM_STARVATION_WAIT_MS      400U
+#define AUDIO_MANAGER_PCM_STREAM_WAIT_POLL_MS             20U
+#define AUDIO_MANAGER_PCM_STREAM_PRE_PLAYBACK_SILENCE_BLOCKS 4U
 #define AUDIO_MANAGER_WAV_PREFETCH_BYTES_PER_SECOND \
     (AUDIO_MANAGER_SAMPLE_RATE_HZ * sizeof(int16_t))
 #define AUDIO_MANAGER_WAV_PREFETCH_SLOT_BYTES \
@@ -109,6 +119,9 @@ _Static_assert(AUDIO_MANAGER_MANUAL_RECORD_MAX_SECONDS > 0U,
                "Manual recording duration must be positive");
 _Static_assert((AUDIO_MANAGER_WAV_PREFETCH_SLOT_BYTES % sizeof(int16_t)) == 0U,
                "WAV prefetch slots must contain complete PCM16 samples");
+_Static_assert(AUDIO_MANAGER_PCM_STREAM_PREFILL_SAMPLES <=
+                   AUDIO_MANAGER_PCM_STREAM_RING_SAMPLES,
+               "PCM stream prefill must fit its bounded ring");
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "AUDIO_MANAGER";
@@ -213,12 +226,14 @@ typedef enum
     AUDIO_PLAYBACK_SOURCE_NONE = 0,
     AUDIO_PLAYBACK_SOURCE_RECORDED_PCM24,
     AUDIO_PLAYBACK_SOURCE_WAV_PCM16,
+    AUDIO_PLAYBACK_SOURCE_PCM16_STREAM,
 } audio_playback_source_kind_t;
 
 typedef struct
 {
     audio_playback_source_kind_t kind;
     size_t recorded_sample_count;
+    uint32_t stream_generation;
     audio_wav_prefetch_t wav_prefetch;
 } audio_playback_source_t;
 
@@ -228,6 +243,7 @@ typedef enum
     AUDIO_MANAGER_COMMAND_RECORD_MANUAL,
     AUDIO_MANAGER_COMMAND_PLAY_RECORDED,
     AUDIO_MANAGER_COMMAND_PLAY_WAV,
+    AUDIO_MANAGER_COMMAND_PLAY_PCM16_STREAM,
     AUDIO_MANAGER_COMMAND_SHUTDOWN,
 } audio_manager_command_kind_t;
 
@@ -235,6 +251,7 @@ typedef struct
 {
     audio_manager_command_kind_t kind;
     char wav_path[AUDIO_MANAGER_WAV_PATH_MAX_BYTES];
+    uint32_t stream_generation;
 } audio_manager_command_t;
 
 typedef enum
@@ -244,6 +261,7 @@ typedef enum
     AUDIO_MANAGER_OPERATION_RECORD_MANUAL,
     AUDIO_MANAGER_OPERATION_RECORDED_PLAYBACK,
     AUDIO_MANAGER_OPERATION_WAV,
+    AUDIO_MANAGER_OPERATION_PCM16_STREAM,
     AUDIO_MANAGER_OPERATION_STABILITY,
 } audio_manager_operation_t;
 
@@ -283,6 +301,13 @@ typedef struct
     int32_t *recording_pcm24;
     audio_dsp_workspace_t *dsp_workspace;
 
+    /* The downlink producer copies bounded PCM16 packets here. The manager
+     * task is the only consumer and the only I2S/TX owner. */
+    int16_t *pcm_stream_storage;
+    audio_manager_pcm_stream_core_t pcm_stream;
+    SemaphoreHandle_t pcm_stream_mutex;
+    bool pcm_stream_tx_started;
+
     bool recorded_audio_valid;
     size_t recorded_sample_count;
 
@@ -312,6 +337,9 @@ DMA_ATTR static int32_t s_rx_block[
     AUDIO_MANAGER_FRAMES_PER_BLOCK * AUDIO_MANAGER_SLOT_COUNT];
 DMA_ATTR static int16_t s_tx_block[
     AUDIO_MANAGER_FRAMES_PER_BLOCK * AUDIO_MANAGER_SLOT_COUNT];
+/* Mono ingress is copied out of the PSRAM ring before it is mapped into the
+ * DMA-capable stereo TX block. */
+DMA_ATTR static int16_t s_pcm_stream_mono_block[AUDIO_MANAGER_FRAMES_PER_BLOCK];
 DMA_ATTR static const int16_t s_silence_block[
     AUDIO_MANAGER_FRAMES_PER_BLOCK * AUDIO_MANAGER_SLOT_COUNT] = {0};
 
@@ -335,6 +363,7 @@ static bool audio_manager_tx_overflow_callback(
     void *user_context);
 
 static bool audio_manager_take_status_mutex(const char *operation);
+static bool audio_manager_take_pcm_stream_mutex(const char *operation);
 static void audio_manager_reset_diagnostics(void);
 static void audio_manager_snapshot_diagnostics(
     audio_manager_diagnostics_t *diagnostics);
@@ -406,6 +435,9 @@ static esp_err_t play_wav_stream(
     audio_wav_prefetch_t *prefetch,
     audio_wav_playback_metrics_t *metrics,
     bool *cancelled);
+static esp_err_t play_pcm16_stream(
+    uint32_t generation,
+    bool *cancelled);
 static esp_err_t audio_manager_copy_prefetch_metrics(
     audio_wav_prefetch_t *prefetch,
     audio_wav_playback_metrics_t *metrics);
@@ -430,12 +462,15 @@ static esp_err_t playback_once(
 static esp_err_t audio_manager_select_recording_playback_source(
     size_t sample_count);
 static esp_err_t audio_manager_select_wav_playback_source(const char *path);
+static esp_err_t audio_manager_select_pcm_stream_playback_source(
+    uint32_t generation);
 static esp_err_t audio_manager_release_playback_source(void);
 static esp_err_t force_cycle_cleanup(void);
 static esp_err_t run_cycle(audio_cycle_metrics_t *metrics);
 static void audio_manager_handle_record_command(bool manual);
 static void audio_manager_handle_recorded_playback_command(void);
 static void audio_manager_handle_wav_command(const char *path);
+static void audio_manager_handle_pcm_stream_command(uint32_t generation);
 static void audio_manager_run_stability_iteration(void);
 static bool audio_manager_stability_mode_enabled(void);
 static bool audio_manager_mixed_stress_mode_enabled(void);
@@ -477,6 +512,265 @@ static bool audio_manager_take_status_mutex(const char *operation)
         "Status mutex timeout while %s",
         (operation != NULL) ? operation : "updating diagnostics");
     return false;
+}
+
+static bool audio_manager_take_pcm_stream_mutex(const char *operation)
+{
+    if (s_runtime.pcm_stream_mutex == NULL)
+    {
+        return false;
+    }
+
+    if (xSemaphoreTake(
+            s_runtime.pcm_stream_mutex,
+            pdMS_TO_TICKS(AUDIO_MANAGER_MUTEX_TIMEOUT_MS)) == pdTRUE)
+    {
+        return true;
+    }
+
+    ESP_LOGE(
+        TAG,
+        "PCM stream mutex timeout while %s",
+        (operation != NULL) ? operation : "updating stream state");
+    return false;
+}
+
+static void audio_manager_pcm_stream_notify_task(void)
+{
+    const TaskHandle_t task = s_runtime.task_handle;
+    if (task != NULL)
+    {
+        xTaskNotifyGive(task);
+    }
+}
+
+static void audio_manager_pcm_stream_close_from_owner(uint32_t generation)
+{
+    if (!audio_manager_take_pcm_stream_mutex("closing PCM stream"))
+    {
+        return;
+    }
+
+    if ((s_runtime.pcm_stream.generation == generation) &&
+        s_runtime.pcm_stream.active)
+    {
+        (void)audio_manager_pcm_stream_core_close(
+            &s_runtime.pcm_stream,
+            generation);
+    }
+    s_runtime.pcm_stream_tx_started = false;
+    xSemaphoreGive(s_runtime.pcm_stream_mutex);
+}
+
+esp_err_t audio_manager_pcm_stream_prepare(uint32_t generation)
+{
+    if ((generation == 0U) || !s_runtime.initialized ||
+        (s_runtime.pcm_stream_mutex == NULL))
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!audio_manager_take_pcm_stream_mutex("preparing PCM stream"))
+    {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    if (s_runtime.pcm_stream.active)
+    {
+        xSemaphoreGive(s_runtime.pcm_stream_mutex);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const esp_err_t result = audio_manager_pcm_stream_core_prepare(
+        &s_runtime.pcm_stream,
+        generation);
+    s_runtime.pcm_stream_tx_started = false;
+    xSemaphoreGive(s_runtime.pcm_stream_mutex);
+    return result;
+}
+
+esp_err_t audio_manager_pcm_stream_start(uint32_t generation)
+{
+    if ((generation == 0U) || !s_runtime.initialized ||
+        (s_runtime.status_mutex == NULL) ||
+        (s_runtime.command_queue == NULL))
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (audio_manager_stability_mode_enabled())
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!audio_manager_take_pcm_stream_mutex("starting PCM stream"))
+    {
+        return ESP_ERR_TIMEOUT;
+    }
+    const bool prepared = s_runtime.pcm_stream.active &&
+                          !s_runtime.pcm_stream.aborted &&
+                          (s_runtime.pcm_stream.generation == generation);
+    xSemaphoreGive(s_runtime.pcm_stream_mutex);
+    if (!prepared)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!audio_manager_take_status_mutex("queueing PCM stream playback"))
+    {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    bool accepted = false;
+    portENTER_CRITICAL(&s_control_lock);
+    if (s_control.task_running &&
+        !s_control.shutdown_requested &&
+        (s_control.operation == AUDIO_MANAGER_OPERATION_NONE) &&
+        (s_runtime.status.state == AUDIO_MANAGER_STATE_IDLE))
+    {
+        s_control.operation = AUDIO_MANAGER_OPERATION_PCM16_STREAM;
+        s_control.cancel_requested = false;
+        s_control.record_stop_requested = false;
+        accepted = true;
+    }
+    portEXIT_CRITICAL(&s_control_lock);
+
+    if (!accepted)
+    {
+        xSemaphoreGive(s_runtime.status_mutex);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const audio_manager_command_t command = {
+        .kind = AUDIO_MANAGER_COMMAND_PLAY_PCM16_STREAM,
+        .stream_generation = generation,
+    };
+    if (xQueueSend(s_runtime.command_queue, &command, 0U) != pdTRUE)
+    {
+        audio_manager_finish_operation();
+        xSemaphoreGive(s_runtime.status_mutex);
+        return ESP_ERR_TIMEOUT;
+    }
+
+    xSemaphoreGive(s_runtime.status_mutex);
+    audio_manager_pcm_stream_notify_task();
+    return ESP_OK;
+}
+
+esp_err_t audio_manager_pcm_stream_write(
+    uint32_t generation,
+    const int16_t *samples,
+    size_t sample_count)
+{
+    if ((generation == 0U) || (samples == NULL) || (sample_count == 0U) ||
+        !s_runtime.initialized)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!audio_manager_take_pcm_stream_mutex("writing PCM stream"))
+    {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    const esp_err_t result = audio_manager_pcm_stream_core_write(
+        &s_runtime.pcm_stream,
+        generation,
+        samples,
+        sample_count);
+    xSemaphoreGive(s_runtime.pcm_stream_mutex);
+    if (result == ESP_OK)
+    {
+        audio_manager_pcm_stream_notify_task();
+    }
+    return result;
+}
+
+esp_err_t audio_manager_pcm_stream_finish(uint32_t generation)
+{
+    if ((generation == 0U) || !s_runtime.initialized)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!audio_manager_take_pcm_stream_mutex("finishing PCM stream"))
+    {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    const esp_err_t result = audio_manager_pcm_stream_core_finish(
+        &s_runtime.pcm_stream,
+        generation);
+    xSemaphoreGive(s_runtime.pcm_stream_mutex);
+    if (result == ESP_OK)
+    {
+        audio_manager_pcm_stream_notify_task();
+    }
+    return result;
+}
+
+esp_err_t audio_manager_pcm_stream_abort(uint32_t generation)
+{
+    if ((generation == 0U) || !s_runtime.initialized)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!audio_manager_take_pcm_stream_mutex("aborting PCM stream"))
+    {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    esp_err_t result = audio_manager_pcm_stream_core_abort(
+        &s_runtime.pcm_stream,
+        generation);
+    if (result == ESP_OK)
+    {
+        result = audio_manager_pcm_stream_core_close(
+            &s_runtime.pcm_stream,
+            generation);
+    }
+    s_runtime.pcm_stream_tx_started = false;
+    xSemaphoreGive(s_runtime.pcm_stream_mutex);
+    if (result == ESP_OK)
+    {
+        audio_manager_pcm_stream_notify_task();
+    }
+    return result;
+}
+
+esp_err_t audio_manager_pcm_stream_get_status(
+    uint32_t generation,
+    audio_manager_pcm_stream_status_t *status)
+{
+    if ((generation == 0U) || (status == NULL) || !s_runtime.initialized)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!audio_manager_take_pcm_stream_mutex("reading PCM stream status"))
+    {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    audio_manager_pcm_stream_core_t snapshot = {0};
+    const esp_err_t result = audio_manager_pcm_stream_core_get(
+        &s_runtime.pcm_stream,
+        generation,
+        &snapshot);
+    if (result == ESP_OK)
+    {
+        *status = (audio_manager_pcm_stream_status_t) {
+            .active = snapshot.active,
+            .ended = snapshot.ended,
+            .aborted = snapshot.aborted,
+            .tx_started = s_runtime.pcm_stream_tx_started,
+            .generation = snapshot.generation,
+            .queued_samples = snapshot.queued_samples,
+            .accepted_samples = snapshot.accepted_samples,
+            .played_samples = snapshot.consumed_samples,
+            .high_water_samples = snapshot.high_water_samples,
+            .full_count = snapshot.full_count,
+            .starvation_count = snapshot.starvation_count,
+        };
+    }
+    xSemaphoreGive(s_runtime.pcm_stream_mutex);
+    return result;
 }
 
 static void audio_manager_reset_diagnostics(void)
@@ -1877,6 +2171,210 @@ static esp_err_t play_wav_stream(
 }
 
 /**
+ * @brief Consume the manager-owned PCM16 ingress ring through the proven TX
+ *        conversion path.
+ *
+ * The producer never touches I2S: it only wakes this task after a bounded
+ * copy. A short prefill absorbs normal WebSocket/Opus scheduling jitter. If
+ * ingress later runs dry before EOS, fail rather than silently declaring a
+ * complete response after an audible gap.
+ */
+static esp_err_t play_pcm16_stream(
+    uint32_t generation,
+    bool *cancelled)
+{
+    if ((generation == 0U) || (cancelled == NULL))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *cancelled = false;
+    uint32_t initial_waited_ms = 0U;
+    for (;;)
+    {
+        if (audio_manager_cancel_is_requested())
+        {
+            *cancelled = true;
+            return ESP_OK;
+        }
+
+        audio_manager_pcm_stream_status_t status = {0};
+        const esp_err_t status_result = audio_manager_pcm_stream_get_status(
+            generation,
+            &status);
+        if (status_result != ESP_OK)
+        {
+            return status_result;
+        }
+        if (status.aborted || !status.active)
+        {
+            *cancelled = true;
+            return ESP_OK;
+        }
+        if (status.queued_samples >= AUDIO_MANAGER_PCM_STREAM_PREFILL_SAMPLES ||
+            (status.ended && (status.queued_samples > 0U)))
+        {
+            break;
+        }
+        if (status.ended)
+        {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        if (initial_waited_ms >= AUDIO_MANAGER_PCM_STREAM_INITIAL_WAIT_MS)
+        {
+            ESP_LOGE(TAG,
+                     "PCM stream initial prefill timed out generation=%u",
+                     (unsigned)generation);
+            return ESP_ERR_TIMEOUT;
+        }
+        (void)ulTaskNotifyTake(
+            pdTRUE,
+            pdMS_TO_TICKS(AUDIO_MANAGER_PCM_STREAM_WAIT_POLL_MS));
+        initial_waited_ms += AUDIO_MANAGER_PCM_STREAM_WAIT_POLL_MS;
+    }
+
+    ESP_LOGI(TAG,
+             "PCM_STREAM START generation=%u prefill=%u samples ring=%u samples",
+             (unsigned)generation,
+             (unsigned)AUDIO_MANAGER_PCM_STREAM_PREFILL_SAMPLES,
+             (unsigned)AUDIO_MANAGER_PCM_STREAM_RING_SAMPLES);
+
+    esp_err_t result = start_i2s_tx();
+    bool tx_started = (result == ESP_OK);
+    if (tx_started && audio_manager_take_pcm_stream_mutex("marking PCM TX start"))
+    {
+        s_runtime.pcm_stream_tx_started = true;
+        xSemaphoreGive(s_runtime.pcm_stream_mutex);
+    }
+
+    if ((result == ESP_OK) && !*cancelled)
+    {
+        result = write_silence_blocks(
+            AUDIO_MANAGER_PCM_STREAM_PRE_PLAYBACK_SILENCE_BLOCKS,
+            cancelled);
+    }
+    if ((result == ESP_OK) && !*cancelled)
+    {
+        audio_manager_set_state(AUDIO_MANAGER_STATE_PLAYBACK);
+    }
+
+    uint32_t starvation_waited_ms = 0U;
+    while ((result == ESP_OK) && !*cancelled)
+    {
+        if (audio_manager_cancel_is_requested())
+        {
+            *cancelled = true;
+            break;
+        }
+
+        size_t samples_read = 0U;
+        bool ended = false;
+        bool aborted = false;
+        bool active = false;
+        if (!audio_manager_take_pcm_stream_mutex("reading PCM stream"))
+        {
+            result = ESP_ERR_TIMEOUT;
+            break;
+        }
+
+        result = audio_manager_pcm_stream_core_read(
+            &s_runtime.pcm_stream,
+            generation,
+            s_pcm_stream_mono_block,
+            AUDIO_MANAGER_FRAMES_PER_BLOCK,
+            &samples_read);
+        ended = s_runtime.pcm_stream.ended;
+        aborted = s_runtime.pcm_stream.aborted;
+        active = s_runtime.pcm_stream.active;
+        if (result == ESP_ERR_NOT_FOUND && active && !ended && !aborted)
+        {
+            ++s_runtime.pcm_stream.starvation_count;
+        }
+        xSemaphoreGive(s_runtime.pcm_stream_mutex);
+
+        if (result == ESP_ERR_NOT_FOUND)
+        {
+            if (aborted || !active)
+            {
+                *cancelled = true;
+                result = ESP_OK;
+                break;
+            }
+            if (ended)
+            {
+                result = ESP_OK;
+                break;
+            }
+            if (starvation_waited_ms >=
+                AUDIO_MANAGER_PCM_STREAM_STARVATION_WAIT_MS)
+            {
+                ESP_LOGE(TAG,
+                         "PCM stream starved generation=%u waited=%ums",
+                         (unsigned)generation,
+                         (unsigned)starvation_waited_ms);
+                result = ESP_ERR_TIMEOUT;
+                break;
+            }
+            (void)ulTaskNotifyTake(
+                pdTRUE,
+                pdMS_TO_TICKS(AUDIO_MANAGER_PCM_STREAM_WAIT_POLL_MS));
+            starvation_waited_ms += AUDIO_MANAGER_PCM_STREAM_WAIT_POLL_MS;
+            result = ESP_OK;
+            continue;
+        }
+
+        if (result != ESP_OK)
+        {
+            if (aborted || !active)
+            {
+                *cancelled = true;
+                result = ESP_OK;
+            }
+            break;
+        }
+
+        starvation_waited_ms = 0U;
+        for (size_t frame = 0U; frame < samples_read; ++frame)
+        {
+            const int16_t fixed_scaled_sample =
+                audio_wav_pcm16_scale_full_range_to_peak(
+                    s_pcm_stream_mono_block[frame],
+                    AUDIO_DSP_OUTPUT_PEAK_CEILING_PCM16);
+            const int16_t mono_sample = apply_wav_volume_percent(
+                fixed_scaled_sample);
+            const size_t slot = frame * AUDIO_MANAGER_SLOT_COUNT;
+            s_tx_block[slot] = mono_sample;
+            s_tx_block[slot + 1U] = mono_sample;
+        }
+
+        result = write_tx_frames(samples_read);
+    }
+
+    if ((result == ESP_OK) && !*cancelled)
+    {
+        result = write_silence_blocks(
+            AUDIO_MANAGER_PCM_STREAM_PRE_PLAYBACK_SILENCE_BLOCKS,
+            cancelled);
+    }
+
+    if (tx_started)
+    {
+        const esp_err_t stop_result = stop_i2s_tx();
+        if ((result == ESP_OK) && (stop_result != ESP_OK))
+        {
+            result = stop_result;
+        }
+    }
+
+    if (audio_manager_take_pcm_stream_mutex("marking PCM TX stop"))
+    {
+        s_runtime.pcm_stream_tx_started = false;
+        xSemaphoreGive(s_runtime.pcm_stream_mutex);
+    }
+    return result;
+}
+
+/**
  * @brief Join the reader, then copy its final metrics before source teardown.
  *
  * Retrying a bounded join is deliberate: freeing PSRAM or closing a FILE
@@ -2242,6 +2740,13 @@ static esp_err_t playback_once(
                 &metrics->wav,
                 cancelled);
 
+        case AUDIO_PLAYBACK_SOURCE_PCM16_STREAM:
+            if (source->stream_generation == 0U)
+            {
+                return ESP_ERR_INVALID_ARG;
+            }
+            return play_pcm16_stream(source->stream_generation, cancelled);
+
         default:
             return ESP_ERR_INVALID_ARG;
     }
@@ -2353,6 +2858,32 @@ static esp_err_t audio_manager_select_wav_playback_source(const char *path)
     return ESP_OK;
 }
 
+static esp_err_t audio_manager_select_pcm_stream_playback_source(
+    uint32_t generation)
+{
+    if (generation == 0U)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_runtime.playback_source.kind != AUDIO_PLAYBACK_SOURCE_NONE)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    audio_manager_pcm_stream_status_t status = {0};
+    const esp_err_t result = audio_manager_pcm_stream_get_status(
+        generation,
+        &status);
+    if ((result != ESP_OK) || !status.active || status.aborted)
+    {
+        return (result == ESP_OK) ? ESP_ERR_INVALID_STATE : result;
+    }
+
+    s_runtime.playback_source.kind = AUDIO_PLAYBACK_SOURCE_PCM16_STREAM;
+    s_runtime.playback_source.stream_generation = generation;
+    return ESP_OK;
+}
+
 static esp_err_t audio_manager_release_playback_source(void)
 {
     esp_err_t result = ESP_OK;
@@ -2386,6 +2917,7 @@ static esp_err_t audio_manager_release_playback_source(void)
 
     s_runtime.playback_source.kind = AUDIO_PLAYBACK_SOURCE_NONE;
     s_runtime.playback_source.recorded_sample_count = 0U;
+    s_runtime.playback_source.stream_generation = 0U;
     return result;
 }
 
@@ -3189,6 +3721,141 @@ static void audio_manager_handle_wav_command(const char *path)
     }
 }
 
+static void audio_manager_handle_pcm_stream_command(uint32_t generation)
+{
+    ESP_LOGI(TAG,
+             "========== PCM16 STREAM PLAYBACK generation=%u ==========",
+             (unsigned)generation);
+
+    if (audio_manager_take_status_mutex("starting PCM stream playback"))
+    {
+        ++s_runtime.status.pcm_stream_playback_started;
+        xSemaphoreGive(s_runtime.status_mutex);
+    }
+
+    bool cancelled = audio_manager_cancel_is_requested();
+    esp_err_t result = ESP_OK;
+    audio_manager_pcm_stream_status_t before = {0};
+    if (!cancelled)
+    {
+        result = audio_manager_pcm_stream_get_status(generation, &before);
+        if ((result == ESP_OK) && (before.aborted || !before.active))
+        {
+            cancelled = true;
+        }
+    }
+
+    if ((result == ESP_OK) && !cancelled)
+    {
+        result = audio_manager_select_pcm_stream_playback_source(generation);
+    }
+    if ((result == ESP_OK) && !cancelled)
+    {
+        audio_cycle_metrics_t metrics = {0};
+        result = playback_once(
+            &s_runtime.playback_source,
+            &metrics,
+            &cancelled);
+    }
+
+    const esp_err_t cleanup_result = force_cycle_cleanup();
+    if ((result == ESP_OK) && (cleanup_result != ESP_OK))
+    {
+        result = cleanup_result;
+        cancelled = false;
+    }
+    else if ((result != ESP_OK) && (cleanup_result != ESP_OK))
+    {
+        ESP_LOGE(TAG,
+                 "PCM stream cleanup also failed: %s",
+                 esp_err_to_name(cleanup_result));
+    }
+
+    audio_manager_pcm_stream_status_t terminal = {0};
+    const esp_err_t terminal_status_result = audio_manager_pcm_stream_get_status(
+        generation,
+        &terminal);
+    audio_manager_pcm_stream_close_from_owner(generation);
+
+    ESP_LOGI(TAG,
+             "PCM_STREAM_DIAG generation=%u result=%s cancelled=%s accepted=%llu played=%llu queued=%u high_water=%u full=%u starvation=%u",
+             (unsigned)generation,
+             esp_err_to_name(result),
+             cancelled ? "yes" : "no",
+             (unsigned long long)terminal.accepted_samples,
+             (unsigned long long)terminal.played_samples,
+             (unsigned)terminal.queued_samples,
+             (unsigned)terminal.high_water_samples,
+             (unsigned)terminal.full_count,
+             (unsigned)terminal.starvation_count);
+    if (terminal_status_result != ESP_OK)
+    {
+        ESP_LOGW(TAG,
+                 "PCM stream terminal diagnostics unavailable generation=%u error=%s",
+                 (unsigned)generation,
+                 esp_err_to_name(terminal_status_result));
+    }
+
+    bool status_updated = false;
+    if (audio_manager_take_status_mutex("storing PCM stream result"))
+    {
+        s_runtime.status.last_error = result;
+        if (result != ESP_OK)
+        {
+            ++s_runtime.status.pcm_stream_playback_failed;
+            s_runtime.status.state = AUDIO_MANAGER_STATE_ERROR;
+        }
+        else if (cancelled)
+        {
+            ++s_runtime.status.pcm_stream_playback_cancelled;
+            s_runtime.status.state = AUDIO_MANAGER_STATE_IDLE;
+        }
+        else
+        {
+            ++s_runtime.status.pcm_stream_playback_completed;
+            s_runtime.status.state = AUDIO_MANAGER_STATE_IDLE;
+        }
+        audio_manager_refresh_diagnostics_locked();
+        status_updated = true;
+        xSemaphoreGive(s_runtime.status_mutex);
+    }
+
+    audio_manager_finish_operation();
+
+    if (status_updated)
+    {
+        audio_manager_notify_status_changed();
+    }
+    else
+    {
+        audio_manager_set_state(AUDIO_MANAGER_STATE_IDLE);
+    }
+
+    if (result != ESP_OK)
+    {
+        ESP_LOGE(TAG,
+                 "PCM stream playback failed generation=%u: %s",
+                 (unsigned)generation,
+                 esp_err_to_name(result));
+        if (status_updated)
+        {
+            audio_manager_set_state(AUDIO_MANAGER_STATE_IDLE);
+        }
+    }
+    else if (cancelled)
+    {
+        ESP_LOGI(TAG,
+                 "PCM stream playback cancelled generation=%u",
+                 (unsigned)generation);
+    }
+    else
+    {
+        ESP_LOGI(TAG,
+                 "PCM stream playback completed generation=%u",
+                 (unsigned)generation);
+    }
+}
+
 /* Static Functions: Manager Task / Regression ----------------------------- */
 static void log_cycle_diagnostics(
     uint32_t cycle,
@@ -3480,6 +4147,11 @@ static void audio_manager_task(void *argument)
                     audio_manager_handle_wav_command(command.wav_path);
                     break;
 
+                case AUDIO_MANAGER_COMMAND_PLAY_PCM16_STREAM:
+                    audio_manager_handle_pcm_stream_command(
+                        command.stream_generation);
+                    break;
+
                 case AUDIO_MANAGER_COMMAND_SHUTDOWN:
                     task_done = true;
                     break;
@@ -3626,12 +4298,22 @@ esp_err_t audio_manager_init(const audio_manager_config_t *config)
         return ESP_ERR_NO_MEM;
     }
 
+    s_runtime.pcm_stream_mutex = xSemaphoreCreateMutex();
+    if (s_runtime.pcm_stream_mutex == NULL)
+    {
+        vSemaphoreDelete(s_runtime.status_mutex);
+        s_runtime.status_mutex = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+
     s_runtime.command_queue = xQueueCreate(
         AUDIO_MANAGER_COMMAND_QUEUE_LENGTH,
         sizeof(audio_manager_command_t));
     if (s_runtime.command_queue == NULL)
     {
+        vSemaphoreDelete(s_runtime.pcm_stream_mutex);
         vSemaphoreDelete(s_runtime.status_mutex);
+        s_runtime.pcm_stream_mutex = NULL;
         s_runtime.status_mutex = NULL;
         return ESP_ERR_NO_MEM;
     }
@@ -3640,8 +4322,10 @@ esp_err_t audio_manager_init(const audio_manager_config_t *config)
     if (s_runtime.lifecycle_events == NULL)
     {
         vQueueDelete(s_runtime.command_queue);
+        vSemaphoreDelete(s_runtime.pcm_stream_mutex);
         vSemaphoreDelete(s_runtime.status_mutex);
         s_runtime.command_queue = NULL;
+        s_runtime.pcm_stream_mutex = NULL;
         s_runtime.status_mutex = NULL;
         return ESP_ERR_NO_MEM;
     }
@@ -3651,9 +4335,11 @@ esp_err_t audio_manager_init(const audio_manager_config_t *config)
     {
         vEventGroupDelete(s_runtime.lifecycle_events);
         vQueueDelete(s_runtime.command_queue);
+        vSemaphoreDelete(s_runtime.pcm_stream_mutex);
         vSemaphoreDelete(s_runtime.status_mutex);
         s_runtime.lifecycle_events = NULL;
         s_runtime.command_queue = NULL;
+        s_runtime.pcm_stream_mutex = NULL;
         s_runtime.status_mutex = NULL;
         return result;
     }
@@ -3666,27 +4352,58 @@ esp_err_t audio_manager_init(const audio_manager_config_t *config)
     s_runtime.dsp_workspace = (audio_dsp_workspace_t *)heap_caps_malloc(
         sizeof(audio_dsp_workspace_t),
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    s_runtime.pcm_stream_storage = (int16_t *)heap_caps_malloc(
+        AUDIO_MANAGER_PCM_STREAM_RING_SAMPLES * sizeof(int16_t),
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
     if ((s_runtime.recording_pcm24 == NULL) ||
         (s_runtime.dsp_workspace == NULL) ||
+        (s_runtime.pcm_stream_storage == NULL) ||
         !esp_ptr_external_ram(s_runtime.recording_pcm24) ||
-        !esp_ptr_external_ram(s_runtime.dsp_workspace))
+        !esp_ptr_external_ram(s_runtime.dsp_workspace) ||
+        !esp_ptr_external_ram(s_runtime.pcm_stream_storage))
     {
         heap_caps_free(s_runtime.recording_pcm24);
         heap_caps_free(s_runtime.dsp_workspace);
+        heap_caps_free(s_runtime.pcm_stream_storage);
         s_runtime.recording_pcm24 = NULL;
         s_runtime.dsp_workspace = NULL;
+        s_runtime.pcm_stream_storage = NULL;
         vEventGroupDelete(s_runtime.lifecycle_events);
         vQueueDelete(s_runtime.command_queue);
+        vSemaphoreDelete(s_runtime.pcm_stream_mutex);
         vSemaphoreDelete(s_runtime.status_mutex);
         s_runtime.lifecycle_events = NULL;
         s_runtime.command_queue = NULL;
+        s_runtime.pcm_stream_mutex = NULL;
         s_runtime.status_mutex = NULL;
         return ESP_ERR_NO_MEM;
     }
 
     memset(s_runtime.recording_pcm24, 0, s_runtime.recording_bytes);
     audio_dsp_workspace_init(s_runtime.dsp_workspace);
+    result = audio_manager_pcm_stream_core_init(
+        &s_runtime.pcm_stream,
+        s_runtime.pcm_stream_storage,
+        AUDIO_MANAGER_PCM_STREAM_RING_SAMPLES);
+    if (result != ESP_OK)
+    {
+        heap_caps_free(s_runtime.recording_pcm24);
+        heap_caps_free(s_runtime.dsp_workspace);
+        heap_caps_free(s_runtime.pcm_stream_storage);
+        s_runtime.recording_pcm24 = NULL;
+        s_runtime.dsp_workspace = NULL;
+        s_runtime.pcm_stream_storage = NULL;
+        vEventGroupDelete(s_runtime.lifecycle_events);
+        vQueueDelete(s_runtime.command_queue);
+        vSemaphoreDelete(s_runtime.pcm_stream_mutex);
+        vSemaphoreDelete(s_runtime.status_mutex);
+        s_runtime.lifecycle_events = NULL;
+        s_runtime.command_queue = NULL;
+        s_runtime.pcm_stream_mutex = NULL;
+        s_runtime.status_mutex = NULL;
+        return result;
+    }
 
     audio_manager_reset_diagnostics();
     audio_manager_reset_control();
@@ -3732,6 +4449,14 @@ esp_err_t audio_manager_init(const audio_manager_config_t *config)
         (unsigned)AUDIO_MANAGER_WAV_PREFETCH_READER_PRIORITY);
     ESP_LOGI(
         TAG,
+        "PCM stream ring=%u samples=%uB prefill=%u samples=%ums",
+        (unsigned)AUDIO_MANAGER_PCM_STREAM_RING_SAMPLES,
+        (unsigned)(AUDIO_MANAGER_PCM_STREAM_RING_SAMPLES * sizeof(int16_t)),
+        (unsigned)AUDIO_MANAGER_PCM_STREAM_PREFILL_SAMPLES,
+        (unsigned)((AUDIO_MANAGER_PCM_STREAM_PREFILL_SAMPLES * 1000U) /
+                   AUDIO_MANAGER_SAMPLE_RATE_HZ));
+    ESP_LOGI(
+        TAG,
         "DSP HPF80x2 + LPF6kx2 + adaptive NS + 16x speaker conditioning + limiter");
     ESP_LOGI(TAG, "================================================");
 
@@ -3775,6 +4500,7 @@ esp_err_t audio_manager_start(void)
 {
     if (!s_runtime.initialized ||
         (s_runtime.status_mutex == NULL) ||
+        (s_runtime.pcm_stream_mutex == NULL) ||
         (s_runtime.command_queue == NULL) ||
         (s_runtime.lifecycle_events == NULL))
     {
@@ -4012,7 +4738,8 @@ esp_err_t audio_manager_stop_playback(void)
     portENTER_CRITICAL(&s_control_lock);
     if (s_control.task_running &&
         ((s_control.operation == AUDIO_MANAGER_OPERATION_WAV) ||
-         (s_control.operation == AUDIO_MANAGER_OPERATION_RECORDED_PLAYBACK)))
+         (s_control.operation == AUDIO_MANAGER_OPERATION_RECORDED_PLAYBACK) ||
+         (s_control.operation == AUDIO_MANAGER_OPERATION_PCM16_STREAM)))
     {
         s_control.cancel_requested = true;
         requested = true;
@@ -4176,8 +4903,10 @@ esp_err_t audio_manager_deinit(void)
 
     heap_caps_free(s_runtime.recording_pcm24);
     heap_caps_free(s_runtime.dsp_workspace);
+    heap_caps_free(s_runtime.pcm_stream_storage);
     s_runtime.recording_pcm24 = NULL;
     s_runtime.dsp_workspace = NULL;
+    s_runtime.pcm_stream_storage = NULL;
 
     if (s_runtime.command_queue != NULL)
     {
@@ -4195,6 +4924,12 @@ esp_err_t audio_manager_deinit(void)
     {
         vSemaphoreDelete(s_runtime.status_mutex);
         s_runtime.status_mutex = NULL;
+    }
+
+    if (s_runtime.pcm_stream_mutex != NULL)
+    {
+        vSemaphoreDelete(s_runtime.pcm_stream_mutex);
+        s_runtime.pcm_stream_mutex = NULL;
     }
 
     audio_manager_reset_control();
