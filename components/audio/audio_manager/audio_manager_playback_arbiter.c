@@ -62,13 +62,19 @@ static void clear_slot(playback_slot_t *slot)
     }
 }
 
+static bool slot_terminal_requested(const playback_slot_t *slot)
+{
+    return (slot != NULL) &&
+           (slot->cancel_requested || slot->preempt_requested ||
+            slot->failure_requested);
+}
+
 static audio_manager_playback_arbiter_state_t visible_state_locked(void)
 {
     if (!s_current_valid) {
         return AUDIO_MANAGER_PLAYBACK_ARBITER_IDLE;
     }
-    if (s_current.cancel_requested || s_current.preempt_requested ||
-        s_current.failure_requested) {
+    if (slot_terminal_requested(&s_current)) {
         return AUDIO_MANAGER_PLAYBACK_ARBITER_PREEMPTING;
     }
     switch (s_current.stream.state) {
@@ -254,7 +260,12 @@ static esp_err_t submit_slot_locked(const playback_slot_t *incoming)
                 !s_pending_valid) {
                 s_pending = *incoming;
                 s_pending_valid = true;
-                s_current.preempt_requested = true;
+                /* Preserve the first terminal intent. A late preempt may queue
+                 * behind a request already cancelling/failing, but it must not
+                 * rewrite that request's terminal reason. */
+                if (!slot_terminal_requested(&s_current)) {
+                    s_current.preempt_requested = true;
+                }
                 ++s_status.accepted_count;
                 ++s_status.queued_count;
                 result = ESP_OK;
@@ -273,11 +284,16 @@ static esp_err_t submit_slot_locked(const playback_slot_t *incoming)
     return result;
 }
 
-static bool current_stream_is_closed_locked(void)
+static esp_err_t current_stream_is_closed_locked(bool *closed)
 {
+    if (closed == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *closed = false;
+
     if (!s_current_valid ||
         (s_current.source != PLAYBACK_SOURCE_PCM16_STREAM)) {
-        return false;
+        return ESP_OK;
     }
 
     audio_manager_pcm_stream_status_t manager_stream = {0};
@@ -285,14 +301,17 @@ static bool current_stream_is_closed_locked(void)
         s_current.request.request_id,
         &manager_stream);
     if (result != ESP_OK) {
-        return true;
+        /* A failed status read is UNKNOWN, not CLOSED. The caller may retry a
+         * transient timeout or explicitly fail a non-transient probe error. */
+        return result;
     }
     s_current.stream.pcm_samples_accepted = manager_stream.accepted_samples;
     s_current.stream.pcm_samples_played = manager_stream.played_samples;
     s_current.stream.ingress_queue_high_water = manager_stream.high_water_samples;
     s_current.stream.ingress_full_count = manager_stream.full_count;
     s_current.stream.starvation_count = manager_stream.starvation_count;
-    return !manager_stream.active;
+    *closed = !manager_stream.active;
+    return ESP_OK;
 }
 
 static void playback_arbiter_task(void *arg)
@@ -325,25 +344,45 @@ static void playback_arbiter_task(void *arg)
         bool do_abort = false;
         bool do_stop = false;
         bool do_start = false;
-        playback_slot_t action_slot = {0};
+        bool terminal_observed = false;
+        playback_slot_t terminal_slot = {0};
+        playback_slot_t start_slot = {0};
 
         if (take_lock()) {
             if (s_current_valid) {
                 update_stream_metrics_locked(&s_current);
-                const bool stream_closed = current_stream_is_closed_locked();
+
+                bool stream_closed = false;
+                esp_err_t stream_probe_result = ESP_OK;
+                if ((s_current.source == PLAYBACK_SOURCE_PCM16_STREAM) &&
+                    s_current.start_submitted) {
+                    stream_probe_result =
+                        current_stream_is_closed_locked(&stream_closed);
+                    if (stream_probe_result != ESP_OK) {
+                        sync_status_locked(
+                            visible_state_locked(),
+                            stream_probe_result);
+                        if ((stream_probe_result != ESP_ERR_TIMEOUT) &&
+                            !slot_terminal_requested(&s_current)) {
+                            s_current.failure_requested = true;
+                            s_current.requested_failure = stream_probe_result;
+                        }
+                    }
+                }
+
                 const bool terminal_requested =
-                    s_current.cancel_requested ||
-                    s_current.preempt_requested ||
-                    s_current.failure_requested;
+                    slot_terminal_requested(&s_current);
 
                 if (terminal_requested) {
-                    action_slot = s_current;
+                    terminal_observed = true;
+                    terminal_slot = s_current;
                     if (s_current.source == PLAYBACK_SOURCE_PCM16_STREAM) {
                         do_abort = true;
                     }
                     if (s_current.start_submitted) {
                         do_stop = true;
                         if ((s_current.source == PLAYBACK_SOURCE_PCM16_STREAM) &&
+                            (stream_probe_result == ESP_OK) &&
                             stream_closed &&
                             (manager.state != AUDIO_MANAGER_STATE_PLAYBACK)) {
                             finish_current_locked(ESP_OK);
@@ -352,8 +391,9 @@ static void playback_arbiter_task(void *arg)
                             finish_current_locked(ESP_OK);
                         }
                     } else {
-                        /* No manager command owns I2S yet. The action below
-                         * flushes any prepared PCM ring before the next turn. */
+                        /* No manager command owns I2S yet. Preserve the old
+                         * request in terminal_slot, finish/promote logically,
+                         * then flush the prepared PCM ring after unlocking. */
                         finish_current_locked(ESP_OK);
                     }
                 } else if (s_current.start_submitted) {
@@ -364,8 +404,9 @@ static void playback_arbiter_task(void *arg)
                                 : AUDIO_MANAGER_PLAYBACK_REQUEST_ACTIVE;
                     } else if (s_current.source == PLAYBACK_SOURCE_PCM16_STREAM) {
                         /* IDLE is legitimate while the manager waits for the
-                         * first bounded prefill; only a closed ring is terminal. */
-                        if (stream_closed) {
+                         * first bounded prefill; only a confirmed closed ring
+                         * is terminal. UNKNOWN status is retried/fails safely. */
+                        if ((stream_probe_result == ESP_OK) && stream_closed) {
                             finish_current_locked(manager.last_error);
                         }
                     } else if ((manager.state == AUDIO_MANAGER_STATE_IDLE) &&
@@ -375,12 +416,13 @@ static void playback_arbiter_task(void *arg)
                     }
                 }
 
-                if (s_current_valid && !s_current.start_submitted &&
-                    !s_current.cancel_requested &&
-                    !s_current.preempt_requested &&
-                    !s_current.failure_requested &&
+                /* Never start a newly-promoted request in the same arbiter
+                 * iteration that is still cleaning up the previous owner. */
+                if (!terminal_observed &&
+                    s_current_valid && !s_current.start_submitted &&
+                    !slot_terminal_requested(&s_current) &&
                     (manager.state == AUDIO_MANAGER_STATE_IDLE)) {
-                    action_slot = s_current;
+                    start_slot = s_current;
                     do_start = true;
                     s_current.stream.state =
                         AUDIO_MANAGER_PLAYBACK_REQUEST_STARTING;
@@ -402,8 +444,9 @@ static void playback_arbiter_task(void *arg)
         }
 
         if (do_abort &&
-            (action_slot.source == PLAYBACK_SOURCE_PCM16_STREAM)) {
-            (void)audio_manager_pcm_stream_abort(action_slot.request.request_id);
+            (terminal_slot.source == PLAYBACK_SOURCE_PCM16_STREAM)) {
+            (void)audio_manager_pcm_stream_abort(
+                terminal_slot.request.request_id);
         }
         if (do_stop) {
             const esp_err_t ret = audio_manager_stop_playback();
@@ -415,32 +458,37 @@ static void playback_arbiter_task(void *arg)
 
         if (do_start) {
             const esp_err_t ret =
-                (action_slot.source == PLAYBACK_SOURCE_PCM16_STREAM)
-                    ? audio_manager_pcm_stream_start(action_slot.request.request_id)
-                    : audio_manager_play_wav(action_slot.path);
+                (start_slot.source == PLAYBACK_SOURCE_PCM16_STREAM)
+                    ? audio_manager_pcm_stream_start(start_slot.request.request_id)
+                    : audio_manager_play_wav(start_slot.path);
             if (take_lock()) {
                 if (slot_has_request_id(&s_current,
                                         s_current_valid,
-                                        action_slot.request.request_id)) {
+                                        start_slot.request.request_id)) {
                     if (ret == ESP_OK) {
                         s_current.start_submitted = true;
                         s_current.stream.state =
                             AUDIO_MANAGER_PLAYBACK_REQUEST_STARTING;
                         ESP_LOGI(TAG,
                                  "accepted request=%u client=%s priority=%u source=%s",
-                                 (unsigned)action_slot.request.request_id,
+                                 (unsigned)start_slot.request.request_id,
                                  audio_manager_client_to_string(
-                                     action_slot.request.client),
-                                 (unsigned)action_slot.request.priority,
-                                 (action_slot.source == PLAYBACK_SOURCE_PCM16_STREAM)
+                                     start_slot.request.client),
+                                 (unsigned)start_slot.request.priority,
+                                 (start_slot.source == PLAYBACK_SOURCE_PCM16_STREAM)
                                      ? "pcm16_stream"
                                      : "wav");
                     } else if (ret == ESP_ERR_INVALID_STATE) {
                         /* A legacy caller may have won after the copied
-                         * status snapshot. Keep the request/ring and retry. */
-                        s_current.stream.state =
-                            AUDIO_MANAGER_PLAYBACK_REQUEST_PENDING;
-                    } else {
+                         * status snapshot. Keep the request/ring and retry,
+                         * unless a terminal intent arrived while start ran. */
+                        if (!slot_terminal_requested(&s_current)) {
+                            s_current.stream.state =
+                                AUDIO_MANAGER_PLAYBACK_REQUEST_PENDING;
+                        }
+                    } else if (!slot_terminal_requested(&s_current)) {
+                        /* First terminal intent wins. A late start error must
+                         * not overwrite a concurrent cancel/preempt. */
                         s_current.failure_requested = true;
                         s_current.requested_failure = ret;
                     }
@@ -608,9 +656,7 @@ esp_err_t audio_manager_playback_arbiter_write_pcm16(
     playback_slot_t *slot = NULL;
     const bool valid = request_is_stream_locked(request_id, &slot) &&
                        !slot->stream_finish_requested &&
-                       !slot->cancel_requested &&
-                       !slot->preempt_requested &&
-                       !slot->failure_requested;
+                       !slot_terminal_requested(slot);
     xSemaphoreGive(s_lock);
     if (!valid) {
         return ESP_ERR_INVALID_STATE;
@@ -641,8 +687,7 @@ esp_err_t audio_manager_playback_arbiter_finish_pcm16_stream(
     }
     playback_slot_t *slot = NULL;
     if (!request_is_stream_locked(request_id, &slot) ||
-        slot->stream_finish_requested || slot->cancel_requested ||
-        slot->preempt_requested || slot->failure_requested) {
+        slot->stream_finish_requested || slot_terminal_requested(slot)) {
         xSemaphoreGive(s_lock);
         return ESP_ERR_INVALID_STATE;
     }
@@ -685,11 +730,16 @@ static esp_err_t mark_stream_terminal_request(uint32_t request_id,
 
     if (slot_has_request_id(&s_current, s_current_valid, request_id) &&
         (s_current.source == PLAYBACK_SOURCE_PCM16_STREAM)) {
-        if (failed) {
-            s_current.failure_requested = true;
-            s_current.requested_failure = error;
-        } else {
-            s_current.cancel_requested = true;
+        /* Do not let a late TTS_STOP/error path overwrite a preemption (or
+         * vice versa). The first terminal intent observed under the arbiter
+         * lock owns the final request state. */
+        if (!slot_terminal_requested(&s_current)) {
+            if (failed) {
+                s_current.failure_requested = true;
+                s_current.requested_failure = error;
+            } else {
+                s_current.cancel_requested = true;
+            }
         }
         sync_status_locked(visible_state_locked(), ESP_OK);
         xSemaphoreGive(s_lock);
@@ -742,7 +792,9 @@ esp_err_t audio_manager_playback_arbiter_cancel(uint32_t request_id)
     if (slot_has_request_id(&s_current, s_current_valid, request_id)) {
         const bool stream =
             (s_current.source == PLAYBACK_SOURCE_PCM16_STREAM);
-        s_current.cancel_requested = true;
+        if (!slot_terminal_requested(&s_current)) {
+            s_current.cancel_requested = true;
+        }
         sync_status_locked(visible_state_locked(), ESP_OK);
         xSemaphoreGive(s_lock);
         if (stream) {
