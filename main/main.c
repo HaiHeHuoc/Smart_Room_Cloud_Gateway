@@ -75,7 +75,7 @@
 #endif
 
 /* Macros ------------------------------------------------------------------- */
-#define PERFORMANCE_MONITOR 0
+#define PERFORMANCE_MONITOR 1
 
 #if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
 #define APP_XIAOZHI_VALIDATION_QUIESCENCE_MS \
