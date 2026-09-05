@@ -25,6 +25,9 @@ typedef enum
     /** Temperature and humidity sensor screen. */
     APP_GUI_SCREEN_SENSOR_DASHBOARD,
 
+    /** Temporary Xiaozhi interaction-validation status screen. */
+    APP_GUI_SCREEN_XIAOZHI,
+
     /** Factory-reset success or failure result. */
     APP_GUI_SCREEN_RESET_RESULT,
 
@@ -185,6 +188,43 @@ typedef struct
     ui_audio_state_t state;
     esp_err_t last_error;
 } ui_audio_status_t;
+
+/* Xiaozhi Validation UI Types ------------------------------------------- */
+
+/** Maximum bytes, including NUL, retained in each Xiaozhi transcript line. */
+#define UI_XIAOZHI_TEXT_BUFFER_SIZE 192U
+
+/** @brief Temporary Xiaozhi validation states rendered by the GUI task. */
+typedef enum
+{
+    UI_XIAOZHI_STATE_DISCONNECTED = 0,
+    UI_XIAOZHI_STATE_READY,
+    UI_XIAOZHI_STATE_LISTENING,
+    UI_XIAOZHI_STATE_PROCESSING,
+    UI_XIAOZHI_STATE_RESPONDING,
+    UI_XIAOZHI_STATE_ERROR,
+} ui_xiaozhi_state_t;
+
+/**
+ * @brief Bounded Xiaozhi validation snapshot copied into the GUI queue.
+ *
+ * Timestamps use esp_timer_get_time() monotonic microseconds. The GUI owns
+ * duration formatting locally and this structure contains no audio buffer,
+ * credential, endpoint, or framework-owned pointer.
+ */
+typedef struct
+{
+    ui_xiaozhi_state_t state;
+    int64_t listening_started_at_us;
+    int64_t listening_stopped_at_us;
+    esp_err_t last_error;
+
+    bool user_text_truncated;
+    char user_text[UI_XIAOZHI_TEXT_BUFFER_SIZE];
+
+    bool assistant_text_truncated;
+    char assistant_text[UI_XIAOZHI_TEXT_BUFFER_SIZE];
+} ui_xiaozhi_status_t;
 
 /* Reset Result UI Types --------------------------------------------------- */
 
@@ -357,6 +397,21 @@ esp_err_t app_gui_post_audio_status(
     const ui_audio_status_t *status);
 
 /**
+ * @brief Replace the pending Xiaozhi validation snapshot without waiting.
+ *
+ * This API copies one bounded snapshot into a length-one latest-value queue;
+ * it never calls LVGL, changes screen routing, or retains @p status. It is
+ * safe from normal task and task-context callback code, but is not ISR-safe.
+ *
+ * @param[in] status Null-terminated, non-sensitive UI snapshot to copy.
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG for invalid status/text or
+ *         ESP_ERR_INVALID_STATE before app_gui_init(), or ESP_FAIL if the
+ *         queue update fails unexpectedly.
+ */
+esp_err_t app_gui_post_xiaozhi_status(
+    const ui_xiaozhi_status_t *status);
+
+/**
  * @brief Replace the pending cloud status without waiting.
  *
  * This function copies the snapshot into a queue of length one and never calls
@@ -421,9 +476,9 @@ esp_err_t app_gui_is_reset_result_presented(
  * does not wait for screen construction, and is safe from normal task and
  * task-context callback code. It is not ISR-safe.
  *
- * @param[in] screen_id BOOT, PROVISIONING, WIFI_STATUS, or
- *            SENSOR_DASHBOARD. NONE is not an external target. RESET_RESULT
- *            must be requested through app_gui_show_reset_result().
+ * @param[in] screen_id BOOT, PROVISIONING, WIFI_STATUS, SENSOR_DASHBOARD, or
+ *            XIAOZHI. NONE is not an external target. RESET_RESULT must be
+ *            requested through app_gui_show_reset_result().
  * @return ESP_OK when queued, ESP_ERR_INVALID_ARG for an invalid target,
  *         ESP_ERR_INVALID_STATE before app_gui_init(), or ESP_ERR_TIMEOUT
  *         when the command queue is full.

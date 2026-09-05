@@ -136,7 +136,7 @@ The approved post-Version 1 order is:
 ```text
 Sprint 10: audio hardware validation
 Sprint 11: production audio manager
-Sprint 12: Xiaozhi build and transport validation
+Sprint 12: Xiaozhi build and WebSocket transport validation
 Sprint 13: voice assistant adapter
 Sprint 14: push-to-talk MVP
 Sprint 15: GUI voice integration
@@ -148,6 +148,55 @@ Sprint 18: wake word and advanced voice UX
 Version 2 must not replace existing Wi-Fi, provisioning, storage, cloud, GUI,
 or reset ownership.
 
+### Xiaozhi Transport Boundary
+
+- Xiaozhi MQTT+UDP is intentionally **not selected** for the current roadmap.
+- The same pre-CONNECTED MQTT failure (`Certificate validated` followed by
+  `transport_read(): EOF`, `errno=119`, and `mqtt_message_receive()=-2`) was
+  reproduced in both the Gateway integration and a standalone official-flow
+  `esp_xiaozhi` test.
+- This evidence is sufficient to classify the MQTT path as unusable in the
+  validated environment; it does not prove the remote broker itself defective
+  without broker/server logs.
+- Project-side MQTT availability and MQTT transport-selection attributes are
+  removed. The project selects WebSocket only and does not provide MQTT
+  fallback.
+- `esp_xiaozhi` may still contain its own MQTT dependency/private NVS state as
+  upstream implementation detail. The Gateway does not read, expose, or start
+  that transport.
+- P2-D installs only WebSocket `CHAT_TEXT` receive plumbing. Resolved
+  `esp_xiaozhi` 0.1.2 has no public arbitrary typed-text TX API, so target
+  USER/ASSISTANT text evidence is deferred to the supported P2-F audio/STT
+  path.
+- P2-E WebSocket audio-channel lifecycle has target-hardware PASS. P2-F
+  requires a legal local raw-Opus packet fixture; none exists in the checkout,
+  and arbitrary PCM, WAV, Ogg, or fabricated audio is not accepted.
+- Audible P2-F playback is a Phase 12 source/architecture accepted limitation:
+  the validation callback receives encoded server bytes but deliberately does
+  not decode them or take `audio_manager`/speaker ownership. The serial P2-F
+  TX/STT/text/audio-RX contract remains required and pending.
+- The gated validation worker records steady-state Internal/DMA/PSRAM,
+  t+0/250/1000/3000/5000 cleanup, bounded cycle trends, attribution, and worker
+  HWM. Internal and DMA totals overlap and are never summed.
+- The old -21,420 Internal/-32,768 largest-block result used a baseline before
+  deferred Gateway managers started. Attribution classified the overall cause
+  as mixed: contaminated baseline, one-time fragmentation, and an ESP-IDF
+  6.0.1 cross-signed certificate-bundle leak. A source-hash-gated
+  upstream-compatible build shim fixes the proven TLS leak while preserving
+  Firebase-required cross-signed verification.
+- Post-fix 1/3/10/20/100 lifecycle runs, all seven supported fault/recovery
+  cases, and the clean feature-off target regression pass. Real Wi-Fi/AP,
+  Internet, and service-loss HIL remains pending; private/raw fault simulation
+  is not an acceptable substitute.
+- The selected transport rationale is recorded in
+  [the WebSocket ADR](ADR_XIAOZHI_WEBSOCKET_TRANSPORT.md), and required serial,
+  audible, lifecycle, fault, and resource capture is defined in
+  [the Xiaozhi hardware acceptance data contract](XIAOZHI_HARDWARE_ACCEPTANCE.md).
+- Remaining Phase 12 validation is WebSocket-only: lawful-fixture P2-F plus
+  real Wi-Fi/AP, Internet, and service-loss HIL. Phase 12.5 includes only a
+  temporary copied-status screen and gated diagnostics; no production voice
+  assistant, microphone, speaker, or production GUI integration is included.
+
 ## Deliberately Deferred
 
 - Custom mobile application
@@ -155,5 +204,6 @@ or reset ownership.
 - Always-on BLE data streaming
 - Local web dashboard
 - OTA before a complete security and rollback design
+- Xiaozhi MQTT+UDP transport
 - Wake word before push-to-talk and audio resource acceptance
 - AI-controlled destructive actions such as reset, credential erase, reboot, or OTA
