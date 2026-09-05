@@ -188,7 +188,9 @@ static void finish_current_locked(esp_err_t manager_result)
     store_terminal_locked(&s_current, terminal_state, terminal_result);
     clear_slot(&s_current);
     s_current_valid = false;
-    promote_pending_locked();
+    /* Pending promotion is intentionally deferred to the arbiter task. A
+     * terminal PCM request may still need abort/close work after this lock is
+     * released, so exposing the next owner here would reopen a prepare race. */
     sync_status_locked(visible_state_locked(), terminal_result);
 }
 
@@ -392,8 +394,8 @@ static void playback_arbiter_task(void *arg)
                         }
                     } else {
                         /* No manager command owns I2S yet. Preserve the old
-                         * request in terminal_slot, finish/promote logically,
-                         * then flush the prepared PCM ring after unlocking. */
+                         * request in terminal_slot, finish logically, then
+                         * flush the prepared PCM ring after unlocking. */
                         finish_current_locked(ESP_OK);
                     }
                 } else if (s_current.start_submitted) {
@@ -429,7 +431,8 @@ static void playback_arbiter_task(void *arg)
                 }
             }
 
-            if (!s_current_valid && s_pending_valid &&
+            if (!terminal_observed &&
+                !s_current_valid && s_pending_valid &&
                 (manager.state == AUDIO_MANAGER_STATE_IDLE)) {
                 promote_pending_locked();
             }
