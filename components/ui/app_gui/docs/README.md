@@ -25,6 +25,9 @@ Phase 7.4 adds a modal factory-reset result screen plus an exact,
 transaction-aware presentation acknowledgment for controlled restart timing.
 Task 3 adds the synchronized local clock and date to the sensor dashboard;
 the existing UI task refreshes those labels through the LVGL timer handler.
+Phase 12.5 adds a temporary Xiaozhi interaction-validation screen. It presents
+only copied WebSocket validation facts; it does not add a production voice
+assistant, microphone, speaker, or independent GUI task.
 
 ## Application Screens
 
@@ -35,6 +38,7 @@ the existing UI task refreshes those labels through the LVGL timer handler.
 | `APP_GUI_SCREEN_PROVISIONING` | Stable provisioning layout with a scannable QR code, instruction/status labels, and state indicator. |
 | `APP_GUI_SCREEN_WIFI_STATUS` | Existing Wi-Fi mode, SSID, and IPv4 screen. |
 | `APP_GUI_SCREEN_SENSOR_DASHBOARD` | Sensor dashboard with synchronized local time/date in its left header, temperature/humidity below, and Wi-Fi, cloud, sensor, and audio summaries in the right status column. |
+| `APP_GUI_SCREEN_XIAOZHI` | Project-owned Xiaozhi voice presentation: connection state, actual-microphone recording duration, and bounded USER/ASSISTANT transcript. It is entered through the existing explicit screen-request API. |
 | `APP_GUI_SCREEN_RESET_RESULT` | Factory-reset success or failure result; entered only through `app_gui_show_reset_result()`. |
 
 The old `APP_GUI_SCREEN_WIFI` and `APP_GUI_SCREEN_SENSOR` identifiers were
@@ -54,6 +58,8 @@ renamed directly. No compatibility aliases are retained.
 - Sensor status queue: length 5, producers never wait.
 - Audio status queue: length 1, newest state snapshot overwrites the pending value.
 - Cloud status queue: length 1, newest snapshot overwrites the pending value.
+- Xiaozhi status queue: length 1, newest copied temporary-validation snapshot
+  overwrites the pending value.
 
 If any allocation fails, every queue created by that attempt is deleted, all
 handles return to `NULL`, and `app_gui_init()` returns `ESP_ERR_NO_MEM`.
@@ -87,6 +93,7 @@ the manager is otherwise `IDLE` is rendered as `Audio: ERR`.
 | `app_gui_post_sensor_status()` | Queue a sensor model without calling LVGL. |
 | `app_gui_post_audio_status()` | Replace the pending non-sensitive audio state without calling LVGL. |
 | `app_gui_post_cloud_status()` | Replace the pending cloud model without calling LVGL. |
+| `app_gui_post_xiaozhi_status()` | Replace the pending bounded Xiaozhi validation model without calling LVGL or routing a screen. |
 | `app_gui_show_reset_result()` | Validate, copy, and enqueue one reset result without calling LVGL. |
 | `app_gui_is_reset_result_presented()` | Non-blockingly inspect whether the exact transaction completed a GUI presentation cycle. |
 
@@ -126,6 +133,7 @@ drain screen commands in FIFO order
 -> consume/cache/render provisioning QR
 -> consume/cache/render latest provisioning status
 -> consume/cache/render status queues
+-> consume/cache/render latest Xiaozhi validation status when its screen is active
 -> take LVGL mutex
 -> lv_timer_handler()
 -> release LVGL mutex
@@ -142,7 +150,8 @@ authoritative active-screen ID. For each non-duplicate request it:
    construction, cached rendering, or Wi-Fi timer allocation fails.
 5. Loads the target only after construction and rendering succeed.
 6. Updates the active-screen ID only after the target is valid.
-7. Pauses timers that belong to inactive screens.
+7. Pauses timers that belong to inactive screens, including the Xiaozhi
+   duration timer before its root can be deleted.
 8. Keeps the new screen's widget references and deletes the previous inactive
    root.
 
@@ -162,7 +171,8 @@ app_gui UI task
 
 Status handlers acquire the mutex only when rendering a model on its active
 screen. Producers, coordinator code, and ESP/Wi-Fi/provisioning/cloud/sensor
-callbacks never call LVGL.
+callbacks never call LVGL. The temporary Xiaozhi observer follows the same
+rule: its worker/event-loop callback only posts a copied status snapshot.
 
 The Wi-Fi timeout callback already runs inside `lv_timer_handler()` while the
 mutex is held. It therefore only posts a non-blocking
@@ -190,6 +200,49 @@ the UI ownership and screen-lifecycle rules. The dependency direction is
 read-only: `app_gui -> time_manager`; `time_manager` remains independent of
 GUI/LVGL.
 
+## Phase 12.5 Xiaozhi Validation UI
+
+The temporary screen is deliberately separate from provisioning, Wi-Fi status,
+and the sensor dashboard. It uses the existing `app_gui_request_screen()` API;
+there is no new touch/menu/button path. The current Phase 12.5 hardware-test
+route is the sole temporary exception: when the network reaches `ONLINE`, the
+coordinator requests `XIAOZHI` instead of `WIFI_STATUS` so copied validation
+status is visible. Remove that route after manual acceptance; ordinary Xiaozhi
+status updates never select a screen. Leaving the screen does not stop, cancel,
+or restart Xiaozhi validation. Returning to it renders the latest cached
+snapshot.
+
+```text
+voice_assistant copied session/audio snapshot
+    -> voice_assistant_ui_model derives presentation state and capture timestamps
+    -> voice_assistant_ui_gui_adapter copies project GUI model
+    -> app_gui_post_xiaozhi_status() length-one overwrite queue
+    -> app_gui UI task caches status
+    -> render only while APP_GUI_SCREEN_XIAOZHI is active
+```
+
+`ui_xiaozhi_status_t` has the states `DISCONNECTED`, `READY`, `LISTENING`,
+`PROCESSING`, `RESPONDING`, and `ERROR`, start/stop timestamps from
+`esp_timer_get_time()`, a non-sensitive `esp_err_t`, and separate 192-byte
+NUL-terminated USER/ASSISTANT buffers. `LISTENING` is rendered as
+`RECORDING` only after real microphone capture is active. The GUI timer
+computes the live duration from that start timestamp and freezes it after
+capture stops; background code never sends 100 ms duration messages.
+
+The 160x128 layout has a connection/state indicator, state/detail line,
+`RECORD mm:ss.t` while capture is active (then the frozen `LISTEN` duration),
+and fixed USER/XZ transcript regions. The model keeps at most 191 bytes per
+role plus NUL. The on-screen regions use fixed-size clipping so long text
+cannot grow, relocate, or retain a stale LVGL object; truncation flags remain
+available for diagnostics without printing text in logs.
+
+One LVGL timer runs every 100 ms only while `XIAOZHI` is active. It stores no
+widget pointer in user data, is paused before another root is deleted, and is
+resumed only after a completed Xiaozhi root is loaded. No new FreeRTOS task,
+queue message per timer tick, or recursive LVGL mutex acquisition is used.
+P2-D receive plumbing and P2-E/P2-F WebSocket/audio validation behavior remain
+unchanged.
+
 ## Model Caching
 
 The GUI retains the latest complete:
@@ -199,6 +252,7 @@ The GUI retains the latest complete:
 - `ui_wifi_status_t` plus an availability flag;
 - `ui_sensor_status_t` plus an availability flag;
 - `ui_cloud_status_t` plus an availability flag.
+- `ui_xiaozhi_status_t` plus an availability flag;
 - `ui_reset_status_t` plus an availability flag.
 
 It also retains the newest accepted provisioning generation. A strictly newer
@@ -216,6 +270,7 @@ Status events never choose a screen:
   `SENSOR_DASHBOARD`.
 - Sensor updates render only on `SENSOR_DASHBOARD`.
 - Cloud updates render only on `SENSOR_DASHBOARD`.
+- Xiaozhi validation updates render only on `XIAOZHI`.
 - Reset results render only through the reset-result command and screen.
 - Updates received for inactive screens only refresh cached models and never
   touch deleted LVGL pointers.
@@ -225,6 +280,8 @@ Entering `PROVISIONING` renders the latest provisioning model, or the default
 payload when available. Entering `WIFI_STATUS` renders the latest Wi-Fi model.
 Entering `SENSOR_DASHBOARD` renders the latest sensor, Wi-Fi summary, cloud
 models, and the current time/date header.
+Entering `XIAOZHI` renders its newest complete cached snapshot, or a safe
+`DISCONNECTED` default before the first validation update.
 
 ## Phase 7.4 Reset Result UI
 
@@ -399,6 +456,7 @@ It posts screen requests but never renders or calls LVGL.
 | Sensor status update | Cache/render only; no implicit screen change |
 | Audio status update | Cache/render only; no implicit screen change |
 | Cloud status update | Cache/render only; no implicit screen change |
+| Xiaozhi validation status update | Cache/render only on `XIAOZHI`; no implicit screen change and no lifecycle action |
 | Wi-Fi screen timeout | Explicit deferred `SENSOR_DASHBOARD` request |
 | Reset result | Dedicated copied command -> modal `RESET_RESULT`; ordinary routing remains blocked, while a newer reset result may replace the current one before verified success reboots |
 
@@ -413,6 +471,8 @@ BLE cleanup, and connection adoption, the coordinator posts `SUCCESS`, waits
 
 - Invalid or `NONE` screen requests return `ESP_ERR_INVALID_ARG`.
 - NULL or invalid provisioning status returns `ESP_ERR_INVALID_ARG`.
+- Invalid Xiaozhi state, timestamp ordering, error/state pairing, or
+  unterminated transcript returns `ESP_ERR_INVALID_ARG`.
 - NULL, empty, or unterminated QR payload returns `ESP_ERR_INVALID_ARG`.
 - A zero reset transaction ID or inconsistent reset state/error pair returns
   `ESP_ERR_INVALID_ARG`.
@@ -437,12 +497,18 @@ BLE cleanup, and connection adoption, the coordinator posts `SUCCESS`, waits
 ESP_ERROR_CHECK(ui_manager_lvgl_init(&display_handle));
 ESP_ERROR_CHECK(app_gui_init());
 ESP_ERROR_CHECK(app_gui_start_ui_task());
+#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+/* Register the temporary Xiaozhi observer; failure is logged but non-fatal. */
+xiaozhi_foundation_register_ui_status_callback(...);
+#endif
 ESP_ERROR_CHECK(app_network_coordinator_init(&network_config));
 ESP_ERROR_CHECK(app_network_coordinator_start());
 ```
 
 `main` does not create an initial screen directly. The coordinator requests the
-initial screen only after resolving the final configuration state.
+initial screen only after resolving the final configuration state. With the
+temporary Phase 12 validation gate at its default `n`, the observer is not
+registered and an `ONLINE` transition does not request `APP_GUI_SCREEN_XIAOZHI`.
 
 ## Phase 6.4.1 Historical Checkpoint
 
@@ -597,6 +663,17 @@ Run any temporary state driver outside the UI task, call only public
 22. Disconnect Wi-Fi after a successful synchronization, then cycle into and
     out of `SENSOR_DASHBOARD`; verify the clock continues advancing and no
     LVGL assertion, stale pointer, or duplicate timer behavior occurs.
+23. Request `XIAOZHI`, then inject each copied state through the public API;
+    verify connection/state/color, safe disconnected/error text, and no
+    automatic route away from the current screen.
+24. During Phase-15 hardware validation, verify actual-microphone `RECORDING`
+    advances near 100 ms resolution, freezes after `PROCESSING`/`RESPONDING`/
+    `ERROR`, and shows
+    bounded USER and XZ transcript snippets without new object creation.
+25. Navigate `XIAOZHI -> SENSOR_DASHBOARD -> XIAOZHI` during a validation
+    attempt. Verify the validation continues independently, latest status is
+    restored on return, and no stale-pointer/LVGL assertion/heap-growth trend
+    appears under repeated transitions.
 
 ## Phase 6.4.7 Closure Status
 

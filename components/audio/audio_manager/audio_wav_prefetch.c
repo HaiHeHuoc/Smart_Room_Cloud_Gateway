@@ -23,6 +23,7 @@
 #define AUDIO_WAV_PREFETCH_MAX_RECOVERY_ATTEMPTS    1U
 #define AUDIO_WAV_PREFETCH_WORKER_STOPPED_BIT ((EventBits_t)(1U << 0U))
 #define AUDIO_WAV_PREFETCH_WORKER_DESTROY_ACK_BIT ((EventBits_t)(1U << 1U))
+#define AUDIO_WAV_PREFETCH_WORKER_EXIT_ACK_BIT ((EventBits_t)(1U << 2U))
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "AUDIO_WAV_PREFETCH";
@@ -511,17 +512,16 @@ static void audio_wav_prefetch_task(void *argument)
      * xEventGroupSetBits().  It acknowledges the STOPPED bit, then this task
      * notifies the manager only after its final EventGroup access is complete.
      */
-    const TaskHandle_t owner_task = prefetch->owner_task;
     (void)xEventGroupWaitBits(
         prefetch->events,
         AUDIO_WAV_PREFETCH_WORKER_DESTROY_ACK_BIT,
         pdFALSE,
         pdTRUE,
         portMAX_DELAY);
-    if (owner_task != NULL)
-    {
-        xTaskNotifyGive(owner_task);
-    }
+    /* The manager task also uses its direct task notification for PCM ingress.
+     * A separate event bit makes this teardown acknowledgement unambiguous. */
+    xEventGroupSetBits(prefetch->events,
+                       AUDIO_WAV_PREFETCH_WORKER_EXIT_ACK_BIT);
     vTaskDelete(NULL);
 }
 
@@ -794,8 +794,13 @@ esp_err_t audio_wav_prefetch_stop_and_destroy(
             AUDIO_WAV_PREFETCH_WORKER_DESTROY_ACK_BIT);
     }
 
-    if (ulTaskNotifyTake(pdTRUE, timeout) == 0U)
-    {
+    const EventBits_t exit_bits = xEventGroupWaitBits(
+        prefetch->events,
+        AUDIO_WAV_PREFETCH_WORKER_EXIT_ACK_BIT,
+        pdFALSE,
+        pdTRUE,
+        timeout);
+    if ((exit_bits & AUDIO_WAV_PREFETCH_WORKER_EXIT_ACK_BIT) == 0U) {
         return ESP_ERR_TIMEOUT;
     }
 
