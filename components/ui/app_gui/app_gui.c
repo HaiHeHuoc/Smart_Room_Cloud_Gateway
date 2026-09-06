@@ -165,8 +165,12 @@ typedef struct
     lv_obj_t *xiaozhi_state_label;
     lv_obj_t *xiaozhi_detail_label;
     lv_obj_t *xiaozhi_duration_label;
+    lv_obj_t *xiaozhi_user_text_viewport;
     lv_obj_t *xiaozhi_user_text_label;
+    lv_obj_t *xiaozhi_user_overflow_label;
+    lv_obj_t *xiaozhi_assistant_text_viewport;
     lv_obj_t *xiaozhi_assistant_text_label;
+    lv_obj_t *xiaozhi_assistant_overflow_label;
     lv_obj_t *xiaozhi_state_indicator;
     lv_obj_t *reset_status_label;
     lv_obj_t *reset_detail_label;
@@ -258,8 +262,12 @@ static lv_obj_t *s_xiaozhi_connection_label = NULL;
 static lv_obj_t *s_xiaozhi_state_label = NULL;
 static lv_obj_t *s_xiaozhi_detail_label = NULL;
 static lv_obj_t *s_xiaozhi_duration_label = NULL;
+static lv_obj_t *s_xiaozhi_user_text_viewport = NULL;
 static lv_obj_t *s_xiaozhi_user_text_label = NULL;
+static lv_obj_t *s_xiaozhi_user_overflow_label = NULL;
+static lv_obj_t *s_xiaozhi_assistant_text_viewport = NULL;
 static lv_obj_t *s_xiaozhi_assistant_text_label = NULL;
+static lv_obj_t *s_xiaozhi_assistant_overflow_label = NULL;
 static lv_obj_t *s_xiaozhi_state_indicator = NULL;
 static lv_timer_t *s_xiaozhi_screen_timer = NULL;
 
@@ -404,6 +412,9 @@ static void app_gui_render_cloud_status(
     const ui_cloud_status_t *status);
 static void app_gui_render_xiaozhi_status(
     const ui_xiaozhi_status_t *status);
+static bool app_gui_xiaozhi_text_exceeds_viewport(
+    const char *text,
+    const lv_obj_t *viewport);
 static bool app_gui_render_cached_status(
     app_gui_screen_id_t screen_id);
 static esp_err_t app_gui_activate_screen(
@@ -983,6 +994,13 @@ static void app_gui_init_xiaozhi_transcript_font(void)
     s_xiaozhi_transcript_font = app_gui_xiaozhi_latin_12;
     s_xiaozhi_transcript_font.fallback =
         &lv_font_source_han_sans_sc_14_cjk;
+    /* Chinese fallback glyphs need Source Han's full 17-pixel line height.
+     * Use it for the shared descriptor so mixed Vietnamese/English/Chinese
+     * lines neither overlap nor clip accent marks. */
+    s_xiaozhi_transcript_font.line_height =
+        lv_font_source_han_sans_sc_14_cjk.line_height;
+    s_xiaozhi_transcript_font.base_line =
+        lv_font_source_han_sans_sc_14_cjk.base_line;
     s_xiaozhi_transcript_font_initialized = true;
 }
 
@@ -1020,8 +1038,14 @@ static void app_gui_capture_widget_refs(
     refs->xiaozhi_state_label = s_xiaozhi_state_label;
     refs->xiaozhi_detail_label = s_xiaozhi_detail_label;
     refs->xiaozhi_duration_label = s_xiaozhi_duration_label;
+    refs->xiaozhi_user_text_viewport = s_xiaozhi_user_text_viewport;
     refs->xiaozhi_user_text_label = s_xiaozhi_user_text_label;
+    refs->xiaozhi_user_overflow_label = s_xiaozhi_user_overflow_label;
+    refs->xiaozhi_assistant_text_viewport =
+        s_xiaozhi_assistant_text_viewport;
     refs->xiaozhi_assistant_text_label = s_xiaozhi_assistant_text_label;
+    refs->xiaozhi_assistant_overflow_label =
+        s_xiaozhi_assistant_overflow_label;
     refs->xiaozhi_state_indicator = s_xiaozhi_state_indicator;
     refs->reset_status_label =
         s_reset_status_label;
@@ -1058,8 +1082,12 @@ static void app_gui_clear_widget_refs(void)
     s_xiaozhi_state_label = NULL;
     s_xiaozhi_detail_label = NULL;
     s_xiaozhi_duration_label = NULL;
+    s_xiaozhi_user_text_viewport = NULL;
     s_xiaozhi_user_text_label = NULL;
+    s_xiaozhi_user_overflow_label = NULL;
+    s_xiaozhi_assistant_text_viewport = NULL;
     s_xiaozhi_assistant_text_label = NULL;
+    s_xiaozhi_assistant_overflow_label = NULL;
     s_xiaozhi_state_indicator = NULL;
     s_reset_status_label = NULL;
     s_reset_detail_label = NULL;
@@ -1102,8 +1130,14 @@ static void app_gui_apply_widget_refs(
     s_xiaozhi_state_label = refs->xiaozhi_state_label;
     s_xiaozhi_detail_label = refs->xiaozhi_detail_label;
     s_xiaozhi_duration_label = refs->xiaozhi_duration_label;
+    s_xiaozhi_user_text_viewport = refs->xiaozhi_user_text_viewport;
     s_xiaozhi_user_text_label = refs->xiaozhi_user_text_label;
+    s_xiaozhi_user_overflow_label = refs->xiaozhi_user_overflow_label;
+    s_xiaozhi_assistant_text_viewport =
+        refs->xiaozhi_assistant_text_viewport;
     s_xiaozhi_assistant_text_label = refs->xiaozhi_assistant_text_label;
+    s_xiaozhi_assistant_overflow_label =
+        refs->xiaozhi_assistant_overflow_label;
     s_xiaozhi_state_indicator = refs->xiaozhi_state_indicator;
     s_reset_status_label = refs->reset_status_label;
     s_reset_detail_label = refs->reset_detail_label;
@@ -2396,8 +2430,16 @@ static esp_err_t app_gui_create_xiaozhi_screen(
     s_xiaozhi_state_label = lv_label_create(screen);
     s_xiaozhi_detail_label = lv_label_create(screen);
     s_xiaozhi_duration_label = lv_label_create(screen);
-    s_xiaozhi_user_text_label = lv_label_create(screen);
-    s_xiaozhi_assistant_text_label = lv_label_create(screen);
+    s_xiaozhi_user_text_viewport = lv_obj_create(screen);
+    s_xiaozhi_assistant_text_viewport = lv_obj_create(screen);
+    s_xiaozhi_user_text_label =
+        lv_label_create(s_xiaozhi_user_text_viewport);
+    s_xiaozhi_user_overflow_label =
+        lv_label_create(s_xiaozhi_user_text_viewport);
+    s_xiaozhi_assistant_text_label =
+        lv_label_create(s_xiaozhi_assistant_text_viewport);
+    s_xiaozhi_assistant_overflow_label =
+        lv_label_create(s_xiaozhi_assistant_text_viewport);
     s_xiaozhi_state_indicator = lv_obj_create(screen);
 
     if ((title == NULL) || (top_rule == NULL) || (bottom_rule == NULL) ||
@@ -2406,8 +2448,12 @@ static esp_err_t app_gui_create_xiaozhi_screen(
         (s_xiaozhi_state_label == NULL) ||
         (s_xiaozhi_detail_label == NULL) ||
         (s_xiaozhi_duration_label == NULL) ||
+        (s_xiaozhi_user_text_viewport == NULL) ||
         (s_xiaozhi_user_text_label == NULL) ||
+        (s_xiaozhi_user_overflow_label == NULL) ||
+        (s_xiaozhi_assistant_text_viewport == NULL) ||
         (s_xiaozhi_assistant_text_label == NULL) ||
+        (s_xiaozhi_assistant_overflow_label == NULL) ||
         (s_xiaozhi_state_indicator == NULL)) {
         return ESP_ERR_NO_MEM;
     }
@@ -2445,7 +2491,7 @@ static esp_err_t app_gui_create_xiaozhi_screen(
         LV_PART_MAIN);
 
     lv_obj_t *rules[] = {top_rule, bottom_rule};
-    const int32_t rule_y[] = {25, 87};
+    const int32_t rule_y[] = {21, 90};
 
     for (size_t index = 0U;
          index < (sizeof(rules) / sizeof(rules[0]));
@@ -2462,17 +2508,17 @@ static esp_err_t app_gui_create_xiaozhi_screen(
 
     lv_label_set_text(s_xiaozhi_state_label, "DISCONNECTED");
     lv_label_set_long_mode(s_xiaozhi_state_label, LV_LABEL_LONG_MODE_CLIP);
-    lv_obj_set_size(s_xiaozhi_state_label, 152, 21);
-    lv_obj_set_pos(s_xiaozhi_state_label, 4, 30);
+    lv_obj_set_size(s_xiaozhi_state_label, 152, 14);
+    lv_obj_set_pos(s_xiaozhi_state_label, 4, 25);
     lv_obj_set_style_text_font(
         s_xiaozhi_state_label,
-        &lv_font_montserrat_18,
+        &lv_font_montserrat_12,
         LV_PART_MAIN);
 
     lv_label_set_text(s_xiaozhi_detail_label, "No active session");
     lv_label_set_long_mode(s_xiaozhi_detail_label, LV_LABEL_LONG_MODE_CLIP);
-    lv_obj_set_size(s_xiaozhi_detail_label, 152, 11);
-    lv_obj_set_pos(s_xiaozhi_detail_label, 4, 53);
+    lv_obj_set_size(s_xiaozhi_detail_label, 152, 10);
+    lv_obj_set_pos(s_xiaozhi_detail_label, 4, 42);
     lv_obj_set_style_text_font(
         s_xiaozhi_detail_label,
         &lv_font_montserrat_10,
@@ -2486,11 +2532,11 @@ static esp_err_t app_gui_create_xiaozhi_screen(
     lv_label_set_long_mode(
         s_xiaozhi_duration_label,
         LV_LABEL_LONG_MODE_CLIP);
-    lv_obj_set_size(s_xiaozhi_duration_label, 152, 18);
-    lv_obj_set_pos(s_xiaozhi_duration_label, 4, 66);
+    lv_obj_set_size(s_xiaozhi_duration_label, 152, 14);
+    lv_obj_set_pos(s_xiaozhi_duration_label, 4, 54);
     lv_obj_set_style_text_font(
         s_xiaozhi_duration_label,
-        &lv_font_montserrat_18,
+        &lv_font_montserrat_12,
         LV_PART_MAIN);
     lv_obj_set_style_text_color(
         s_xiaozhi_duration_label,
@@ -2500,7 +2546,7 @@ static esp_err_t app_gui_create_xiaozhi_screen(
     lv_label_set_text(user_header, "YOU");
     lv_label_set_text(assistant_header, "XZ");
     lv_obj_t *transcript_headers[] = {user_header, assistant_header};
-    const int32_t transcript_y[] = {91, 108};
+    const int32_t transcript_y[] = {75, 96};
 
     for (size_t index = 0U;
          index < (sizeof(transcript_headers) / sizeof(transcript_headers[0]));
@@ -2521,22 +2567,48 @@ static esp_err_t app_gui_create_xiaozhi_screen(
         s_xiaozhi_user_text_label,
         s_xiaozhi_assistant_text_label,
     };
-    const int32_t transcript_text_y[] = {90, 106};
-    const int32_t transcript_height[] = {16, 20};
+    lv_obj_t *transcript_viewports[] = {
+        s_xiaozhi_user_text_viewport,
+        s_xiaozhi_assistant_text_viewport,
+    };
+    lv_obj_t *transcript_overflow_labels[] = {
+        s_xiaozhi_user_overflow_label,
+        s_xiaozhi_assistant_overflow_label,
+    };
+    const int32_t transcript_text_y[] = {72, 93};
+    const int32_t transcript_height[] = {17, 34};
 
     for (size_t index = 0U;
          index < (sizeof(transcript_labels) / sizeof(transcript_labels[0]));
          ++index) {
-        lv_label_set_text(transcript_labels[index], "-");
-        /* Fixed region prevents transcript growth from moving other widgets. */
-        lv_label_set_long_mode(
-            transcript_labels[index],
-            LV_LABEL_LONG_MODE_CLIP);
+        lv_obj_remove_style_all(transcript_viewports[index]);
+        lv_obj_remove_flag(
+            transcript_viewports[index],
+            LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(
+            transcript_viewports[index],
+            LV_OBJ_FLAG_OVERFLOW_VISIBLE);
         lv_obj_set_size(
-            transcript_labels[index],
+            transcript_viewports[index],
             126,
             transcript_height[index]);
-        lv_obj_set_pos(transcript_labels[index], 30, transcript_text_y[index]);
+        lv_obj_set_pos(
+            transcript_viewports[index],
+            30,
+            transcript_text_y[index]);
+        lv_obj_set_style_pad_all(
+            transcript_viewports[index],
+            0,
+            LV_PART_MAIN);
+
+        lv_label_set_text(transcript_labels[index], "-");
+        /* A fixed parent viewport clips wrapped text so transcript growth
+         * cannot move the Xiaozhi state or a neighbouring transcript. */
+        lv_label_set_long_mode(
+            transcript_labels[index],
+            LV_LABEL_LONG_MODE_WRAP);
+        lv_obj_set_width(transcript_labels[index], 126);
+        lv_obj_set_pos(transcript_labels[index], 0, 0);
         lv_obj_set_style_text_font(
             transcript_labels[index],
             &s_xiaozhi_transcript_font,
@@ -2544,6 +2616,29 @@ static esp_err_t app_gui_create_xiaozhi_screen(
         lv_obj_set_style_text_color(
             transcript_labels[index],
             lv_color_hex(0xF2F5F7),
+            LV_PART_MAIN);
+
+        lv_label_set_text(transcript_overflow_labels[index], "");
+        lv_obj_set_size(transcript_overflow_labels[index], 16, 11);
+        lv_obj_set_pos(
+            transcript_overflow_labels[index],
+            110,
+            transcript_height[index] - 11);
+        lv_obj_set_style_text_font(
+            transcript_overflow_labels[index],
+            &lv_font_montserrat_10,
+            LV_PART_MAIN);
+        lv_obj_set_style_text_color(
+            transcript_overflow_labels[index],
+            lv_color_hex(0xF2F5F7),
+            LV_PART_MAIN);
+        lv_obj_set_style_bg_color(
+            transcript_overflow_labels[index],
+            lv_color_hex(0x101619),
+            LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(
+            transcript_overflow_labels[index],
+            LV_OPA_COVER,
             LV_PART_MAIN);
     }
 
@@ -2593,6 +2688,27 @@ static void app_gui_format_xiaozhi_duration(
         (unsigned long long)decimal);
 }
 
+static bool app_gui_xiaozhi_text_exceeds_viewport(
+    const char *text,
+    const lv_obj_t *viewport)
+{
+    if ((text == NULL) || (text[0] == '\0') || (viewport == NULL)) {
+        return false;
+    }
+
+    lv_point_t rendered_size = {0};
+    lv_text_get_size(
+        &rendered_size,
+        text,
+        &s_xiaozhi_transcript_font,
+        0,
+        0,
+        lv_obj_get_width(viewport),
+        LV_TEXT_FLAG_BREAK_ALL);
+
+    return rendered_size.y > lv_obj_get_height(viewport);
+}
+
 static void app_gui_render_xiaozhi_status(
     const ui_xiaozhi_status_t *status)
 {
@@ -2601,8 +2717,12 @@ static void app_gui_render_xiaozhi_status(
         (s_xiaozhi_state_label == NULL) ||
         (s_xiaozhi_detail_label == NULL) ||
         (s_xiaozhi_duration_label == NULL) ||
+        (s_xiaozhi_user_text_viewport == NULL) ||
         (s_xiaozhi_user_text_label == NULL) ||
+        (s_xiaozhi_user_overflow_label == NULL) ||
+        (s_xiaozhi_assistant_text_viewport == NULL) ||
         (s_xiaozhi_assistant_text_label == NULL) ||
+        (s_xiaozhi_assistant_overflow_label == NULL) ||
         (s_xiaozhi_state_indicator == NULL)) {
         return;
     }
@@ -2629,6 +2749,21 @@ static void app_gui_render_xiaozhi_status(
         (status->state == UI_XIAOZHI_STATE_LISTENING) ? "RECORD" : "LISTEN",
         duration);
 
+    const char *const user_text =
+        (status->user_text[0] != '\0') ? status->user_text : "-";
+    const char *const assistant_text =
+        (status->assistant_text[0] != '\0')
+            ? status->assistant_text
+            : "-";
+    const bool user_overflow = status->user_text_truncated ||
+        app_gui_xiaozhi_text_exceeds_viewport(
+            status->user_text,
+            s_xiaozhi_user_text_viewport);
+    const bool assistant_overflow = status->assistant_text_truncated ||
+        app_gui_xiaozhi_text_exceeds_viewport(
+            status->assistant_text,
+            s_xiaozhi_assistant_text_viewport);
+
     app_gui_set_label_text_if_changed(
         s_xiaozhi_connection_label,
         (status->state == UI_XIAOZHI_STATE_ERROR)
@@ -2645,12 +2780,16 @@ static void app_gui_render_xiaozhi_status(
         duration_text);
     app_gui_set_label_text_if_changed(
         s_xiaozhi_user_text_label,
-        (status->user_text[0] != '\0') ? status->user_text : "-");
+        user_text);
     app_gui_set_label_text_if_changed(
         s_xiaozhi_assistant_text_label,
-        (status->assistant_text[0] != '\0')
-            ? status->assistant_text
-            : "-");
+        assistant_text);
+    app_gui_set_label_text_if_changed(
+        s_xiaozhi_user_overflow_label,
+        user_overflow ? "..." : "");
+    app_gui_set_label_text_if_changed(
+        s_xiaozhi_assistant_overflow_label,
+        assistant_overflow ? "..." : "");
 
     lv_obj_set_style_text_color(
         s_xiaozhi_connection_label,

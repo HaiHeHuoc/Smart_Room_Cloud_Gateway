@@ -226,18 +226,29 @@ voice_assistant copied session/audio snapshot
 
 `ui_xiaozhi_status_t` has the states `DISCONNECTED`, `CONNECTING`, `READY`,
 `LISTENING`, `PROCESSING`, `RESPONDING`, `RECOVERING`, and `ERROR`, start/stop timestamps from
-`esp_timer_get_time()`, a non-sensitive `esp_err_t`, and separate 192-byte
-NUL-terminated USER/ASSISTANT buffers. `LISTENING` is rendered as
-`RECORDING` only after real microphone capture is active. The GUI timer
-computes the live duration from that start timestamp and freezes it after
-capture stops; background code never sends 100 ms duration messages.
+`esp_timer_get_time()`, a non-sensitive `esp_err_t`, a 256-byte NUL-terminated
+USER buffer, and a 768-byte NUL-terminated assistant buffer. The production
+model copies text on UTF-8 code-point boundaries: a source that exceeds its
+buffer, or ends with an incomplete UTF-8 code point, is shortened safely and
+marked truncated. `LISTENING` is rendered as `RECORDING` only after real
+microphone capture is active. The GUI timer computes the live duration from
+that start timestamp and freezes it after capture stops; background code never
+sends 100 ms duration messages.
 
-The 160x128 layout has a connection/state indicator, state/detail line,
-`RECORD mm:ss.t` while capture is active (then the frozen `LISTEN` duration),
-and fixed USER/XZ transcript regions. The model keeps at most 191 bytes per
-role plus NUL. The on-screen regions use fixed-size clipping so long text
-cannot grow, relocate, or retain a stale LVGL object; truncation flags remain
-available for diagnostics without printing text in logs.
+Only Xiaozhi transcript labels use the multilingual font chain. The
+project-owned 12-pixel Noto Sans SC-derived font covers English and Vietnamese
+including diacritics; LVGL's bundled 14-pixel Source Han Sans SC CJK font is
+its fallback for the enabled common Chinese repertoire. Static UI labels and
+the rest of the application remain unchanged. Chinese glyphs outside LVGL's
+bundled subset use the normal LVGL missing-glyph placeholder until a measured,
+larger project font subset is added.
+
+The 160x128 layout has a connection/state indicator, compact state/detail and
+`RECORD mm:ss.t` lines, one 17-pixel USER viewport, and a 34-pixel XZ response
+viewport. Each viewport clips a wrapped child label, so long text cannot move
+or retain stale LVGL objects. An overlay `...` appears when text exceeds the
+viewport or the bounded model source was truncated; transcript text itself is
+never printed to logs.
 
 One LVGL timer runs every 100 ms only while `XIAOZHI` is active. It stores no
 widget pointer in user data, is paused before another root is deleted, and is
@@ -671,8 +682,10 @@ Run any temporary state driver outside the UI task, call only public
     automatic route away from the current screen.
 24. During Phase-15 hardware validation, verify actual-microphone `RECORDING`
     advances near 100 ms resolution, freezes after `PROCESSING`/`RESPONDING`/
-    `ERROR`, and shows
-    bounded USER and XZ transcript snippets without new object creation.
+    `ERROR`, and shows bounded USER and XZ transcript snippets without new
+    object creation. Verify English, Vietnamese with diacritics, mixed
+    English/Vietnamese/Chinese text, and an overlong response; no UTF-8 split,
+    overlap, stale pointer, or missing overflow indicator may occur.
 25. Navigate `XIAOZHI -> SENSOR_DASHBOARD -> XIAOZHI` during a validation
     attempt. Verify the validation continues independently, latest status is
     restored on return, and no stale-pointer/LVGL assertion/heap-growth trend
