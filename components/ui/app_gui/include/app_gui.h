@@ -145,6 +145,12 @@ typedef struct
     /** Humidity copied from sensor_manager; -1.0f marks a failed read. */
     float humidity_percent;
 
+    /** Last successful temperature, retained when the latest read fails. */
+    float last_valid_temperature_c;
+
+    /** Last successful humidity, retained when the latest read fails. */
+    float last_valid_humidity_percent;
+
     /** Whether sensor_manager has recorded at least one successful sample. */
     bool data_valid;
 

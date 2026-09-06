@@ -3182,17 +3182,30 @@ static void app_gui_render_sensor_status(
         return;
     }
 
-    if (status->data_valid && !status->data_stale) {
+    const bool current_reading_available =
+        status->data_valid &&
+        (status->temperature_c != APP_GUI_SENSOR_FAILED_VALUE) &&
+        (status->humidity_percent != APP_GUI_SENSOR_FAILED_VALUE);
+    const bool retained_reading_available =
+        status->data_valid && !current_reading_available;
+
+    if (current_reading_available || retained_reading_available) {
         char temperature_text[16] = {0};
         char humidity_text[16] = {0};
+        const float temperature_c = current_reading_available
+                                        ? status->temperature_c
+                                        : status->last_valid_temperature_c;
+        const float humidity_percent = current_reading_available
+                                           ? status->humidity_percent
+                                           : status->last_valid_humidity_percent;
 
-        if (status->temperature_c != APP_GUI_SENSOR_FAILED_VALUE)
+        if (temperature_c != APP_GUI_SENSOR_FAILED_VALUE)
         {
             (void)snprintf(
                 temperature_text,
                 sizeof(temperature_text),
                 "%.1f " "\xC2\xB0" "C",
-                status->temperature_c);
+                temperature_c);
         }
         else
         {
@@ -3202,13 +3215,13 @@ static void app_gui_render_sensor_status(
                 "-");
         }
 
-        if (status->humidity_percent != APP_GUI_SENSOR_FAILED_VALUE)
+        if (humidity_percent != APP_GUI_SENSOR_FAILED_VALUE)
         {
             (void)snprintf(
                 humidity_text,
                 sizeof(humidity_text),
                 "%.0f %%RH",
-                status->humidity_percent);
+                humidity_percent);
         }
         else
         {
@@ -3218,28 +3231,39 @@ static void app_gui_render_sensor_status(
                 "-");
         }
 
-        lv_label_set_text(
+        app_gui_set_label_text_if_changed(
             s_sensor_temperature_label,
             temperature_text);
-        lv_label_set_text(
+        app_gui_set_label_text_if_changed(
             s_sensor_humidity_label,
             humidity_text);
     }
     else {
-        lv_label_set_text(s_sensor_temperature_label, "-");
-        lv_label_set_text(s_sensor_humidity_label, "-");
+        app_gui_set_label_text_if_changed(s_sensor_temperature_label, "-");
+        app_gui_set_label_text_if_changed(s_sensor_humidity_label, "-");
     }
 
-    const ui_sensor_state_t displayed_state =
-        status->data_stale
-            ? UI_SENSOR_STATE_DEGRADED
-            : status->state;
+    const char *state_text = app_gui_sensor_state_to_string(status->state);
+    ui_sensor_state_t displayed_state = status->state;
 
-    lv_label_set_text(
+    if (!status->data_valid) {
+        state_text = (status->last_error == ESP_OK)
+                         ? "Sensor: No data"
+                         : "Sensor: Read error";
+        displayed_state = (status->last_error == ESP_OK)
+                              ? UI_SENSOR_STATE_INITIALIZING
+                              : UI_SENSOR_STATE_ERROR;
+    } else if (status->data_stale) {
+        state_text = "Sensor: Stale";
+        displayed_state = UI_SENSOR_STATE_DEGRADED;
+    } else if (status->last_error != ESP_OK) {
+        state_text = "Sensor: Read error";
+        displayed_state = UI_SENSOR_STATE_DEGRADED;
+    }
+
+    app_gui_set_label_text_if_changed(
         s_sensor_state_label,
-        status->data_stale
-            ? "Sensor: Stale"
-            : app_gui_sensor_state_to_string(status->state));
+        state_text);
     lv_obj_set_style_text_color(
         s_sensor_state_label,
         app_gui_sensor_state_color(displayed_state),
