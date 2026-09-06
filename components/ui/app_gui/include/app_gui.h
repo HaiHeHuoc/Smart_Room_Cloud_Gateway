@@ -392,12 +392,16 @@ esp_err_t app_gui_post_wifi_status(
 
 /* Sensor Status API ------------------------------------------------------- */
 /**
- * @brief Post a sensor status snapshot to the GUI task without waiting.
+ * @brief Replace the pending sensor status with the newest snapshot.
+ *
+ * This function does not call LVGL directly and does not wait. The sensor
+ * queue has length one, so the GUI renders the newest snapshot rather than a
+ * backlog of periodic readings.
  *
  * @param status Sensor status copied into the GUI queue.
  * @return ESP_OK on success, ESP_ERR_INVALID_ARG if status is NULL,
- *         ESP_ERR_INVALID_STATE before app_gui_init(), or ESP_ERR_TIMEOUT
- *         when the queue is full.
+ *         ESP_ERR_INVALID_STATE before app_gui_init(), or ESP_FAIL if the
+ *         queue update fails.
  */
 esp_err_t app_gui_post_sensor_status(
     const ui_sensor_status_t *status);

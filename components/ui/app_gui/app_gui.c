@@ -35,7 +35,7 @@
 #define APP_GUI_PROVISIONING_STATUS_QUEUE_LENGTH 1U
 #define APP_GUI_PROVISIONING_QR_QUEUE_LENGTH 1U
 #define APP_GUI_WIFI_STATUS_QUEUE_LENGTH 1U
-#define APP_GUI_SENSOR_STATUS_QUEUE_LENGTH 5U
+#define APP_GUI_SENSOR_STATUS_QUEUE_LENGTH 1U
 #define APP_GUI_AUDIO_STATUS_QUEUE_LENGTH 1U
 #define APP_GUI_CLOUD_STATUS_QUEUE_LENGTH 1U
 #define APP_GUI_XIAOZHI_STATUS_QUEUE_LENGTH 1U
@@ -4734,17 +4734,16 @@ esp_err_t app_gui_post_sensor_status(
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (xQueueSend(
+    if (xQueueOverwrite(
             s_sensor_status_queue,
-            status,
-            0) != pdPASS)
+            status) != pdTRUE)
     {
         /*
-         * Sensor data is periodic, so dropping one update is acceptable.
-         * The next sample will deliver a newer snapshot.
+         * The dashboard renders a snapshot rather than a historical chart.
+         * Retaining only the newest sample prevents UI lag when LVGL is busy.
          */
-        ESP_LOGE(TAG, "GUI Sensor queue updating TimeOut");
-        return ESP_ERR_TIMEOUT;
+        ESP_LOGW(TAG, "Failed to post sensor status to UI");
+        return ESP_FAIL;
     }
 
     return ESP_OK;
