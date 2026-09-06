@@ -1565,6 +1565,9 @@ static void app_cloud_status_callback(
 
         .last_http_status =
             status->last_http_status,
+
+        .last_success_time_ms =
+            status->last_success_time_ms,
     };
 
     const esp_err_t error =

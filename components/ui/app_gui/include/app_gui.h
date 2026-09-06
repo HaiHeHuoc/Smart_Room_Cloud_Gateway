@@ -280,6 +280,9 @@ typedef struct
     ui_cloud_state_t state;
     esp_err_t last_error;
     int last_http_status;
+
+    /** Monotonic uptime of the most recent successful upload, or zero. */
+    int64_t last_success_time_ms;
 } ui_cloud_status_t;
 
 /* Lifecycle API ----------------------------------------------------------- */
