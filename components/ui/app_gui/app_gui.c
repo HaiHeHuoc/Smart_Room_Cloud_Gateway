@@ -9,6 +9,7 @@
 
 #include "ui_manager_lvgl.h"
 #include "app_gui.h"
+#include "fonts/app_gui_xiaozhi_latin_12.h"
 #include "time_manager.h"
 #include "esp_log.h"
 #include "esp_err.h"
@@ -21,6 +22,10 @@
 
 #if !LV_USE_QRCODE
 #error "Phase 6.4.3 requires CONFIG_LV_USE_QRCODE=y"
+#endif
+
+#if !LV_FONT_SOURCE_HAN_SANS_SC_14_CJK
+#error "Multilingual Xiaozhi transcript rendering requires Source Han Sans SC"
 #endif
 
 /* Macros ------------------------------------------------------------------- */
@@ -216,6 +221,10 @@ static ui_xiaozhi_status_t s_latest_xiaozhi_status = {
     .listening_stopped_at_us = 0,
     .last_error = ESP_OK,
 };
+/* Latin/Vietnamese glyphs are primary; Source Han Sans SC resolves Chinese
+ * glyphs through this mutable LVGL fallback descriptor. */
+static lv_font_t s_xiaozhi_transcript_font = {0};
+static bool s_xiaozhi_transcript_font_initialized = false;
 
 /* Provisioning references are valid only while its screen is active. */
 static lv_obj_t *s_provisioning_qr_container = NULL;
@@ -314,6 +323,7 @@ static lv_color_t app_gui_provisioning_state_color(
 static void app_gui_cleanup_queues(void);
 static void app_gui_set_active_screen_id(
     app_gui_screen_id_t screen_id);
+static void app_gui_init_xiaozhi_transcript_font(void);
 static void app_gui_capture_widget_refs(
     app_gui_widget_refs_t *refs);
 static void app_gui_clear_widget_refs(void);
@@ -962,6 +972,18 @@ static void app_gui_set_active_screen_id(
     taskENTER_CRITICAL(&s_screen_id_lock);
     s_current_screen_id = screen_id;
     taskEXIT_CRITICAL(&s_screen_id_lock);
+}
+
+static void app_gui_init_xiaozhi_transcript_font(void)
+{
+    if (s_xiaozhi_transcript_font_initialized) {
+        return;
+    }
+
+    s_xiaozhi_transcript_font = app_gui_xiaozhi_latin_12;
+    s_xiaozhi_transcript_font.fallback =
+        &lv_font_source_han_sans_sc_14_cjk;
+    s_xiaozhi_transcript_font_initialized = true;
 }
 
 static void app_gui_capture_widget_refs(
@@ -2517,7 +2539,7 @@ static esp_err_t app_gui_create_xiaozhi_screen(
         lv_obj_set_pos(transcript_labels[index], 30, transcript_text_y[index]);
         lv_obj_set_style_text_font(
             transcript_labels[index],
-            &lv_font_montserrat_10,
+            &s_xiaozhi_transcript_font,
             LV_PART_MAIN);
         lv_obj_set_style_text_color(
             transcript_labels[index],
@@ -4145,6 +4167,8 @@ esp_err_t app_gui_init(void)
         ESP_LOGW(TAG, "Application GUI is already initialized");
         return ESP_ERR_INVALID_STATE;
     }
+
+    app_gui_init_xiaozhi_transcript_font();
 
     s_command_queue =
         xQueueCreateWithCaps(
