@@ -30,4 +30,7 @@ CONFIG_LV_FONT_MONTSERRAT_12=y
 CONFIG_LV_FONT_MONTSERRAT_18=y
 CONFIG_LV_FONT_MONTSERRAT_20=y
 CONFIG_LV_FONT_SOURCE_HAN_SANS_SC_14_CJK=y
+# app_main() owns the startup sequence and remains alive for deferred service
+# activation. The ESP-IDF default 3584-byte stack overflowed on target.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 CONFIG_LV_USE_QRCODE=y
