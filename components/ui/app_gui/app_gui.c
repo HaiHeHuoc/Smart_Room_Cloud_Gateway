@@ -361,6 +361,12 @@ static esp_err_t app_gui_create_xiaozhi_screen(
     lv_obj_t *screen);
 static const char *app_gui_wifi_state_to_string(ui_wifi_state_t state);
 static lv_color_t app_gui_wifi_state_color(ui_wifi_state_t state);
+static const char *app_gui_wifi_status_to_string(
+    const ui_wifi_status_t *status);
+static lv_color_t app_gui_wifi_status_color(
+    const ui_wifi_status_t *status);
+static const char *app_gui_dashboard_wifi_status_to_string(
+    const ui_wifi_status_t *status);
 static const char *app_gui_sensor_state_to_string(ui_sensor_state_t state);
 static lv_color_t app_gui_sensor_state_color(ui_sensor_state_t state);
 static const char *app_gui_audio_status_to_string(
@@ -1311,21 +1317,85 @@ static lv_color_t app_gui_wifi_state_color(ui_wifi_state_t state)
 {
     switch (state) {
         case UI_WIFI_STATE_CONNECTING:
-            return lv_color_hex(0xFFC857);
-
         case UI_WIFI_STATE_WAITING_FOR_IP:
-            return lv_color_hex(0x4DB6E5);
+        case UI_WIFI_STATE_RETRY_WAIT:
+            return lv_color_hex(0xFFC857);
 
         case UI_WIFI_STATE_CONNECTED:
             return lv_color_hex(0x49C978);
 
-        case UI_WIFI_STATE_DISCONNECTED:
         case UI_WIFI_STATE_FAILED:
             return lv_color_hex(0xF06464);
 
+        case UI_WIFI_STATE_DISCONNECTED:
         case UI_WIFI_STATE_IDLE:
         default:
             return lv_color_hex(0xA6B0B6);
+    }
+}
+
+static const char *app_gui_wifi_status_to_string(
+    const ui_wifi_status_t *status)
+{
+    if (status == NULL) {
+        return "IDLE";
+    }
+
+    if ((status->state == UI_WIFI_STATE_CONNECTED) &&
+        !status->has_ipv4_address) {
+        return "WAITING IP";
+    }
+
+    return app_gui_wifi_state_to_string(status->state);
+}
+
+static lv_color_t app_gui_wifi_status_color(
+    const ui_wifi_status_t *status)
+{
+    if (status == NULL) {
+        return app_gui_wifi_state_color(UI_WIFI_STATE_IDLE);
+    }
+
+    if ((status->state == UI_WIFI_STATE_CONNECTED) &&
+        !status->has_ipv4_address) {
+        return app_gui_wifi_state_color(UI_WIFI_STATE_WAITING_FOR_IP);
+    }
+
+    return app_gui_wifi_state_color(status->state);
+}
+
+static const char *app_gui_dashboard_wifi_status_to_string(
+    const ui_wifi_status_t *status)
+{
+    if (status == NULL) {
+        return "Wi-Fi: --";
+    }
+
+    if ((status->state == UI_WIFI_STATE_CONNECTED) &&
+        status->has_ipv4_address) {
+        return "Wi-Fi: Online";
+    }
+
+    switch (status->state) {
+        case UI_WIFI_STATE_CONNECTING:
+            return "Wi-Fi: Connecting";
+
+        case UI_WIFI_STATE_WAITING_FOR_IP:
+        case UI_WIFI_STATE_CONNECTED:
+            return "Wi-Fi: Waiting IP";
+
+        case UI_WIFI_STATE_RETRY_WAIT:
+            return "Wi-Fi: Retrying";
+
+        case UI_WIFI_STATE_FAILED:
+            return "Wi-Fi: Failed";
+
+        case UI_WIFI_STATE_DISCONNECTED:
+            return "Wi-Fi: Offline";
+
+        case UI_WIFI_STATE_IDLE:
+        default:
+            return "Wi-Fi: Idle";
     }
 }
 
@@ -2154,15 +2224,13 @@ static esp_err_t app_gui_create_sensor_screen(
     lv_obj_set_style_pad_all(screen, 0, LV_PART_MAIN);
 
     bool wifi_status_available = false;
-    bool wifi_online = false;
+    ui_wifi_status_t wifi_status = {0};
     bool cloud_status_available = false;
     ui_cloud_state_t cloud_state = UI_CLOUD_STATE_UNKNOWN;
 
     taskENTER_CRITICAL(&s_screen_id_lock);
     wifi_status_available = s_latest_wifi_status_available;
-    wifi_online =
-        s_latest_wifi_status.state == UI_WIFI_STATE_CONNECTED &&
-        s_latest_wifi_status.has_ipv4_address;
+    wifi_status = s_latest_wifi_status;
     cloud_status_available = s_latest_cloud_status_available;
     cloud_state = s_latest_cloud_status.state;
     taskEXIT_CRITICAL(&s_screen_id_lock);
@@ -2171,9 +2239,7 @@ static esp_err_t app_gui_create_sensor_screen(
     const lv_color_t wifi_color =
         !wifi_status_available
             ? inactive_color
-            : (wifi_online
-                ? lv_color_hex(0x49C978)
-                : lv_color_hex(0xF06464));
+            : app_gui_wifi_status_color(&wifi_status);
     const lv_color_t cloud_color =
         cloud_status_available
             ? app_gui_cloud_state_color(cloud_state)
@@ -2301,11 +2367,9 @@ static esp_err_t app_gui_create_sensor_screen(
         app_gui_create_sensor_value_label(
             screen,
             APP_GUI_DASHBOARD_STATUS_WIFI_Y_PX,
-            !wifi_status_available
-                ? "Wi-Fi: --"
-                : (wifi_online
-                    ? "Wi-Fi: Online"
-                    : "Wi-Fi: Offline"));
+            wifi_status_available
+                ? app_gui_dashboard_wifi_status_to_string(&wifi_status)
+                : "Wi-Fi: --");
     s_sensor_cloud_label =
         app_gui_create_sensor_value_label(
             screen,
@@ -3083,21 +3147,21 @@ static void app_gui_render_wifi_status(
         return;
     }
 
-    lv_label_set_text(
+    app_gui_set_label_text_if_changed(
         s_wifi_mode_label,
-        app_gui_wifi_state_to_string(status->state));
+        app_gui_wifi_status_to_string(status));
     lv_obj_set_style_text_color(
         s_wifi_mode_label,
-        app_gui_wifi_state_color(status->state),
+        app_gui_wifi_status_color(status),
         LV_PART_MAIN);
 
-    lv_label_set_text(
+    app_gui_set_label_text_if_changed(
         s_wifi_ssid_label,
         status->ssid[0] != '\0'
             ? status->ssid
             : "-");
 
-    lv_label_set_text(
+    app_gui_set_label_text_if_changed(
         s_wifi_ip_label,
         status->has_ipv4_address &&
         (status->ipv4_address[0] != '\0')
@@ -3307,19 +3371,11 @@ static void app_gui_render_sensor_wifi_status(
         return;
     }
 
-    const bool online =
-        status->state == UI_WIFI_STATE_CONNECTED &&
-        status->has_ipv4_address;
-    const lv_color_t state_color =
-        online
-            ? lv_color_hex(0x49C978)
-            : lv_color_hex(0xF06464);
+    const lv_color_t state_color = app_gui_wifi_status_color(status);
 
-    lv_label_set_text(
+    app_gui_set_label_text_if_changed(
         s_sensor_wifi_label,
-        online
-            ? "Wi-Fi: Online"
-            : "Wi-Fi: Offline");
+        app_gui_dashboard_wifi_status_to_string(status));
     lv_obj_set_style_text_color(
         s_sensor_wifi_label,
         state_color,
