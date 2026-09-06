@@ -2300,6 +2300,8 @@ static esp_err_t app_gui_create_sensor_screen(
 
     lv_obj_t *wifi_header = lv_label_create(screen);
     lv_obj_t *cloud_header = lv_label_create(screen);
+    lv_obj_t *temperature_header = lv_label_create(screen);
+    lv_obj_t *humidity_header = lv_label_create(screen);
     lv_obj_t *header_rule = app_gui_create_dashboard_rule(
         screen,
         1,
@@ -2325,6 +2327,8 @@ static esp_err_t app_gui_create_sensor_screen(
 
     if ((wifi_header == NULL) ||
         (cloud_header == NULL) ||
+        (temperature_header == NULL) ||
+        (humidity_header == NULL) ||
         (header_rule == NULL) ||
         (column_rule == NULL) ||
         (s_sensor_wifi_dot == NULL) ||
@@ -2353,6 +2357,32 @@ static esp_err_t app_gui_create_sensor_screen(
         cloud_header,
         lv_color_hex(0xF2F5F7),
         LV_PART_MAIN);
+
+    lv_label_set_text(temperature_header, "TEMP");
+    lv_label_set_text(humidity_header, "HUMIDITY");
+
+    lv_obj_t *sensor_headers[] = {
+        temperature_header,
+        humidity_header,
+    };
+
+    const int32_t sensor_header_y[] = {30, 74};
+    for (size_t index = 0U;
+         index < (sizeof(sensor_headers) / sizeof(sensor_headers[0]));
+         ++index) {
+        lv_obj_set_pos(
+            sensor_headers[index],
+            APP_GUI_DASHBOARD_MARGIN_PX,
+            sensor_header_y[index]);
+        lv_obj_set_style_text_font(
+            sensor_headers[index],
+            &lv_font_montserrat_10,
+            LV_PART_MAIN);
+        lv_obj_set_style_text_color(
+            sensor_headers[index],
+            lv_color_hex(0x8C989F),
+            LV_PART_MAIN);
+    }
 
     s_sensor_temperature_label =
         app_gui_create_sensor_value_label(screen, 47, "-");
@@ -2411,6 +2441,11 @@ static esp_err_t app_gui_create_sensor_screen(
         lv_obj_set_style_text_align(
             left_values[index],
             LV_TEXT_ALIGN_CENTER,
+            LV_PART_MAIN);
+        lv_obj_set_height(left_values[index], 24);
+        lv_obj_set_style_text_font(
+            left_values[index],
+            &lv_font_montserrat_18,
             LV_PART_MAIN);
     }
 
