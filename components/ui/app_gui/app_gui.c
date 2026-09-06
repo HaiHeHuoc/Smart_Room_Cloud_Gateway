@@ -797,38 +797,38 @@ static const char *app_gui_provisioning_instruction_text(
 {
     switch (state) {
         case UI_PROVISIONING_STATE_WAITING_FOR_PHONE:
-            return "Scan to connect";
+            return "Scan QR\nwith phone";
 
         case UI_PROVISIONING_STATE_CREDENTIAL_RECEIVED:
-            return "Wi-Fi received";
+            return "Phone connected";
 
         case UI_PROVISIONING_STATE_CONNECTING_WIFI:
-            return "Connecting to Wi-Fi";
+            return "Joining Wi-Fi";
 
         case UI_PROVISIONING_STATE_WAITING_FOR_IP:
-            return "Connected to router";
+            return "Getting address";
 
         case UI_PROVISIONING_STATE_SAVING_CONFIG:
-            return "Saving settings";
+            return "Saving Wi-Fi";
 
         case UI_PROVISIONING_STATE_CLEANING_UP:
-            return "Setup complete";
+            return "Finishing setup";
 
         case UI_PROVISIONING_STATE_SUCCESS:
-            return "Wi-Fi configured";
+            return "Setup complete";
 
         case UI_PROVISIONING_STATE_FAILED:
-            return "Check Wi-Fi details";
+            return "Check password";
 
         case UI_PROVISIONING_STATE_TIMEOUT:
-            return "Setup expired";
+            return "Scan QR again";
 
         case UI_PROVISIONING_STATE_RETRYING:
-            return "Starting a new session";
+            return "Starting again";
 
         case UI_PROVISIONING_STATE_STARTING:
         default:
-            return "Prepare your phone";
+            return "Open phone setup";
     }
 }
 
@@ -837,38 +837,38 @@ static const char *app_gui_provisioning_status_text(
 {
     switch (state) {
         case UI_PROVISIONING_STATE_WAITING_FOR_PHONE:
-            return "Waiting for phone";
+            return "Phone: waiting";
 
         case UI_PROVISIONING_STATE_CREDENTIAL_RECEIVED:
-            return "Checking...";
+            return "Wi-Fi: received";
 
         case UI_PROVISIONING_STATE_CONNECTING_WIFI:
-            return "Connecting...";
+            return "Wi-Fi: connecting";
 
         case UI_PROVISIONING_STATE_WAITING_FOR_IP:
-            return "Getting IP...";
+            return "Network: waiting";
 
         case UI_PROVISIONING_STATE_SAVING_CONFIG:
-            return "Saving...";
+            return "Storage: saving";
 
         case UI_PROVISIONING_STATE_CLEANING_UP:
-            return "Finishing...";
+            return "Setup: finalizing";
 
         case UI_PROVISIONING_STATE_SUCCESS:
-            return "Connected";
+            return "Wi-Fi: ready";
 
         case UI_PROVISIONING_STATE_FAILED:
-            return "Connection failed";
+            return "Wi-Fi: failed";
 
         case UI_PROVISIONING_STATE_TIMEOUT:
-            return "Timed out";
+            return "Session expired";
 
         case UI_PROVISIONING_STATE_RETRYING:
-            return "Retrying...";
+            return "Session: retrying";
 
         case UI_PROVISIONING_STATE_STARTING:
         default:
-            return "Starting setup...";
+            return "Setup: starting";
     }
 }
 
@@ -2132,7 +2132,7 @@ static void app_gui_render_provisioning_status(
             snprintf(
                 instruction_with_session,
                 sizeof(instruction_with_session),
-                "Session %lu/%lu\n%s",
+                "Try %lu/%lu\n%s",
                 (unsigned long)status->session_number,
                 (unsigned long)status->session_limit,
                 instruction);
@@ -2146,10 +2146,10 @@ static void app_gui_render_provisioning_status(
         }
     }
 
-    lv_label_set_text(
+    app_gui_set_label_text_if_changed(
         s_provisioning_instruction_label,
         instruction);
-    lv_label_set_text(
+    app_gui_set_label_text_if_changed(
         s_provisioning_status_label,
         app_gui_provisioning_status_text(status->state));
     lv_obj_set_style_text_color(
