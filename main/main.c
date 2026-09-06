@@ -1304,6 +1304,9 @@ static void app_sensor_status_callback(
 
         .last_error =
             status->last_error,
+
+        .last_success_time_ms =
+            status->last_success_time_ms,
     };
 
     esp_err_t error =

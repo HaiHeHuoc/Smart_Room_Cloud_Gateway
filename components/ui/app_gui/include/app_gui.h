@@ -153,6 +153,9 @@ typedef struct
 
     /** Result of the most recent sensor read. */
     esp_err_t last_error;
+
+    /** Monotonic uptime of the latest valid sample, or zero if none exists. */
+    int64_t last_success_time_ms;
 } ui_sensor_status_t;
 
 /* Audio UI Types ---------------------------------------------------------- */
