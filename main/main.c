@@ -1296,6 +1296,12 @@ static void app_sensor_status_callback(
         .humidity_percent =
             status->humidity_percent,
 
+        .last_valid_temperature_c =
+            status->last_valid_temperature_c,
+
+        .last_valid_humidity_percent =
+            status->last_valid_humidity_percent,
+
         .data_valid =
             status->data_valid,
 

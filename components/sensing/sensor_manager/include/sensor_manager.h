@@ -72,6 +72,12 @@ typedef struct
      */
     float humidity_percent;
 
+    /** Temperature from the latest successful read, retained across failures. */
+    float last_valid_temperature_c;
+
+    /** Humidity from the latest successful read, retained across failures. */
+    float last_valid_humidity_percent;
+
     /** True after at least one successful DHT22 sample has been recorded. */
     bool data_valid;
 

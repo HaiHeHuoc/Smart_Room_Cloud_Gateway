@@ -94,6 +94,12 @@ static void sensor_manager_update_success(
     s_status.humidity_percent =
         data->humidity_percent;
 
+    s_status.last_valid_temperature_c =
+        data->temperature_c;
+
+    s_status.last_valid_humidity_percent =
+        data->humidity_percent;
+
     s_status.data_valid = true;
     s_status.data_stale = false;
 
