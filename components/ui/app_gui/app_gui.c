@@ -56,6 +56,8 @@
 #define APP_GUI_CLOCK_DATE_PLACEHOLDER         "--/--/----"
 #define APP_GUI_XIAOZHI_TIMER_PERIOD_MS        100U
 #define APP_GUI_XIAOZHI_DURATION_BUFFER_SIZE   16U
+#define APP_GUI_XIAOZHI_ASSISTANT_SCROLL_STEP_PX 1
+#define APP_GUI_XIAOZHI_ASSISTANT_SCROLL_HOLD_TICKS 10U
 
 /*
  * The 73-byte Security 1 payload needs QR version 5 at LVGL's medium ECC:
@@ -291,6 +293,9 @@ static lv_obj_t *s_xiaozhi_assistant_text_label = NULL;
 static lv_obj_t *s_xiaozhi_assistant_overflow_label = NULL;
 static lv_obj_t *s_xiaozhi_state_indicator = NULL;
 static lv_timer_t *s_xiaozhi_screen_timer = NULL;
+static int32_t s_xiaozhi_assistant_scroll_limit_px = 0;
+static int32_t s_xiaozhi_assistant_scroll_offset_px = 0;
+static uint32_t s_xiaozhi_assistant_scroll_hold_ticks = 0U;
 
 static bool s_latest_reset_status_available = false;
 
@@ -364,6 +369,9 @@ static void app_gui_sensor_clock_timer_cb(lv_timer_t *timer);
 static void app_gui_restart_sensor_clock_timer(void);
 static void app_gui_xiaozhi_timer_cb(lv_timer_t *timer);
 static void app_gui_restart_xiaozhi_screen_timer(void);
+static void app_gui_reset_xiaozhi_assistant_scroll(
+    int32_t scroll_limit_px);
+static void app_gui_update_xiaozhi_assistant_scroll(void);
 static esp_err_t app_gui_create_boot_screen(
     lv_obj_t *screen);
 static void app_gui_render_boot_status(
@@ -448,6 +456,9 @@ static void app_gui_render_cloud_detail(
 static void app_gui_render_xiaozhi_status(
     const ui_xiaozhi_status_t *status);
 static bool app_gui_xiaozhi_text_exceeds_viewport(
+    const char *text,
+    const lv_obj_t *viewport);
+static int32_t app_gui_xiaozhi_text_overflow_px(
     const char *text,
     const lv_obj_t *viewport);
 static bool app_gui_render_cached_status(
@@ -1150,6 +1161,9 @@ static void app_gui_clear_widget_refs(void)
     s_xiaozhi_assistant_text_label = NULL;
     s_xiaozhi_assistant_overflow_label = NULL;
     s_xiaozhi_state_indicator = NULL;
+    s_xiaozhi_assistant_scroll_limit_px = 0;
+    s_xiaozhi_assistant_scroll_offset_px = 0;
+    s_xiaozhi_assistant_scroll_hold_ticks = 0U;
     s_reset_status_label = NULL;
     s_reset_detail_label = NULL;
     s_reset_state_indicator = NULL;
@@ -1335,6 +1349,7 @@ static void app_gui_xiaozhi_timer_cb(lv_timer_t *timer)
     taskEXIT_CRITICAL(&s_screen_id_lock);
 
     app_gui_render_xiaozhi_status(&status);
+    app_gui_update_xiaozhi_assistant_scroll();
 }
 
 static void app_gui_restart_xiaozhi_screen_timer(void)
@@ -1348,6 +1363,56 @@ static void app_gui_restart_xiaozhi_screen_timer(void)
         APP_GUI_XIAOZHI_TIMER_PERIOD_MS);
     lv_timer_resume(s_xiaozhi_screen_timer);
     lv_timer_reset(s_xiaozhi_screen_timer);
+}
+
+static void app_gui_reset_xiaozhi_assistant_scroll(
+    int32_t scroll_limit_px)
+{
+    s_xiaozhi_assistant_scroll_limit_px =
+        (scroll_limit_px > 0) ? scroll_limit_px : 0;
+    s_xiaozhi_assistant_scroll_offset_px = 0;
+    s_xiaozhi_assistant_scroll_hold_ticks =
+        (s_xiaozhi_assistant_scroll_limit_px > 0)
+            ? APP_GUI_XIAOZHI_ASSISTANT_SCROLL_HOLD_TICKS
+            : 0U;
+
+    if (s_xiaozhi_assistant_text_label != NULL) {
+        lv_obj_set_y(s_xiaozhi_assistant_text_label, 0);
+    }
+}
+
+static void app_gui_update_xiaozhi_assistant_scroll(void)
+{
+    if ((s_xiaozhi_assistant_text_label == NULL) ||
+        (s_xiaozhi_assistant_scroll_limit_px <= 0)) {
+        return;
+    }
+
+    if (s_xiaozhi_assistant_scroll_hold_ticks > 0U) {
+        --s_xiaozhi_assistant_scroll_hold_ticks;
+        return;
+    }
+
+    if (s_xiaozhi_assistant_scroll_offset_px >=
+        s_xiaozhi_assistant_scroll_limit_px) {
+        app_gui_reset_xiaozhi_assistant_scroll(
+            s_xiaozhi_assistant_scroll_limit_px);
+        return;
+    }
+
+    s_xiaozhi_assistant_scroll_offset_px +=
+        APP_GUI_XIAOZHI_ASSISTANT_SCROLL_STEP_PX;
+    if (s_xiaozhi_assistant_scroll_offset_px >=
+        s_xiaozhi_assistant_scroll_limit_px) {
+        s_xiaozhi_assistant_scroll_offset_px =
+            s_xiaozhi_assistant_scroll_limit_px;
+        s_xiaozhi_assistant_scroll_hold_ticks =
+            APP_GUI_XIAOZHI_ASSISTANT_SCROLL_HOLD_TICKS;
+    }
+
+    lv_obj_set_y(
+        s_xiaozhi_assistant_text_label,
+        -s_xiaozhi_assistant_scroll_offset_px);
 }
 
 static const char *app_gui_wifi_state_to_string(ui_wifi_state_t state)
@@ -3003,8 +3068,15 @@ static bool app_gui_xiaozhi_text_exceeds_viewport(
     const char *text,
     const lv_obj_t *viewport)
 {
+    return app_gui_xiaozhi_text_overflow_px(text, viewport) > 0;
+}
+
+static int32_t app_gui_xiaozhi_text_overflow_px(
+    const char *text,
+    const lv_obj_t *viewport)
+{
     if ((text == NULL) || (text[0] == '\0') || (viewport == NULL)) {
-        return false;
+        return 0;
     }
 
     lv_point_t rendered_size = {0};
@@ -3017,7 +3089,10 @@ static bool app_gui_xiaozhi_text_exceeds_viewport(
         lv_obj_get_width(viewport),
         LV_TEXT_FLAG_BREAK_ALL);
 
-    return rendered_size.y > lv_obj_get_height(viewport);
+    const int32_t overflow_px =
+        rendered_size.y - lv_obj_get_height(viewport);
+
+    return (overflow_px > 0) ? overflow_px : 0;
 }
 
 static void app_gui_render_xiaozhi_status(
@@ -3070,10 +3145,15 @@ static void app_gui_render_xiaozhi_status(
         app_gui_xiaozhi_text_exceeds_viewport(
             status->user_text,
             s_xiaozhi_user_text_viewport);
-    const bool assistant_overflow = status->assistant_text_truncated ||
-        app_gui_xiaozhi_text_exceeds_viewport(
-            status->assistant_text,
+    const int32_t assistant_scroll_limit_px =
+        app_gui_xiaozhi_text_overflow_px(
+            assistant_text,
             s_xiaozhi_assistant_text_viewport);
+    const char *const current_assistant_text =
+        lv_label_get_text(s_xiaozhi_assistant_text_label);
+    const bool assistant_text_changed =
+        (current_assistant_text == NULL) ||
+        (strcmp(current_assistant_text, assistant_text) != 0);
 
     app_gui_set_label_text_if_changed(
         s_xiaozhi_connection_label,
@@ -3095,12 +3175,18 @@ static void app_gui_render_xiaozhi_status(
     app_gui_set_label_text_if_changed(
         s_xiaozhi_assistant_text_label,
         assistant_text);
+    if (assistant_text_changed ||
+        (assistant_scroll_limit_px !=
+         s_xiaozhi_assistant_scroll_limit_px)) {
+        app_gui_reset_xiaozhi_assistant_scroll(
+            assistant_scroll_limit_px);
+    }
     app_gui_set_label_text_if_changed(
         s_xiaozhi_user_overflow_label,
         user_overflow ? "..." : "");
     app_gui_set_label_text_if_changed(
         s_xiaozhi_assistant_overflow_label,
-        assistant_overflow ? "..." : "");
+        status->assistant_text_truncated ? "..." : "");
 
     lv_obj_set_style_text_color(
         s_xiaozhi_connection_label,
