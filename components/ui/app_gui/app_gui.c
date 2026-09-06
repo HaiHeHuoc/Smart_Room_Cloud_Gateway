@@ -9,6 +9,7 @@
 
 #include "ui_manager_lvgl.h"
 #include "app_gui.h"
+#include "app_gui_theme.h"
 #include "fonts/app_gui_xiaozhi_latin_12.h"
 #include "time_manager.h"
 #include "esp_log.h"
@@ -877,16 +878,16 @@ static lv_color_t app_gui_provisioning_state_color(
 {
     switch (state) {
         case UI_PROVISIONING_STATE_SUCCESS:
-            return lv_color_hex(0x49C978);
+            return lv_color_hex(APP_GUI_THEME_SUCCESS);
 
         case UI_PROVISIONING_STATE_FAILED:
         case UI_PROVISIONING_STATE_TIMEOUT:
-            return lv_color_hex(0xF06464);
+            return lv_color_hex(APP_GUI_THEME_FAILURE);
 
         case UI_PROVISIONING_STATE_SAVING_CONFIG:
         case UI_PROVISIONING_STATE_CLEANING_UP:
         case UI_PROVISIONING_STATE_RETRYING:
-            return lv_color_hex(0xFFC857);
+            return lv_color_hex(APP_GUI_THEME_PROGRESS);
 
         case UI_PROVISIONING_STATE_STARTING:
         case UI_PROVISIONING_STATE_WAITING_FOR_PHONE:
@@ -894,7 +895,7 @@ static lv_color_t app_gui_provisioning_state_color(
         case UI_PROVISIONING_STATE_CONNECTING_WIFI:
         case UI_PROVISIONING_STATE_WAITING_FOR_IP:
         default:
-            return lv_color_hex(0x4DB6E5);
+            return lv_color_hex(APP_GUI_THEME_INFORMATION);
     }
 }
 
@@ -944,35 +945,35 @@ static lv_color_t app_gui_audio_status_color(
     if ((status == NULL) ||
         (status->state == UI_AUDIO_STATE_UNAVAILABLE))
     {
-        return lv_color_hex(0x7B858A);
+        return lv_color_hex(APP_GUI_THEME_UNAVAILABLE);
     }
 
     if ((status->state == UI_AUDIO_STATE_IDLE) &&
         (status->last_error != ESP_OK))
     {
-        return lv_color_hex(0xF06464);
+        return lv_color_hex(APP_GUI_THEME_FAILURE);
     }
 
     switch (status->state)
     {
         case UI_AUDIO_STATE_RECORDING:
-            return lv_color_hex(0xF06464);
+            return lv_color_hex(APP_GUI_THEME_FAILURE);
 
         case UI_AUDIO_STATE_PROCESSING:
-            return lv_color_hex(0xFFC857);
+            return lv_color_hex(APP_GUI_THEME_PROGRESS);
 
         case UI_AUDIO_STATE_PLAYBACK:
-            return lv_color_hex(0x49C978);
+            return lv_color_hex(APP_GUI_THEME_SUCCESS);
 
         case UI_AUDIO_STATE_ERROR:
-            return lv_color_hex(0xF06464);
+            return lv_color_hex(APP_GUI_THEME_FAILURE);
 
         case UI_AUDIO_STATE_READY:
-            return lv_color_hex(0x4DB6E5);
+            return lv_color_hex(APP_GUI_THEME_INFORMATION);
 
         case UI_AUDIO_STATE_IDLE:
         default:
-            return lv_color_hex(0x7B858A);
+            return lv_color_hex(APP_GUI_THEME_UNAVAILABLE);
     }
 }
 
@@ -1382,18 +1383,18 @@ static lv_color_t app_gui_wifi_state_color(ui_wifi_state_t state)
         case UI_WIFI_STATE_CONNECTING:
         case UI_WIFI_STATE_WAITING_FOR_IP:
         case UI_WIFI_STATE_RETRY_WAIT:
-            return lv_color_hex(0xFFC857);
+            return lv_color_hex(APP_GUI_THEME_PROGRESS);
 
         case UI_WIFI_STATE_CONNECTED:
-            return lv_color_hex(0x49C978);
+            return lv_color_hex(APP_GUI_THEME_SUCCESS);
 
         case UI_WIFI_STATE_FAILED:
-            return lv_color_hex(0xF06464);
+            return lv_color_hex(APP_GUI_THEME_FAILURE);
 
         case UI_WIFI_STATE_DISCONNECTED:
         case UI_WIFI_STATE_IDLE:
         default:
-            return lv_color_hex(0xA6B0B6);
+            return lv_color_hex(APP_GUI_THEME_INACTIVE);
     }
 }
 
@@ -1487,17 +1488,17 @@ static lv_color_t app_gui_sensor_state_color(
 {
     switch (state) {
         case UI_SENSOR_STATE_READY:
-            return lv_color_hex(0x49C978);
+            return lv_color_hex(APP_GUI_THEME_SUCCESS);
 
         case UI_SENSOR_STATE_DEGRADED:
-            return lv_color_hex(0xFFC857);
+            return lv_color_hex(APP_GUI_THEME_PROGRESS);
 
         case UI_SENSOR_STATE_ERROR:
-            return lv_color_hex(0xF06464);
+            return lv_color_hex(APP_GUI_THEME_FAILURE);
 
         case UI_SENSOR_STATE_INITIALIZING:
         default:
-            return lv_color_hex(0x4DB6E5);
+            return lv_color_hex(APP_GUI_THEME_INFORMATION);
     }
 }
 
@@ -1534,22 +1535,22 @@ static lv_color_t app_gui_cloud_state_color(
 {
     switch (state) {
         case UI_CLOUD_STATE_ONLINE:
-            return lv_color_hex(0x49C978);
+            return lv_color_hex(APP_GUI_THEME_SUCCESS);
 
         case UI_CLOUD_STATE_UPLOADING:
-            return lv_color_hex(0x4DB6E5);
+            return lv_color_hex(APP_GUI_THEME_INFORMATION);
 
         case UI_CLOUD_STATE_WAITING:
         case UI_CLOUD_STATE_RETRY_WAIT:
-            return lv_color_hex(0xFFC857);
+            return lv_color_hex(APP_GUI_THEME_PROGRESS);
 
         case UI_CLOUD_STATE_AUTH_ERROR:
         case UI_CLOUD_STATE_ERROR:
-            return lv_color_hex(0xF06464);
+            return lv_color_hex(APP_GUI_THEME_FAILURE);
 
         case UI_CLOUD_STATE_UNKNOWN:
         default:
-            return lv_color_hex(0x7B858A);
+            return lv_color_hex(APP_GUI_THEME_UNAVAILABLE);
     }
 }
 
@@ -1626,29 +1627,29 @@ static lv_color_t app_gui_xiaozhi_state_color(
 {
     switch (state) {
         case UI_XIAOZHI_STATE_CONNECTING:
-            return lv_color_hex(0x4DB6E5);
+            return lv_color_hex(APP_GUI_THEME_INFORMATION);
 
         case UI_XIAOZHI_STATE_READY:
-            return lv_color_hex(0x49C978);
+            return lv_color_hex(APP_GUI_THEME_SUCCESS);
 
         case UI_XIAOZHI_STATE_LISTENING:
-            return lv_color_hex(0x4DB6E5);
+            return lv_color_hex(APP_GUI_THEME_INFORMATION);
 
         case UI_XIAOZHI_STATE_PROCESSING:
-            return lv_color_hex(0xFFC857);
+            return lv_color_hex(APP_GUI_THEME_PROGRESS);
 
         case UI_XIAOZHI_STATE_RESPONDING:
-            return lv_color_hex(0xA987FF);
+            return lv_color_hex(APP_GUI_THEME_VOICE_RESPONSE);
 
         case UI_XIAOZHI_STATE_RECOVERING:
-            return lv_color_hex(0xFFC857);
+            return lv_color_hex(APP_GUI_THEME_PROGRESS);
 
         case UI_XIAOZHI_STATE_ERROR:
-            return lv_color_hex(0xF06464);
+            return lv_color_hex(APP_GUI_THEME_FAILURE);
 
         case UI_XIAOZHI_STATE_DISCONNECTED:
         default:
-            return lv_color_hex(0x7B858A);
+            return lv_color_hex(APP_GUI_THEME_UNAVAILABLE);
     }
 }
 
