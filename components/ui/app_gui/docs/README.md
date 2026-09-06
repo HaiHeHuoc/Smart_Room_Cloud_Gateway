@@ -249,14 +249,19 @@ larger project font subset is added.
 The 160x128 layout has a connection/state indicator, compact state/detail and
 `RECORD mm:ss.t` lines, one 17-pixel USER viewport, and a 34-pixel XZ response
 viewport. Each viewport clips a wrapped child label, so long text cannot move
-or retain stale LVGL objects. An overlay `...` appears when text exceeds the
-viewport or the bounded model source was truncated; transcript text itself is
-never printed to logs.
+or retain stale LVGL objects. USER text keeps the `...` overflow indicator.
+When the XZ response wraps beyond its viewport, the existing UI timer moves
+its child label upward by one pixel per 100 ms after an initial pause, pauses
+again after the final line, then restarts at the beginning. A new response
+returns to the first line immediately. The XZ `...` indicator is retained only
+when the bounded model source was truncated; transcript text itself is never
+printed to logs.
 
 One LVGL timer runs every 100 ms only while `XIAOZHI` is active. It stores no
 widget pointer in user data, is paused before another root is deleted, and is
-resumed only after a completed Xiaozhi root is loaded. No new FreeRTOS task,
-queue message per timer tick, or recursive LVGL mutex acquisition is used.
+resumed only after a completed Xiaozhi root is loaded. It also owns the local
+XZ response-scroll state. No new FreeRTOS task, queue message per timer tick,
+or recursive LVGL mutex acquisition is used.
 P2-D receive plumbing and P2-E/P2-F WebSocket/audio validation behavior remain
 unchanged.
 
