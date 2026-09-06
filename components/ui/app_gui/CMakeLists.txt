@@ -1,5 +1,7 @@
 idf_component_register(
-    SRCS "app_gui.c"
+    SRCS
+        "app_gui.c"
+        "fonts/app_gui_xiaozhi_latin_12.c"
     INCLUDE_DIRS "include"
     REQUIRES
         common
