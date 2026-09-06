@@ -2662,9 +2662,9 @@ static esp_err_t app_gui_create_sensor_screen(
     }
 
     s_sensor_temperature_label =
-        app_gui_create_sensor_value_label(screen, 47, "-");
+        app_gui_create_sensor_value_label(screen, 49, "-");
     s_sensor_humidity_label =
-        app_gui_create_sensor_value_label(screen, 91, "-");
+        app_gui_create_sensor_value_label(screen, 93, "-");
     s_sensor_audio_label =
         app_gui_create_sensor_value_label(
             screen,
@@ -2719,10 +2719,10 @@ static esp_err_t app_gui_create_sensor_screen(
             left_values[index],
             LV_TEXT_ALIGN_CENTER,
             LV_PART_MAIN);
-        lv_obj_set_height(left_values[index], 24);
+        lv_obj_set_height(left_values[index], 20);
         lv_obj_set_style_text_font(
             left_values[index],
-            &lv_font_montserrat_18,
+            &lv_font_montserrat_14,
             LV_PART_MAIN);
     }
 
