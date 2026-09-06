@@ -37,6 +37,8 @@ assistant, microphone, speaker, or independent GUI task.
 | `APP_GUI_SCREEN_BOOT` | Static `Smart Gateway` / `Starting...` placeholder. |
 | `APP_GUI_SCREEN_PROVISIONING` | Stable provisioning layout with a scannable QR code, instruction/status labels, and state indicator. |
 | `APP_GUI_SCREEN_WIFI_STATUS` | Existing Wi-Fi mode, SSID, and IPv4 screen. |
+| `APP_GUI_SCREEN_NETWORK_DETAIL` | Persistent read-only Network detail: state, SSID, IPv4, RSSI, and disconnect reason. |
+| `APP_GUI_SCREEN_CLOUD_DETAIL` | Persistent read-only Cloud detail: state, age of last successful sync, HTTP status, and last error. |
 | `APP_GUI_SCREEN_SENSOR_DASHBOARD` | Sensor dashboard with synchronized local time/date in its left header, temperature/humidity below, and Wi-Fi, cloud, sensor, and audio summaries in the right status column. |
 | `APP_GUI_SCREEN_XIAOZHI` | Project-owned Xiaozhi voice presentation: connection state, actual-microphone recording duration, and bounded USER/ASSISTANT transcript. It is entered through the existing explicit screen-request API. |
 | `APP_GUI_SCREEN_RESET_RESULT` | Factory-reset success or failure result; entered only through `app_gui_show_reset_result()`. |
@@ -55,7 +57,7 @@ renamed directly. No compatibility aliases are retained.
 - Provisioning QR queue: length 1, newest payload-or-unavailable message
   overwrites the pending value.
 - Wi-Fi status queue: length 1, newest snapshot overwrites the pending value.
-- Sensor status queue: length 5, producers never wait.
+- Sensor status queue: length 1, newest snapshot overwrites the pending value.
 - Audio status queue: length 1, newest state snapshot overwrites the pending value.
 - Cloud status queue: length 1, newest snapshot overwrites the pending value.
 - Xiaozhi status queue: length 1, newest copied temporary-validation snapshot
@@ -90,7 +92,7 @@ the manager is otherwise `IDLE` is rendered as `Audio: ERR`.
 | `app_gui_post_provisioning_qr_payload()` | Validate and copy the active Security 1 QR payload into the dedicated latest-value queue. |
 | `app_gui_clear_provisioning_qr_payload()` | Post explicit session invalidation; the GUI task clears its cache and hides the QR widget. |
 | `app_gui_post_wifi_status()` | Replace the pending Wi-Fi model without calling LVGL. |
-| `app_gui_post_sensor_status()` | Queue a sensor model without calling LVGL. |
+| `app_gui_post_sensor_status()` | Replace the pending sensor model without calling LVGL. |
 | `app_gui_post_audio_status()` | Replace the pending non-sensitive audio state without calling LVGL. |
 | `app_gui_post_cloud_status()` | Replace the pending cloud model without calling LVGL. |
 | `app_gui_post_xiaozhi_status()` | Replace the pending bounded Xiaozhi validation model without calling LVGL or routing a screen. |
@@ -208,7 +210,8 @@ is no new touch/menu/button path. Production lifecycle updates always copy the
 latest snapshot, but only a real `READY -> LISTENING` microphone-capture
 transition may select `XIAOZHI`. When that interaction reaches terminal
 `READY`, `CONNECTING`, or `IDLE`, the adapter returns to the sensor dashboard
-after three seconds. A temporarily full GUI command queue is retried without
+after five seconds for a short response or ten seconds for a response over 240
+bytes or marked truncated. A temporarily full GUI command queue is retried without
 abandoning this return. Repeated transcript updates in one state do not queue
 duplicate screen routes, and a callback delayed by adapter-lock contention
 re-reads the newest model snapshot. Startup and reconnect states never claim
@@ -280,10 +283,10 @@ intentionally outside this bounded device-lifetime policy.
 Status events never choose a screen:
 
 - Provisioning updates render only on `PROVISIONING`.
-- Wi-Fi updates render only on `WIFI_STATUS` or update the Wi-Fi summary on
-  `SENSOR_DASHBOARD`.
+- Wi-Fi updates render only on `WIFI_STATUS`, `NETWORK_DETAIL`, or update the
+  Wi-Fi summary on `SENSOR_DASHBOARD`.
 - Sensor updates render only on `SENSOR_DASHBOARD`.
-- Cloud updates render only on `SENSOR_DASHBOARD`.
+- Cloud updates render only on `CLOUD_DETAIL` or `SENSOR_DASHBOARD`.
 - Xiaozhi validation updates render only on `XIAOZHI`.
 - Reset results render only through the reset-result command and screen.
 - Updates received for inactive screens only refresh cached models and never
@@ -294,6 +297,8 @@ Entering `PROVISIONING` renders the latest provisioning model, or the default
 payload when available. Entering `WIFI_STATUS` renders the latest Wi-Fi model.
 Entering `SENSOR_DASHBOARD` renders the latest sensor, Wi-Fi summary, cloud
 models, and the current time/date header.
+Entering `NETWORK_DETAIL` or `CLOUD_DETAIL` renders the corresponding latest
+cached model. Neither detail screen creates a timeout route.
 Entering `XIAOZHI` renders its newest complete cached snapshot, or a safe
 `DISCONNECTED` default before the first validation update.
 
@@ -438,17 +443,17 @@ clears every provisioning pointer when another screen becomes active.
 
 | State | Instruction | Status | Color |
 |---|---|---|---|
-| `STARTING` | Prepare your phone | Starting setup... | Blue |
-| `WAITING_FOR_PHONE` | Scan to connect | Waiting for phone | Blue |
-| `CREDENTIAL_RECEIVED` | Wi-Fi received | Checking... | Blue |
-| `CONNECTING_WIFI` | Connecting to Wi-Fi | Connecting... | Blue |
-| `WAITING_FOR_IP` | Connected to router | Getting IP... | Blue |
-| `SAVING_CONFIG` | Saving settings | Saving... | Yellow |
-| `CLEANING_UP` | Setup complete | Finishing... | Yellow |
-| `SUCCESS` | Wi-Fi configured | Connected | Green |
-| `FAILED` | Check Wi-Fi details | Connection failed | Red |
-| `TIMEOUT` | Setup expired | Timed out | Red |
-| `RETRYING` | Starting a new session | Retrying... | Yellow |
+| `STARTING` | Open phone setup | Setup: starting | Blue |
+| `WAITING_FOR_PHONE` | Scan QR with phone | Phone: waiting | Blue |
+| `CREDENTIAL_RECEIVED` | Phone connected | Wi-Fi: received | Blue |
+| `CONNECTING_WIFI` | Joining Wi-Fi | Wi-Fi: connecting | Blue |
+| `WAITING_FOR_IP` | Getting address | Network: waiting | Blue |
+| `SAVING_CONFIG` | Saving Wi-Fi | Storage: saving | Yellow |
+| `CLEANING_UP` | Finishing setup | Setup: finalizing | Yellow |
+| `SUCCESS` | Setup complete | Wi-Fi: ready | Green |
+| `FAILED` | Check password | Wi-Fi: failed | Red |
+| `TIMEOUT` | Scan QR again | Session expired | Red |
+| `RETRYING` | Starting again | Session: retrying | Yellow |
 
 `last_error` and `wifi_disconnect_reason` are available only for debug logs
 and future policy. Numeric internal values are not shown to normal users.
@@ -619,8 +624,8 @@ stability. Final Phase 6.4 hardware acceptance remains pending.
 Run any temporary state driver outside the UI task, call only public
 `app_gui` APIs, and remove it before committing production behavior.
 
-1. Activate `PROVISIONING`; verify `Wi-Fi Setup`, `Prepare your phone`, and
-   `Starting setup...` with no clipping or white flash.
+1. Activate `PROVISIONING`; verify `Wi-Fi Setup`, `Open phone setup`, and
+   `Setup: starting` with no clipping or white flash.
 2. Exercise all provisioning states including `RETRYING`; verify text/color
    changes without
    object recreation, crash, watchdog, or LVGL assertion.
@@ -690,6 +695,10 @@ Run any temporary state driver outside the UI task, call only public
     attempt. Verify the validation continues independently, latest status is
     restored on return, and no stale-pointer/LVGL assertion/heap-growth trend
     appears under repeated transitions.
+26. Request `NETWORK_DETAIL` and `CLOUD_DETAIL` through the public GUI API.
+    Verify cached and live values update without an automatic route away;
+    confirm Wi-Fi is green only after IPv4, and Cloud `LAST SYNC` reads
+    `Never` before the first successful upload.
 
 ## Phase 6.4.7 Closure Status
 
