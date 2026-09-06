@@ -22,6 +22,12 @@ typedef enum
     /** Wi-Fi status screen. */
     APP_GUI_SCREEN_WIFI_STATUS,
 
+    /** Persistent Network detail screen. */
+    APP_GUI_SCREEN_NETWORK_DETAIL,
+
+    /** Persistent Cloud synchronization detail screen. */
+    APP_GUI_SCREEN_CLOUD_DETAIL,
+
     /** Temperature and humidity sensor screen. */
     APP_GUI_SCREEN_SENSOR_DASHBOARD,
 

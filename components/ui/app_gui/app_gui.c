@@ -151,6 +151,15 @@ typedef struct
     lv_obj_t *wifi_mode_label;
     lv_obj_t *wifi_ssid_label;
     lv_obj_t *wifi_ip_label;
+    lv_obj_t *network_state_label;
+    lv_obj_t *network_ssid_label;
+    lv_obj_t *network_ip_label;
+    lv_obj_t *network_rssi_label;
+    lv_obj_t *network_reason_label;
+    lv_obj_t *cloud_detail_state_label;
+    lv_obj_t *cloud_detail_sync_label;
+    lv_obj_t *cloud_detail_http_label;
+    lv_obj_t *cloud_detail_error_label;
     lv_obj_t *sensor_time_label;
     lv_obj_t *sensor_date_label;
     lv_obj_t *sensor_temperature_label;
@@ -243,6 +252,17 @@ static lv_obj_t *s_wifi_mode_label = NULL;
 static lv_obj_t *s_wifi_ssid_label = NULL;
 static lv_obj_t *s_wifi_ip_label = NULL;
 static lv_timer_t *s_wifi_screen_timer = NULL;
+
+/* Detail object references are valid only while their corresponding screen is active. */
+static lv_obj_t *s_network_state_label = NULL;
+static lv_obj_t *s_network_ssid_label = NULL;
+static lv_obj_t *s_network_ip_label = NULL;
+static lv_obj_t *s_network_rssi_label = NULL;
+static lv_obj_t *s_network_reason_label = NULL;
+static lv_obj_t *s_cloud_detail_state_label = NULL;
+static lv_obj_t *s_cloud_detail_sync_label = NULL;
+static lv_obj_t *s_cloud_detail_http_label = NULL;
+static lv_obj_t *s_cloud_detail_error_label = NULL;
 
 /* Sensor object references are valid only while the sensor screen is active. */
 static lv_obj_t *s_sensor_time_label = NULL;
@@ -355,6 +375,10 @@ static void app_gui_render_provisioning_status(
     const ui_provisioning_status_t *status);
 static esp_err_t app_gui_create_wifi_screen(
     lv_obj_t *screen);
+static esp_err_t app_gui_create_network_detail_screen(
+    lv_obj_t *screen);
+static esp_err_t app_gui_create_cloud_detail_screen(
+    lv_obj_t *screen);
 static esp_err_t app_gui_create_sensor_screen(
     lv_obj_t *screen);
 static esp_err_t app_gui_create_xiaozhi_screen(
@@ -405,6 +429,8 @@ static void app_gui_set_label_text_if_changed(
     const char *text);
 static void app_gui_render_wifi_status(
     const ui_wifi_status_t *status);
+static void app_gui_render_network_detail(
+    const ui_wifi_status_t *status);
 static void app_gui_render_sensor_status(
     const ui_sensor_status_t *status);
 static void app_gui_render_sensor_clock(void);
@@ -415,6 +441,8 @@ static void app_gui_render_dashboard_xiaozhi_status(
 static void app_gui_render_sensor_wifi_status(
     const ui_wifi_status_t *status);
 static void app_gui_render_cloud_status(
+    const ui_cloud_status_t *status);
+static void app_gui_render_cloud_detail(
     const ui_cloud_status_t *status);
 static void app_gui_render_xiaozhi_status(
     const ui_xiaozhi_status_t *status);
@@ -463,6 +491,8 @@ static bool app_gui_is_valid_screen_id(
          (screen_id == APP_GUI_SCREEN_BOOT) ||
          (screen_id == APP_GUI_SCREEN_PROVISIONING) ||
          (screen_id == APP_GUI_SCREEN_WIFI_STATUS) ||
+         (screen_id == APP_GUI_SCREEN_NETWORK_DETAIL) ||
+         (screen_id == APP_GUI_SCREEN_CLOUD_DETAIL) ||
          (screen_id == APP_GUI_SCREEN_SENSOR_DASHBOARD) ||
          (screen_id == APP_GUI_SCREEN_XIAOZHI) ||
          (screen_id == APP_GUI_SCREEN_RESET_RESULT));
@@ -699,6 +729,12 @@ static const char *app_gui_screen_id_to_string(
 
         case APP_GUI_SCREEN_WIFI_STATUS:
             return "WIFI_STATUS";
+
+        case APP_GUI_SCREEN_NETWORK_DETAIL:
+            return "NETWORK_DETAIL";
+
+        case APP_GUI_SCREEN_CLOUD_DETAIL:
+            return "CLOUD_DETAIL";
 
         case APP_GUI_SCREEN_SENSOR_DASHBOARD:
             return "SENSOR_DASHBOARD";
@@ -1030,6 +1066,15 @@ static void app_gui_capture_widget_refs(
     refs->wifi_mode_label = s_wifi_mode_label;
     refs->wifi_ssid_label = s_wifi_ssid_label;
     refs->wifi_ip_label = s_wifi_ip_label;
+    refs->network_state_label = s_network_state_label;
+    refs->network_ssid_label = s_network_ssid_label;
+    refs->network_ip_label = s_network_ip_label;
+    refs->network_rssi_label = s_network_rssi_label;
+    refs->network_reason_label = s_network_reason_label;
+    refs->cloud_detail_state_label = s_cloud_detail_state_label;
+    refs->cloud_detail_sync_label = s_cloud_detail_sync_label;
+    refs->cloud_detail_http_label = s_cloud_detail_http_label;
+    refs->cloud_detail_error_label = s_cloud_detail_error_label;
     refs->sensor_time_label = s_sensor_time_label;
     refs->sensor_date_label = s_sensor_date_label;
     refs->sensor_temperature_label = s_sensor_temperature_label;
@@ -1074,6 +1119,15 @@ static void app_gui_clear_widget_refs(void)
     s_wifi_mode_label = NULL;
     s_wifi_ssid_label = NULL;
     s_wifi_ip_label = NULL;
+    s_network_state_label = NULL;
+    s_network_ssid_label = NULL;
+    s_network_ip_label = NULL;
+    s_network_rssi_label = NULL;
+    s_network_reason_label = NULL;
+    s_cloud_detail_state_label = NULL;
+    s_cloud_detail_sync_label = NULL;
+    s_cloud_detail_http_label = NULL;
+    s_cloud_detail_error_label = NULL;
     s_sensor_time_label = NULL;
     s_sensor_date_label = NULL;
     s_sensor_temperature_label = NULL;
@@ -1122,6 +1176,15 @@ static void app_gui_apply_widget_refs(
     s_wifi_mode_label = refs->wifi_mode_label;
     s_wifi_ssid_label = refs->wifi_ssid_label;
     s_wifi_ip_label = refs->wifi_ip_label;
+    s_network_state_label = refs->network_state_label;
+    s_network_ssid_label = refs->network_ssid_label;
+    s_network_ip_label = refs->network_ip_label;
+    s_network_rssi_label = refs->network_rssi_label;
+    s_network_reason_label = refs->network_reason_label;
+    s_cloud_detail_state_label = refs->cloud_detail_state_label;
+    s_cloud_detail_sync_label = refs->cloud_detail_sync_label;
+    s_cloud_detail_http_label = refs->cloud_detail_http_label;
+    s_cloud_detail_error_label = refs->cloud_detail_error_label;
     s_sensor_time_label = refs->sensor_time_label;
     s_sensor_date_label = refs->sensor_date_label;
     s_sensor_temperature_label = refs->sensor_temperature_label;
@@ -2200,6 +2263,154 @@ static esp_err_t app_gui_create_wifi_screen(
     return ESP_OK;
 }
 
+static lv_obj_t *app_gui_create_detail_value_label(
+    lv_obj_t *screen,
+    int32_t y)
+{
+    lv_obj_t *label = lv_label_create(screen);
+    if (label == NULL) {
+        return NULL;
+    }
+
+    lv_label_set_text(label, "-");
+    lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_DOTS);
+    lv_obj_set_size(label, 96, 16);
+    lv_obj_set_pos(label, 58, y);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_12, LV_PART_MAIN);
+    lv_obj_set_style_text_color(label, lv_color_hex(0xF2F5F7), LV_PART_MAIN);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
+    return label;
+}
+
+static esp_err_t app_gui_create_detail_screen_chrome(
+    lv_obj_t *screen,
+    const char *title,
+    const char *const *row_titles,
+    size_t row_count,
+    const int32_t *row_y)
+{
+    if ((screen == NULL) || (title == NULL) || (row_titles == NULL) ||
+        (row_y == NULL)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(screen, lv_color_hex(0x101619), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(screen, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(screen, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(screen, 0, LV_PART_MAIN);
+
+    lv_obj_t *title_label = lv_label_create(screen);
+    lv_obj_t *divider = lv_obj_create(screen);
+    if ((title_label == NULL) || (divider == NULL)) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    lv_label_set_text(title_label, title);
+    lv_obj_set_pos(title_label, 6, 5);
+    lv_obj_set_style_text_font(title_label, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_color(title_label, lv_color_hex(0xF2F5F7), LV_PART_MAIN);
+
+    lv_obj_remove_style_all(divider);
+    lv_obj_set_size(divider, 148, 1);
+    lv_obj_set_pos(divider, 6, 31);
+    lv_obj_set_style_bg_opa(divider, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(divider, lv_color_hex(0x344047), LV_PART_MAIN);
+
+    for (size_t index = 0U; index < row_count; ++index) {
+        lv_obj_t *row_title = lv_label_create(screen);
+        if (row_title == NULL) {
+            return ESP_ERR_NO_MEM;
+        }
+
+        lv_label_set_text(row_title, row_titles[index]);
+        lv_obj_set_pos(row_title, 6, row_y[index] + 2);
+        lv_obj_set_style_text_font(row_title, &lv_font_montserrat_10, LV_PART_MAIN);
+        lv_obj_set_style_text_color(row_title, lv_color_hex(0x8C989F), LV_PART_MAIN);
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t app_gui_create_network_detail_screen(
+    lv_obj_t *screen)
+{
+    static const char *const row_titles[] = {
+        "STATE", "SSID", "IPv4", "RSSI", "REASON",
+    };
+    static const int32_t row_y[] = {38, 56, 74, 92, 110};
+
+    if (screen == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    app_gui_clear_widget_refs();
+    const esp_err_t ret = app_gui_create_detail_screen_chrome(
+        screen,
+        "NETWORK",
+        row_titles,
+        sizeof(row_titles) / sizeof(row_titles[0]),
+        row_y);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    s_network_state_label = app_gui_create_detail_value_label(screen, row_y[0]);
+    s_network_ssid_label = app_gui_create_detail_value_label(screen, row_y[1]);
+    s_network_ip_label = app_gui_create_detail_value_label(screen, row_y[2]);
+    s_network_rssi_label = app_gui_create_detail_value_label(screen, row_y[3]);
+    s_network_reason_label = app_gui_create_detail_value_label(screen, row_y[4]);
+
+    return ((s_network_state_label != NULL) &&
+            (s_network_ssid_label != NULL) &&
+            (s_network_ip_label != NULL) &&
+            (s_network_rssi_label != NULL) &&
+            (s_network_reason_label != NULL))
+               ? ESP_OK
+               : ESP_ERR_NO_MEM;
+}
+
+static esp_err_t app_gui_create_cloud_detail_screen(
+    lv_obj_t *screen)
+{
+    static const char *const row_titles[] = {
+        "STATE", "LAST SYNC", "HTTP", "ERROR",
+    };
+    static const int32_t row_y[] = {42, 65, 88, 111};
+
+    if (screen == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    app_gui_clear_widget_refs();
+    const esp_err_t ret = app_gui_create_detail_screen_chrome(
+        screen,
+        "CLOUD",
+        row_titles,
+        sizeof(row_titles) / sizeof(row_titles[0]),
+        row_y);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    s_cloud_detail_state_label =
+        app_gui_create_detail_value_label(screen, row_y[0]);
+    s_cloud_detail_sync_label =
+        app_gui_create_detail_value_label(screen, row_y[1]);
+    s_cloud_detail_http_label =
+        app_gui_create_detail_value_label(screen, row_y[2]);
+    s_cloud_detail_error_label =
+        app_gui_create_detail_value_label(screen, row_y[3]);
+
+    return ((s_cloud_detail_state_label != NULL) &&
+            (s_cloud_detail_sync_label != NULL) &&
+            (s_cloud_detail_http_label != NULL) &&
+            (s_cloud_detail_error_label != NULL))
+               ? ESP_OK
+               : ESP_ERR_NO_MEM;
+}
+
 /* Sensor Screen Construction ---------------------------------------------- */
 static esp_err_t app_gui_create_sensor_screen(
     lv_obj_t *screen)
@@ -3204,6 +3415,61 @@ static void app_gui_render_wifi_status(
             : "-");
 }
 
+static void app_gui_render_network_detail(
+    const ui_wifi_status_t *status)
+{
+    if ((status == NULL) ||
+        (s_network_state_label == NULL) ||
+        (s_network_ssid_label == NULL) ||
+        (s_network_ip_label == NULL) ||
+        (s_network_rssi_label == NULL) ||
+        (s_network_reason_label == NULL)) {
+        return;
+    }
+
+    char rssi_text[16] = {0};
+    char reason_text[16] = {0};
+
+    if (status->rssi_valid) {
+        (void)snprintf(
+            rssi_text,
+            sizeof(rssi_text),
+            "%d dBm",
+            (int)status->rssi_dbm);
+    } else {
+        (void)snprintf(rssi_text, sizeof(rssi_text), "-");
+    }
+
+    if ((status->state == UI_WIFI_STATE_DISCONNECTED) ||
+        (status->state == UI_WIFI_STATE_FAILED)) {
+        (void)snprintf(
+            reason_text,
+            sizeof(reason_text),
+            "0x%04X",
+            (unsigned)status->disconnect_reason);
+    } else {
+        (void)snprintf(reason_text, sizeof(reason_text), "-");
+    }
+
+    app_gui_set_label_text_if_changed(
+        s_network_state_label,
+        app_gui_wifi_status_to_string(status));
+    app_gui_set_label_text_if_changed(
+        s_network_ssid_label,
+        status->ssid[0] != '\0' ? status->ssid : "-");
+    app_gui_set_label_text_if_changed(
+        s_network_ip_label,
+        status->has_ipv4_address && (status->ipv4_address[0] != '\0')
+            ? status->ipv4_address
+            : "-");
+    app_gui_set_label_text_if_changed(s_network_rssi_label, rssi_text);
+    app_gui_set_label_text_if_changed(s_network_reason_label, reason_text);
+    lv_obj_set_style_text_color(
+        s_network_state_label,
+        app_gui_wifi_status_color(status),
+        LV_PART_MAIN);
+}
+
 static void app_gui_render_sensor_status(
     const ui_sensor_status_t *status)
 {
@@ -3471,6 +3737,89 @@ static void app_gui_render_cloud_status(
     }
 }
 
+static void app_gui_format_elapsed_time(
+    int64_t timestamp_ms,
+    char *buffer,
+    size_t buffer_size)
+{
+    if ((buffer == NULL) || (buffer_size == 0U)) {
+        return;
+    }
+
+    if (timestamp_ms <= 0) {
+        (void)snprintf(buffer, buffer_size, "Never");
+        return;
+    }
+
+    const int64_t now_ms = esp_timer_get_time() / 1000;
+    const int64_t elapsed_seconds =
+        (now_ms > timestamp_ms) ? ((now_ms - timestamp_ms) / 1000) : 0;
+
+    if (elapsed_seconds < 60) {
+        (void)snprintf(buffer, buffer_size, "%llds ago", (long long)elapsed_seconds);
+    } else if (elapsed_seconds < (60 * 60)) {
+        (void)snprintf(
+            buffer,
+            buffer_size,
+            "%lldm ago",
+            (long long)(elapsed_seconds / 60));
+    } else {
+        (void)snprintf(
+            buffer,
+            buffer_size,
+            "%lldh ago",
+            (long long)(elapsed_seconds / (60 * 60)));
+    }
+}
+
+static void app_gui_render_cloud_detail(
+    const ui_cloud_status_t *status)
+{
+    if ((status == NULL) ||
+        (s_cloud_detail_state_label == NULL) ||
+        (s_cloud_detail_sync_label == NULL) ||
+        (s_cloud_detail_http_label == NULL) ||
+        (s_cloud_detail_error_label == NULL)) {
+        return;
+    }
+
+    char sync_text[20] = {0};
+    char http_text[16] = {0};
+
+    app_gui_format_elapsed_time(
+        status->last_success_time_ms,
+        sync_text,
+        sizeof(sync_text));
+    if (status->last_http_status > 0) {
+        (void)snprintf(
+            http_text,
+            sizeof(http_text),
+            "%d",
+            status->last_http_status);
+    } else {
+        (void)snprintf(http_text, sizeof(http_text), "-");
+    }
+
+    app_gui_set_label_text_if_changed(
+        s_cloud_detail_state_label,
+        app_gui_cloud_state_to_string(status->state));
+    app_gui_set_label_text_if_changed(
+        s_cloud_detail_sync_label,
+        sync_text);
+    app_gui_set_label_text_if_changed(
+        s_cloud_detail_http_label,
+        http_text);
+    app_gui_set_label_text_if_changed(
+        s_cloud_detail_error_label,
+        status->last_error == ESP_OK
+            ? "-"
+            : esp_err_to_name(status->last_error));
+    lv_obj_set_style_text_color(
+        s_cloud_detail_state_label,
+        app_gui_cloud_state_color(status->state),
+        LV_PART_MAIN);
+}
+
 static bool app_gui_render_cached_status(
     app_gui_screen_id_t screen_id)
 {
@@ -3591,6 +3940,20 @@ static bool app_gui_render_cached_status(
         return true;
     }
 
+    if (screen_id == APP_GUI_SCREEN_NETWORK_DETAIL) {
+        if (wifi_available) {
+            app_gui_render_network_detail(&wifi_status);
+        }
+        return true;
+    }
+
+    if (screen_id == APP_GUI_SCREEN_CLOUD_DETAIL) {
+        if (cloud_available) {
+            app_gui_render_cloud_detail(&cloud_status);
+        }
+        return true;
+    }
+
     if (screen_id == APP_GUI_SCREEN_XIAOZHI) {
         if (!xiaozhi_available) {
             xiaozhi_status.state = UI_XIAOZHI_STATE_DISCONNECTED;
@@ -3694,6 +4057,14 @@ static esp_err_t app_gui_activate_screen(
 
         case APP_GUI_SCREEN_WIFI_STATUS:
             ret = app_gui_create_wifi_screen(target_root);
+            break;
+
+        case APP_GUI_SCREEN_NETWORK_DETAIL:
+            ret = app_gui_create_network_detail_screen(target_root);
+            break;
+
+        case APP_GUI_SCREEN_CLOUD_DETAIL:
+            ret = app_gui_create_cloud_detail_screen(target_root);
             break;
 
         case APP_GUI_SCREEN_SENSOR_DASHBOARD:
@@ -4222,11 +4593,16 @@ static void app_gui_process_cloud_status(void)
 
     app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
 
-    if ((app_gui_get_screen_id(&screen_id) == ESP_OK) &&
-        (screen_id == APP_GUI_SCREEN_SENSOR_DASHBOARD)) {
-        ui_manager_lvgl_wait_for_mutex();
-        app_gui_render_cloud_status(&cloud_status);
-        ui_manager_lvgl_release_mutex();
+    if (app_gui_get_screen_id(&screen_id) == ESP_OK) {
+        if (screen_id == APP_GUI_SCREEN_SENSOR_DASHBOARD) {
+            ui_manager_lvgl_wait_for_mutex();
+            app_gui_render_cloud_status(&cloud_status);
+            ui_manager_lvgl_release_mutex();
+        } else if (screen_id == APP_GUI_SCREEN_CLOUD_DETAIL) {
+            ui_manager_lvgl_wait_for_mutex();
+            app_gui_render_cloud_detail(&cloud_status);
+            ui_manager_lvgl_release_mutex();
+        }
     }
 
     ESP_LOGD(
@@ -4314,6 +4690,11 @@ static void app_gui_process_wifi_status(void)
             ui_manager_lvgl_wait_for_mutex();
             app_gui_render_wifi_status(&wifi_status);
             app_gui_restart_wifi_screen_timer();
+            ui_manager_lvgl_release_mutex();
+        }
+        else if (screen_id == APP_GUI_SCREEN_NETWORK_DETAIL) {
+            ui_manager_lvgl_wait_for_mutex();
+            app_gui_render_network_detail(&wifi_status);
             ui_manager_lvgl_release_mutex();
         }
         else if (screen_id == APP_GUI_SCREEN_SENSOR_DASHBOARD) {
