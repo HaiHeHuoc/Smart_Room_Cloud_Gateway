@@ -191,8 +191,16 @@ typedef struct
 
 /* Xiaozhi UI Types -------------------------------------------------------- */
 
-/** Maximum bytes, including NUL, retained in each Xiaozhi transcript line. */
-#define UI_XIAOZHI_TEXT_BUFFER_SIZE 192U
+/** Maximum bytes, including NUL, retained for one USER transcript. */
+#define UI_XIAOZHI_USER_TEXT_BUFFER_SIZE 256U
+
+/**
+ * Maximum bytes, including NUL, retained for one Xiaozhi response.
+ *
+ * Xiaozhi responses deserve more retained context than USER text because the
+ * response viewport is deliberately larger and remains visible after a turn.
+ */
+#define UI_XIAOZHI_ASSISTANT_TEXT_BUFFER_SIZE 768U
 
 /** @brief Xiaozhi lifecycle states rendered by the GUI task. */
 typedef enum
@@ -222,10 +230,10 @@ typedef struct
     esp_err_t last_error;
 
     bool user_text_truncated;
-    char user_text[UI_XIAOZHI_TEXT_BUFFER_SIZE];
+    char user_text[UI_XIAOZHI_USER_TEXT_BUFFER_SIZE];
 
     bool assistant_text_truncated;
-    char assistant_text[UI_XIAOZHI_TEXT_BUFFER_SIZE];
+    char assistant_text[UI_XIAOZHI_ASSISTANT_TEXT_BUFFER_SIZE];
 } ui_xiaozhi_status_t;
 
 /* Reset Result UI Types --------------------------------------------------- */
