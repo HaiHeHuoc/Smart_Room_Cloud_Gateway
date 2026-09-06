@@ -9,7 +9,9 @@
 #include "freertos/semphr.h"
 #include "voice_assistant_ui_model.h"
 
-#define VOICE_UI_DASHBOARD_RETURN_DELAY_US   (3LL * 1000LL * 1000LL)
+#define VOICE_UI_DASHBOARD_RETURN_MIN_DELAY_US  (5LL * 1000LL * 1000LL)
+#define VOICE_UI_DASHBOARD_RETURN_LONG_DELAY_US (10LL * 1000LL * 1000LL)
+#define VOICE_UI_DASHBOARD_RETURN_LONG_TEXT_BYTES 240U
 #define VOICE_UI_ROUTE_RETRY_DELAY_US        (100LL * 1000LL)
 #define VOICE_UI_ROUTE_DEFERRED_RETRY_US     (3LL * 1000LL * 1000LL)
 #define VOICE_UI_ROUTE_RETRY_MAX_ATTEMPTS    10U
@@ -27,6 +29,8 @@ static esp_timer_handle_t s_xiaozhi_open_retry_timer = NULL;
 static esp_timer_handle_t s_model_sync_retry_timer = NULL;
 static uint32_t s_dashboard_retry_attempts = 0U;
 static uint32_t s_xiaozhi_open_retry_attempts = 0U;
+static int64_t s_dashboard_return_delay_us =
+    VOICE_UI_DASHBOARD_RETURN_MIN_DELAY_US;
 
 static bool gui_take_callback_lock(TickType_t wait_ticks)
 {
@@ -109,6 +113,22 @@ static bool gui_state_allows_dashboard_return(voice_assistant_ui_state_t state)
     return (state == VOICE_ASSISTANT_UI_READY) ||
            (state == VOICE_ASSISTANT_UI_CONNECTING) ||
            (state == VOICE_ASSISTANT_UI_IDLE);
+}
+
+static int64_t gui_dashboard_return_delay_for_model(
+    const voice_assistant_ui_model_t *model)
+{
+    if ((model == NULL) || !model->assistant_text_valid) {
+        return VOICE_UI_DASHBOARD_RETURN_MIN_DELAY_US;
+    }
+
+    const size_t text_length = strnlen(
+        model->assistant_text,
+        sizeof(model->assistant_text));
+    return (model->assistant_text_truncated ||
+            (text_length > VOICE_UI_DASHBOARD_RETURN_LONG_TEXT_BYTES))
+               ? VOICE_UI_DASHBOARD_RETURN_LONG_DELAY_US
+               : VOICE_UI_DASHBOARD_RETURN_MIN_DELAY_US;
 }
 
 static void gui_cancel_timer(esp_timer_handle_t timer, const char *name)
@@ -263,7 +283,7 @@ static void gui_schedule_dashboard_return_locked(void)
 
     const esp_err_t ret = esp_timer_start_once(
         s_dashboard_return_timer,
-        VOICE_UI_DASHBOARD_RETURN_DELAY_US);
+        s_dashboard_return_delay_us);
     if (ret != ESP_OK) {
         ESP_LOGW(
             TAG,
@@ -356,7 +376,7 @@ static void gui_apply_screen_policy_locked(voice_assistant_ui_state_t state)
      * Only a real READY -> microphone-capture transition authorizes the
      * Xiaozhi interaction screen. Always queue this route even if Xiaozhi is
      * already the visible screen: it intentionally supersedes a dashboard
-     * command that may have been queued by the 3-second timer just before PTT.
+     * command that may have been queued by the post-turn timer just before PTT.
      */
     if ((previous == VOICE_ASSISTANT_UI_READY) &&
         (state == VOICE_ASSISTANT_UI_LISTENING)) {
@@ -494,6 +514,14 @@ static void gui_model_callback(
             "voice GUI snapshot dropped state=%s error=%s",
             voice_assistant_ui_state_to_string(latest.state),
             esp_err_to_name(post_ret));
+    }
+
+    if (latest.state == VOICE_ASSISTANT_UI_LISTENING) {
+        s_dashboard_return_delay_us =
+            VOICE_UI_DASHBOARD_RETURN_MIN_DELAY_US;
+    } else {
+        s_dashboard_return_delay_us =
+            gui_dashboard_return_delay_for_model(&latest);
     }
 
     gui_apply_screen_policy_locked(latest.state);
