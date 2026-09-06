@@ -2,6 +2,7 @@ set(xiaozhi_foundation_sources
     "xiaozhi_foundation.c"
     "xiaozhi_session.c"
     "xiaozhi_text_bridge.c"
+    "xiaozhi_websocket_task_policy.c"
     "xiaozhi_websocket_tx_timeout.c")
 
 set(xiaozhi_foundation_private_requires
@@ -52,8 +53,10 @@ set_source_files_properties(
 target_link_options(
     ${COMPONENT_LIB}
     INTERFACE
+    "LINKER:--wrap=esp_websocket_client_init"
     "LINKER:--wrap=esp_websocket_client_send_text"
     "LINKER:--wrap=esp_websocket_client_send_bin"
+    "LINKER:-u,__wrap_esp_websocket_client_init"
     "LINKER:-u,__wrap_esp_websocket_client_send_text"
     "LINKER:-u,__wrap_esp_websocket_client_send_bin")
 if(CONFIG_XIAOZHI_FOUNDATION_P2F_SD_FIXTURE)
