@@ -169,6 +169,68 @@ static void ui_voice_status_callback(
     ui_publish();
 }
 
+/**
+ * Return the largest valid UTF-8 prefix that fits in @p maximum_bytes.
+ *
+ * The semantic-text callback owns neither the source pointer nor its storage.
+ * This function therefore only examines a bounded, NUL-terminated prefix that
+ * the caller has already measured. Invalid source bytes are retained as one
+ * byte so a malformed remote message cannot make this copy loop stall.
+ */
+static size_t ui_get_utf8_prefix_length(
+    const char *text,
+    size_t text_length,
+    size_t maximum_bytes)
+{
+    size_t offset = 0U;
+
+    while (offset < text_length) {
+        const uint8_t first = (uint8_t)text[offset];
+        size_t code_point_length = 1U;
+
+        if ((first >= 0xC2U) && (first <= 0xDFU)) {
+            code_point_length = 2U;
+        }
+        else if ((first >= 0xE0U) && (first <= 0xEFU)) {
+            code_point_length = 3U;
+        }
+        else if ((first >= 0xF0U) && (first <= 0xF4U)) {
+            code_point_length = 4U;
+        }
+
+        if ((code_point_length > 1U) &&
+            ((offset + code_point_length) <= text_length)) {
+            bool continuation_valid = true;
+
+            for (size_t index = 1U;
+                 index < code_point_length;
+                 ++index) {
+                if ((((uint8_t)text[offset + index] & 0xC0U) != 0x80U)) {
+                    continuation_valid = false;
+                    break;
+                }
+            }
+
+            if (!continuation_valid) {
+                code_point_length = 1U;
+            }
+        }
+        else if (code_point_length > 1U) {
+            /* A valid leading byte with insufficient following bytes belongs
+             * to a code point cut by the source or destination bound. */
+            break;
+        }
+
+        if ((offset + code_point_length) > maximum_bytes) {
+            break;
+        }
+
+        offset += code_point_length;
+    }
+
+    return offset;
+}
+
 static esp_err_t ui_copy_text(
     uint32_t session_generation,
     const char *text,
@@ -178,11 +240,20 @@ static esp_err_t ui_copy_text(
         return ESP_ERR_INVALID_ARG;
     }
 
-    const size_t source_len = strnlen(text, VOICE_ASSISTANT_UI_TEXT_BUFFER_SIZE);
-    const bool truncated = source_len == VOICE_ASSISTANT_UI_TEXT_BUFFER_SIZE;
-    const size_t copy_len = truncated
-                                ? (VOICE_ASSISTANT_UI_TEXT_BUFFER_SIZE - 1U)
-                                : source_len;
+    const size_t destination_size = user_text
+                                        ? sizeof(s_model.user_text)
+                                        : sizeof(s_model.assistant_text);
+    const size_t source_length = strnlen(text, destination_size);
+    const bool source_exceeds_buffer = source_length == destination_size;
+    const size_t copy_limit = source_exceeds_buffer
+                                  ? (destination_size - 1U)
+                                  : source_length;
+    const size_t copy_length = ui_get_utf8_prefix_length(
+        text,
+        source_length,
+        copy_limit);
+    const bool truncated = source_exceeds_buffer ||
+                           (copy_length != source_length);
 
     if (!ui_take_lock()) {
         return ESP_ERR_TIMEOUT;
@@ -202,8 +273,8 @@ static esp_err_t ui_copy_text(
     }
 
     char *const destination = user_text ? s_model.user_text : s_model.assistant_text;
-    memcpy(destination, text, copy_len);
-    destination[copy_len] = '\0';
+    memcpy(destination, text, copy_length);
+    destination[copy_length] = '\0';
 
     if (user_text) {
         s_model.user_text_valid = true;

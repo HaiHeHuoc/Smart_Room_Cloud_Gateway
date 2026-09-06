@@ -11,7 +11,11 @@ extern "C"
 {
 #endif
 
-#define VOICE_ASSISTANT_UI_TEXT_BUFFER_SIZE 192U
+/** Maximum bytes, including NUL, retained for a USER transcript. */
+#define VOICE_ASSISTANT_UI_USER_TEXT_BUFFER_SIZE 256U
+
+/** Maximum bytes, including NUL, retained for an assistant transcript. */
+#define VOICE_ASSISTANT_UI_ASSISTANT_TEXT_BUFFER_SIZE 768U
 
 typedef enum {
     VOICE_ASSISTANT_UI_IDLE = 0,
@@ -35,11 +39,11 @@ typedef struct {
 
     bool user_text_valid;
     bool user_text_truncated;
-    char user_text[VOICE_ASSISTANT_UI_TEXT_BUFFER_SIZE];
+    char user_text[VOICE_ASSISTANT_UI_USER_TEXT_BUFFER_SIZE];
 
     bool assistant_text_valid;
     bool assistant_text_truncated;
-    char assistant_text[VOICE_ASSISTANT_UI_TEXT_BUFFER_SIZE];
+    char assistant_text[VOICE_ASSISTANT_UI_ASSISTANT_TEXT_BUFFER_SIZE];
 } voice_assistant_ui_model_t;
 
 typedef void (*voice_assistant_ui_model_callback_t)(

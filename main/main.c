@@ -1509,20 +1509,26 @@ static void app_xiaozhi_ui_status_callback(
         .assistant_text_truncated = status->assistant_text_truncated,
     };
 
-    _Static_assert(
-        sizeof(ui_status.user_text) == sizeof(status->user_text),
-        "Xiaozhi UI text bounds must match at the composition boundary");
-
-    memcpy(
-        ui_status.user_text,
+    const size_t user_length = strnlen(
         status->user_text,
-        sizeof(ui_status.user_text));
+        sizeof(status->user_text));
+    const size_t assistant_length = strnlen(
+        status->assistant_text,
+        sizeof(status->assistant_text));
+
+    memcpy(ui_status.user_text, status->user_text, user_length);
     memcpy(
         ui_status.assistant_text,
         status->assistant_text,
-        sizeof(ui_status.assistant_text));
-    ui_status.user_text[sizeof(ui_status.user_text) - 1U] = '\0';
-    ui_status.assistant_text[sizeof(ui_status.assistant_text) - 1U] = '\0';
+        assistant_length);
+    ui_status.user_text[user_length] = '\0';
+    ui_status.assistant_text[assistant_length] = '\0';
+    ui_status.user_text_truncated =
+        ui_status.user_text_truncated ||
+        (user_length == sizeof(status->user_text));
+    ui_status.assistant_text_truncated =
+        ui_status.assistant_text_truncated ||
+        (assistant_length == sizeof(status->assistant_text));
 
     const esp_err_t ret = app_gui_post_xiaozhi_status(&ui_status);
 

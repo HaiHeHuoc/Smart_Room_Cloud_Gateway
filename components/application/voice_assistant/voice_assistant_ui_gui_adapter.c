@@ -1,6 +1,5 @@
 #include "voice_assistant_ui_gui_adapter.h"
 
-#include <stdio.h>
 #include <string.h>
 
 #include "app_gui.h"
@@ -77,20 +76,23 @@ static esp_err_t gui_map_error(
 }
 
 static void gui_copy_text(
-    char destination[UI_XIAOZHI_TEXT_BUFFER_SIZE],
+    char *destination,
+    size_t destination_size,
     const char *source,
     bool valid)
 {
-    destination[0] = '\0';
+    if ((destination == NULL) || (destination_size == 0U)) {
+        return;
+    }
+
+    memset(destination, 0, destination_size);
     if (!valid || (source == NULL)) {
         return;
     }
 
-    (void)snprintf(
-        destination,
-        UI_XIAOZHI_TEXT_BUFFER_SIZE,
-        "%s",
-        source);
+    /* The production model has already completed its UTF-8-safe bounded copy.
+     * Preserve the exact bounded snapshot rather than formatting it again. */
+    memcpy(destination, source, destination_size - 1U);
 }
 
 static bool gui_state_belongs_to_active_turn(voice_assistant_ui_state_t state)
@@ -466,9 +468,21 @@ static void gui_model_callback(
         .assistant_text_truncated = latest.assistant_text_truncated,
     };
 
-    gui_copy_text(gui.user_text, latest.user_text, latest.user_text_valid);
+    _Static_assert(
+        sizeof(gui.user_text) == sizeof(latest.user_text),
+        "Voice USER text bounds must match the GUI model");
+    _Static_assert(
+        sizeof(gui.assistant_text) == sizeof(latest.assistant_text),
+        "Voice assistant text bounds must match the GUI model");
+
+    gui_copy_text(
+        gui.user_text,
+        sizeof(gui.user_text),
+        latest.user_text,
+        latest.user_text_valid);
     gui_copy_text(
         gui.assistant_text,
+        sizeof(gui.assistant_text),
         latest.assistant_text,
         latest.assistant_text_valid);
 
