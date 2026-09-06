@@ -9,6 +9,7 @@
  * default overflowed on target. Keep the task in internal RAM and reserve a
  * measured safety margin without altering the managed component. */
 #define XIAOZHI_WEBSOCKET_TASK_STACK_BYTES (12U * 1024U)
+#define XIAOZHI_WEBSOCKET_NETWORK_TIMEOUT_MS 10000
 
 extern esp_websocket_client_handle_t __real_esp_websocket_client_init(
     const esp_websocket_client_config_t *config);
@@ -37,6 +38,14 @@ esp_websocket_client_handle_t __wrap_esp_websocket_client_init(
         (int)XIAOZHI_WEBSOCKET_TASK_STACK_BYTES) {
         xiaozhi_config.task_stack =
             (int)XIAOZHI_WEBSOCKET_TASK_STACK_BYTES;
+    }
+
+    /* esp_xiaozhi 0.1.2 leaves this unset. Make the provider's documented
+     * 10-second default explicit so the runtime does not emit a warning while
+     * retaining an upstream-provided positive timeout unchanged. */
+    if (xiaozhi_config.network_timeout_ms <= 0) {
+        xiaozhi_config.network_timeout_ms =
+            XIAOZHI_WEBSOCKET_NETWORK_TIMEOUT_MS;
     }
 
     return __real_esp_websocket_client_init(&xiaozhi_config);

@@ -241,12 +241,13 @@ preserve these choices (`XIAOZHI_SYNC_SYSTEM_TIME_FROM_SERVER=n` and static
 audio-task allocation). It does not carry the unrelated audio stress switch or
 manual-record-duration override that a `save-defconfig` operation can retain.
 
-`esp_xiaozhi` 0.1.2 leaves `esp_websocket_client_config_t.task_stack` unset,
-which selects the WebSocket provider's 4 KiB default. The project wraps only
-WebSocket client configurations carrying Xiaozhi's `Protocol-Version` header
-and raises that task to 12 KiB. The wrapper copies the public configuration for
-the init call, preserves any future upstream value already at least 12 KiB,
-and does not modify `managed_components` or unrelated WebSocket clients.
+`esp_xiaozhi` 0.1.2 leaves `esp_websocket_client_config_t.task_stack` and
+`network_timeout_ms` unset, which selects the WebSocket provider's 4 KiB and
+10-second defaults. The project wraps only WebSocket client configurations
+carrying Xiaozhi's `Protocol-Version` header, raises that task to 12 KiB, and
+makes the 10-second timeout explicit. The wrapper copies the public
+configuration for the init call, preserves positive upstream values, and does
+not modify `managed_components` or unrelated WebSocket clients.
 
 ### NVS and cache-off policy
 
