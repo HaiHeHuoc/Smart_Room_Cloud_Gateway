@@ -11,3 +11,12 @@ idf_component_register(
     PRIV_REQUIRES
         freertos
 )
+
+# Scope the xTaskCreate/vTaskDelete PSRAM override to sd_card_manager only.
+# The recovery worker owns SDSPI/FATFS mount, health, unmount, and retry work;
+# it does not execute internal-flash/NVS/OTA/cache-disabled operations.
+target_compile_options(
+    ${COMPONENT_LIB}
+    PRIVATE
+        "-includepsram_task_create.h"
+)
