@@ -238,6 +238,14 @@ static bool sync_file(void)
 
 static bool close_file(bool sync)
 {
+    /* A READY manager can temporarily reject new leases while its idle health
+     * check owns the card. Preserve the segment and let the caller retry rather
+     * than converting that short reservation into a false durability failure.
+     */
+    if (sync && s_dirty && !s_file && storage_ready() &&
+        !sd_card_manager_is_mounted()) {
+        return false;
+    }
     if (!sync && s_dirty) s_durability_failed = true;
     bool ok = !sync || sync_file();
     if (s_file && !release_file_handle()) ok = false;
@@ -552,7 +560,11 @@ static void writer(void *context)
                 backlog = count >= backlog ? 0 : backlog - count;
                 if (!storage_ready()) { ok = false; break; }
                 if (esp_timer_get_time() - s_last_sync >= (int64_t)CONFIG_LOG_MANAGER_SYNC_MS * 1000 &&
-                    !sync_file()) { close_file(false); ok = false; break; }
+                    !sync_file()) {
+                    if (s_failed || !storage_ready()) close_file(false);
+                    ok = false;
+                    break;
+                }
                 taskYIELD();
             }
         } else if (backlog && (requested || stop)) ok = false;
@@ -564,7 +576,10 @@ static void writer(void *context)
         }
         if (mounted && (requested || stop || (bits & WAKE_URGENT) ||
             now - s_last_sync >= (int64_t)CONFIG_LOG_MANAGER_SYNC_MS * 1000)) {
-            if (!sync_file()) { close_file(false); ok = false; }
+            if (!sync_file()) {
+                if (s_failed || !storage_ready()) close_file(false);
+                ok = false;
+            }
         }
         if (stop && !close_file(mounted)) ok = false;
         if (requested || stop) {
