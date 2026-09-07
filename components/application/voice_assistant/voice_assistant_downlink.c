@@ -15,9 +15,9 @@
 #include "freertos/task.h"
 
 #define DOWNLINK_TASK_NAME                 "voice_downlink"
-/* esp_audio_codec documents about 20 KiB of task stack for decoder coverage;
- * keep additional coordinator headroom for queue/stream orchestration. */
-#define DOWNLINK_TASK_STACK_BYTES          (24U * 1024U)
+/* Keep decode/orchestration on an Internal-RAM stack. Target HIL retained
+ * enough margin for a conservative trim from 24 KiB to 18 KiB. */
+#define DOWNLINK_TASK_STACK_BYTES          (18U * 1024U)
 /* The upstream WebSocket dispatch task runs at priority 5. Keep the consumer
  * one level higher so a successful callback enqueue immediately runs decode
  * work before dispatch can drain a burst of additional response frames. */
