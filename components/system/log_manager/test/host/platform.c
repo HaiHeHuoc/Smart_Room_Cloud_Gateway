@@ -9,7 +9,7 @@
 #include "app_log.h"
 
 int host_mounted, host_health_check, host_synced, host_leases, host_allocations, host_tasks;
-int host_console, host_writes, host_syncs, host_fail_write, host_fail_sync, host_delay;
+int host_console, host_writes, host_syncs, host_fail_write, host_partial_write, host_fail_sync, host_delay;
 int host_fail_alloc, host_fail_task, host_fail_unlink;
 struct host_task {
     pthread_mutex_t mutex;
@@ -148,6 +148,13 @@ size_t host_fwrite(const void *data, size_t size, size_t count, FILE *file)
     __atomic_add_fetch(&host_writes, 1, __ATOMIC_RELAXED);
     int delay = __atomic_load_n(&host_delay, __ATOMIC_RELAXED); if (delay) host_sleep(delay);
     if (__atomic_exchange_n(&host_fail_write, 0, __ATOMIC_RELAXED)) { errno = EIO; return 0; }
+    if (__atomic_exchange_n(&host_partial_write, 0, __ATOMIC_RELAXED)) {
+        size_t partial = count > 1 ? count / 2 : 0;
+        if (!partial) { errno = EIO; return 0; }
+        size_t written = fwrite(data, size, partial, file);
+        errno = EIO;
+        return written;
+    }
     return fwrite(data, size, count, file);
 }
 int host_fsync(int fd)
