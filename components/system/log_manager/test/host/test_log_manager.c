@@ -102,7 +102,7 @@ int main(void)
     setvbuf(stdout, NULL, _IONBF, 0);
     ring_tests();
     APP_LOGI("TEST", EARLY, "value=1"); assert(host_console == 1);
-    assert(host_zero_boot_console == 1); /* zero boot is valid only before init */
+    assert(host_zero_boot_console == 0); /* early fallback has no structured boot field */
     log_manager_set_console_enabled(false);
     assert(log_manager_deinit() == ESP_OK);
     host_fail_alloc = 1;
