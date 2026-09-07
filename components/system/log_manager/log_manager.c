@@ -62,6 +62,10 @@ static StaticSemaphore_t s_mutex_memory, s_done_memory;
 static SemaphoreHandle_t s_mutex, s_done;
 static manager_t s;
 static uint32_t s_contention;
+/* Lock-free fallback copy used only for console formatting when the producer
+ * cannot take s_mutex. Two 32-bit words avoid relying on 64-bit atomics on
+ * ESP32-S3. They change only during serialized successful init(). */
+static uint32_t s_boot_hi, s_boot_lo;
 static bool s_console = true, s_storage = true;
 static bool s_start_failed;
 static int s_console_level = CONFIG_LOG_MANAGER_CONSOLE_LEVEL;
@@ -91,6 +95,13 @@ static void unlock(void) { xSemaphoreGive(s_mutex); }
 static void wake_locked(uint32_t bits)
 {
     if (s.task) xTaskNotify(s.task, bits, eSetBits);
+}
+
+static uint64_t boot_snapshot(void)
+{
+    uint32_t hi = __atomic_load_n(&s_boot_hi, __ATOMIC_RELAXED);
+    uint32_t lo = __atomic_load_n(&s_boot_lo, __ATOMIC_RELAXED);
+    return ((uint64_t)hi << 32) | lo;
 }
 
 static bool policy(bool *enabled, int *maximum, esp_log_level_t level)
@@ -614,6 +625,7 @@ static bool enqueue_time_sync(void)
     s.stats.dropped_records += log_buffer_push(&s.ring, line, n);
     size_t buffered = s.ring.payload + s.pending_bytes;
     if (buffered > s.stats.peak_buffered_bytes) s.stats.peak_buffered_bytes = buffered;
+    wake_locked(WAKE_DATA);
     unlock();
     return true;
 }
@@ -694,16 +706,24 @@ static void writer(void *context)
             if (stop) { vTaskDelete(NULL); return; }
         }
         bits = 0;
-        /* Timeout is also a low-rate snapshot fallback if a hint was contended.
-         * Keep independent sync and batch deadlines despite frequent hints.
-         */
+        /* Fully idle writer is notification-driven. The first queued record
+         * explicitly wakes it; below-threshold backlog then uses WRITE_MS as
+         * its drain deadline, while dirty data waits only for the sync deadline.
+         * This removes the former unconditional one-second idle snapshot poll. */
         now = esp_timer_get_time();
-        int64_t wait_us = (int64_t)CONFIG_LOG_MANAGER_WRITE_MS * 1000 - (now - last_write);
-        int64_t sync_us = (int64_t)CONFIG_LOG_MANAGER_SYNC_MS * 1000 - (now - s_last_sync);
-        if (s_dirty && sync_us < wait_us) wait_us = sync_us;
-        if (wait_us <= 0) wait_us = 1000;
-        TickType_t ticks = pdMS_TO_TICKS((uint32_t)((wait_us + 999) / 1000));
-        xTaskNotifyWait(0, UINT32_MAX, &bits, ticks ? ticks : 1);
+        TickType_t ticks = portMAX_DELAY;
+        if (backlog) {
+            int64_t wait_us = (int64_t)CONFIG_LOG_MANAGER_WRITE_MS * 1000 - (now - last_write);
+            if (wait_us <= 0) wait_us = 1000;
+            ticks = pdMS_TO_TICKS((uint32_t)((wait_us + 999) / 1000));
+            if (!ticks) ticks = 1;
+        } else if (s_dirty) {
+            int64_t wait_us = (int64_t)CONFIG_LOG_MANAGER_SYNC_MS * 1000 - (now - s_last_sync);
+            if (wait_us <= 0) wait_us = 1000;
+            ticks = pdMS_TO_TICKS((uint32_t)((wait_us + 999) / 1000));
+            if (!ticks) ticks = 1;
+        }
+        xTaskNotifyWait(0, UINT32_MAX, &bits, ticks);
     }
 }
 
@@ -742,7 +762,10 @@ static void emit_record(esp_log_level_t level, const char *tag, const char *even
     bool storage = policy(&s_storage, &s_storage_level, level) &&
                    !__atomic_load_n(&s_start_failed, __ATOMIC_RELAXED);
     if (!console && !storage) return;
-    uint64_t boot = 0;
+    /* Console formatting must keep the established session identity even when
+     * this non-blocking producer loses the logger mutex. Before first init the
+     * snapshot is intentionally zero, matching the existing early-console path. */
+    uint64_t boot = boot_snapshot();
     if (lock(0)) {
         boot = s.boot;
         /* Provider diagnostics called by the writer must never feed its own
@@ -765,11 +788,13 @@ static void emit_record(esp_log_level_t level, const char *tag, const char *even
                 !__atomic_load_n(&s_start_failed, __ATOMIC_RELAXED) && s.boot == boot) {
                 ++s.stats.produced_records;
                 if (truncated) ++s.stats.truncated_records;
+                bool was_empty = s.ring.records == 0 && s.pending_records == 0;
                 size_t before = s.ring.payload;
                 s.stats.dropped_records += log_buffer_push(&s.ring, line, length);
                 size_t buffered = s.ring.payload + s.pending_bytes;
                 if (buffered > s.stats.peak_buffered_bytes) s.stats.peak_buffered_bytes = buffered;
-                if (before < BATCH_BYTES && s.ring.payload >= BATCH_BYTES) wake_locked(WAKE_DATA);
+                if (was_empty || (before < BATCH_BYTES && s.ring.payload >= BATCH_BYTES))
+                    wake_locked(WAKE_DATA);
                 if (level == ESP_LOG_ERROR) wake_locked(WAKE_URGENT);
             }
             unlock();
@@ -808,6 +833,8 @@ esp_err_t log_manager_init(void)
     s.batch = (char *)memory + capacity;
     s.stats.buffer_capacity = capacity;
     s.boot = ((uint64_t)esp_random() << 32) | esp_random();
+    __atomic_store_n(&s_boot_hi, (uint32_t)(s.boot >> 32), __ATOMIC_RELAXED);
+    __atomic_store_n(&s_boot_lo, (uint32_t)s.boot, __ATOMIC_RELAXED);
     s.initialized = true;
     __atomic_store_n(&s_contention, 0, __ATOMIC_RELAXED);
     __atomic_store_n(&s_start_failed, false, __ATOMIC_RELAXED);
