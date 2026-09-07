@@ -102,6 +102,7 @@ int main(void)
     setvbuf(stdout, NULL, _IONBF, 0);
     ring_tests();
     APP_LOGI("TEST", EARLY, "value=1"); assert(host_console == 1);
+    assert(host_zero_boot_console == 1); /* zero boot is valid only before init */
     log_manager_set_console_enabled(false);
     assert(log_manager_deinit() == ESP_OK);
     host_fail_alloc = 1;
@@ -124,6 +125,13 @@ int main(void)
     char content[8192]; read_text(unknown, content, sizeof(content));
     assert(strstr(content, "[UNSYNCED]") && strstr(content, "[OFFLINE]"));
     puts("PASS pre-init console, repeated init/start, SD absent startup, late SD, unsynced file");
+
+    /* P3: once backlog is empty and data is synced, the writer blocks on task
+     * notification rather than waking every WRITE_MS just to resnapshot providers. */
+    int idle_waits = __atomic_load_n(&host_notify_waits, __ATOMIC_RELAXED);
+    host_sleep(350);
+    assert(__atomic_load_n(&host_notify_waits, __ATOMIC_RELAXED) <= idle_waits + 1);
+    puts("PASS fully idle writer waits on notification without periodic polling");
 
     /* P0 regression: an idle log segment must not retain an SD lease. During
      * the SD manager's idle health check the logical state remains READY while
@@ -154,7 +162,7 @@ int main(void)
     host_sleep(320);
     assert(__atomic_load_n(&host_syncs, __ATOMIC_RELAXED) > sync_before);
     wait_no_leases();
-    puts("PASS timeout drain and independent periodic durability sync");
+    puts("PASS first-record wake, timeout drain and independent durability sync");
 
     assert(log_manager_flush(1000) == ESP_OK);
     int writes_before = __atomic_load_n(&host_writes, __ATOMIC_RELAXED);
@@ -249,11 +257,16 @@ int main(void)
     assert(concurrent.produced_records == concurrent.persisted_records + concurrent.dropped_records);
     assert(concurrent.buffered_bytes == 0);
     uint32_t contention = concurrent.contention_drops;
+    int zero_boot = __atomic_load_n(&host_zero_boot_console, __ATOMIC_RELAXED);
+    log_manager_set_console_enabled(true);
+    log_manager_set_console_level(ESP_LOG_INFO);
     assert(lock(20));
     APP_LOGI("TEST", CONTENDED, "value=1");
     unlock();
+    log_manager_set_console_enabled(false);
     assert(snapshot().contention_drops == contention + 1);
-    puts("PASS four concurrent producers, coherent accounting and nonblocking contention drop");
+    assert(__atomic_load_n(&host_zero_boot_console, __ATOMIC_RELAXED) == zero_boot);
+    puts("PASS concurrent producers, contention drop and stable boot identity on console fallback");
 
     /* Force a slow SD write: producer remains quick, stop times out without
      * deleting its task/buffer, then a repeated stop reaps the same operation.
