@@ -11,6 +11,13 @@
 #define APP_LOG_CONSOLE_SINK_TAG "APP_LOG_SINK"
 #define APP_LOG_COLOR_FORMAT_BYTES 64U
 
+/* Function Prototypes ------------------------------------------------------ */
+void log_manager_console_write(
+    esp_log_level_t level,
+    const char *tag,
+    const char *format,
+    ...);
+
 /* Static Functions --------------------------------------------------------- */
 static const char *console_color_for_level(esp_log_level_t level)
 {
