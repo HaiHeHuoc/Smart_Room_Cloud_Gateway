@@ -97,7 +97,7 @@ bool time_manager_is_synced(void);
 esp_err_t time_manager_get_local_time(struct tm *local);
 
 extern int host_mounted, host_health_check, host_synced, host_leases, host_allocations, host_tasks;
-extern int host_console, host_writes, host_syncs, host_fail_write, host_fail_sync, host_delay;
+extern int host_console, host_writes, host_syncs, host_fail_write, host_partial_write, host_fail_sync, host_delay;
 extern int host_fail_alloc, host_fail_task, host_fail_unlink;
 void host_sleep(unsigned ms);
 size_t host_fwrite(const void *data, size_t size, size_t count, FILE *file);
