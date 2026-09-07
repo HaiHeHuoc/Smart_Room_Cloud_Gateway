@@ -47,6 +47,11 @@ static void wait_persisted(uint64_t minimum)
             (unsigned long long)snapshot().persisted_records);
     assert(false);
 }
+static void wait_no_leases(void)
+{
+    for (int i = 0; i < 500 && __atomic_load_n(&host_leases, __ATOMIC_RELAXED); ++i) host_sleep(1);
+    assert(__atomic_load_n(&host_leases, __ATOMIC_RELAXED) == 0);
+}
 static void read_text(const char *path, char *out, size_t capacity)
 {
     FILE *file = fopen(path, "rb"); assert(file);
@@ -112,6 +117,7 @@ int main(void)
     assert(log_manager_flush(1000) == ESP_FAIL);
     mounted(true);
     wait_persisted(1);
+    wait_no_leases();
     assert(log_manager_flush(1000) == ESP_OK);
     char unknown[PATH_BYTES]; strcpy(unknown, s_path);
     assert(strstr(unknown, "/unknown/boot_"));
@@ -119,12 +125,35 @@ int main(void)
     assert(strstr(content, "[UNSYNCED]") && strstr(content, "[OFFLINE]"));
     puts("PASS pre-init console, repeated init/start, SD absent startup, late SD, unsynced file");
 
+    /* P0 regression: an idle log segment must not retain an SD lease. During
+     * the SD manager's idle health check the logical state remains READY while
+     * new leases are temporarily rejected; logger must buffer, not report loss.
+     */
+    uint64_t health_before = snapshot().persisted_records;
+    __atomic_store_n(&host_health_check, 1, __ATOMIC_RELAXED);
+    APP_LOGI("TEST", SD_HEALTH_CHECK_WINDOW, "value=1");
+    log_manager_notify_environment_changed();
+    host_sleep(150);
+    log_manager_stats_t health = snapshot();
+    assert(health.persisted_records == health_before);
+    assert(health.buffered_bytes > 0 && health.storage_available);
+    assert(__atomic_load_n(&host_leases, __ATOMIC_RELAXED) == 0);
+    __atomic_store_n(&host_health_check, 0, __ATOMIC_RELAXED);
+    log_manager_notify_environment_changed();
+    wait_persisted(health_before + 1);
+    wait_no_leases();
+    assert(log_manager_flush(1000) == ESP_OK);
+    wait_no_leases();
+    puts("PASS idle logger releases SD lease and tolerates SD health-check reservation");
+
     uint64_t before = snapshot().persisted_records;
     APP_LOGI("TEST", TIMEOUT, "value=2");
     wait_persisted(before + 1);
+    wait_no_leases();
     int sync_before = __atomic_load_n(&host_syncs, __ATOMIC_RELAXED);
     host_sleep(320);
     assert(__atomic_load_n(&host_syncs, __ATOMIC_RELAXED) > sync_before);
+    wait_no_leases();
     puts("PASS timeout drain and independent periodic durability sync");
 
     assert(log_manager_flush(1000) == ESP_OK);
@@ -133,6 +162,7 @@ int main(void)
     for (int i = 0; i < 5; ++i) APP_LOGI("TEST", THRESHOLD, "index=%d text=%s", i, payload);
     for (int i = 0; i < 40 && __atomic_load_n(&host_writes, __ATOMIC_RELAXED) == writes_before; ++i) host_sleep(2);
     assert(__atomic_load_n(&host_writes, __ATOMIC_RELAXED) > writes_before);
+    wait_no_leases();
     assert(log_manager_flush(1000) == ESP_OK);
     before = snapshot().persisted_records - 1;
     puts("PASS threshold drain before write timeout");

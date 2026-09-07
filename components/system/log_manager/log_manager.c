@@ -98,6 +98,18 @@ static bool policy(bool *enabled, int *maximum, esp_log_level_t level)
            (int)level <= __atomic_load_n(maximum, __ATOMIC_RELAXED);
 }
 
+/* READY is the logical VFS state. sd_card_manager_is_mounted() also returns
+ * false during its short idle health-check reservation, which must not be
+ * mistaken for card loss by the logger. Actual file access is still protected
+ * by sd_card_manager_acquire(), so a health check can temporarily reject I/O.
+ */
+static bool storage_ready(void)
+{
+    sd_card_manager_status_t status = {0};
+    return sd_card_manager_get_status(&status) == ESP_OK &&
+           status.state == SD_CARD_MANAGER_STATE_READY;
+}
+
 static size_t format_line(char *line, esp_log_level_t level, const char *tag,
                           const char *event, const char *format, va_list args,
                           uint64_t boot, bool *truncated)
@@ -140,15 +152,87 @@ static void count_failure(int error)
         sd_card_manager_report_io_error(ESP_FAIL);
 }
 
+/* Close only the current stdio handle and release its lease. The segment
+ * identity, byte count and dirty state remain valid so later batches/syncs can
+ * reopen the same file. This is the key ownership rule that leaves idle gaps
+ * with zero SD leases for sd_card_manager health checks and hot-remove detect.
+ */
+static bool release_file_handle(void)
+{
+    bool ok = true;
+    if (s_file) {
+        if (fclose(s_file) != 0) {
+            count_failure(errno);
+            ok = false;
+        }
+        s_file = NULL;
+    }
+    if (s_lease) {
+        sd_card_manager_release();
+        s_lease = false;
+    }
+    return ok;
+}
+
+static void clear_segment(bool durability_uncertain)
+{
+    if (durability_uncertain && s_dirty) s_durability_failed = true;
+    s_path[0] = 0;
+    s_day[0] = 0;
+    s_file_bytes = 0;
+    s_dirty = false;
+}
+
+static bool reopen_file(void)
+{
+    if (!s_path[0]) return false;
+    if (sd_card_manager_acquire() != ESP_OK) return false;
+    s_lease = true;
+
+    int fd = open(s_path, O_WRONLY | O_APPEND);
+    if (fd < 0) {
+        int error = errno;
+        count_failure(error);
+        sd_card_manager_release();
+        s_lease = false;
+        clear_segment(true);
+        return false;
+    }
+
+    s_file = fdopen(fd, "ab");
+    if (!s_file) {
+        int error = errno;
+        close(fd);
+        count_failure(error);
+        sd_card_manager_release();
+        s_lease = false;
+        clear_segment(true);
+        return false;
+    }
+
+    if (setvbuf(s_file, NULL, _IONBF, 0) != 0) {
+        count_failure(ENOMEM);
+        (void)release_file_handle();
+        clear_segment(true);
+        return false;
+    }
+    return true;
+}
+
 static bool sync_file(void)
 {
-    if (!s_file || !s_dirty) return true;
+    if (!s_dirty) return true;
+    if (!s_file && !reopen_file()) return false;
     if (fflush(s_file) != 0 || fsync(fileno(s_file)) != 0) {
         count_failure(errno);
         return false;
     }
     s_dirty = false;
     s_last_sync = esp_timer_get_time();
+    if (!release_file_handle()) {
+        clear_segment(false);
+        return false;
+    }
     return true;
 }
 
@@ -156,15 +240,21 @@ static bool close_file(bool sync)
 {
     if (!sync && s_dirty) s_durability_failed = true;
     bool ok = !sync || sync_file();
-    if (s_file) {
-        if (fclose(s_file) != 0) { count_failure(errno); ok = false; }
-        s_file = NULL;
+    if (s_file && !release_file_handle()) ok = false;
+    if (s_lease) {
+        sd_card_manager_release();
+        s_lease = false;
     }
-    if (s_lease) { sd_card_manager_release(); s_lease = false; }
-    s_path[0] = 0;
-    s_dirty = false;
+    clear_segment(false);
     if (!ok) s_durability_failed = true;
     return ok;
+}
+
+static bool park_file(void)
+{
+    if (release_file_handle()) return true;
+    clear_segment(true);
+    return false;
 }
 
 static bool join_path(char *out, const char *parent, const char *name)
@@ -326,9 +416,11 @@ static bool write_pending(void)
     char day[11];
     record_day(file_time, day);
     size_t marker_reserve = !strcmp(day, "unknown") ? 192 : 0;
-    bool rotate = s_file && s_file_bytes + s.pending_bytes + marker_reserve >
+    bool segment_exists = s_path[0] != 0;
+    bool rotate = segment_exists && s_file_bytes + s.pending_bytes + marker_reserve >
                   (size_t)CONFIG_LOG_MANAGER_ROTATE_KIB * 1024;
-    if (s_file && (strcmp(day, s_day) || rotate)) {
+    if (segment_exists && (strcmp(day, s_day) || rotate)) {
+        if (!s_file && !reopen_file()) return false;
         if (!strcmp(s_day, "unknown") && strcmp(day, "unknown")) {
             char marker[192];
             int n = snprintf(marker, sizeof(marker),
@@ -342,7 +434,11 @@ static bool write_pending(void)
         if (!close_file(true)) return false;
         if (rotate && lock(LOCK_TICKS)) { ++s.stats.file_rotations; unlock(); }
     }
-    if (!s_file && !open_file(file_time)) return false;
+    if (!s_path[0]) {
+        if (!open_file(file_time)) return false;
+    } else if (!s_file && !reopen_file()) {
+        return false;
+    }
     /* Reserve retention headroom once per file, not a directory scan per batch. */
     if (!s_file_bytes && !retain((size_t)CONFIG_LOG_MANAGER_ROTATE_KIB * 1024)) {
         close_file(false); return false;
@@ -356,6 +452,11 @@ static bool write_pending(void)
         memcpy(s_dated_prefix, file_time, 24);
         s_dated_prefix[24] = 0;
     }
+    /* Do not keep a file lease while waiting for the next batch/sync deadline.
+     * fclose() is not a durability boundary here; s_dirty stays set and the
+     * periodic/urgent sync path reopens this same segment and fsyncs it.
+     */
+    if (!park_file()) return false;
     while (!lock(LOCK_TICKS)) taskYIELD();
     s.stats.storage_available = true;
     if (s_failed) ++s.stats.storage_recoveries;
@@ -415,7 +516,7 @@ static void writer(void *context)
     int64_t last_write = esp_timer_get_time();
     bool saw_sync = false;
     for (;;) {
-        bool mounted = sd_card_manager_is_mounted();
+        bool mounted = storage_ready();
         bool synced = time_manager_is_synced();
         if (mounted && (bits & WAKE_ENV)) s_retry_after = 0;
         /* One control record makes the unknown->dated transition happen even
@@ -445,18 +546,18 @@ static void writer(void *context)
              * requests. Producers never share the SD/stdio critical path.
              */
             while (backlog) {
-                if (!sd_card_manager_is_mounted()) { ok = false; break; }
+                if (!storage_ready()) { ok = false; break; }
                 size_t count = take_batch();
                 if (!count || !write_pending()) { ok = false; break; }
                 backlog = count >= backlog ? 0 : backlog - count;
-                if (!sd_card_manager_is_mounted()) { ok = false; break; }
+                if (!storage_ready()) { ok = false; break; }
                 if (esp_timer_get_time() - s_last_sync >= (int64_t)CONFIG_LOG_MANAGER_SYNC_MS * 1000 &&
                     !sync_file()) { close_file(false); ok = false; break; }
                 taskYIELD();
             }
         } else if (backlog && (requested || stop)) ok = false;
         if (drain) last_write = esp_timer_get_time();
-        mounted = sd_card_manager_is_mounted();
+        mounted = storage_ready();
         if (!mounted) {
             if (!close_file(false)) s_durability_failed = true;
             ok = false;

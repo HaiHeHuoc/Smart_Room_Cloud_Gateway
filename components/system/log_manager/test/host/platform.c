@@ -8,7 +8,7 @@
 #include "log_manager.h"
 #include "app_log.h"
 
-int host_mounted, host_synced, host_leases, host_allocations, host_tasks;
+int host_mounted, host_health_check, host_synced, host_leases, host_allocations, host_tasks;
 int host_console, host_writes, host_syncs, host_fail_write, host_fail_sync, host_delay;
 int host_fail_alloc, host_fail_task, host_fail_unlink;
 struct host_task {
@@ -112,7 +112,19 @@ void esp_log_level_set(const char *tag, esp_log_level_t level)
 {
     assert(!strcmp(tag, "APP_LOG_SINK")); __atomic_store_n(&sink_level, level, __ATOMIC_RELAXED);
 }
-bool sd_card_manager_is_mounted(void) { return __atomic_load_n(&host_mounted, __ATOMIC_RELAXED); }
+bool sd_card_manager_is_mounted(void)
+{
+    return __atomic_load_n(&host_mounted, __ATOMIC_RELAXED) &&
+           !__atomic_load_n(&host_health_check, __ATOMIC_RELAXED);
+}
+esp_err_t sd_card_manager_get_status(sd_card_manager_status_t *status)
+{
+    if (!status) return ESP_ERR_INVALID_ARG;
+    status->state = __atomic_load_n(&host_mounted, __ATOMIC_RELAXED)
+        ? SD_CARD_MANAGER_STATE_READY
+        : SD_CARD_MANAGER_STATE_UNAVAILABLE;
+    return ESP_OK;
+}
 esp_err_t sd_card_manager_acquire(void)
 {
     if (!sd_card_manager_is_mounted()) return ESP_ERR_INVALID_STATE;
