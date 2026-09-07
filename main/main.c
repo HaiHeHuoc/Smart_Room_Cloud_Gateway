@@ -97,10 +97,10 @@ static const char *const TAG = "MAIN_APP";
 /* The UI manager borrows this handle for the lifetime of the application. */
 static display_driver_handle_t display_handle;
 
-/* DHT22 timing respects the sensor's minimum interval between reads. */
+/* Give DHT22 extra timing margin under concurrent audio/network workloads. */
 static const sensor_manager_config_t SENSOR_MANAGER_CONFIG =
 {
-    .sample_period_ms = 2000U,
+    .sample_period_ms = 3000U,
     .stale_timeout_ms = 10000U,
 };
 
