@@ -12,6 +12,7 @@ idf_component_register(
     PRIV_REQUIRES
         freertos
         log
+        log_manager
         app_network_coordinator
         config_manager
         esp_system
