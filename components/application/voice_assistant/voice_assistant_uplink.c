@@ -16,9 +16,9 @@
 #include "freertos/task.h"
 
 #define UPLINK_TASK_NAME             "voice_uplink"
-/* esp_audio_codec documents about 40 KiB of task stack for encoder coverage.
- * Opus processing must not run on the former 5 KiB coordinator stack. */
-#define UPLINK_TASK_STACK_BYTES      (40U * 1024U)
+/* Keep Opus processing on an Internal-RAM stack. Target HIL retained enough
+ * margin for a conservative 4 KiB trim from the original 40 KiB allocation. */
+#define UPLINK_TASK_STACK_BYTES      (36U * 1024U)
 #define UPLINK_TASK_PRIORITY         5U
 #define UPLINK_QUEUE_LENGTH          8U
 #define UPLINK_RECONCILE_MS          20U
