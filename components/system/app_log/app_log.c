@@ -8,11 +8,27 @@
 
 /* Static Variables --------------------------------------------------------- */
 static app_log_sink_t s_sink;
+static app_log_filter_t s_filter;
 
 /* Functions ---------------------------------------------------------------- */
-void app_log_register_backend(app_log_sink_t sink)
+void app_log_register_backend(app_log_sink_t sink, app_log_filter_t filter)
 {
+    __atomic_store_n(&s_filter, filter, __ATOMIC_RELEASE);
     __atomic_store_n(&s_sink, sink, __ATOMIC_RELEASE);
+}
+
+bool app_log_should_emit(esp_log_level_t level)
+{
+    if (level <= ESP_LOG_NONE || level > ESP_LOG_VERBOSE) {
+        return false;
+    }
+
+    app_log_filter_t filter =
+        __atomic_load_n(&s_filter, __ATOMIC_ACQUIRE);
+
+    /* Before composition installs a backend, preserve the early console
+     * fallback rather than dropping startup diagnostics. */
+    return (filter == NULL) || filter(level);
 }
 
 void app_log_emit(esp_log_level_t level, const char *tag, const char *event,
