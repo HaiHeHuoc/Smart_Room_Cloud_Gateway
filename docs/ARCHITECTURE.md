@@ -52,6 +52,14 @@ flowchart LR
 
 ## Component Ownership
 
+Application logging is centralized in [`log_manager`](../components/system/log_manager/README.md).
+`main` initializes it at entry, after platform PSRAM/RTOS startup, and forwards
+SD/time availability hints. `APP_LOGx` sends independently filtered console output
+and bounded PSRAM records; one unpinned writer owns all log file I/O, batching,
+sync, rotation and retention. `sd_card_manager` retains mount/recovery and lease
+ownership; `time_manager` retains SNTP/clock validity. Neither depends on the
+logger. Early/pre-init logs remain console-only. Hardware acceptance is pending.
+
 | Component | Owns | Does not own |
 |---|---|---|
 | `wifi_manager` | Station lifecycle, driver serialization, reconnect | Provisioning policy, NVS schema, GUI |

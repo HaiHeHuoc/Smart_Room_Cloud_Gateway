@@ -19,6 +19,7 @@ idf_component_register(
     PRIV_INCLUDE_DIRS
         "."
     REQUIRES
+        app_log
         esp_common
         common
     PRIV_REQUIRES

@@ -8,6 +8,7 @@
 #include "freertos/task.h"
 
 #include "esp_log.h"
+#include "app_log.h"
 #include "esp_timer.h"
 #include "esp_check.h"
 #include "esp_err.h"
@@ -194,8 +195,8 @@ static void sensor_manager_task(
         {
             sensor_manager_update_success(&data);
 
-            ESP_LOGD(
-                TAG,
+            APP_LOGD(
+                TAG, TEMPERATURE_F_C_HUMIDITY_F_FEF116BD,
                 "Temperature: %.1f C | Humidity: %.1f %%",
                 data.temperature_c,
                 data.humidity_percent);
@@ -204,8 +205,8 @@ static void sensor_manager_task(
         {
             sensor_manager_update_failure(error);
 
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, DHT22_READ_FAILED_S_9BEB6288,
                 "DHT22 read failed: %s",
                 esp_err_to_name(error));
         }
@@ -233,8 +234,8 @@ static void sensor_manager_notify_status_changed(void)
             pdMS_TO_TICKS(
                 SENSOR_MANAGER_MUTEX_TIMEOUT_MS)) != pdTRUE)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FAILED_TO_ACQUIRE_STATUS_MUT_E03EA966,
             "Failed to acquire status mutex for notification");
 
         return;
@@ -330,7 +331,7 @@ esp_err_t sensor_manager_start(void)
         return ESP_ERR_NO_MEM;
     }
 
-    ESP_LOGI(TAG, "Started");
+    APP_LOGI(TAG, SENSOR_STARTED, "started=1");
 
     return ESP_OK;
 }
@@ -352,8 +353,8 @@ esp_err_t sensor_manager_init(
     if (config->sample_period_ms <
         SENSOR_MANAGER_MIN_SAMPLE_PERIOD_MS)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, SAMPLE_PERIOD_MUST_BE_AT_E67B16D2,
             "Sample period must be at least %u ms",
             SENSOR_MANAGER_MIN_SAMPLE_PERIOD_MS);
 
@@ -363,8 +364,8 @@ esp_err_t sensor_manager_init(
     if (config->stale_timeout_ms <=
         config->sample_period_ms)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, STALE_TIMEOUT_MUST_BE_GREATE_FFEB09C5,
             "Stale timeout must be greater than sample period");
 
         return ESP_ERR_INVALID_ARG;
@@ -394,9 +395,10 @@ esp_err_t sensor_manager_init(
 
     s_is_initialized = true;
 
-    ESP_LOGI(
+    APP_LOGI(
         TAG,
-        "Initialized: period=%lu ms, stale=%lu ms",
+        SENSOR_INITIALIZED,
+        "period_ms=%lu stale_ms=%lu",
         (unsigned long)s_config.sample_period_ms,
         (unsigned long)s_config.stale_timeout_ms);
 

@@ -7,6 +7,7 @@
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "app_log.h"
 
 #include "dht.h"
 
@@ -45,8 +46,8 @@ static void dht22_bringup_task(void *argument)
 
         if (err != ESP_OK)
         {
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, DHT22_READ_FAILED_S_996CEBE9,
                 "DHT22 read failed: %s",
                 esp_err_to_name(err));
         }
@@ -58,16 +59,16 @@ static void dht22_bringup_task(void *argument)
                  data.humidity_percent > 100.0f)
         {
             /* Reject values outside the operating range stated by DHT22. */
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, INVALID_DATA_TEMPERATURE_F_C_CAF8D566,
                 "Invalid data: temperature=%.1f C, humidity=%.1f %%",
                 data.temperature_c,
                 data.humidity_percent);
         }
         else
         {
-            ESP_LOGD(
-                TAG,
+            APP_LOGD(
+                TAG, TEMPERATURE_F_C_HUMIDITY_F_24D08329,
                 "Temperature: %.1f C | Humidity: %.1f %%",
                 data.temperature_c,
                 data.humidity_percent);
@@ -126,8 +127,8 @@ esp_err_t dht22_sensor_read(
         humidity_percent < 0.0f ||
         humidity_percent > 100.0f)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, INVALID_DATA_TEMPERATURE_F_C_2A248DFD,
             "Invalid data: temperature=%.1f C, humidity=%.1f %%",
             temperature_c,
             humidity_percent);

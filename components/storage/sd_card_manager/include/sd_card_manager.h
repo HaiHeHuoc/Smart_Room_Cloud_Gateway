@@ -107,6 +107,15 @@ esp_err_t sd_card_manager_get_status(sd_card_manager_status_t *status);
  */
 bool sd_card_manager_is_mounted(void);
 
+/** Register a single composition-root availability hint callback (NULL removes).
+ * Called after READY/recovery transitions, outside the state lock, in task
+ * context. Must not block or perform I/O; read the current snapshot later.
+ * Registration is independent of init. In-flight callbacks may finish after
+ * removal, so callback code/context must remain valid for application lifetime.
+ * The manager does not depend on any consumer component.
+ */
+void sd_card_manager_register_availability_callback(void (*callback)(void));
+
 /**
  * @brief Reserve the mounted SD VFS for one open-file lifetime.
  *

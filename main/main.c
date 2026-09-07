@@ -32,6 +32,8 @@
 
 /* Time manager ------------------------------------------------------------ */
 #include "time_manager.h"
+#include "log_manager.h"
+#include "app_log.h"
 
 /* Wifi manager ------------------------------------------------------------ */
 #include "wifi_manager.h"
@@ -305,21 +307,37 @@ static esp_err_t app_request_xiaozhi_validation_after_steady_state(void);
 #endif
 
 /* Application -------------------------------------------------------------- */
+static void app_log_time_changed(const time_manager_status_t *status, void *context)
+{
+    (void)status;
+    (void)context;
+    log_manager_notify_environment_changed();
+}
+
 /** @brief Initialize the current application services and run diagnostics. */
 void app_main(void)
 {
+#if CONFIG_LOG_MANAGER_ENABLE
+    /* PSRAM and scheduler already exist. SD/time remain independent services. */
+    esp_err_t log_ret = log_manager_init();
+    if (log_ret == ESP_OK) log_ret = log_manager_start();
+    if (log_ret != ESP_OK) {
+        APP_LOGW(TAG, PERSISTENT_LOGGER_UNAVAILABL_C5AD12C1, "Persistent logger unavailable: %s", esp_err_to_name(log_ret));
+    }
+    sd_card_manager_register_availability_callback(log_manager_notify_environment_changed);
+#endif
     /* Project identity is emitted first to make firmware logs traceable. */
-    ESP_LOGI(TAG, "PROJECT: %s", APP_PROJECT_NAME);
-    ESP_LOGI(TAG, "VERSION: %s", APP_PROJECT_VER);
-    ESP_LOGI(TAG, "BUILD DATE: %s", APP_PROJECT_VER_DATE);
+    APP_LOGI(TAG, BOOT_START, "project=%s", APP_PROJECT_NAME);
+    APP_LOGI(TAG, VERSION_S_9810027F, "VERSION: %s", APP_PROJECT_VER);
+    APP_LOGI(TAG, BUILD_DATE_S_8522DA1C, "BUILD DATE: %s", APP_PROJECT_VER_DATE);
 
     esp_err_t network_ret =
         network_platform_init();
 
     if (network_ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_INITIALIZE_NETWORK_2D049F7C,
             "Failed to initialize network platform: %s",
             esp_err_to_name(network_ret));
 
@@ -333,19 +351,21 @@ void app_main(void)
 
     if (time_ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_INITIALIZE_TIME_MA_599F6950,
             "Failed to initialize time manager: %s; continuing without time sync",
             esp_err_to_name(time_ret));
     }
     else
     {
+        const esp_err_t observer_ret = time_manager_register_status_callback(app_log_time_changed, NULL);
+        if (observer_ret != ESP_OK) APP_LOGW(TAG, TIME_LOG_OBSERVER_S_7277B9D2, "Time log observer: %s", esp_err_to_name(observer_ret));
         time_ret = time_manager_start();
 
         if (time_ret != ESP_OK)
         {
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, FAILED_TO_CONFIGURE_TIME_MAN_1C2A53AD,
                 "Failed to configure time manager: %s; continuing without time sync",
                 esp_err_to_name(time_ret));
         }
@@ -357,8 +377,8 @@ void app_main(void)
 
     if (ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_INITIALIZE_DISPLAY_89B562F8,
             "Failed to initialize display driver: %s",
             esp_err_to_name(ret));
 
@@ -371,8 +391,8 @@ void app_main(void)
 
     if (ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_INITIALIZE_LVGL_UI_A08DA920,
             "Failed to initialize LVGL UI manager: %s",
             esp_err_to_name(ret));
 
@@ -388,8 +408,8 @@ void app_main(void)
 
     if (sd_init_ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_INITIALIZE_SD_RECO_DEA5B901,
             "Failed to initialize SD recovery service: %s; continuing without SD",
             esp_err_to_name(sd_init_ret));
     }
@@ -398,8 +418,8 @@ void app_main(void)
 
     if (ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_REGISTER_LVGL_SD_0A44B8E8,
             "Failed to register LVGL SD filesystem: %s",
             esp_err_to_name(ret));
 
@@ -410,22 +430,22 @@ void app_main(void)
 
     if (ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_INITIALIZE_APPLICA_8677DF6E,
             "Failed to initialize application GUI: %s",
             esp_err_to_name(ret));
 
         return;
     }
 
-    ESP_LOGD(TAG, "Starting LVGL task handler");
+    APP_LOGD(TAG, STARTING_LVGL_TASK_HANDLER_053844B5, "Starting LVGL task handler");
 
     ret = app_gui_start_ui_task();
 
     if (ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_START_APPLICATION_4BE8FCDC,
             "Failed to start application GUI task: %s",
             esp_err_to_name(ret));
 
@@ -445,21 +465,21 @@ void app_main(void)
 
     if (xiaozhi_ui_ret != ESP_OK)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, XIAOZHI_VALIDATION_UI_OBSERV_F4AC6A37,
             "Xiaozhi validation UI observer unavailable: %s",
             esp_err_to_name(xiaozhi_ui_ret));
     }
 #endif
 
-    ESP_LOGI(TAG, "LVGL display initialized successfully");
+    APP_LOGI(TAG, DISPLAY_READY, "initialized=1");
 
     ret = app_gui_request_screen(APP_GUI_SCREEN_BOOT);
 
     if (ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_REQUEST_BOOT_SCREE_9A3D2A9A,
             "Failed to request BOOT screen before SD recovery: %s",
             esp_err_to_name(ret));
 
@@ -478,8 +498,8 @@ void app_main(void)
 
         if (sd_start_ret != ESP_OK)
         {
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, FAILED_TO_START_SD_RECOVERY_2E22BCC8,
                 "Failed to start SD recovery task: %s; continuing without SD",
                 esp_err_to_name(sd_start_ret));
         }
@@ -491,8 +511,8 @@ void app_main(void)
 
     if (monitor_ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_START_PERFORMANCE_9007906C,
             "Failed to start performance monitor: %s",
             esp_err_to_name(monitor_ret));
     }
@@ -512,8 +532,8 @@ void app_main(void)
 
     if (reset_ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_INITIALIZE_RESET_C_089301BC,
             "Failed to initialize reset coordinator: %s",
             esp_err_to_name(reset_ret));
     }
@@ -524,8 +544,8 @@ void app_main(void)
 
         if (reset_ret != ESP_OK)
         {
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, FAILED_TO_START_RESET_COORDI_E014C3B4,
                 "Failed to start reset coordinator: %s",
                 esp_err_to_name(reset_ret));
         }
@@ -537,8 +557,8 @@ void app_main(void)
 
             if (button_ret != ESP_OK)
             {
-                ESP_LOGE(
-                    TAG,
+                APP_LOGE(
+                    TAG, FAILED_TO_INITIALIZE_BUTTON_B23CA943,
                     "Failed to initialize button manager: %s",
                     esp_err_to_name(button_ret));
             }
@@ -551,8 +571,8 @@ void app_main(void)
 
                 if (button_ret != ESP_OK)
                 {
-                    ESP_LOGE(
-                        TAG,
+                    APP_LOGE(
+                        TAG, FAILED_TO_REGISTER_BUTTON_CA_1047D3FA,
                         "Failed to register button callback: %s",
                         esp_err_to_name(button_ret));
                 }
@@ -563,8 +583,8 @@ void app_main(void)
 
                     if (button_ret != ESP_OK)
                     {
-                        ESP_LOGE(
-                            TAG,
+                        APP_LOGE(
+                            TAG, FAILED_TO_START_BUTTON_MANAG_26EE33FD,
                             "Failed to start button manager: %s",
                             esp_err_to_name(button_ret));
                     }
@@ -578,8 +598,8 @@ void app_main(void)
 
     if (wifi_ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_INITIALIZE_WI_FI_74C799C3,
             "Failed to initialize Wi-Fi manager: %s",
             esp_err_to_name(wifi_ret));
         app_route_boot_failure_to_wifi_status(
@@ -599,8 +619,8 @@ void app_main(void)
 
     if (callback_ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_REGISTER_WI_FI_44843FFE,
             "Failed to register Wi-Fi status callback: %s",
             esp_err_to_name(callback_ret));
         app_route_boot_failure_to_wifi_status(
@@ -615,8 +635,8 @@ void app_main(void)
 
     if (coordinator_ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_INITIALIZE_NETWORK_B61B4648,
             "Failed to initialize network coordinator: %s",
             esp_err_to_name(coordinator_ret));
         app_route_boot_failure_to_wifi_status(
@@ -636,8 +656,8 @@ void app_main(void)
 
     if (service_ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_INITIALIZE_FIREBAS_07E25924,
             "Failed to initialize Firebase Authentication: %s",
             esp_err_to_name(service_ret));
         app_route_boot_failure_to_wifi_status(
@@ -652,8 +672,8 @@ void app_main(void)
 
     if (service_ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_INITIALIZE_CLOUD_M_3BDA2E0B,
             "Failed to initialize cloud manager: %s",
             esp_err_to_name(service_ret));
         app_route_boot_failure_to_wifi_status(
@@ -669,8 +689,8 @@ void app_main(void)
 
     if (service_ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_REGISTER_CLOUD_MAN_003EF3B8,
             "Failed to register cloud manager status callback: %s",
             esp_err_to_name(service_ret));
         app_route_boot_failure_to_wifi_status(
@@ -689,8 +709,8 @@ void app_main(void)
 
     if (service_ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_INITIALIZE_SENSOR_8C6683EE,
             "Failed to initialize sensor manager: %s",
             esp_err_to_name(service_ret));
         app_route_boot_failure_to_wifi_status(
@@ -706,8 +726,8 @@ void app_main(void)
 
     if (service_ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_REGISTER_SENSOR_CA_CE553DCF,
             "Failed to register sensor callback: %s",
             esp_err_to_name(service_ret));
         app_route_boot_failure_to_wifi_status(
@@ -720,8 +740,8 @@ void app_main(void)
 
     if (service_ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_START_SENSOR_MANAG_8885C436,
             "Failed to start sensor manager: %s",
             esp_err_to_name(service_ret));
         app_route_boot_failure_to_wifi_status(
@@ -740,8 +760,8 @@ void app_main(void)
 
     if (coordinator_ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_START_NETWORK_COOR_C695B9A9,
             "Failed to start network coordinator: %s",
             esp_err_to_name(coordinator_ret));
         app_route_boot_failure_to_wifi_status(
@@ -772,8 +792,8 @@ void app_main(void)
 
             if (service_ret != ESP_OK)
             {
-                ESP_LOGW(
-                    TAG,
+                APP_LOGW(
+                    TAG, FAILED_TO_INSPECT_NETWORK_RE_C0D1B049,
                     "Failed to inspect network readiness for deferred startup: %s",
                     esp_err_to_name(service_ret));
             }
@@ -794,14 +814,14 @@ void app_main(void)
                     if (screen_ret == ESP_OK)
                     {
                         network_failure_screen_requested = true;
-                        ESP_LOGW(
-                            TAG,
+                        APP_LOGW(
+                            TAG, NETWORK_COORDINATOR_ENTERED_1F7D6E80,
                             "Network coordinator entered FAILED while BOOT was active; WIFI_STATUS queued to prevent an indefinite Starting screen");
                     }
                     else
                     {
-                        ESP_LOGW(
-                            TAG,
+                        APP_LOGW(
+                            TAG, FAILED_TO_ROUTE_BOOT_SCREEN_B60E173C,
                             "Failed to route BOOT screen after network failure: %s",
                             esp_err_to_name(screen_ret));
                     }
@@ -814,8 +834,8 @@ void app_main(void)
                 }
                 else if (screen_state_ret != ESP_OK)
                 {
-                    ESP_LOGW(
-                        TAG,
+                    APP_LOGW(
+                        TAG, FAILED_TO_INSPECT_ACTIVE_SCR_1759E2B3,
                         "Failed to inspect active screen after network failure: %s",
                         esp_err_to_name(screen_state_ret));
                 }
@@ -835,16 +855,16 @@ void app_main(void)
                     audio_started = true;
 #endif
 
-                    ESP_LOGI(
-                        TAG,
+                    APP_LOGI(
+                        TAG, AUDIO_MANAGER_STARTED_AFTER_5EA81CA8,
                         "Audio manager started after network handoff: state=%s",
                         app_network_coordinator_state_to_string(
                             network_state));
                 }
                 else
                 {
-                    ESP_LOGE(
-                        TAG,
+                    APP_LOGE(
+                        TAG, AUDIO_MANAGER_STARTUP_AFTER_808939E3,
                         "Audio manager startup after network handoff failed: %s",
                         esp_err_to_name(audio_ret));
                 }
@@ -860,8 +880,8 @@ void app_main(void)
                 {
                     cloud_started = true;
 
-                    ESP_LOGI(
-                        TAG,
+                    APP_LOGI(
+                        TAG, CLOUD_MANAGER_STARTED_AFTER_60A03252,
                         "Cloud manager started after network handoff: state=%s",
                         app_network_coordinator_state_to_string(
                             network_state));
@@ -873,8 +893,8 @@ void app_main(void)
                      * task allocation fails, so a later loop may retry after
                      * temporary memory pressure has cleared.
                      */
-                    ESP_LOGW(
-                        TAG,
+                    APP_LOGW(
+                        TAG, CLOUD_MANAGER_START_DEFERRED_71E98CC6,
                         "Cloud manager start deferred: %s",
                         esp_err_to_name(service_ret));
                 }
@@ -893,8 +913,8 @@ void app_main(void)
 
             if (xiaozhi_ret != ESP_OK)
             {
-                ESP_LOGE(
-                    TAG,
+                APP_LOGE(
+                    TAG, XIAOZHI_STEADY_STATE_VALIDAT_13DB41B2,
                     "Xiaozhi steady-state validation was not started: %s",
                     esp_err_to_name(xiaozhi_ret));
             }
@@ -922,8 +942,8 @@ static void app_route_boot_failure_to_wifi_status(
 
     if (screen_state_ret != ESP_OK)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, STARTUP_FAILURE_STAGE_S_ERRO_8FF0E86A,
             "Startup failure stage=%s error=%s; unable to inspect active screen: %s",
             safe_stage,
             esp_err_to_name(error),
@@ -933,8 +953,8 @@ static void app_route_boot_failure_to_wifi_status(
 
     if (screen_id != APP_GUI_SCREEN_BOOT)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, STARTUP_FAILURE_STAGE_S_ERRO_04472C05,
             "Startup failure stage=%s error=%s; preserving active screen=%d",
             safe_stage,
             esp_err_to_name(error),
@@ -948,8 +968,8 @@ static void app_route_boot_failure_to_wifi_status(
 
     if (screen_ret != ESP_OK)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, STARTUP_FAILURE_STAGE_S_ERRO_9618CCF2,
             "Startup failure stage=%s error=%s; failed to leave BOOT screen: %s",
             safe_stage,
             esp_err_to_name(error),
@@ -957,8 +977,8 @@ static void app_route_boot_failure_to_wifi_status(
         return;
     }
 
-    ESP_LOGW(
-        TAG,
+    APP_LOGW(
+        TAG, STARTUP_FAILURE_STAGE_S_ERRO_17617266,
         "Startup failure stage=%s error=%s; WIFI_STATUS queued to prevent an indefinite BOOT Starting screen",
         safe_stage,
         esp_err_to_name(error));
@@ -970,8 +990,8 @@ static esp_err_t network_platform_init(void)
 
     if (ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_INITIALIZE_NVS_S_7146FBB0,
             "Failed to initialize NVS: %s",
             esp_err_to_name(ret));
 
@@ -982,8 +1002,8 @@ static esp_err_t network_platform_init(void)
 
     if (ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_INITIALIZE_CONFIG_D1341810,
             "Failed to initialize config manager: %s",
             esp_err_to_name(ret));
 
@@ -994,8 +1014,8 @@ static esp_err_t network_platform_init(void)
 
     if (ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_INITIALIZE_ESP_NET_49FD92DF,
             "Failed to initialize ESP-NETIF: %s",
             esp_err_to_name(ret));
 
@@ -1011,15 +1031,15 @@ static esp_err_t network_platform_init(void)
 
     if (ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_CREATE_DEFAULT_EVE_E4E4D781,
             "Failed to create default event loop: %s",
             esp_err_to_name(ret));
 
         return ret;
     }
 
-    ESP_LOGI(TAG, "Network platform initialized");
+    APP_LOGI(TAG, NETWORK_PLATFORM_INITIALIZED_687787FB, "Network platform initialized");
 
     return ESP_OK;
 }
@@ -1076,8 +1096,8 @@ static void app_wifi_status_callback(
 
         if (coordinator_error != ESP_OK)
         {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, FAILED_TO_FORWARD_WI_FI_E61C9850,
                 "Failed to forward Wi-Fi event to coordinator: %s",
                 esp_err_to_name(coordinator_error));
         }
@@ -1118,8 +1138,8 @@ static void app_wifi_status_callback(
 
     if (ret != ESP_OK)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FAILED_TO_FORWARD_WI_FI_3E5BA7A2,
             "Failed to forward Wi-Fi status to UI: %s",
             esp_err_to_name(ret));
     }
@@ -1132,8 +1152,8 @@ static void app_wifi_status_callback(
         (cloud_network_error !=
          ESP_ERR_INVALID_STATE))
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FAILED_TO_FORWARD_WI_FI_4C9EBAAE,
             "Failed to forward Wi-Fi state to cloud manager: %s",
             esp_err_to_name(cloud_network_error));
     }
@@ -1146,14 +1166,14 @@ static void app_wifi_status_callback(
         (time_network_error !=
          ESP_ERR_INVALID_STATE))
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FAILED_TO_FORWARD_WI_FI_627CA9E5,
             "Failed to forward Wi-Fi state to time manager: %s",
             esp_err_to_name(time_network_error));
     }
 
-    ESP_LOGD(
-        TAG,
+    APP_LOGD(
+        TAG, WI_FI_CALLBACK_STATE_S_43A887B5,
         "Wi-Fi callback: state=%s, ip=%s, reason=%u",
         wifi_manager_state_to_string(status->state),
         status->has_ipv4_address
@@ -1234,8 +1254,8 @@ static void app_audio_status_callback(
 
     if (ret != ESP_OK)
     {
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, AUDIO_GUI_UPDATE_DROPPED_S_7F905C9A,
             "Audio GUI update dropped: %s",
             esp_err_to_name(ret));
     }
@@ -1321,8 +1341,8 @@ static void app_sensor_status_callback(
 
     if (error != ESP_OK)
     {
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, SENSOR_GUI_UPDATE_DROPPED_S_DFB178E5,
             "Sensor GUI update dropped: %s",
             esp_err_to_name(error));
     }
@@ -1425,8 +1445,8 @@ static void app_sensor_status_callback(
 
     if (error != ESP_OK)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, SENSOR_CLOUD_UPDATE_DROPPED_1A860093,
             "Sensor cloud update dropped: %s",
             esp_err_to_name(error));
     }
@@ -1543,8 +1563,8 @@ static void app_xiaozhi_ui_status_callback(
 
     if (ret != ESP_OK)
     {
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, XIAOZHI_GUI_UPDATE_DROPPED_S_6979FE06,
             "Xiaozhi GUI update dropped: state=%d, error=%s, post=%s",
             (int)ui_state,
             esp_err_to_name(ui_status.last_error),
@@ -1585,8 +1605,8 @@ static void app_cloud_status_callback(
 
     if (error != ESP_OK)
     {
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, CLOUD_GUI_UPDATE_DROPPED_S_13C51440,
             "Cloud GUI update dropped: %s",
             esp_err_to_name(error));
     }
@@ -1678,8 +1698,8 @@ static esp_err_t app_start_audio_manager_after_network_online(void)
 
     if (audio_ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_INITIALIZE_AUDIO_M_5C9D7ED3,
             "Failed to initialize audio manager: %s",
             esp_err_to_name(audio_ret));
 
@@ -1693,8 +1713,8 @@ static esp_err_t app_start_audio_manager_after_network_online(void)
 
     if (audio_gui_ret != ESP_OK)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FAILED_TO_REGISTER_AUDIO_GUI_8C26893B,
             "Failed to register audio GUI status callback: %s",
             esp_err_to_name(audio_gui_ret));
     }
@@ -1703,16 +1723,16 @@ static esp_err_t app_start_audio_manager_after_network_online(void)
 
     if (audio_ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_START_AUDIO_MANAGE_BABC04EE,
             "Failed to start audio manager task: %s",
             esp_err_to_name(audio_ret));
 
         return audio_ret;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, AUDIO_MANAGER_TASK_STARTED_M_5C489DBF,
         "Audio manager task started; mode is reported by audio_manager");
 
 #if CONFIG_AUDIO_MANAGER_PUBLIC_API_TEST
@@ -1721,15 +1741,15 @@ static esp_err_t app_start_audio_manager_after_network_online(void)
 
     if (audio_test_ret != ESP_OK)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FAILED_TO_START_PUBLIC_AUDIO_64885848,
             "Failed to start public audio API validation task: %s",
             esp_err_to_name(audio_test_ret));
     }
     else
     {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, PUBLIC_AUDIO_API_VALIDATION_658B5834,
             "Public audio API validation task started at priority 6");
     }
 #endif
@@ -1738,15 +1758,15 @@ static esp_err_t app_start_audio_manager_after_network_online(void)
     const esp_err_t phase16_test_ret = app_phase16_auto_hil_test_start();
     if (phase16_test_ret != ESP_OK)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FAILED_TO_START_PHASE_AUTOMA_8C134F7F,
             "Failed to start Phase-16 automatic HIL coordinator: %s",
             esp_err_to_name(phase16_test_ret));
     }
     else
     {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, PHASE_AUTOMATIC_HIL_COORDINA_4783FC53,
             "Phase-16 automatic HIL coordinator started (test branch only)");
     }
 #endif
@@ -1784,8 +1804,8 @@ static esp_err_t app_request_xiaozhi_validation_after_steady_state(void)
 
     if (ret != ESP_OK)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FAILED_TO_QUEUE_XIAOZHI_VALI_2DE027D9,
             "Failed to queue Xiaozhi validation screen: %s",
             esp_err_to_name(ret));
         return ret;
@@ -1796,8 +1816,8 @@ static esp_err_t app_request_xiaozhi_validation_after_steady_state(void)
     TickType_t quiescence_started_at = 0U;
     bool quiescence_active = false;
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, WAITING_FOR_XIAOZHI_VALIDATI_A963361E,
         "Waiting for Xiaozhi validation steady state: timeout_ms=%lu "
         "quiescence_ms=%lu",
         (unsigned long)APP_XIAOZHI_VALIDATION_READY_TIMEOUT_MS,
@@ -1840,8 +1860,8 @@ static esp_err_t app_request_xiaozhi_validation_after_steady_state(void)
         else if ((now - quiescence_started_at) >=
                  pdMS_TO_TICKS(APP_XIAOZHI_VALIDATION_QUIESCENCE_MS))
         {
-            ESP_LOGI(
-                TAG,
+            APP_LOGI(
+                TAG, XIAOZHI_STEADY_STATE_READY_N_6E6327FF,
                 "XIAOZHI_STEADY_STATE ready network=ONLINE audio=IDLE "
                 "cloud_state=%d screen=XIAOZHI quiescence_ms=%lu",
                 (int)cloud_status.state,
@@ -1853,8 +1873,8 @@ static esp_err_t app_request_xiaozhi_validation_after_steady_state(void)
 
             if (ret == ESP_OK)
             {
-                ESP_LOGI(
-                    TAG,
+                APP_LOGI(
+                    TAG, XIAOZHI_VALIDATION_REQUESTED_EDE32DE0,
                     "Xiaozhi validation requested from steady-state composition layer");
             }
 
@@ -1866,8 +1886,8 @@ static esp_err_t app_request_xiaozhi_validation_after_steady_state(void)
                 APP_XIAOZHI_VALIDATION_READY_POLL_MS));
     }
 
-    ESP_LOGE(
-        TAG,
+    APP_LOGE(
+        TAG, XIAOZHI_STEADY_STATE_TIMEOUT_DA8CB854,
         "XIAOZHI_STEADY_STATE timeout; validation baseline not captured");
     return ESP_ERR_TIMEOUT;
 }
@@ -1889,15 +1909,15 @@ static void app_button_event_callback(
     switch (event_data->event)
     {
         case BUTTON_MANAGER_EVENT_PRESSED:
-            ESP_LOGD(TAG, "Button pressed");
+            APP_LOGD(TAG, BUTTON_PRESSED_25934916, "Button pressed");
 
             reset_input_event =
                 APP_RESET_COORDINATOR_INPUT_PRESSED;
             break;
 
         case BUTTON_MANAGER_EVENT_RELEASED:
-            ESP_LOGD(
-                TAG,
+            APP_LOGD(
+                TAG, BUTTON_RELEASED_HELD_PRIU32_F3749A0D,
                 "Button released: held=%" PRIu32 " ms",
                 event_data->held_ms);
             reset_input_event =
@@ -1905,8 +1925,8 @@ static void app_button_event_callback(
             break;
 
         case BUTTON_MANAGER_EVENT_LONG_PRESS:
-            ESP_LOGI(
-                TAG,
+            APP_LOGI(
+                TAG, BUTTON_LONG_PRESS_DETECTED_H_E023DACE,
                 "Button long press detected: held=%" PRIu32 " ms",
                 event_data->held_ms);
             reset_input_event =
@@ -1914,8 +1934,8 @@ static void app_button_event_callback(
             break;
 
         default:
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, UNKNOWN_BUTTON_EVENT_D_B44AB91A,
                 "Unknown button event: %d",
                 (int)event_data->event);
             return;
@@ -1933,8 +1953,8 @@ static void app_button_event_callback(
 
     if (post_ret != ESP_OK)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FAILED_TO_FORWARD_BUTTON_EVE_62ECCE11,
             "Failed to forward button event to reset coordinator: %s",
             esp_err_to_name(post_ret));
     }

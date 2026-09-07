@@ -27,6 +27,7 @@
 #include "esp_heap_trace.h"
 #endif
 #include "esp_log.h"
+#include "app_log.h"
 #include "esp_mcp_engine.h"
 #include "esp_timer.h"
 #include "esp_xiaozhi_chat.h"
@@ -161,8 +162,8 @@ static esp_err_t xiaozhi_foundation_log_heap_trace_records(size_t count)
         heap_trace_record_t record = {0};
         const esp_err_t get_ret = heap_trace_get(index, &record);
         if (get_ret != ESP_OK) {
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, XZ_ATTR_HEAP_RECORD_RESULT_170EE8B9,
                 "XZ_ATTR_HEAP_RECORD result=FAIL index=%u error=%s",
                 (unsigned)index,
                 esp_err_to_name(get_ret));
@@ -188,8 +189,8 @@ static esp_err_t xiaozhi_foundation_log_heap_trace_records(size_t count)
             offset += (size_t)written;
         }
 
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, XZ_ATTR_HEAP_RECORD_RESULT_8C43629C,
             "XZ_ATTR_HEAP_RECORD result=RETAINED index=%u size=%u "
             "address=%p callers=%s",
             (unsigned)index,
@@ -852,7 +853,7 @@ static void xiaozhi_foundation_transport_validation_task(
             requested_transport);
 
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Xiaozhi validation worker finished: %s",
+        APP_LOGE(TAG, XIAOZHI_VALIDATION_WORKER_FI_6F25F03E, "Xiaozhi validation worker finished: %s",
                  esp_err_to_name(ret));
     }
 
@@ -1194,7 +1195,7 @@ static void xiaozhi_foundation_suppress_upstream_payload_logs(
     ctx->upstream_log_guard.active = true;
 #else
     /* This target enables dynamic tag levels; do not claim suppression if not. */
-    ESP_LOGW(TAG, "Upstream payload INFO log suppression is unavailable");
+    APP_LOGW(TAG, UPSTREAM_PAYLOAD_INFO_LOG_SU_74A189F5, "Upstream payload INFO log suppression is unavailable");
 #endif
 }
 
@@ -1240,8 +1241,8 @@ static esp_err_t xiaozhi_foundation_maybe_inject_fault(
     }
 
     ctx->fault_injected = true;
-    ESP_LOGW(
-        TAG,
+    APP_LOGW(
+        TAG, XZ_FAULT_INJECT_CASE_S_0A29E6F7,
         "XZ_FAULT_INJECT case=%s generation=%u error=%s",
         xiaozhi_foundation_fault_case_to_string(fault_case),
         (unsigned)ctx->generation,
@@ -1282,8 +1283,8 @@ static void xiaozhi_foundation_capture_resource_snapshot(
         return;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, RESOURCE_S_INTERNAL_FREE_BYT_D955E864,
         "RESOURCE[%s] internal_free_bytes=%u internal_min_free_bytes=%u "
         "internal_largest_block_bytes=%u dma_free_bytes=%u "
         "dma_min_free_bytes=%u dma_largest_block_bytes=%u "
@@ -1324,7 +1325,7 @@ static void xiaozhi_foundation_capture_cleanup_settle_samples(
     xiaozhi_foundation_resource_snapshot_t intermediate = {0};
 
     if (log_snapshots && (cycle != 0U)) {
-        ESP_LOGI(TAG, "XZ_LC_RESOURCE cycle=%u phase=CLEANUP_T+0_MS",
+        APP_LOGI(TAG, XZ_LC_RESOURCE_CYCLE_U_C4308CEF, "XZ_LC_RESOURCE cycle=%u phase=CLEANUP_T+0_MS",
                  (unsigned)cycle);
     }
     xiaozhi_foundation_capture_resource_snapshot(
@@ -1334,7 +1335,7 @@ static void xiaozhi_foundation_capture_cleanup_settle_samples(
 
     vTaskDelay(pdMS_TO_TICKS(XIAOZHI_FOUNDATION_CLEANUP_SETTLE_T250_MS));
     if (log_snapshots && (cycle != 0U)) {
-        ESP_LOGI(TAG, "XZ_LC_RESOURCE cycle=%u phase=CLEANUP_T+250_MS",
+        APP_LOGI(TAG, XZ_LC_RESOURCE_CYCLE_U_0E28935A, "XZ_LC_RESOURCE cycle=%u phase=CLEANUP_T+250_MS",
                  (unsigned)cycle);
     }
     xiaozhi_foundation_capture_resource_snapshot(
@@ -1346,7 +1347,7 @@ static void xiaozhi_foundation_capture_cleanup_settle_samples(
         XIAOZHI_FOUNDATION_CLEANUP_SETTLE_T1000_MS -
         XIAOZHI_FOUNDATION_CLEANUP_SETTLE_T250_MS));
     if (log_snapshots && (cycle != 0U)) {
-        ESP_LOGI(TAG, "XZ_LC_RESOURCE cycle=%u phase=CLEANUP_T+1000_MS",
+        APP_LOGI(TAG, XZ_LC_RESOURCE_CYCLE_U_918BAF11, "XZ_LC_RESOURCE cycle=%u phase=CLEANUP_T+1000_MS",
                  (unsigned)cycle);
     }
     xiaozhi_foundation_capture_resource_snapshot(
@@ -1358,7 +1359,7 @@ static void xiaozhi_foundation_capture_cleanup_settle_samples(
         XIAOZHI_FOUNDATION_CLEANUP_SETTLE_T3000_MS -
         XIAOZHI_FOUNDATION_CLEANUP_SETTLE_T1000_MS));
     if (log_snapshots && (cycle != 0U)) {
-        ESP_LOGI(TAG, "XZ_LC_RESOURCE cycle=%u phase=CLEANUP_T+3000_MS",
+        APP_LOGI(TAG, XZ_LC_RESOURCE_CYCLE_U_D3AEA86C, "XZ_LC_RESOURCE cycle=%u phase=CLEANUP_T+3000_MS",
                  (unsigned)cycle);
     }
     xiaozhi_foundation_capture_resource_snapshot(
@@ -1370,7 +1371,7 @@ static void xiaozhi_foundation_capture_cleanup_settle_samples(
         XIAOZHI_FOUNDATION_CLEANUP_SETTLE_T5000_MS -
         XIAOZHI_FOUNDATION_CLEANUP_SETTLE_T3000_MS));
     if (log_snapshots && (cycle != 0U)) {
-        ESP_LOGI(TAG, "XZ_LC_RESOURCE cycle=%u phase=CLEANUP_T+5000_MS",
+        APP_LOGI(TAG, XZ_LC_RESOURCE_CYCLE_U_15C1A1EB, "XZ_LC_RESOURCE cycle=%u phase=CLEANUP_T+5000_MS",
                  (unsigned)cycle);
     }
     xiaozhi_foundation_capture_resource_snapshot(
@@ -1388,8 +1389,8 @@ static void xiaozhi_foundation_log_resource_delta(
         return;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, RESOURCE_DELTA_S_INTERNAL_FR_E5E97C7C,
         "RESOURCE DELTA %s internal_free_bytes=%lld "
         "internal_min_free_bytes=%lld internal_largest_block_bytes=%lld "
         "dma_free_bytes=%lld dma_min_free_bytes=%lld "
@@ -1431,8 +1432,8 @@ static void xiaozhi_foundation_log_cycle_resource_trend(
         return;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, XZ_LC_TREND_CYCLE_U_F13D4BA3,
         "XZ_LC_TREND cycle=%u internal_baseline=%u internal_t0=%u "
         "internal_t5000=%u internal_delta_t0=%lld "
         "internal_delta_t5000=%lld largest_baseline=%u largest_t0=%u "
@@ -1472,8 +1473,8 @@ static void xiaozhi_foundation_log_intercycle_resource_trend(
         return;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, XZ_LC_INTERCYCLE_CYCLE_U_0891C516,
         "XZ_LC_INTERCYCLE cycle=%u baseline_minus_previous_t5000 "
         "internal_free_bytes=%lld internal_largest_block_bytes=%lld "
         "dma_free_bytes=%lld dma_largest_block_bytes=%lld "
@@ -1541,8 +1542,8 @@ static esp_err_t xiaozhi_foundation_log_validation_summary(
         out_cycle_result->cleanup_t5000 = *cleanup_t5000;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, VALIDATION_SUMMARY_CHECKPOIN_1F8AFAF4,
         "VALIDATION SUMMARY checkpoint=%s result=%s primary_error=%s "
         "cleanup_error=%s fault_case=%s fault_injected=%s",
         checkpoint_name,
@@ -1553,8 +1554,8 @@ static esp_err_t xiaozhi_foundation_log_validation_summary(
             esp_err_to_name(result.cleanup_error) : "ESP_OK",
         xiaozhi_foundation_fault_case_to_string(ctx->fault_case),
         ctx->fault_injected ? "yes" : "no");
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, VALIDATION_COUNTERS_ATTEMPTS_7E767421,
         "VALIDATION COUNTERS attempts=%u pass=%u fail=%u connected=%u "
         "disconnected=%u server_goodbye=%u audio_opened=%u audio_closed=%u errors=%u "
         "user_text=%u assistant_text=%u turns=%u tts_start=%u "
@@ -1960,8 +1961,8 @@ static void xiaozhi_foundation_log_protocol_diagnostics(
 
     if (((protocol_bits & XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT) != 0U) &&
         user_text_received) {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, CHAT_TEXT_ROLE_USER_LEN_BB0DB675,
             "CHAT_TEXT role=USER len=%u%s",
             (unsigned)user_text_length,
             user_text_truncated ? " truncated" : "");
@@ -1969,8 +1970,8 @@ static void xiaozhi_foundation_log_protocol_diagnostics(
 
     if (((protocol_bits & XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT) != 0U) &&
         assistant_text_received) {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, CHAT_TEXT_ROLE_ASSISTANT_LEN_78F877C8,
             "CHAT_TEXT role=ASSISTANT len=%u%s",
             (unsigned)assistant_text_length,
             assistant_text_truncated ? " truncated" : "");
@@ -1978,21 +1979,21 @@ static void xiaozhi_foundation_log_protocol_diagnostics(
 
     if (((protocol_bits & XIAOZHI_FOUNDATION_EVENT_CONVERSATION_TURN_COMPLETE) != 0U) &&
         conversation_turn_complete) {
-        ESP_LOGI(TAG, "Conversation turn complete: USER -> ASSISTANT");
+        APP_LOGI(TAG, CONVERSATION_TURN_COMPLETE_U_F652BB6F, "Conversation turn complete: USER -> ASSISTANT");
     }
 
     if (((protocol_bits & XIAOZHI_FOUNDATION_EVENT_CHAT_TTS_STATE) != 0U) &&
         tts_state_received) {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, TTS_STATE_S_C6C4C6D1,
             "TTS state=%s",
             xiaozhi_foundation_tts_state_to_string(last_tts_state));
     }
 
     if (((protocol_bits & XIAOZHI_FOUNDATION_EVENT_CHAT_ERROR) != 0U) &&
         first_error_received) {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, CHAT_ERROR_FIRST_CODE_S_0E3E491D,
             "CHAT_ERROR first_code=%s source=%s%s",
             esp_err_to_name(first_error_code),
             (first_error_source[0] != '\0') ? first_error_source : "unknown",
@@ -2001,15 +2002,15 @@ static void xiaozhi_foundation_log_protocol_diagnostics(
 
     if (((protocol_bits & XIAOZHI_FOUNDATION_EVENT_CHAT_EMOJI) != 0U) &&
         emoji_received) {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, CHAT_EMOJI_LEN_U_S_5F7790CD,
             "CHAT_EMOJI len=%u%s",
             (unsigned)last_emoji_length,
             last_emoji_truncated ? " truncated" : "");
     }
 
     if ((protocol_bits & XIAOZHI_FOUNDATION_EVENT_SERVER_GOODBYE) != 0U) {
-        ESP_LOGW(TAG, "SERVER_GOODBYE observed");
+        APP_LOGW(TAG, SERVER_GOODBYE_OBSERVED_E7BFC087, "SERVER_GOODBYE observed");
     }
 }
 
@@ -2064,12 +2065,12 @@ static esp_err_t xiaozhi_foundation_get_runtime_error(
     const EventBits_t bits = xEventGroupGetBits(ctx->events);
 
     if ((bits & XIAOZHI_FOUNDATION_EVENT_DISCONNECTED) != 0U) {
-        ESP_LOGE(TAG, "%s: DISCONNECTED", operation);
+        APP_LOGE(TAG, S_DISCONNECTED_60257A93, "%s: DISCONNECTED", operation);
         return ESP_FAIL;
     }
 
     if ((bits & XIAOZHI_FOUNDATION_EVENT_SERVER_GOODBYE) != 0U) {
-        ESP_LOGE(TAG, "%s: SERVER_GOODBYE", operation);
+        APP_LOGE(TAG, S_SERVER_GOODBYE_870D8AC8, "%s: SERVER_GOODBYE", operation);
         return ESP_FAIL;
     }
 
@@ -2093,8 +2094,8 @@ static esp_err_t xiaozhi_foundation_get_runtime_error(
             NULL);
         portEXIT_CRITICAL(&ctx->protocol_lock);
 
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, S_CHAT_ERROR_CODE_S_B294444C,
             "%s: CHAT_ERROR code=%s source=%s%s",
             operation,
             esp_err_to_name(error_code),
@@ -2131,7 +2132,7 @@ static esp_err_t xiaozhi_foundation_wait_for_event(
     }
 
     if ((observed & expected) == 0U) {
-        ESP_LOGE(TAG, "%s: timeout after %u ms", operation,
+        APP_LOGE(TAG, S_TIMEOUT_AFTER_U_MS_D072DAF6, "%s: timeout after %u ms", operation,
                  (unsigned)timeout_ms);
         return ESP_ERR_TIMEOUT;
     }
@@ -2165,7 +2166,7 @@ static esp_err_t xiaozhi_foundation_open_audio_channel(
         XIAOZHI_FOUNDATION_EVENT_AUDIO_CHANNEL_OPENED |
             XIAOZHI_FOUNDATION_EVENT_AUDIO_CHANNEL_CLOSED);
 
-    ESP_LOGI(TAG, "Opening audio channel");
+    APP_LOGI(TAG, OPENING_AUDIO_CHANNEL_7625026F, "Opening audio channel");
 
     esp_err_t ret = esp_xiaozhi_chat_open_audio_channel(
         chat,
@@ -2173,12 +2174,12 @@ static esp_err_t xiaozhi_foundation_open_audio_channel(
         NULL,
         0U);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "open_audio_channel failed: %s", esp_err_to_name(ret));
+        APP_LOGE(TAG, OPEN_AUDIO_CHANNEL_FAILED_S_0FAAF71E, "open_audio_channel failed: %s", esp_err_to_name(ret));
         return ret;
     }
 
     *audio_channel_open = true;
-    ESP_LOGI(TAG, "open_audio_channel: OK");
+    APP_LOGI(TAG, OPEN_AUDIO_CHANNEL_OK_F7B9C183, "open_audio_channel: OK");
 
     ret = xiaozhi_foundation_wait_for_event(
         ctx,
@@ -2189,7 +2190,7 @@ static esp_err_t xiaozhi_foundation_open_audio_channel(
         return ret;
     }
 
-    ESP_LOGI(TAG, "AUDIO_CHANNEL_OPENED");
+    APP_LOGI(TAG, AUDIO_CHANNEL_OPENED_467B2C95, "AUDIO_CHANNEL_OPENED");
     return ESP_OK;
 }
 
@@ -2212,19 +2213,19 @@ static esp_err_t xiaozhi_foundation_close_audio_channel(
                          XIAOZHI_FOUNDATION_EVENT_AUDIO_CHANNEL_CLOSED);
 
     if (cleanup) {
-        ESP_LOGI(TAG, "Cleanup closing audio channel");
+        APP_LOGI(TAG, CLEANUP_CLOSING_AUDIO_CHANNE_178078FF, "Cleanup closing audio channel");
     } else {
-        ESP_LOGI(TAG, "Closing audio channel");
+        APP_LOGI(TAG, CLOSING_AUDIO_CHANNEL_9C54A345, "Closing audio channel");
     }
 
     esp_err_t ret = esp_xiaozhi_chat_close_audio_channel(chat);
     if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "close_audio_channel failed: %s", esp_err_to_name(ret));
+        APP_LOGW(TAG, CLOSE_AUDIO_CHANNEL_FAILED_S_B72B1CC9, "close_audio_channel failed: %s", esp_err_to_name(ret));
         return ret;
     }
 
     *audio_channel_open = false;
-    ESP_LOGI(TAG, "close_audio_channel: OK");
+    APP_LOGI(TAG, CLOSE_AUDIO_CHANNEL_OK_0A814C4B, "close_audio_channel: OK");
 
     ret = xiaozhi_foundation_wait_for_event(
         ctx,
@@ -2235,7 +2236,7 @@ static esp_err_t xiaozhi_foundation_close_audio_channel(
         return ret;
     }
 
-    ESP_LOGI(TAG, "AUDIO_CHANNEL_CLOSED");
+    APP_LOGI(TAG, AUDIO_CHANNEL_CLOSED_1D0C13E2, "AUDIO_CHANNEL_CLOSED");
     return ESP_OK;
 }
 
@@ -2244,7 +2245,7 @@ static esp_err_t xiaozhi_foundation_validate_p2e_audio_channel(
     esp_xiaozhi_chat_handle_t chat,
     bool *audio_channel_open)
 {
-    ESP_LOGI(TAG, "=== P2-E WEBSOCKET AUDIO CHANNEL ===");
+    APP_LOGI(TAG, P2_E_WEBSOCKET_AUDIO_CHANNEL_B9AB911C, "=== P2-E WEBSOCKET AUDIO CHANNEL ===");
 
     esp_err_t ret = xiaozhi_foundation_open_audio_channel(
         ctx,
@@ -2274,7 +2275,7 @@ static esp_err_t xiaozhi_foundation_validate_p2e_audio_channel(
         return ret;
     }
 
-    ESP_LOGI(TAG, "Audio channel stable for %u ms",
+    APP_LOGI(TAG, AUDIO_CHANNEL_STABLE_FOR_U_BBF81A3C, "Audio channel stable for %u ms",
              (unsigned)XIAOZHI_FOUNDATION_AUDIO_CHANNEL_HOLD_MS);
 
     return xiaozhi_foundation_close_audio_channel(
@@ -2442,7 +2443,7 @@ static esp_err_t xiaozhi_foundation_send_p2f_fixture(
             (const char *)cursor,
             frame_size);
         if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Audio TX frame %u/%u failed: %s",
+            APP_LOGE(TAG, AUDIO_TX_FRAME_U_U_74C013CE, "Audio TX frame %u/%u failed: %s",
                      (unsigned)(index + 1U),
                      (unsigned)fixture->frame_count,
                      esp_err_to_name(ret));
@@ -2492,7 +2493,7 @@ static esp_err_t xiaozhi_foundation_wait_for_p2f_evidence(
 
         const TickType_t elapsed = xTaskGetTickCount() - started_at;
         if (elapsed >= timeout_ticks) {
-            ESP_LOGE(TAG, "P2-F response timeout after %u ms",
+            APP_LOGE(TAG, P2_F_RESPONSE_TIMEOUT_AFTER_EE7395DC, "P2-F response timeout after %u ms",
                      (unsigned)XIAOZHI_FOUNDATION_P2F_RESPONSE_TIMEOUT_MS);
             return ESP_ERR_TIMEOUT;
         }
@@ -2594,10 +2595,10 @@ static void xiaozhi_foundation_log_p2f_evidence(
             safe_text,
             sizeof(safe_text),
             user_text);
-        ESP_LOGI(TAG, "CHAT_TEXT role=USER len=%u%s",
+        APP_LOGI(TAG, CHAT_TEXT_ROLE_USER_LEN_C6A77C76, "CHAT_TEXT role=USER len=%u%s",
                  (unsigned)user_text_length,
                  user_text_truncated ? " truncated" : "");
-        ESP_LOGI(TAG, "USER text=\"%s\"", safe_text);
+        APP_LOGI(TAG, CHAT_TEXT_OMITTED_7FB17BBB, "chat_text_omitted=1");
         memset(safe_text, 0, sizeof(safe_text));
     }
 
@@ -2607,28 +2608,28 @@ static void xiaozhi_foundation_log_p2f_evidence(
             safe_text,
             sizeof(safe_text),
             assistant_text);
-        ESP_LOGI(TAG, "CHAT_TEXT role=ASSISTANT len=%u%s",
+        APP_LOGI(TAG, CHAT_TEXT_ROLE_ASSISTANT_LEN_68D6DC77, "CHAT_TEXT role=ASSISTANT len=%u%s",
                  (unsigned)assistant_text_length,
                  assistant_text_truncated ? " truncated" : "");
-        ESP_LOGI(TAG, "ASSISTANT text=\"%s\"", safe_text);
+        APP_LOGI(TAG, CHAT_TEXT_OMITTED_7FB17BBB, "chat_text_omitted=1");
         memset(safe_text, 0, sizeof(safe_text));
     }
 
     if (conversation_turn_complete) {
-        ESP_LOGI(TAG, "Conversation Q/A text turn: COMPLETE");
+        APP_LOGI(TAG, CONVERSATION_Q_A_TEXT_TURN_A27334BC, "Conversation Q/A text turn: COMPLETE");
     }
 
     if (tts_start_received) {
-        ESP_LOGI(TAG, "TTS state=START");
+        APP_LOGI(TAG, TTS_STATE_START_71B43B6B, "TTS state=START");
     }
     if (tts_sentence_start_received) {
-        ESP_LOGI(TAG, "TTS state=SENTENCE_START");
+        APP_LOGI(TAG, TTS_STATE_SENTENCE_START_30DEC664, "TTS state=SENTENCE_START");
     }
     if (tts_stop_received) {
-        ESP_LOGI(TAG, "TTS state=STOP");
+        APP_LOGI(TAG, TTS_STATE_STOP_8B1A09C1, "TTS state=STOP");
     }
 
-    ESP_LOGI(TAG, "Audio RX packets=%u bytes=%llu first=%u max=%u",
+    APP_LOGI(TAG, AUDIO_RX_PACKETS_U_BYTES_06F07E10, "Audio RX packets=%u bytes=%llu first=%u max=%u",
               (unsigned)audio_rx_callback_count,
               (unsigned long long)audio_rx_total_bytes,
              (unsigned)audio_rx_first_packet_size,
@@ -2648,7 +2649,7 @@ static esp_err_t xiaozhi_foundation_validate_p2f_audio_e2e(
         return ESP_ERR_INVALID_ARG;
     }
 
-    ESP_LOGI(TAG, "=== P2-F WEBSOCKET AUDIO E2E ===");
+    APP_LOGI(TAG, P2_F_WEBSOCKET_AUDIO_E2E_7F66AFBF, "=== P2-F WEBSOCKET AUDIO E2E ===");
 
     const uint8_t *fixture_data = NULL;
     size_t fixture_size = 0U;
@@ -2657,7 +2658,7 @@ static esp_err_t xiaozhi_foundation_validate_p2f_audio_e2e(
         &fixture_data,
         &fixture_size);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "P2-F fixture is not embedded: %s",
+        APP_LOGE(TAG, P2_F_FIXTURE_IS_NOT_2F2CAF7C, "P2-F fixture is not embedded: %s",
                  esp_err_to_name(ret));
         return ret;
     }
@@ -2667,7 +2668,7 @@ static esp_err_t xiaozhi_foundation_validate_p2f_audio_e2e(
         fixture_size,
         &fixture);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "P2-F fixture format rejected: %s",
+        APP_LOGE(TAG, P2_F_FIXTURE_FORMAT_REJECTED_2FBB753F, "P2-F fixture format rejected: %s",
                  esp_err_to_name(ret));
         return ret;
     }
@@ -2710,7 +2711,7 @@ static esp_err_t xiaozhi_foundation_validate_p2f_audio_e2e(
         chat,
         ESP_XIAOZHI_CHAT_LISTENING_MODE_MANUAL);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "start_listening failed: %s", esp_err_to_name(ret));
+        APP_LOGE(TAG, START_LISTENING_FAILED_S_BC94211A, "start_listening failed: %s", esp_err_to_name(ret));
         return ret;
     }
 
@@ -2719,8 +2720,8 @@ static esp_err_t xiaozhi_foundation_validate_p2f_audio_e2e(
         ctx,
         XIAOZHI_FOUNDATION_UI_LISTENING,
         ESP_OK);
-    ESP_LOGI(TAG, "start_listening: OK");
-    ESP_LOGI(TAG, "Sending known audio");
+    APP_LOGI(TAG, START_LISTENING_OK_822C40D3, "start_listening: OK");
+    APP_LOGI(TAG, SENDING_KNOWN_AUDIO_6F22DB4F, "Sending known audio");
 
     ret = xiaozhi_foundation_send_p2f_fixture(
         ctx,
@@ -2728,14 +2729,14 @@ static esp_err_t xiaozhi_foundation_validate_p2f_audio_e2e(
         &fixture,
         &frames_sent,
         &bytes_sent);
-    ESP_LOGI(TAG, "Audio TX frames=%u bytes=%u",
+    APP_LOGI(TAG, AUDIO_TX_FRAMES_U_BYTES_CFDD7FD7, "Audio TX frames=%u bytes=%u",
              (unsigned)frames_sent,
              (unsigned)bytes_sent);
 
     if (listening_started) {
         const esp_err_t stop_ret = esp_xiaozhi_chat_send_stop_listening(chat);
         if (stop_ret != ESP_OK) {
-            ESP_LOGW(TAG, "stop_listening failed: %s",
+            APP_LOGW(TAG, STOP_LISTENING_FAILED_S_B1997EF8, "stop_listening failed: %s",
                      esp_err_to_name(stop_ret));
             if (ret == ESP_OK) {
                 ret = stop_ret;
@@ -2745,7 +2746,7 @@ static esp_err_t xiaozhi_foundation_validate_p2f_audio_e2e(
                 ctx,
                 XIAOZHI_FOUNDATION_UI_PROCESSING,
                 ESP_OK);
-            ESP_LOGI(TAG, "stop_listening: OK");
+            APP_LOGI(TAG, STOP_LISTENING_OK_F01DDB95, "stop_listening: OK");
         }
     }
 
@@ -2756,22 +2757,22 @@ static esp_err_t xiaozhi_foundation_validate_p2f_audio_e2e(
     xiaozhi_foundation_log_p2f_evidence(ctx);
 
     if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "Conversation Q/A text evidence: PASS");
+        APP_LOGI(TAG, CONVERSATION_Q_A_TEXT_EVIDEN_0A48EBF6, "Conversation Q/A text evidence: PASS");
     }
 
     if (ret == ESP_ERR_TIMEOUT) {
         const EventBits_t evidence = xEventGroupGetBits(ctx->events);
         if ((evidence & XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT_USER) == 0U) {
-            ESP_LOGE(TAG, "P2-F FAIL: no USER CHAT_TEXT");
+            APP_LOGE(TAG, P2_F_FAIL_NO_USER_C7173324, "P2-F FAIL: no USER CHAT_TEXT");
         }
         if ((evidence & XIAOZHI_FOUNDATION_EVENT_CHAT_TEXT_ASSISTANT) == 0U) {
-            ESP_LOGE(TAG, "P2-F FAIL: no ASSISTANT CHAT_TEXT");
+            APP_LOGE(TAG, P2_F_FAIL_NO_ASSISTANT_8405C5F3, "P2-F FAIL: no ASSISTANT CHAT_TEXT");
         }
         if ((evidence & XIAOZHI_FOUNDATION_EVENT_CONVERSATION_TURN_COMPLETE) == 0U) {
-            ESP_LOGE(TAG, "P2-F FAIL: no complete USER -> ASSISTANT conversation turn");
+            APP_LOGE(TAG, P2_F_FAIL_NO_COMPLETE_7C75D6F2, "P2-F FAIL: no complete USER -> ASSISTANT conversation turn");
         }
         if ((evidence & XIAOZHI_FOUNDATION_EVENT_AUDIO_RX) == 0U) {
-            ESP_LOGE(TAG, "P2-F FAIL: no audio callback data");
+            APP_LOGE(TAG, P2_F_FAIL_NO_AUDIO_B9765A85, "P2-F FAIL: no audio callback data");
         }
     }
 
@@ -2850,13 +2851,13 @@ static void xiaozhi_foundation_probe_task(void *argument)
         xiaozhi_foundation_probe_impl(&info);
 
     if (ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, BACKGROUND_SERVICE_PROBE_FAI_4502EA54,
             "Background service probe failed: %s",
             esp_err_to_name(ret));
     } else {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, BACKGROUND_SERVICE_PROBE_COM_3AF8BEC4,
             "Background service probe completed");
     }
 
@@ -2910,14 +2911,14 @@ static esp_err_t xiaozhi_foundation_validate_transport_cycle(
         xiaozhi_foundation_should_log_cycle_resources(cycle);
 
     if ((cycle != 0U) && full_lifecycle) {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, XZ_LC_BEGIN_CYCLE_U_8B45DDFB,
             "XZ_LC_BEGIN cycle=%u generation=%u",
             (unsigned)cycle,
             (unsigned)generation);
     } else if ((cycle != 0U) && !full_lifecycle) {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, XZ_ATTR_CYCLE_BEGIN_STAGE_BAE63648,
             "XZ_ATTR_CYCLE_BEGIN stage=%s cycle=%u generation=%u",
             xiaozhi_foundation_attribution_stage_to_string(
                 attribution_stage),
@@ -2925,11 +2926,11 @@ static esp_err_t xiaozhi_foundation_validate_transport_cycle(
             (unsigned)generation);
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, TRANSPORT_REQUESTED_S_7E9E2372,
         "Transport requested: %s",
         xiaozhi_foundation_transport_to_string(requested));
-    ESP_LOGI(TAG, "Validation checkpoint selected: %s", checkpoint_name);
+    APP_LOGI(TAG, VALIDATION_CHECKPOINT_SELECT_C04E67B6, "Validation checkpoint selected: %s", checkpoint_name);
 
     xiaozhi_foundation_validation_ctx_t ctx = {
         .requested_transport = requested,
@@ -2960,10 +2961,10 @@ static esp_err_t xiaozhi_foundation_validate_transport_cycle(
     ctx.counters.validation_attempt_count = 1U;
     xiaozhi_foundation_suppress_upstream_payload_logs(&ctx);
     if (ctx.upstream_log_guard.active) {
-        ESP_LOGI(TAG, "Upstream raw-payload log tags: SUPPRESSED");
+        APP_LOGI(TAG, UPSTREAM_RAW_PAYLOAD_LOG_TAG_6BB70BAB, "Upstream raw-payload log tags: SUPPRESSED");
     }
     if (log_resource_snapshots && (cycle != 0U)) {
-        ESP_LOGI(TAG, "XZ_LC_RESOURCE cycle=%u phase=STEADY_STATE_BASELINE",
+        APP_LOGI(TAG, XZ_LC_RESOURCE_CYCLE_U_536369B4, "XZ_LC_RESOURCE cycle=%u phase=STEADY_STATE_BASELINE",
                  (unsigned)cycle);
     }
     xiaozhi_foundation_capture_resource_snapshot(
@@ -2978,8 +2979,8 @@ static esp_err_t xiaozhi_foundation_validate_transport_cycle(
         info_release_required = true;
 
         if (ret != ESP_OK) {
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, FAILED_TO_GET_XIAOZHI_SERVIC_653F5E33,
                 "Failed to get Xiaozhi service info: %s",
                 esp_err_to_name(ret));
             goto cleanup;
@@ -3003,15 +3004,15 @@ static esp_err_t xiaozhi_foundation_validate_transport_cycle(
         info_release_required = false;
         memset(&info, 0, sizeof(info));
         if (ret != ESP_OK) {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, FAILED_TO_FREE_XIAOZHI_SERVI_ED8C9477,
                 "Failed to free Xiaozhi service info: %s",
                 esp_err_to_name(ret));
             goto cleanup;
         }
 
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, WEBSOCKET_AVAILABLE_S_BF8A129B,
             "WebSocket available: %s",
             ctx.websocket_available ? "yes" : "no");
 
@@ -3035,15 +3036,15 @@ static esp_err_t xiaozhi_foundation_validate_transport_cycle(
             &selected_transport);
 
         if (ret != ESP_OK) {
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, NO_USABLE_XIAOZHI_WEBSOCKET_BBCAFE71,
                 "No usable Xiaozhi WebSocket transport: %s",
                 esp_err_to_name(ret));
             goto cleanup;
         }
 
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, TRANSPORT_SELECTED_S_481DFF8B,
             "Transport selected: %s",
             xiaozhi_foundation_transport_to_string(
                 selected_transport));
@@ -3051,14 +3052,14 @@ static esp_err_t xiaozhi_foundation_validate_transport_cycle(
 
     ret = esp_mcp_create(&mcp);
     if (ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_CREATE_MCP_ENGINE_0A96A2DD,
             "Failed to create MCP engine: %s",
             esp_err_to_name(ret));
         goto cleanup;
     }
 
-    ESP_LOGI(TAG, "MCP engine created");
+    APP_LOGI(TAG, MCP_ENGINE_CREATED_A85EBDF7, "MCP engine created");
 
     ret = xiaozhi_foundation_maybe_inject_fault(
         &ctx,
@@ -3073,7 +3074,7 @@ static esp_err_t xiaozhi_foundation_validate_transport_cycle(
 
     ctx.events = xEventGroupCreate();
     if (ctx.events == NULL) {
-        ESP_LOGE(TAG, "Failed to create transport EventGroup");
+        APP_LOGE(TAG, FAILED_TO_CREATE_TRANSPORT_E_F2A50483, "Failed to create transport EventGroup");
         ret = ESP_ERR_NO_MEM;
         goto cleanup;
     }
@@ -3121,14 +3122,14 @@ static esp_err_t xiaozhi_foundation_validate_transport_cycle(
         &chat);
 
     if (ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, CHAT_INIT_FAILED_S_DDB977E8,
             "chat_init failed: %s",
             esp_err_to_name(ret));
         goto cleanup;
     }
 
-    ESP_LOGI(TAG, "chat_init: OK");
+    APP_LOGI(TAG, CHAT_INIT_OK_D685D5C0, "chat_init: OK");
     xiaozhi_foundation_capture_resource_snapshot(
         &(xiaozhi_foundation_resource_snapshot_t){0},
         "AFTER_CHAT_INIT",
@@ -3153,8 +3154,8 @@ static esp_err_t xiaozhi_foundation_validate_transport_cycle(
         &event_handler_instance);
 
     if (ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_REGISTER_XIAOZHI_C_7642FB78,
             "Failed to register Xiaozhi chat event handler: %s",
             esp_err_to_name(ret));
         goto cleanup;
@@ -3171,15 +3172,15 @@ static esp_err_t xiaozhi_foundation_validate_transport_cycle(
 
     ret = esp_xiaozhi_chat_start(chat);
     if (ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, CHAT_START_FAILED_S_96795F22,
             "chat_start failed: %s",
             esp_err_to_name(ret));
         goto cleanup;
     }
 
     chat_started = true;
-    ESP_LOGI(TAG, "chat_start: OK");
+    APP_LOGI(TAG, CHAT_START_OK_EAF66515, "chat_start: OK");
 
     ret = xiaozhi_foundation_maybe_inject_fault(
         &ctx,
@@ -3188,8 +3189,8 @@ static esp_err_t xiaozhi_foundation_validate_transport_cycle(
         goto cleanup;
     }
 
-    ESP_LOGI(TAG, "Public arbitrary text TX: NOT AVAILABLE");
-    ESP_LOGI(TAG, "CHAT_TEXT receive handler: armed");
+    APP_LOGI(TAG, PUBLIC_ARBITRARY_TEXT_TX_NOT_1670E48E, "Public arbitrary text TX: NOT AVAILABLE");
+    APP_LOGI(TAG, CHAT_TEXT_RECEIVE_HANDLER_AR_48D255A8, "CHAT_TEXT receive handler: armed");
 
     ret = xiaozhi_foundation_wait_for_event(
         &ctx,
@@ -3200,13 +3201,13 @@ static esp_err_t xiaozhi_foundation_validate_transport_cycle(
         goto cleanup;
     }
 
-    ESP_LOGI(TAG, "CONNECTED event received");
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(TAG, CONNECTED_EVENT_RECEIVED_A2E0B604, "CONNECTED event received");
+    APP_LOGI(
+        TAG, TRANSPORT_CONNECTED_S_E0E7EB3D,
         "Transport connected: %s",
         xiaozhi_foundation_transport_to_string(
             selected_transport));
-    ESP_LOGI(TAG, "WebSocket connected");
+    APP_LOGI(TAG, WEBSOCKET_CONNECTED_2CFA2F0E, "WebSocket connected");
     xiaozhi_foundation_capture_resource_snapshot(
         &(xiaozhi_foundation_resource_snapshot_t){0},
         "AFTER_CONNECTED",
@@ -3248,7 +3249,7 @@ cleanup:
         memset(&info, 0, sizeof(info));
 
         if (free_info_ret != ESP_OK) {
-            ESP_LOGW(TAG, "Failed to free Xiaozhi service info during cleanup: %s",
+            APP_LOGW(TAG, FAILED_TO_FREE_XIAOZHI_SERVI_720C063B, "Failed to free Xiaozhi service info during cleanup: %s",
                      esp_err_to_name(free_info_ret));
             xiaozhi_foundation_record_cleanup_error(&ctx, free_info_ret);
         }
@@ -3286,14 +3287,14 @@ cleanup:
             esp_xiaozhi_chat_stop(chat);
 
         if (stop_ret != ESP_OK) {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, CHAT_STOP_FAILED_S_0ABDBCEA,
                 "chat_stop failed: %s",
                 esp_err_to_name(stop_ret));
 
             xiaozhi_foundation_record_cleanup_error(&ctx, stop_ret);
         } else {
-            ESP_LOGI(TAG, "chat_stop: OK");
+            APP_LOGI(TAG, CHAT_STOP_OK_FA5147E0, "chat_stop: OK");
         }
     }
 
@@ -3305,8 +3306,8 @@ cleanup:
                 event_handler_instance);
 
         if (unregister_ret != ESP_OK) {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, FAILED_TO_UNREGISTER_XIAOZHI_D90523BA,
                 "Failed to unregister Xiaozhi chat event handler: %s",
                 esp_err_to_name(unregister_ret));
 
@@ -3319,14 +3320,14 @@ cleanup:
             esp_xiaozhi_chat_deinit(chat);
 
         if (deinit_ret != ESP_OK) {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, CHAT_DEINIT_FAILED_S_EFA16D18,
                 "chat_deinit failed: %s",
                 esp_err_to_name(deinit_ret));
 
             xiaozhi_foundation_record_cleanup_error(&ctx, deinit_ret);
         } else {
-            ESP_LOGI(TAG, "chat_deinit: OK");
+            APP_LOGI(TAG, CHAT_DEINIT_OK_7C408753, "chat_deinit: OK");
         }
     }
 
@@ -3337,14 +3338,14 @@ cleanup:
             esp_mcp_destroy(mcp);
 
         if (destroy_ret != ESP_OK) {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, MCP_ENGINE_DESTROY_FAILED_S_6030E05D,
                 "MCP engine destroy failed: %s",
                 esp_err_to_name(destroy_ret));
 
             xiaozhi_foundation_record_cleanup_error(&ctx, destroy_ret);
         } else {
-            ESP_LOGI(TAG, "MCP engine destroyed");
+            APP_LOGI(TAG, MCP_ENGINE_DESTROYED_9505BD12, "MCP engine destroyed");
         }
     }
 
@@ -3392,33 +3393,33 @@ cleanup:
     memset(&ctx.result, 0, sizeof(ctx.result));
 
     if (final_ret == ESP_OK) {
-        ESP_LOGI(TAG, "%s RESULT: PASS", checkpoint_name);
+        APP_LOGI(TAG, S_RESULT_PASS_45EF763C, "%s RESULT: PASS", checkpoint_name);
     } else {
-        ESP_LOGE(TAG, "%s RESULT: FAIL: %s", checkpoint_name,
+        APP_LOGE(TAG, S_RESULT_FAIL_S_E5370249, "%s RESULT: FAIL: %s", checkpoint_name,
                  esp_err_to_name(final_ret));
     }
 
     if ((cycle != 0U) && full_lifecycle) {
         if (final_ret == ESP_OK) {
-            ESP_LOGI(TAG, "XZ_LC_END cycle=%u result=PASS",
+            APP_LOGI(TAG, XZ_LC_END_CYCLE_U_4A31B4AA, "XZ_LC_END cycle=%u result=PASS",
                      (unsigned)cycle);
         } else {
-            ESP_LOGE(TAG,
+            APP_LOGE(TAG, XZ_LC_END_CYCLE_U_F412F3F0,
                      "XZ_LC_END cycle=%u result=FAIL error=%s",
                      (unsigned)cycle,
                      esp_err_to_name(final_ret));
         }
     } else if ((cycle != 0U) && !full_lifecycle) {
         if (final_ret == ESP_OK) {
-            ESP_LOGI(
-                TAG,
+            APP_LOGI(
+                TAG, XZ_ATTR_CYCLE_END_STAGE_85F3E5EB,
                 "XZ_ATTR_CYCLE_END stage=%s cycle=%u result=PASS",
                 xiaozhi_foundation_attribution_stage_to_string(
                     attribution_stage),
                 (unsigned)cycle);
         } else {
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, XZ_ATTR_CYCLE_END_STAGE_DB664547,
                 "XZ_ATTR_CYCLE_END stage=%s cycle=%u result=FAIL error=%s",
                 xiaozhi_foundation_attribution_stage_to_string(
                     attribution_stage),
@@ -3662,9 +3663,9 @@ static void xiaozhi_foundation_log_lifecycle_summary(
         (aggregate->failed_cycles == 0U) &&
         (aggregate->completed_cycles == aggregate->requested_cycles);
 
-    ESP_LOGI(TAG, "=== XIAOZHI LIFECYCLE SUMMARY ===");
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(TAG, XIAOZHI_LIFECYCLE_SUMMARY_5782424B, "=== XIAOZHI LIFECYCLE SUMMARY ===");
+    APP_LOGI(
+        TAG, XZ_LC_RESULT_RESULT_S_BFFD15EE,
         "XZ_LC_RESULT result=%s cycles_requested=%u cycles_completed=%u "
         "cycles_passed=%u cycles_failed=%u first_failed_cycle=%u "
         "first_failure_error=%s",
@@ -3676,8 +3677,8 @@ static void xiaozhi_foundation_log_lifecycle_summary(
         (unsigned)aggregate->first_failed_cycle,
         (aggregate->first_failure_error != ESP_OK) ?
             esp_err_to_name(aggregate->first_failure_error) : "ESP_OK");
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, XZ_LC_DUPLICATE_REQUEST_EXPE_4F2654D9,
         "XZ_LC_DUPLICATE_REQUEST expected=ESP_ERR_INVALID_STATE actual=%s "
         "result=%s",
         aggregate->duplicate_request_checked ?
@@ -3685,8 +3686,8 @@ static void xiaozhi_foundation_log_lifecycle_summary(
         (aggregate->duplicate_request_checked &&
          (aggregate->duplicate_request_result == ESP_ERR_INVALID_STATE)) ?
             "PASS" : "FAIL");
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, XZ_LC_AGGREGATE_COUNTERS_CON_4ECF6F8A,
         "XZ_LC_AGGREGATE_COUNTERS connected=%u disconnected=%u "
         "server_goodbye=%u errors=%u audio_opened=%u audio_closed=%u",
         (unsigned)aggregate->connected_event_count,
@@ -3697,12 +3698,12 @@ static void xiaozhi_foundation_log_lifecycle_summary(
         (unsigned)aggregate->audio_channel_closed_count);
     if (!aggregate->resource_minimums.valid ||
         !aggregate->resource_trend_valid) {
-        ESP_LOGW(TAG, "XZ_LC_RESOURCE result=NOT_AVAILABLE");
+        APP_LOGW(TAG, XZ_LC_RESOURCE_RESULT_NOT_D262334B, "XZ_LC_RESOURCE result=NOT_AVAILABLE");
         return;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, XZ_LC_RESOURCE_MIN_INTERNAL_C2D53FF3,
         "XZ_LC_RESOURCE_MIN internal_free_bytes=%u "
         "internal_largest_block_bytes=%u dma_free_bytes=%u "
         "dma_largest_block_bytes=%u psram_free_bytes=%u "
@@ -3714,8 +3715,8 @@ static void xiaozhi_foundation_log_lifecycle_summary(
         (unsigned)aggregate->resource_minimums.psram_free_bytes,
         (unsigned)aggregate->resource_minimums.psram_largest_block_bytes,
         (unsigned)aggregate->resource_minimums.worker_stack_high_water_words);
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, XZ_LC_RESOURCE_TREND_SUMMARY_59EA9EF7,
         "XZ_LC_RESOURCE_TREND_SUMMARY first_baseline_internal=%u "
         "first_t5000_internal=%u last_t5000_internal=%u "
         "last_minus_first_t5000_internal=%lld "
@@ -3752,13 +3753,13 @@ static esp_err_t xiaozhi_foundation_validate_lifecycle_matrix(
         .first_failure_error = ESP_OK,
     };
 
-    ESP_LOGI(TAG,
+    APP_LOGI(TAG, XZ_LC_CASE_NORMAL_CHAT_B305A9C7,
              "XZ_LC_CASE normal_chat_lifecycle classification=SAFE_AND_DEFINED "
              "coverage=per_cycle");
-    ESP_LOGI(TAG,
+    APP_LOGI(TAG, XZ_LC_CASE_AUDIO_CHANNEL_CA3A4D81,
              "XZ_LC_CASE audio_channel_lifecycle classification=SAFE_AND_DEFINED "
              "coverage=P2E_per_cycle");
-    ESP_LOGI(TAG,
+    APP_LOGI(TAG, XZ_LC_CASE_REPEATED_FULL_98CE51F9,
              "XZ_LC_CASE repeated_full_lifecycle requested_cycles=%u",
              (unsigned)aggregate.requested_cycles);
 
@@ -3766,7 +3767,7 @@ static esp_err_t xiaozhi_foundation_validate_lifecycle_matrix(
     aggregate.duplicate_request_checked = true;
     aggregate.duplicate_request_result =
         xiaozhi_foundation_request_transport_validation(requested);
-    ESP_LOGI(TAG,
+    APP_LOGI(TAG, XZ_LC_CASE_DUPLICATE_VALIDAT_7C36055D,
              "XZ_LC_CASE duplicate_validation_request expected=ESP_ERR_INVALID_STATE "
              "actual=%s",
              esp_err_to_name(aggregate.duplicate_request_result));
@@ -3848,8 +3849,8 @@ static void xiaozhi_foundation_log_fault_resource(
         return;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, XZ_FAULT_RESOURCE_CASE_S_B2608BF6,
         "XZ_FAULT_RESOURCE case=%s phase=%s internal_free_bytes=%u "
         "internal_min_free_bytes=%u internal_largest_block_bytes=%u "
         "dma_free_bytes=%u dma_min_free_bytes=%u "
@@ -3905,9 +3906,9 @@ static void xiaozhi_foundation_log_fault_summary(
         (aggregate->recovery_passed == aggregate->fault_cases_requested) &&
         (aggregate->recovery_failed == 0U);
 
-    ESP_LOGI(TAG, "=== XIAOZHI FAULT SUMMARY ===");
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(TAG, XIAOZHI_FAULT_SUMMARY_3BEC7262, "=== XIAOZHI FAULT SUMMARY ===");
+    APP_LOGI(
+        TAG, XZ_FAULT_RESULT_RESULT_S_C22B96F0,
         "XZ_FAULT_RESULT result=%s fault_cases_requested=%u "
         "fault_cases_completed=%u expected_failures_observed=%u "
         "unexpected_results=%u recovery_passed=%u recovery_failed=%u "
@@ -3925,12 +3926,12 @@ static void xiaozhi_foundation_log_fault_summary(
             esp_err_to_name(aggregate->first_unexpected_error) : "ESP_OK");
 
     if (!aggregate->resource_minimums.valid) {
-        ESP_LOGW(TAG, "XZ_FAULT_RESOURCE_MIN result=NOT_AVAILABLE");
+        APP_LOGW(TAG, XZ_FAULT_RESOURCE_MIN_RESULT_21F0AFFD, "XZ_FAULT_RESOURCE_MIN result=NOT_AVAILABLE");
         return;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, XZ_FAULT_RESOURCE_MIN_INTERN_D2F407E1,
         "XZ_FAULT_RESOURCE_MIN internal_free_bytes=%u "
         "internal_largest_block_bytes=%u dma_free_bytes=%u "
         "dma_largest_block_bytes=%u psram_free_bytes=%u "
@@ -3970,8 +3971,8 @@ static esp_err_t xiaozhi_foundation_validate_fault_matrix(
         xiaozhi_foundation_lifecycle_cycle_result_t fault_result = {0};
         const uint32_t fault_generation =
             xiaozhi_foundation_next_lifecycle_generation();
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, XZ_FAULT_BEGIN_CASE_S_93C9557F,
             "XZ_FAULT_BEGIN case=%s generation=%u",
             xiaozhi_foundation_fault_case_to_string(fault_case),
             (unsigned)fault_generation);
@@ -4023,8 +4024,8 @@ static esp_err_t xiaozhi_foundation_validate_fault_matrix(
                 xiaozhi_foundation_saturating_add_u32(
                     aggregate.expected_failures_observed,
                     1U);
-            ESP_LOGI(
-                TAG,
+            APP_LOGI(
+                TAG, XZ_FAULT_EXPECTED_CASE_S_AB577810,
                 "XZ_FAULT_EXPECTED case=%s error=%s",
                 xiaozhi_foundation_fault_case_to_string(fault_case),
                 esp_err_to_name(fault_ret));
@@ -4035,16 +4036,16 @@ static esp_err_t xiaozhi_foundation_validate_fault_matrix(
                 &aggregate,
                 fault_case,
                 unexpected_error);
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, XZ_FAULT_UNEXPECTED_CASE_S_C90C292E,
                 "XZ_FAULT_UNEXPECTED case=%s actual=%s injected=%s",
                 xiaozhi_foundation_fault_case_to_string(fault_case),
                 esp_err_to_name(fault_ret),
                 fault_result.fault_injected ? "yes" : "no");
         }
 
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, XZ_FAULT_CLEANUP_CASE_S_C1EAF738,
             "XZ_FAULT_CLEANUP case=%s result=%s cleanup_error=%s",
             xiaozhi_foundation_fault_case_to_string(fault_case),
             cleanup_passed ? "PASS" : "FAIL",
@@ -4115,8 +4116,8 @@ static esp_err_t xiaozhi_foundation_validate_fault_matrix(
                     recovery_ret);
             }
 
-            ESP_LOGI(
-                TAG,
+            APP_LOGI(
+                TAG, XZ_FAULT_RECOVERY_CASE_S_DAAAACA6,
                 "XZ_FAULT_RECOVERY case=%s generation=%u result=%s error=%s",
                 xiaozhi_foundation_fault_case_to_string(fault_case),
                 (unsigned)recovery_generation,
@@ -4132,13 +4133,13 @@ static esp_err_t xiaozhi_foundation_validate_fault_matrix(
         const bool case_passed = expected_failure && cleanup_passed &&
                                  recovery_passed;
         if (case_passed) {
-            ESP_LOGI(
-                TAG,
+            APP_LOGI(
+                TAG, XZ_FAULT_END_CASE_S_6E412CF8,
                 "XZ_FAULT_END case=%s result=PASS",
                 xiaozhi_foundation_fault_case_to_string(fault_case));
         } else {
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, XZ_FAULT_END_CASE_S_E0ABD227,
                 "XZ_FAULT_END case=%s result=FAIL error=%s",
                 xiaozhi_foundation_fault_case_to_string(fault_case),
                 esp_err_to_name(case_failure));
@@ -4180,9 +4181,9 @@ static esp_err_t xiaozhi_foundation_validate_resource_attribution_matrix(
 #endif
     bool resource_stability_passed = true;
 
-    ESP_LOGI(TAG, "=== XIAOZHI RESOURCE ATTRIBUTION MATRIX ===");
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(TAG, XIAOZHI_RESOURCE_ATTRIBUTION_EB123011, "=== XIAOZHI RESOURCE ATTRIBUTION MATRIX ===");
+    APP_LOGI(
+        TAG, XZ_ATTR_CONFIG_REPEATS_U_0E291E6B,
         "XZ_ATTR_CONFIG repeats=%u cleanup_settle_ms=%u "
         "long_settle_ms=%u lwip_tcp_msl_ms=60000",
         (unsigned)XIAOZHI_FOUNDATION_ATTRIBUTION_REPEAT_COUNT,
@@ -4203,8 +4204,8 @@ static esp_err_t xiaozhi_foundation_validate_resource_attribution_matrix(
         bool heap_trace_started = false;
 #endif
 
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, XZ_ATTR_STAGE_BEGIN_STAGE_7DE61033,
             "XZ_ATTR_STAGE_BEGIN stage=%s repeats=%u",
             stage_name,
             (unsigned)XIAOZHI_FOUNDATION_ATTRIBUTION_REPEAT_COUNT);
@@ -4219,8 +4220,8 @@ static esp_err_t xiaozhi_foundation_validate_resource_attribution_matrix(
             }
 
             if (trace_ret != ESP_OK) {
-                ESP_LOGE(
-                    TAG,
+                APP_LOGE(
+                    TAG, XZ_ATTR_HEAP_TRACE_RESULT_71E20FC2,
                     "XZ_ATTR_HEAP_TRACE result=FAIL operation=start error=%s",
                     esp_err_to_name(trace_ret));
                 (void)heap_trace_init_standalone(NULL, 0U);
@@ -4228,8 +4229,8 @@ static esp_err_t xiaozhi_foundation_validate_resource_attribution_matrix(
             }
 
             heap_trace_started = true;
-            ESP_LOGI(
-                TAG,
+            APP_LOGI(
+                TAG, XZ_ATTR_HEAP_TRACE_RESULT_00C55B16,
                 "XZ_ATTR_HEAP_TRACE result=STARTED stage=%s capacity=%u",
                 stage_name,
                 (unsigned)
@@ -4259,8 +4260,8 @@ static esp_err_t xiaozhi_foundation_validate_resource_attribution_matrix(
             }
             last_cleanup_t5000 = cycle_result.cleanup_t5000;
 
-            ESP_LOGI(
-                TAG,
+            APP_LOGI(
+                TAG, XZ_ATTR_TREND_STAGE_S_0A789E69,
                 "XZ_ATTR_TREND stage=%s cycle=%u "
                 "baseline_internal=%u t5000_internal=%u "
                 "delta_internal=%lld baseline_largest=%u "
@@ -4296,8 +4297,8 @@ static esp_err_t xiaozhi_foundation_validate_resource_attribution_matrix(
                     heap_trace_started = false;
                 }
 #endif
-                ESP_LOGE(
-                    TAG,
+                APP_LOGE(
+                    TAG, XZ_ATTR_STAGE_RESULT_STAGE_0D78196C,
                     "XZ_ATTR_STAGE_RESULT stage=%s result=FAIL cycle=%u "
                     "error=%s",
                     stage_name,
@@ -4327,8 +4328,8 @@ static esp_err_t xiaozhi_foundation_validate_resource_attribution_matrix(
         xiaozhi_foundation_resource_snapshot_t long_settle =
             last_cleanup_t5000;
         if (material_decline) {
-            ESP_LOGI(
-                TAG,
+            APP_LOGI(
+                TAG, XZ_ATTR_LONG_SETTLE_BEGIN_8B04F0B2,
                 "XZ_ATTR_LONG_SETTLE_BEGIN stage=%s wait_ms=%u "
                 "reason=material_settled_decline",
                 stage_name,
@@ -4355,8 +4356,8 @@ static esp_err_t xiaozhi_foundation_validate_resource_attribution_matrix(
                         trace_summary.count) :
                     ESP_ERR_INVALID_STATE;
 
-            ESP_LOGI(
-                TAG,
+            APP_LOGI(
+                TAG, XZ_ATTR_HEAP_TRACE_RESULT_A59C5B41,
                 "XZ_ATTR_HEAP_TRACE result=%s operation=stop "
                 "records=%u capacity=%u high_water=%u overflow=%s "
                 "allocations=%u frees=%u",
@@ -4425,8 +4426,8 @@ static esp_err_t xiaozhi_foundation_validate_resource_attribution_matrix(
             resource_stability_passed = false;
         }
 
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, XZ_ATTR_STAGE_RESULT_STAGE_D3A7950A,
             "XZ_ATTR_STAGE_RESULT stage=%s execution_result=PASS "
             "resource_stability=%s classification=%s "
             "first_baseline_internal=%u first_t5000_internal=%u "
@@ -4459,15 +4460,15 @@ static esp_err_t xiaozhi_foundation_validate_resource_attribution_matrix(
     }
 
     if (!resource_stability_passed) {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, XZ_ATTR_MATRIX_RESULT_EXECUT_E338E31E,
             "XZ_ATTR_MATRIX_RESULT execution_result=PASS "
             "resource_stability=FAIL result=FAIL");
         return ESP_ERR_INVALID_STATE;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, XZ_ATTR_MATRIX_RESULT_EXECUT_7C7601D1,
         "XZ_ATTR_MATRIX_RESULT execution_result=PASS "
         "resource_stability=PASS result=PASS");
     return ESP_OK;
@@ -4515,12 +4516,12 @@ static esp_err_t xiaozhi_foundation_probe_impl(
 
     esp_xiaozhi_chat_info_t info = {0};
 
-    ESP_LOGI(TAG, "Probing Xiaozhi service");
+    APP_LOGI(TAG, PROBING_XIAOZHI_SERVICE_FB092CA5, "Probing Xiaozhi service");
 
     esp_err_t ret = esp_xiaozhi_chat_get_info(&info);
 
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG,
+        APP_LOGE(TAG, XIAOZHI_SERVICE_PROBE_FAILED_CDA4FF9F,
                  "Xiaozhi service probe failed: %s",
                  esp_err_to_name(ret));
 
@@ -4555,19 +4556,19 @@ static esp_err_t xiaozhi_foundation_probe_impl(
     out_info->new_firmware_available =
         info.has_new_version;
 
-    ESP_LOGI(TAG, "Service reachable");
-    ESP_LOGI(TAG, "WebSocket available: %s",
+    APP_LOGI(TAG, SERVICE_REACHABLE_885DA219, "Service reachable");
+    APP_LOGI(TAG, WEBSOCKET_AVAILABLE_S_8EF71F7A, "WebSocket available: %s",
              out_info->websocket_available ? "yes" : "no");
-    ESP_LOGI(TAG, "Activation code: %s",
+    APP_LOGI(TAG, ACTIVATION_CODE_S_C126617B, "Activation code: %s",
              out_info->activation_code_available ? "present" : "none");
-    ESP_LOGI(TAG, "Activation challenge: %s",
+    APP_LOGI(TAG, ACTIVATION_CHALLENGE_S_CA652903, "Activation challenge: %s",
              out_info->activation_challenge_available ? "present" : "none");
-    ESP_LOGI(TAG, "Activation timeout: %d ms",
+    APP_LOGI(TAG, ACTIVATION_TIMEOUT_D_MS_5959A7E6, "Activation timeout: %d ms",
              out_info->activation_timeout_ms);
 
     ret = esp_xiaozhi_chat_free_info(&info);
     if (ret != ESP_OK) {
-        ESP_LOGW(TAG,
+        APP_LOGW(TAG, FAILED_TO_FREE_XIAOZHI_INFO_0BEE3214,
                  "Failed to free Xiaozhi info: %s",
                  esp_err_to_name(ret));
 

@@ -15,6 +15,7 @@ idf_component_register(
         "include"
 
     REQUIRES
+        app_log
         esp_common
         esp_driver_gpio
         xiaozhi_foundation

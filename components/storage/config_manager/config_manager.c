@@ -9,6 +9,7 @@
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "app_log.h"
 
 #include "nvs.h"
 
@@ -708,7 +709,7 @@ static esp_err_t config_manager_lock(void)
 
     if (result != pdTRUE)
     {
-        ESP_LOGE(TAG, "Timed out waiting for configuration mutex");
+        APP_LOGE(TAG, TIMED_OUT_WAITING_FOR_CONFIG_09D63775, "Timed out waiting for configuration mutex");
         return ESP_ERR_TIMEOUT;
     }
 
@@ -725,13 +726,13 @@ static void config_manager_unlock(void)
 
     if (mutex == NULL)
     {
-        ESP_LOGE(TAG, "Configuration mutex is unavailable");
+        APP_LOGE(TAG, CONFIGURATION_MUTEX_IS_UNAVA_2068A28A, "Configuration mutex is unavailable");
         return;
     }
 
     if (xSemaphoreGive(mutex) != pdTRUE)
     {
-        ESP_LOGE(TAG, "Failed to release configuration mutex");
+        APP_LOGE(TAG, FAILED_TO_RELEASE_CONFIGURAT_6808085A, "Failed to release configuration mutex");
     }
 }
 
@@ -758,14 +759,14 @@ esp_err_t config_manager_init(void)
     if (s_initialized)
     {
         taskEXIT_CRITICAL(&s_init_lock);
-        ESP_LOGD(TAG, "Config manager is already initialized");
+        APP_LOGD(TAG, CONFIG_MANAGER_IS_ALREADY_IN_E0CFD503, "Config manager is already initialized");
         return ESP_OK;
     }
 
     if (s_initializing)
     {
         taskEXIT_CRITICAL(&s_init_lock);
-        ESP_LOGW(TAG, "Config manager initialization is already in progress");
+        APP_LOGW(TAG, CONFIG_MANAGER_INITIALIZATIO_6A84A8B7, "Config manager initialization is already in progress");
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -780,7 +781,7 @@ esp_err_t config_manager_init(void)
         s_initializing = false;
         taskEXIT_CRITICAL(&s_init_lock);
 
-        ESP_LOGE(TAG, "Failed to create configuration mutex");
+        APP_LOGE(TAG, FAILED_TO_CREATE_CONFIGURATI_4564D8BE, "Failed to create configuration mutex");
         return ESP_ERR_NO_MEM;
     }
 
@@ -790,7 +791,7 @@ esp_err_t config_manager_init(void)
     s_initializing = false;
     taskEXIT_CRITICAL(&s_init_lock);
 
-    ESP_LOGI(TAG, "Config manager is initialized");
+    APP_LOGI(TAG, CONFIG_MANAGER_IS_INITIALIZE_C0E2703C, "Config manager is initialized");
 
     return ESP_OK;
 }
@@ -962,17 +963,17 @@ cleanup:
     {
         if (config_changed)
         {
-            ESP_LOGI(TAG, "Wi-Fi configuration saved");
+            APP_LOGI(TAG, WI_FI_CONFIGURATION_SAVED_D983FB74, "Wi-Fi configuration saved");
         }
         else
         {
-            ESP_LOGD(TAG, "Wi-Fi configuration is already current");
+            APP_LOGD(TAG, WI_FI_CONFIGURATION_IS_ALREA_A45421B3, "Wi-Fi configuration is already current");
         }
     }
     else
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_SAVE_WI_FI_24AA1781,
             "Failed to save Wi-Fi configuration: %s",
             esp_err_to_name(err));
     }
@@ -1096,16 +1097,16 @@ cleanup:
 
     if (err == ESP_OK)
     {
-        ESP_LOGD(TAG, "Wi-Fi configuration loaded");
+        APP_LOGD(TAG, WI_FI_CONFIGURATION_LOADED_36D2BBA3, "Wi-Fi configuration loaded");
     }
     else if (err == ESP_ERR_NVS_NOT_FOUND)
     {
-        ESP_LOGD(TAG, "Wi-Fi configuration is not stored");
+        APP_LOGD(TAG, WI_FI_CONFIGURATION_IS_NOT_AA6D928B, "Wi-Fi configuration is not stored");
     }
     else
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FAILED_TO_LOAD_WI_FI_BC61BBA2,
             "Failed to load Wi-Fi configuration: state=%d, error=%s",
             (int)state,
             esp_err_to_name(err));
@@ -1204,21 +1205,21 @@ cleanup:
     {
         if (config_changed)
         {
-            ESP_LOGI(TAG, "Wi-Fi configuration migrated to schema version 1");
+            APP_LOGI(TAG, WI_FI_CONFIGURATION_MIGRATED_3BDEACA6, "Wi-Fi configuration migrated to schema version 1");
         }
         else
         {
-            ESP_LOGD(TAG, "Wi-Fi configuration already uses current schema");
+            APP_LOGD(TAG, WI_FI_CONFIGURATION_ALREADY_3ED4C3E1, "Wi-Fi configuration already uses current schema");
         }
     }
     else if (err == ESP_ERR_NVS_NOT_FOUND)
     {
-        ESP_LOGD(TAG, "No Wi-Fi configuration is available to migrate");
+        APP_LOGD(TAG, NO_WI_FI_CONFIGURATION_IS_381A9F3C, "No Wi-Fi configuration is available to migrate");
     }
     else
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FAILED_TO_MIGRATE_WI_FI_44DF183B,
             "Failed to migrate Wi-Fi configuration: state=%d, error=%s",
             (int)state,
             esp_err_to_name(err));
@@ -1312,17 +1313,17 @@ cleanup:
     {
         if (config_changed)
         {
-            ESP_LOGI(TAG, "Wi-Fi configuration cleared");
+            APP_LOGI(TAG, WI_FI_CONFIGURATION_CLEARED_991DA645, "Wi-Fi configuration cleared");
         }
         else
         {
-            ESP_LOGD(TAG, "Wi-Fi configuration was already clear");
+            APP_LOGD(TAG, WI_FI_CONFIGURATION_WAS_ALRE_FD74D7E2, "Wi-Fi configuration was already clear");
         }
     }
     else
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_CLEAR_WI_FI_6848D4B2,
             "Failed to clear Wi-Fi configuration: %s",
             esp_err_to_name(err));
     }
@@ -1359,15 +1360,15 @@ esp_err_t config_manager_has_wifi_config(
 
     if (err == ESP_OK)
     {
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, WI_FI_CONFIGURATION_PRESENCE_36DDEEDE,
             "Wi-Fi configuration presence checked: present=%s",
             *has_config ? "true" : "false");
     }
     else
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FAILED_TO_CHECK_WI_FI_01524D17,
             "Failed to check Wi-Fi configuration presence: %s",
             esp_err_to_name(err));
     }
@@ -1464,12 +1465,12 @@ cleanup:
 
     if (err == ESP_OK)
     {
-        ESP_LOGI(TAG, "Device identity saved");
+        APP_LOGI(TAG, DEVICE_IDENTITY_SAVED_FDF7783F, "Device identity saved");
     }
     else
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_SAVE_DEVICE_IDENTI_8CF97C2B,
             "Failed to save device identity: %s",
             esp_err_to_name(err));
     }
@@ -1550,16 +1551,16 @@ cleanup:
 
     if (err == ESP_OK)
     {
-        ESP_LOGD(TAG, "Device identity loaded");
+        APP_LOGD(TAG, DEVICE_IDENTITY_LOADED_D7F85738, "Device identity loaded");
     }
     else if (err == ESP_ERR_NVS_NOT_FOUND)
     {
-        ESP_LOGD(TAG, "Device identity is not stored");
+        APP_LOGD(TAG, DEVICE_IDENTITY_IS_NOT_STORE_C3967A4C, "Device identity is not stored");
     }
     else
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FAILED_TO_LOAD_DEVICE_IDENTI_34662096,
             "Failed to load device identity: %s",
             esp_err_to_name(err));
     }
@@ -1645,17 +1646,17 @@ cleanup:
     {
         if (identity_changed)
         {
-            ESP_LOGI(TAG, "Device identity cleared");
+            APP_LOGI(TAG, DEVICE_IDENTITY_CLEARED_FE21C665, "Device identity cleared");
         }
         else
         {
-            ESP_LOGD(TAG, "Device identity was already clear");
+            APP_LOGD(TAG, DEVICE_IDENTITY_WAS_ALREADY_723961CF, "Device identity was already clear");
         }
     }
     else
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_CLEAR_DEVICE_IDENT_CE754466,
             "Failed to clear device identity: %s",
             esp_err_to_name(err));
     }
@@ -2069,8 +2070,8 @@ cleanup:
 
     if (err == ESP_OK)
     {
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, CUSTOM_CONFIGURATION_LOADED_5B593FA1,
             "Custom configuration loaded: key=%s, type=%d, size=%u",
             key,
             (int)type,
@@ -2078,15 +2079,15 @@ cleanup:
     }
     else if (err == ESP_ERR_NVS_NOT_FOUND)
     {
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, CUSTOM_CONFIGURATION_IS_NOT_C516BC21,
             "Custom configuration is not stored: key=%s",
             key);
     }
     else
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_LOAD_CUSTOM_CONFIG_B94B4106,
             "Failed to load custom configuration: key=%s, type=%d, error=%s",
             key,
             (int)type,
@@ -2423,8 +2424,8 @@ esp_err_t config_manager_save_custom_data(
         goto cleanup;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, CUSTOM_CONFIGURATION_SAVED_K_52788F63,
         "Custom configuration saved: key=%s",
         key);
 
@@ -2442,8 +2443,8 @@ cleanup:
 
     if (err != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_SAVE_CUSTOM_CONFIG_67668B4D,
             "Failed to save custom configuration: key=%s, error=%s",
             key,
             esp_err_to_name(err));
@@ -2553,15 +2554,15 @@ cleanup:
 
     if (err == ESP_OK)
     {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, CUSTOM_CONFIGURATION_CLEARED_74D32641,
             "Custom configuration cleared: key=%s",
             key);
     }
     else
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_CLEAR_CUSTOM_CONFI_FFBBCD5E,
             "Failed to clear custom configuration: key=%s, error=%s",
             key,
             esp_err_to_name(err));
@@ -2645,15 +2646,15 @@ cleanup:
         *state =
             CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN;
 
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_INSPECT_WI_FI_A9328C65,
             "Failed to inspect Wi-Fi configuration state: %s",
             esp_err_to_name(err));
     }
     else
     {
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, WI_FI_CONFIGURATION_STATE_IN_0E7E5C82,
             "Wi-Fi configuration state inspected: state=%d",
             (int)*state);
     }
@@ -2696,17 +2697,17 @@ esp_err_t config_manager_factory_reset(void)
         if (device_config_changed ||
             custom_config_changed)
         {
-            ESP_LOGI(TAG, "Component-owned configuration reset");
+            APP_LOGI(TAG, COMPONENT_OWNED_CONFIGURATIO_6DF8A9F2, "Component-owned configuration reset");
         }
         else
         {
-            ESP_LOGD(TAG, "Component-owned configuration was already reset");
+            APP_LOGD(TAG, COMPONENT_OWNED_CONFIGURATIO_287752FB, "Component-owned configuration was already reset");
         }
     }
     else
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, COMPONENT_RESET_INCOMPLETE_D_13D15426,
             "Component reset incomplete: device_cfg=%s, custom_cfg=%s",
             esp_err_to_name(device_config_err),
             esp_err_to_name(custom_config_err));

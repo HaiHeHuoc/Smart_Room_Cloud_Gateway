@@ -1,0 +1,42 @@
+menu "Application log manager"
+    config LOG_MANAGER_ENABLE
+        bool "Enable persistent application logger"
+        depends on SPIRAM
+        default y
+    config LOG_MANAGER_BUFFER_KIB
+        int "PSRAM ring size (KiB)"
+        range 16 2048
+        default 512
+    config LOG_MANAGER_RECORD_BYTES
+        int "Maximum record bytes (including newline and terminator)"
+        range 256 1024
+        default 512
+    config LOG_MANAGER_WRITE_BYTES
+        int "Batch write threshold (bytes)"
+        range 1024 16384
+        default 4096
+    config LOG_MANAGER_WRITE_MS
+        int "Maximum batch delay (ms)"
+        range 100 10000
+        default 1000
+    config LOG_MANAGER_SYNC_MS
+        int "Durability sync interval (ms)"
+        range 1000 60000
+        default 5000
+    config LOG_MANAGER_ROTATE_KIB
+        int "Maximum file size (KiB)"
+        range 64 65536
+        default 5120
+    config LOG_MANAGER_RETAIN_MIB
+        int "Maximum retained log data (MiB)"
+        range 8 2048
+        default 256
+    config LOG_MANAGER_CONSOLE_LEVEL
+        int "Console level (0=none, 1=error through 5=verbose)"
+        range 0 5
+        default 3
+    config LOG_MANAGER_STORAGE_LEVEL
+        int "Persistent level (0=none, 1=error through 5=verbose)"
+        range 0 5
+        default 4
+endmenu

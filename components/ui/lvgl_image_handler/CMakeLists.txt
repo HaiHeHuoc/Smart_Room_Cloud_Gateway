@@ -9,6 +9,7 @@ idf_component_register(
     SRCS ${LVGL_IMAGE_HANDLER_SRCS}
     INCLUDE_DIRS "include"
     REQUIRES
+        app_log
         common
         display_driver
         freertos

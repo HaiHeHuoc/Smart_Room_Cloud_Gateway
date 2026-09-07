@@ -16,6 +16,7 @@
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "app_log.h"
 
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
@@ -66,7 +67,7 @@ static esp_err_t display_driver_init_spi_bus(void)
         .max_transfer_sz = LCD_MAX_TRANSFER_SIZE
     };
 
-    ESP_LOGD(TAG, "spi bus initializes");
+    APP_LOGD(TAG, SPI_BUS_INITIALIZES_D6C474DF, "spi bus initializes");
 
     ESP_RETURN_ON_ERROR(spi_bus_initialize(LCD_SPI_HOST,
                         &bus_config,
@@ -78,7 +79,7 @@ static esp_err_t display_driver_init_spi_bus(void)
 
 static esp_err_t display_driver_set_backlight(bool enable)
 {
-    ESP_LOGD(TAG, "Setting backlight: %s", enable ? "ON" : "OFF");
+    APP_LOGD(TAG, SETTING_BACKLIGHT_S_46B7F8E4, "Setting backlight: %s", enable ? "ON" : "OFF");
 
     /* Board config decides whether the backlight is active-high or active-low. */
     uint8_t m_u8BacklightState = enable ? LCD_BACKLIGHT_ON_LEVEL : LCD_BACKLIGHT_OFF_LEVEL;
@@ -168,7 +169,7 @@ esp_err_t display_driver_init(display_driver_handle_t *handle)
         .trans_queue_depth = 10
     };
 
-    ESP_LOGD(TAG, "Creating LCD IOs");
+    APP_LOGD(TAG, CREATING_LCD_IOS_684E8C29, "Creating LCD IOs");
 
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_spi(
         LCD_SPI_HOST,
@@ -177,7 +178,7 @@ esp_err_t display_driver_init(display_driver_handle_t *handle)
     ), TAG, "Failed to create LCD IOs, %s", __func__);
 
 
-    ESP_LOGD(TAG, "Create ST7735 panel");
+    APP_LOGD(TAG, CREATE_ST7735_PANEL_1138BBC9, "Create ST7735 panel");
 
     /* Panel config describes how the ST7735 interprets pixel format and reset GPIO. */
     const esp_lcd_panel_dev_config_t panel_config = {
@@ -198,14 +199,14 @@ esp_err_t display_driver_init(display_driver_handle_t *handle)
         , "Fail to create ST7735 panel");
 
     /* Reset and initialize the actual LCD controller before drawing to it. */
-    ESP_LOGD(TAG, "Reset ST7735 panel");
+    APP_LOGD(TAG, RESET_ST7735_PANEL_CDD28F2D, "Reset ST7735 panel");
     ESP_RETURN_ON_ERROR(
         esp_lcd_panel_reset(handle->panel_handle),
         TAG,
         "Failed to reset LCD"
     );
 
-    ESP_LOGD(TAG, "init ST7735 panel");
+    APP_LOGD(TAG, INIT_ST7735_PANEL_B19AB58C, "init ST7735 panel");
     ESP_RETURN_ON_ERROR(
         esp_lcd_panel_init(handle->panel_handle),
         TAG,
@@ -215,7 +216,7 @@ esp_err_t display_driver_init(display_driver_handle_t *handle)
 
 
     /* Keep the panel enabled before turning on the backlight so the screen wakes cleanly. */
-    ESP_LOGD(TAG, "Turn display on");
+    APP_LOGD(TAG, TURN_DISPLAY_ON_FAE1534D, "Turn display on");
     ESP_RETURN_ON_ERROR(
         esp_lcd_panel_disp_on_off(handle->panel_handle, true),
         TAG,
@@ -226,20 +227,20 @@ esp_err_t display_driver_init(display_driver_handle_t *handle)
 
     ESP_RETURN_ON_ERROR(display_driver_set_backlight(true), TAG, "Failed to init backlight");
 
-    ESP_LOGI(TAG, "Display Driver initialized successfully");
+    APP_LOGI(TAG, DISPLAY_DRIVER_INITIALIZED_S_55423DFB, "Display Driver initialized successfully");
     return ESP_OK;
 }
 
 esp_err_t display_driver_raw_color_test(const display_driver_handle_t *handle)
 {
     /* This test fills the whole screen with known RGB565 colors one by one. */
-    ESP_LOGD(TAG, "Performing raw color test on the display");
+    APP_LOGD(TAG, PERFORMING_RAW_COLOR_TEST_ON_19ACE905, "Performing raw color test on the display");
 
     ESP_RETURN_ON_FALSE(handle != NULL, ESP_ERR_INVALID_ARG, TAG, "handle is NULL");
     ESP_RETURN_ON_FALSE(handle->panel_handle != NULL, ESP_ERR_INVALID_ARG, TAG, "panel_handle is NULL");
 
 
-    ESP_LOGI(TAG, "Start LCD raw color test");
+    APP_LOGI(TAG, START_LCD_RAW_COLOR_TEST_98338DCC, "Start LCD raw color test");
 
     /* These values are standard RGB565 test colors: red, green, blue, white, black. */
     const struct {
@@ -254,7 +255,7 @@ esp_err_t display_driver_raw_color_test(const display_driver_handle_t *handle)
     };
 
     for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
-        ESP_LOGD(TAG, "Fill %s", tests[i].name);
+        APP_LOGD(TAG, FILL_S_7F29D8C8, "Fill %s", tests[i].name);
 
         /* Draw one solid color, then wait so the result is visible on the LCD. */
         ESP_RETURN_ON_ERROR(
@@ -266,7 +267,7 @@ esp_err_t display_driver_raw_color_test(const display_driver_handle_t *handle)
         vTaskDelay(pdMS_TO_TICKS(800));
     }
 
-    ESP_LOGI(TAG, "LCD raw color test done");
+    APP_LOGI(TAG, LCD_RAW_COLOR_TEST_DONE_FDEBCCC6, "LCD raw color test done");
 
    return ESP_OK;
 }

@@ -6,6 +6,7 @@
 #include "encoder/impl/esp_opus_enc.h"
 #include "esp_audio_types.h"
 #include "esp_log.h"
+#include "app_log.h"
 
 #define VOICE_ASSISTANT_OPUS_BITRATE_BPS 24000
 #define VOICE_ASSISTANT_OPUS_COMPLEXITY  5
@@ -54,7 +55,7 @@ esp_err_t voice_assistant_opus_encoder_init(void)
         esp_opus_enc_open(&config, sizeof(config), &s_encoder);
     if (codec_ret != ESP_AUDIO_ERR_OK) {
         s_encoder = NULL;
-        ESP_LOGE(TAG, "encoder open failed codec_error=%d", (int)codec_ret);
+        APP_LOGE(TAG, ENCODER_OPEN_FAILED_CODEC_ER_948CE0DA, "encoder open failed codec_error=%d", (int)codec_ret);
         return opus_error_to_esp(codec_ret);
     }
 
@@ -64,7 +65,7 @@ esp_err_t voice_assistant_opus_encoder_init(void)
         (s_encoder_input_bytes != (int)VOICE_ASSISTANT_OPUS_PCM_BYTES) ||
         (s_encoder_output_bytes <= 0) ||
         (s_encoder_output_bytes > (int)VOICE_ASSISTANT_OPUS_MAX_PACKET_BYTES)) {
-        ESP_LOGE(TAG,
+        APP_LOGE(TAG, ENCODER_FRAME_CONTRACT_INVAL_E4D6073E,
                  "encoder frame contract invalid codec_error=%d input=%d output=%d",
                  (int)codec_ret,
                  s_encoder_input_bytes,
@@ -75,7 +76,7 @@ esp_err_t voice_assistant_opus_encoder_init(void)
             ESP_ERR_INVALID_SIZE : opus_error_to_esp(codec_ret);
     }
 
-    ESP_LOGI(TAG,
+    APP_LOGI(TAG, ENCODER_READY_RATE_CHANNELS_DA141D6B,
              "encoder READY rate=16000 channels=1 frame_ms=60 pcm_bytes=%d max_packet=%d bitrate=%d",
              s_encoder_input_bytes,
              s_encoder_output_bytes,
@@ -142,10 +143,10 @@ esp_err_t voice_assistant_opus_decoder_init(void)
         esp_opus_dec_open(&config, sizeof(config), &s_decoder);
     if (codec_ret != ESP_AUDIO_ERR_OK) {
         s_decoder = NULL;
-        ESP_LOGE(TAG, "decoder open failed codec_error=%d", (int)codec_ret);
+        APP_LOGE(TAG, DECODER_OPEN_FAILED_CODEC_ER_C9F78BB9, "decoder open failed codec_error=%d", (int)codec_ret);
         return opus_error_to_esp(codec_ret);
     }
-    ESP_LOGI(TAG, "decoder READY rate=16000 channels=1 frame_ms=60");
+    APP_LOGI(TAG, DECODER_READY_RATE_CHANNELS_34845C27, "decoder READY rate=16000 channels=1 frame_ms=60");
     return ESP_OK;
 }
 
@@ -184,7 +185,7 @@ esp_err_t voice_assistant_opus_decode(
     const esp_audio_err_t codec_ret =
         esp_opus_dec_decode(s_decoder, &input, &output, &info);
     if (codec_ret != ESP_AUDIO_ERR_OK) {
-        ESP_LOGW(TAG,
+        APP_LOGW(TAG, DECODER_REJECTED_PACKET_CODE_6B92D3E6,
                  "decoder rejected packet codec_error=%d packet_bytes=%u",
                  (int)codec_ret,
                  (unsigned)packet_size);
@@ -196,7 +197,7 @@ esp_err_t voice_assistant_opus_decode(
         (info.sample_rate != ESP_AUDIO_SAMPLE_RATE_16K) ||
         (info.channel != ESP_AUDIO_MONO) ||
         (info.bits_per_sample != ESP_AUDIO_BIT16)) {
-        ESP_LOGE(TAG,
+        APP_LOGE(TAG, DECODER_CONTRACT_INVALID_CON_6D957C85,
                  "decoder contract invalid consumed=%u/%u decoded=%u rate=%u channels=%u bits=%u",
                  (unsigned)input.consumed,
                  (unsigned)packet_size,

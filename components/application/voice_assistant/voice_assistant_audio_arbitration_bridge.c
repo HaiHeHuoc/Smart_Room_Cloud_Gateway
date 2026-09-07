@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include "esp_log.h"
+#include "app_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -71,7 +72,7 @@ esp_err_t phase16_xiaozhi_start_recording(void)
         if (status.current_valid &&
             status.current.request_id == request_id &&
             status.state == AUDIO_MANAGER_CAPTURE_ARBITER_ACTIVE) {
-            ESP_LOGI(TAG, "Xiaozhi capture granted request=%u", (unsigned)request_id);
+            APP_LOGI(TAG, XIAOZHI_CAPTURE_GRANTED_REQU_7C0241EE, "Xiaozhi capture granted request=%u", (unsigned)request_id);
             return ESP_OK;
         }
         if ((!status.current_valid || status.current.request_id != request_id) &&
@@ -133,7 +134,7 @@ esp_err_t phase16_xiaozhi_stream_begin(void)
     atomic_store_explicit(&s_playback_request_id, request_id, memory_order_release);
     /* Do not wait for ACTIVE here: the manager starts I2S only after this
      * downlink worker has supplied a bounded PCM prefill. */
-    ESP_LOGI(TAG, "Xiaozhi PCM stream reserved request=%u", (unsigned)request_id);
+    APP_LOGI(TAG, XIAOZHI_PCM_STREAM_RESERVED_E713B0DB, "Xiaozhi PCM stream reserved request=%u", (unsigned)request_id);
     return ESP_OK;
 }
 

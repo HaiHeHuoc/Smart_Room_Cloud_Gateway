@@ -13,6 +13,7 @@
 #include "freertos/task.h"
 
 #include "esp_log.h"
+#include "app_log.h"
 #include "esp_vfs_fat.h"
 
 #include "driver/sdspi_host.h"
@@ -45,6 +46,8 @@ static bool s_initialized = false;
 static bool s_started = false;
 static bool s_health_check_in_progress = false;
 static TaskHandle_t s_recovery_task_handle = NULL;
+static void (*s_availability_callback)(void);
+
 static sd_card_manager_status_t s_status = {
     .state = SD_CARD_MANAGER_STATE_UNINITIALIZED,
     .last_error = ESP_OK,
@@ -75,6 +78,14 @@ static sdmmc_card_t *sd_card_manager_begin_idle_health_check(void);
 static bool sd_card_manager_finish_idle_health_check(esp_err_t result);
 
 /* Static Functions --------------------------------------------------------- */
+static void sd_card_manager_notify_availability(void)
+{
+    taskENTER_CRITICAL(&s_state_lock);
+    void (*callback)(void) = s_availability_callback;
+    taskEXIT_CRITICAL(&s_state_lock);
+    if (callback != NULL) callback();
+}
+
 /**
  * @brief Initialize the SPI bus used by the SD card.
  *
@@ -103,8 +114,8 @@ static esp_err_t sd_card_manager_init_spi_bus(void)
         SDSPI_DEFAULT_DMA);
     if (result != ESP_OK)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FAILED_TO_INITIALIZE_SD_SPI_A7CDBF50,
             "Failed to initialize SD SPI bus: %s",
             esp_err_to_name(result));
         return result;
@@ -127,8 +138,8 @@ static esp_err_t sd_card_manager_release_spi_bus(void)
     const esp_err_t result = spi_bus_free(SD_SPI_HOST);
     if (result != ESP_OK)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FAILED_TO_RELEASE_SD_SPI_426FE55B,
             "Failed to release SD SPI bus: %s",
             esp_err_to_name(result));
         return result;
@@ -168,7 +179,7 @@ static esp_err_t sd_card_manager_mount_filesystem(void)
     slot_config.host_id = SD_SPI_HOST;
 
     sdmmc_card_t *card = NULL;
-    ESP_LOGI(TAG, "Mounting SD card filesystem at %s", SD_MOUNT_POINT);
+    APP_LOGI(TAG, MOUNTING_SD_CARD_FILESYSTEM_E435C11A, "Mounting SD card filesystem at %s", SD_MOUNT_POINT);
 
     const esp_err_t result = esp_vfs_fat_sdspi_mount(
         SD_MOUNT_POINT,
@@ -209,8 +220,8 @@ static esp_err_t sd_card_manager_mount_once(void)
     const esp_err_t release_result = sd_card_manager_release_spi_bus();
     if (release_result != ESP_OK)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, SD_MOUNT_CLEANUP_ALSO_FAILED_5D25A9EB,
             "SD mount cleanup also failed: %s",
             esp_err_to_name(release_result));
     }
@@ -246,8 +257,8 @@ static esp_err_t sd_card_manager_unmount_for_recovery(void)
 
         if (result != ESP_OK)
         {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, SD_VFS_UNMOUNT_REPORTED_S_5240B268,
                 "SD VFS unmount reported: %s",
                 esp_err_to_name(result));
         }
@@ -317,6 +328,7 @@ static void sd_card_manager_mark_ready(bool initial_recovery_timed_out)
     s_status.last_error = ESP_OK;
     s_status.consecutive_mount_failures = 0U;
     taskEXIT_CRITICAL(&s_state_lock);
+    sd_card_manager_notify_availability();
 }
 
 static bool sd_card_manager_initial_deadline_expired(TickType_t initial_start)
@@ -391,6 +403,7 @@ static bool sd_card_manager_finish_idle_health_check(esp_err_t result)
     }
     taskEXIT_CRITICAL(&s_state_lock);
 
+    if (recovery_required) sd_card_manager_notify_availability();
     return recovery_required;
 }
 
@@ -414,8 +427,8 @@ static esp_err_t sd_card_manager_list_files_recursive_internal(
     if (dir == NULL)
     {
         const int open_errno = errno;
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FAILED_TO_OPEN_DIRECTORY_S_458EB88B,
             "Failed to open directory %s: errno=%d",
             dir_path,
             open_errno);
@@ -451,7 +464,7 @@ static esp_err_t sd_card_manager_list_files_recursive_internal(
             entry->d_name);
         if ((written < 0) || (written >= (int)sizeof(full_path)))
         {
-            ESP_LOGW(TAG, "Path too long, skipped: %s/%s", dir_path, entry->d_name);
+            APP_LOGW(TAG, PATH_TOO_LONG_SKIPPED_S_E2B96C85, "Path too long, skipped: %s/%s", dir_path, entry->d_name);
             continue;
         }
 
@@ -459,7 +472,7 @@ static esp_err_t sd_card_manager_list_files_recursive_internal(
         if (stat(full_path, &file_stat) != 0)
         {
             const int stat_errno = errno;
-            ESP_LOGW(TAG, "Failed to stat %s: errno=%d", full_path, stat_errno);
+            APP_LOGW(TAG, FAILED_TO_STAT_S_ERRNO_00230488, "Failed to stat %s: errno=%d", full_path, stat_errno);
             if (stat_errno == EIO)
             {
                 sd_card_manager_report_errno_io_error(stat_errno);
@@ -471,7 +484,7 @@ static esp_err_t sd_card_manager_list_files_recursive_internal(
 
         if (S_ISDIR(file_stat.st_mode))
         {
-            ESP_LOGD(TAG, "[DIR ] depth=%u %s", (unsigned)current_depth, full_path);
+            APP_LOGD(TAG, DIR_DEPTH_U_S_543DAB35, "[DIR ] depth=%u %s", (unsigned)current_depth, full_path);
 
             if (current_depth < max_depth)
             {
@@ -488,8 +501,8 @@ static esp_err_t sd_card_manager_list_files_recursive_internal(
         }
         else if (S_ISREG(file_stat.st_mode))
         {
-            ESP_LOGD(
-                TAG,
+            APP_LOGD(
+                TAG, FILE_DEPTH_U_S_SIZE_92436265,
                 "[FILE] depth=%u %s, size=%ld bytes",
                 (unsigned)current_depth,
                 full_path,
@@ -497,14 +510,14 @@ static esp_err_t sd_card_manager_list_files_recursive_internal(
         }
         else
         {
-            ESP_LOGD(TAG, "[OTHER] depth=%u %s", (unsigned)current_depth, full_path);
+            APP_LOGD(TAG, OTHER_DEPTH_U_S_7AE82EAE, "[OTHER] depth=%u %s", (unsigned)current_depth, full_path);
         }
     }
 
     if (readdir_error != 0)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, DIRECTORY_READ_FAILED_FOR_S_53CE57F4,
             "Directory read failed for %s: errno=%d",
             dir_path,
             readdir_error);
@@ -514,7 +527,7 @@ static esp_err_t sd_card_manager_list_files_recursive_internal(
 
     if (closedir(dir) != 0)
     {
-        ESP_LOGW(TAG, "Failed to close directory %s: errno=%d", dir_path, errno);
+        APP_LOGW(TAG, FAILED_TO_CLOSE_DIRECTORY_S_3F53D9EB, "Failed to close directory %s: errno=%d", dir_path, errno);
         sd_card_manager_report_io_error(ESP_FAIL);
         result = ESP_FAIL;
     }
@@ -536,8 +549,8 @@ static void sd_card_manager_recovery_task(void *parameter)
     bool initial_recovery_completed = false;
     bool initial_timeout_logged = false;
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, RECOVERY_TASK_STARTED_SETTLE_DD3741EB,
         "Recovery task started: settle=%ums retry=%ums initial_timeout=%ums",
         (unsigned)SD_CARD_MANAGER_INITIAL_SETTLE_DELAY_MS,
         (unsigned)SD_CARD_MANAGER_INITIAL_RETRY_DELAY_MS,
@@ -570,8 +583,8 @@ static void sd_card_manager_recovery_task(void *parameter)
             const esp_err_t health_result = sdmmc_get_status(card);
             if (sd_card_manager_finish_idle_health_check(health_result))
             {
-                ESP_LOGW(
-                    TAG,
+                APP_LOGW(
+                    TAG, IDLE_SD_HEALTH_CHECK_FAILED_9B30FA9A,
                     "Idle SD health check failed: %s; starting recovery",
                     esp_err_to_name(health_result));
             }
@@ -592,8 +605,8 @@ static void sd_card_manager_recovery_task(void *parameter)
             const esp_err_t cleanup_result = sd_card_manager_unmount_for_recovery();
             if (cleanup_result != ESP_OK)
             {
-                ESP_LOGW(
-                    TAG,
+                APP_LOGW(
+                    TAG, SD_RECOVERY_CLEANUP_REPORTED_5FB737DA,
                     "SD recovery cleanup reported: %s",
                     esp_err_to_name(cleanup_result));
             }
@@ -609,8 +622,8 @@ static void sd_card_manager_recovery_task(void *parameter)
         {
             sd_card_manager_mark_initial_timeout();
             initial_timeout_logged = true;
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, INITIAL_SD_RECOVERY_TIMED_OU_006AE968,
                 "Initial SD recovery timed out; application continues and background retry remains active");
         }
 
@@ -627,14 +640,14 @@ static void sd_card_manager_recovery_task(void *parameter)
             initial_recovery_completed = true;
             if (completed_after_initial_deadline)
             {
-                ESP_LOGW(
-                    TAG,
+                APP_LOGW(
+                    TAG, SD_FILESYSTEM_BECAME_READY_A_9D39464B,
                     "SD filesystem became ready after the initial recovery deadline at %s",
                     SD_MOUNT_POINT);
             }
             else
             {
-                ESP_LOGI(TAG, "SD filesystem is ready at %s", SD_MOUNT_POINT);
+                APP_LOGI(TAG, SD_FILESYSTEM_IS_READY_AT_41152513, "SD filesystem is ready at %s", SD_MOUNT_POINT);
             }
             continue;
         }
@@ -650,8 +663,8 @@ static void sd_card_manager_recovery_task(void *parameter)
             ((mount_attempt_number %
               SD_CARD_MANAGER_BACKGROUND_FAILURE_LOG_PERIOD) == 0U))
         {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, SD_MOUNT_ATTEMPT_LU_FAILED_89BC80C7,
                 "SD mount attempt %lu failed: %s%s",
                 (unsigned long)mount_attempt_number,
                 esp_err_to_name(mount_result),
@@ -661,8 +674,8 @@ static void sd_card_manager_recovery_task(void *parameter)
         }
         else
         {
-            ESP_LOGD(
-                TAG,
+            APP_LOGD(
+                TAG, SD_MOUNT_ATTEMPT_LU_FAILED_E0D7AD69,
                 "SD mount attempt %lu failed: %s",
                 (unsigned long)mount_attempt_number,
                 esp_err_to_name(mount_result));
@@ -687,6 +700,13 @@ static void sd_card_manager_recovery_task(void *parameter)
 }
 
 /* Functions ---------------------------------------------------------------- */
+void sd_card_manager_register_availability_callback(void (*callback)(void))
+{
+    taskENTER_CRITICAL(&s_state_lock);
+    s_availability_callback = callback;
+    taskEXIT_CRITICAL(&s_state_lock);
+}
+
 esp_err_t sd_card_manager_init(void)
 {
     taskENTER_CRITICAL(&s_state_lock);
@@ -713,7 +733,7 @@ esp_err_t sd_card_manager_init(void)
 
     taskEXIT_CRITICAL(&s_state_lock);
 
-    ESP_LOGI(TAG, "SD recovery service initialized");
+    APP_LOGI(TAG, SD_RECOVERY_SERVICE_INITIALI_A922010C, "SD recovery service initialized");
     return ESP_OK;
 }
 
@@ -830,7 +850,7 @@ void sd_card_manager_release(void)
 
     if (release_without_lease)
     {
-        ESP_LOGW(TAG, "SD lease release without a matching acquire");
+        APP_LOGW(TAG, SD_LEASE_RELEASE_WITHOUT_A_B3701121, "SD lease release without a matching acquire");
         return;
     }
 
@@ -862,8 +882,9 @@ void sd_card_manager_report_io_error(esp_err_t error)
 
     if (recovery_requested)
     {
-        ESP_LOGW(
-            TAG,
+        sd_card_manager_notify_availability();
+        APP_LOGW(
+            TAG, SD_I_O_FAILURE_REPORTED_D2CFB717,
             "SD I/O failure reported: %s; draining file leases before recovery",
             esp_err_to_name(error));
         sd_card_manager_notify_recovery_task();
@@ -891,7 +912,7 @@ esp_err_t sd_card_manager_write_test_file(void)
     if (file == NULL)
     {
         const int open_errno = errno;
-        ESP_LOGW(TAG, "Failed to open %s for writing: errno=%d", file_path, open_errno);
+        APP_LOGW(TAG, FAILED_TO_OPEN_S_FOR_ECCF8F02, "Failed to open %s for writing: errno=%d", file_path, open_errno);
         sd_card_manager_report_errno_io_error(open_errno);
         sd_card_manager_release();
         return ESP_FAIL;
@@ -907,7 +928,7 @@ esp_err_t sd_card_manager_write_test_file(void)
 
     if (fclose(file) != 0)
     {
-        ESP_LOGW(TAG, "Failed to close %s: errno=%d", file_path, errno);
+        APP_LOGW(TAG, FAILED_TO_CLOSE_S_ERRNO_9C5A3777, "Failed to close %s: errno=%d", file_path, errno);
         result = ESP_FAIL;
         sd_card_manager_report_io_error(result);
     }
@@ -916,7 +937,7 @@ esp_err_t sd_card_manager_write_test_file(void)
 
     if (result == ESP_OK)
     {
-        ESP_LOGI(TAG, "File written successfully: %s", file_path);
+        APP_LOGI(TAG, FILE_WRITTEN_SUCCESSFULLY_S_A564BB95, "File written successfully: %s", file_path);
     }
 
     return result;
@@ -935,7 +956,7 @@ esp_err_t sd_card_manager_read_test_file(void)
     if (file == NULL)
     {
         const int open_errno = errno;
-        ESP_LOGW(TAG, "Failed to open %s for reading: errno=%d", file_path, open_errno);
+        APP_LOGW(TAG, FAILED_TO_OPEN_S_FOR_08870BD3, "Failed to open %s for reading: errno=%d", file_path, open_errno);
         sd_card_manager_report_errno_io_error(open_errno);
         sd_card_manager_release();
         return ESP_FAIL;
@@ -944,19 +965,19 @@ esp_err_t sd_card_manager_read_test_file(void)
     char line[128] = {0};
     while (fgets(line, sizeof(line), file) != NULL)
     {
-        ESP_LOGD(TAG, "Read line: %s", line);
+        APP_LOGD(TAG, FILE_LINE_BYTES_U_EECC184F, "file_line_bytes=%u", (unsigned)strlen(line));
     }
 
     if (ferror(file))
     {
         result = ESP_FAIL;
-        ESP_LOGW(TAG, "Read error for %s", file_path);
+        APP_LOGW(TAG, READ_ERROR_FOR_S_85FFCA2C, "Read error for %s", file_path);
         sd_card_manager_report_io_error(result);
     }
 
     if (fclose(file) != 0)
     {
-        ESP_LOGW(TAG, "Failed to close %s: errno=%d", file_path, errno);
+        APP_LOGW(TAG, FAILED_TO_CLOSE_S_ERRNO_9C5A3777, "Failed to close %s: errno=%d", file_path, errno);
         result = ESP_FAIL;
         sd_card_manager_report_io_error(result);
     }
@@ -965,7 +986,7 @@ esp_err_t sd_card_manager_read_test_file(void)
 
     if (result == ESP_OK)
     {
-        ESP_LOGI(TAG, "File read successfully: %s", file_path);
+        APP_LOGI(TAG, FILE_READ_SUCCESSFULLY_S_E9BDF603, "File read successfully: %s", file_path);
     }
 
     return result;
@@ -985,7 +1006,7 @@ esp_err_t sd_card_manager_list_files(const char *dir_path)
     if (dir == NULL)
     {
         const int open_errno = errno;
-        ESP_LOGW(TAG, "Failed to open directory %s: errno=%d", scan_path, open_errno);
+        APP_LOGW(TAG, FAILED_TO_OPEN_DIRECTORY_S_ED57C648, "Failed to open directory %s: errno=%d", scan_path, open_errno);
         sd_card_manager_report_errno_io_error(open_errno);
         sd_card_manager_release();
         return ESP_FAIL;
@@ -1014,7 +1035,7 @@ esp_err_t sd_card_manager_list_files(const char *dir_path)
             entry->d_name);
         if ((written < 0) || (written >= (int)sizeof(full_path)))
         {
-            ESP_LOGW(TAG, "Path too long, skipped: %s/%s", scan_path, entry->d_name);
+            APP_LOGW(TAG, PATH_TOO_LONG_SKIPPED_S_E2B96C85, "Path too long, skipped: %s/%s", scan_path, entry->d_name);
             continue;
         }
 
@@ -1022,7 +1043,7 @@ esp_err_t sd_card_manager_list_files(const char *dir_path)
         if (stat(full_path, &file_stat) != 0)
         {
             const int stat_errno = errno;
-            ESP_LOGW(TAG, "Failed to stat %s: errno=%d", full_path, stat_errno);
+            APP_LOGW(TAG, FAILED_TO_STAT_S_ERRNO_00230488, "Failed to stat %s: errno=%d", full_path, stat_errno);
             if (stat_errno == EIO)
             {
                 sd_card_manager_report_errno_io_error(stat_errno);
@@ -1035,24 +1056,24 @@ esp_err_t sd_card_manager_list_files(const char *dir_path)
         if (S_ISDIR(file_stat.st_mode))
         {
             dir_count++;
-            ESP_LOGD(TAG, "[DIR ] %s", full_path);
+            APP_LOGD(TAG, DIR_S_5AA8CD77, "[DIR ] %s", full_path);
         }
         else if (S_ISREG(file_stat.st_mode))
         {
             file_count++;
-            ESP_LOGD(TAG, "[FILE] %s, size=%ld bytes", full_path, (long)file_stat.st_size);
+            APP_LOGD(TAG, FILE_S_SIZE_LD_BYTES_7F15E610, "[FILE] %s, size=%ld bytes", full_path, (long)file_stat.st_size);
         }
         else
         {
-            ESP_LOGD(TAG, "[OTHER] %s", full_path);
+            APP_LOGD(TAG, OTHER_S_5498AAC5, "[OTHER] %s", full_path);
         }
     }
 
     if (readdir_error != 0)
     {
         result = ESP_FAIL;
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, DIRECTORY_READ_FAILED_FOR_S_53CE57F4,
             "Directory read failed for %s: errno=%d",
             scan_path,
             readdir_error);
@@ -1062,7 +1083,7 @@ esp_err_t sd_card_manager_list_files(const char *dir_path)
     if (closedir(dir) != 0)
     {
         result = ESP_FAIL;
-        ESP_LOGW(TAG, "Failed to close directory %s: errno=%d", scan_path, errno);
+        APP_LOGW(TAG, FAILED_TO_CLOSE_DIRECTORY_S_3F53D9EB, "Failed to close directory %s: errno=%d", scan_path, errno);
         sd_card_manager_report_io_error(result);
     }
 
@@ -1070,8 +1091,8 @@ esp_err_t sd_card_manager_list_files(const char *dir_path)
 
     if (result == ESP_OK)
     {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, LIST_DONE_FILES_LU_DIRECTORI_95D3091D,
             "List done. Files=%lu Directories=%lu",
             (unsigned long)file_count,
             (unsigned long)dir_count);
@@ -1092,8 +1113,8 @@ esp_err_t sd_card_manager_list_files_recursive(
 
     const char *const scan_path =
         (dir_path != NULL) ? dir_path : SD_MOUNT_POINT;
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, START_RECURSIVE_FILE_LISTING_229792D5,
         "Start recursive file listing from %s, max_depth=%u",
         scan_path,
         (unsigned)max_depth);
@@ -1106,7 +1127,7 @@ esp_err_t sd_card_manager_list_files_recursive(
 
     if (result == ESP_OK)
     {
-        ESP_LOGI(TAG, "Recursive file listing done");
+        APP_LOGI(TAG, RECURSIVE_FILE_LISTING_DONE_476EAA34, "Recursive file listing done");
     }
 
     return result;

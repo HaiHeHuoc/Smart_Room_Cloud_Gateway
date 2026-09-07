@@ -3,6 +3,7 @@
 #include <stdbool.h>
 
 #include "esp_log.h"
+#include "app_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -39,7 +40,7 @@ static void ptt_gpio_task(void *argument)
     TickType_t candidate_since = xTaskGetTickCount();
     TickType_t last_delivery_attempt = candidate_since;
 
-    ESP_LOGI(TAG,
+    APP_LOGI(TAG, STARTED_GPIO_D_ACTIVE_LEVEL_4FB28515,
              "started gpio=%d active_level=%u pull=down initial=%s",
              (int)s_config.gpio_num,
              (unsigned)s_config.active_level,
@@ -73,14 +74,14 @@ static void ptt_gpio_task(void *argument)
             if (ret == ESP_OK) {
                 delivered = stable;
                 delivery_attempted = false;
-                ESP_LOGI(TAG, "edge=%s", stable ? "PRESS" : "RELEASE");
+                APP_LOGI(TAG, EDGE_S_1A00268C, "edge=%s", stable ? "PRESS" : "RELEASE");
             } else if (!retry) {
-                ESP_LOGW(TAG,
+                APP_LOGW(TAG, EDGE_S_DEFERRED_S_E25A0C6D,
                          "edge=%s deferred: %s",
                          stable ? "PRESS" : "RELEASE",
                          esp_err_to_name(ret));
             } else {
-                ESP_LOGD(TAG,
+                APP_LOGD(TAG, EDGE_S_RETRY_PENDING_S_BDAD7316,
                          "edge=%s retry pending: %s",
                          stable ? "PRESS" : "RELEASE",
                          esp_err_to_name(ret));
@@ -121,7 +122,7 @@ esp_err_t voice_assistant_ptt_gpio_init(
 
     s_config = *config;
     s_initialized = true;
-    ESP_LOGI(TAG,
+    APP_LOGI(TAG, INITIALIZED_GPIO_D_ACTIVE_LE_F3856C8D,
              "initialized gpio=%d active_level=%u poll=%ums debounce=%ums",
              (int)s_config.gpio_num,
              (unsigned)s_config.active_level,

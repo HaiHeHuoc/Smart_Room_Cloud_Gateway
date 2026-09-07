@@ -7,6 +7,7 @@ idf_component_register(
         "include"
 
     REQUIRES
+        app_log
         common
         display_driver
         lvgl

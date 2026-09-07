@@ -3,6 +3,7 @@
 #include "audio_manager_playback_arbiter.h"
 #include "board_config.h"
 #include "esp_log.h"
+#include "app_log.h"
 #include "sdkconfig.h"
 #include "voice_assistant_audio_adapter.h"
 
@@ -47,7 +48,7 @@ static void phase14_audio_status_fanout(
     if ((voice_ret != ESP_OK) &&
         (voice_ret != ESP_ERR_INVALID_STATE) &&
         (voice_ret != ESP_ERR_TIMEOUT)) {
-        ESP_LOGD(TAG,
+        APP_LOGD(TAG, VOICE_AUDIO_STATUS_FANOUT_DR_176810ED,
                  "voice audio-status fanout dropped: %s",
                  esp_err_to_name(voice_ret));
     }
@@ -69,7 +70,7 @@ esp_err_t app_phase14_audio_manager_register_status_callback(
 static esp_err_t phase14_start_voice_stack(void)
 {
 #if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
-    ESP_LOGW(TAG,
+    APP_LOGW(TAG, PHASE_PRODUCTION_VOICE_STACK_B75F60FD,
              "Phase-14 production voice stack suppressed because Phase-12 Xiaozhi validation mode is enabled");
     return ESP_OK;
 #else
@@ -160,14 +161,14 @@ static esp_err_t phase14_start_voice_stack(void)
      * using the first button press as a transport-start race. */
     ret = voice_assistant_begin_session();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG,
+        APP_LOGE(TAG, PHASE_BOOT_XIAOZHI_CONNECTIO_796AACCE,
                  "Phase-15 boot Xiaozhi connection request failed: %s",
                  esp_err_to_name(ret));
         return ret;
     }
 
     s_voice_started = true;
-    ESP_LOGI(TAG,
+    APP_LOGI(TAG, PHASE_VOICE_STACK_READY_BOOT_4E72B3ED,
              "Phase-15 voice stack READY; boot Xiaozhi connection queued ui_model=yes gui_adapter=yes ptt_gpio=%d active_level=%u pull=down",
              (int)PTT_BUTTON_GPIO,
              (unsigned)PTT_BUTTON_ACTIVE_LEVEL);
@@ -187,7 +188,7 @@ esp_err_t app_phase14_audio_manager_start(void)
         arbiter_ret = audio_manager_playback_arbiter_start();
     }
     if (arbiter_ret != ESP_OK) {
-        ESP_LOGE(TAG,
+        APP_LOGE(TAG, PHASE_PLAYBACK_ARBITER_START_65C8AF69,
                  "Phase-16 playback arbiter startup failed after audio READY: %s",
                  esp_err_to_name(arbiter_ret));
         return arbiter_ret;
@@ -198,16 +199,16 @@ esp_err_t app_phase14_audio_manager_start(void)
         arbiter_ret = audio_manager_capture_arbiter_start();
     }
     if (arbiter_ret != ESP_OK) {
-        ESP_LOGE(TAG,
+        APP_LOGE(TAG, PHASE_CAPTURE_ARBITER_STARTU_4896D6F4,
                  "Phase-16 capture arbiter startup failed after audio READY: %s",
                  esp_err_to_name(arbiter_ret));
         return arbiter_ret;
     }
-    ESP_LOGI(TAG, "Phase-16 audio arbiters READY playback=yes capture=yes");
+    APP_LOGI(TAG, PHASE_AUDIO_ARBITERS_READY_P_C8A26903, "Phase-16 audio arbiters READY playback=yes capture=yes");
 
     const esp_err_t voice_ret = phase14_start_voice_stack();
     if (voice_ret != ESP_OK) {
-        ESP_LOGE(TAG,
+        APP_LOGE(TAG, PHASE_VOICE_STACK_STARTUP_FA_E2067A99,
                  "Phase-15 voice stack startup failed after audio READY: %s",
                  esp_err_to_name(voice_ret));
         return voice_ret;

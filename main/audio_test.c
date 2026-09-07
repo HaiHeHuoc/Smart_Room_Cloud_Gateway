@@ -18,6 +18,7 @@
 #include "driver/gpio.h"
 
 #include "esp_log.h"
+#include "app_log.h"
 #include "esp_heap_caps.h"
 #include "esp_check.h"
 #include "esp_memory_utils.h"
@@ -278,8 +279,8 @@ static esp_err_t audio_test_play_recording(
             AUDIO_TEST_BUFFER_SAMPLES;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, STARTING_RECORDED_AUDIO_PLAY_ED480700,
         "Starting recorded audio playback: "
         "samples=%lu duration=%.2f s",
         (unsigned long)sample_count,
@@ -380,8 +381,8 @@ static esp_err_t audio_test_play_recording(
                 s_tx_write_timeout_count++;
             }
 
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, RECORDED_PLAYBACK_WRITE_FAIL_617F61DD,
                 "Recorded playback write failed: %s",
                 esp_err_to_name(ret));
 
@@ -391,8 +392,8 @@ static esp_err_t audio_test_play_recording(
         if (bytes_written != bytes_to_write)
         {
             s_tx_partial_write_count++;
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, PARTIAL_PLAYBACK_WRITE_WRITT_8C2AAA6A,
                 "Partial playback write: "
                 "written=%lu expected=%lu",
                 (unsigned long)bytes_written,
@@ -404,8 +405,8 @@ static esp_err_t audio_test_play_recording(
         played += frames;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, RECORDED_AUDIO_PLAYBACK_COMP_CAAA8788,
         "Recorded audio playback completed: "
         "samples=%lu",
         (unsigned long)played);
@@ -681,8 +682,8 @@ static esp_err_t audio_test_capture(
         (next_progress <=
                 AUDIO_TEST_BUFFER_SAMPLES))
         {
-            ESP_LOGI(
-                TAG,
+            APP_LOGI(
+                TAG, RECORDED_LU_U_SECONDS_9D76EC4B,
                 "Recorded %lu/%u seconds",
                 (unsigned long)(
                     next_progress /
@@ -789,8 +790,8 @@ static esp_err_t audio_test_detect_microphone_slot(
             ? AUDIO_TEST_MIC_SLOT_RIGHT
             : AUDIO_TEST_MIC_SLOT_LEFT;
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, SLOT_DETECT_LEFT_AVG_LLU_8F2C91BB,
         "SLOT_DETECT: "
         "left_avg=%llu left_peak=%lu "
         "right_avg=%llu right_peak=%lu "
@@ -948,8 +949,8 @@ static esp_err_t audio_test_read_rx_block(
 
     if ((bytes_read % bytes_per_frame) != 0U)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, RX_BYTES_ARE_NOT_FRAME_DBC2D9F9,
             "RX bytes are not frame aligned: %lu",
             (unsigned long)bytes_read);
     }
@@ -1178,24 +1179,24 @@ static void audio_test_log_memory(
             MALLOC_CAP_SPIRAM |
             MALLOC_CAP_8BIT);
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, S_INTERNAL_FREE_LU_MIN_E42C32E0,
         "[%s] INTERNAL free=%lu min=%lu largest=%lu",
         stage,
         (unsigned long)internal_free,
         (unsigned long)internal_minimum,
         (unsigned long)internal_largest);
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, S_DMA_FREE_LU_MIN_8BA951A5,
         "[%s] DMA free=%lu min=%lu largest=%lu",
         stage,
         (unsigned long)dma_free,
         (unsigned long)dma_minimum,
         (unsigned long)dma_largest);
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, S_PSRAM_FREE_LU_MIN_17F1461C,
         "[%s] PSRAM free=%lu min=%lu largest=%lu",
         stage,
         (unsigned long)psram_free,
@@ -1353,8 +1354,8 @@ static esp_err_t audio_test_play_tone(void)
          AUDIO_TEST_SAMPLE_RATE_HZ) /
         AUDIO_TEST_FRAMES_PER_BLOCK;
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, STARTING_TONE_PLAYBACK_FREQU_D5887CBD,
         "Starting tone playback: "
         "frequency=%.1f Hz duration=%u s amplitude=%d blocks=%lu",
         (double)AUDIO_TEST_TONE_HZ,
@@ -1413,8 +1414,8 @@ static esp_err_t audio_test_play_tone(void)
 
         if (ret != ESP_OK)
         {
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, FAILED_TO_WRITE_TX_BLOCK_AB9D5EA1,
                 "Failed to write TX block %lu: %s",
                 (unsigned long)block,
                 esp_err_to_name(ret));
@@ -1425,8 +1426,8 @@ static esp_err_t audio_test_play_tone(void)
         if (bytes_written !=
             sizeof(s_tx_block))
         {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, PARTIAL_TX_WRITE_BLOCK_LU_88794080,
                 "Partial TX write: "
                 "block=%lu written=%lu expected=%lu",
                 (unsigned long)block,
@@ -1435,8 +1436,8 @@ static esp_err_t audio_test_play_tone(void)
         }
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, TONE_PLAYBACK_COMPLETED_7EF85294,
         "Tone playback completed");
 
     return ESP_OK;
@@ -1454,15 +1455,15 @@ esp_err_t audio_test_init(void)
 {
     if (s_initialized)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, AUDIO_TEST_IS_ALREADY_INITIA_67A5E7A2,
             "Audio test is already initialized");
 
         return ESP_OK;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, INITIALIZING_AUDIO_COEXISTEN_34874CF2,
         "Initializing audio coexistence test");
 
     ESP_RETURN_ON_ERROR(
@@ -1494,7 +1495,7 @@ esp_err_t audio_test_init(void)
 
     if (s_playback_buffer == NULL)
     {
-        ESP_LOGE(TAG, "Failed to allocate playback buffer");
+        APP_LOGE(TAG, FAILED_TO_ALLOCATE_PLAYBACK_2B43F6BE, "Failed to allocate playback buffer");
         free(s_audio_buffer);
         s_audio_buffer = NULL;
 
@@ -1504,8 +1505,8 @@ esp_err_t audio_test_init(void)
     if (!esp_ptr_external_ram(s_audio_buffer) ||
         !esp_ptr_external_ram(s_playback_buffer))
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, AUDIO_BUFFERS_WERE_NOT_ALLOC_31438037,
             "Audio buffers were not allocated in PSRAM");
 
         free(s_playback_buffer);
@@ -1516,8 +1517,8 @@ esp_err_t audio_test_init(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, AUDIO_BUFFER_ALLOCATED_IN_PS_D8FD7CFE,
         "Audio buffer allocated in PSRAM: "
         "samples=%lu bytes=%lu address=%p",
         (unsigned long)AUDIO_TEST_BUFFER_SAMPLES,
@@ -1528,8 +1529,8 @@ esp_err_t audio_test_init(void)
 
     s_initialized = true;
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, AUDIO_COEXISTENCE_TEST_INITI_A3FB9956,
         "Audio coexistence test initialized");
 
     return ESP_OK;
@@ -1550,16 +1551,16 @@ esp_err_t audio_test_deinit(void)
 
     if (rx_ret != ESP_OK)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FAILED_TO_STOP_RX_DURING_883BF4CE,
             "Failed to stop RX during deinit: %s",
             esp_err_to_name(rx_ret));
     }
 
     if (tx_ret != ESP_OK)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FAILED_TO_STOP_TX_DURING_7E06F108,
             "Failed to stop TX during deinit: %s",
             esp_err_to_name(tx_ret));
     }
@@ -1571,8 +1572,8 @@ esp_err_t audio_test_deinit(void)
 
     if (safe_ret != ESP_OK)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FAILED_TO_HOLD_AMPLIFIER_DIN_21625888,
             "Failed to hold amplifier DIN LOW during deinit: %s",
             esp_err_to_name(safe_ret));
     }
@@ -1593,8 +1594,8 @@ esp_err_t audio_test_deinit(void)
 
     audio_test_log_memory("after deinit");
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, AUDIO_COEXISTENCE_TEST_DEINI_A4442C95,
         "Audio coexistence test deinitialized");
 
     if (rx_ret != ESP_OK)
@@ -1618,8 +1619,8 @@ esp_err_t audio_test_deinit(void)
 esp_err_t audio_test_record_once(
     size_t *samples_recorded)
 {
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, CAPTURE_TASK_NAME_S_PRIORITY_9D99B1FA,
         "Capture task: name=%s priority=%u core=%d",
         pcTaskGetName(NULL),
         (unsigned)uxTaskPriorityGet(NULL),
@@ -1651,8 +1652,8 @@ esp_err_t audio_test_record_once(
         .max_sample = INT16_MIN,
     };
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, STARTING_MICROPHONE_CAPTURE_FD17B348,
         "Starting microphone capture");
 
     ESP_RETURN_ON_ERROR(
@@ -1675,8 +1676,8 @@ esp_err_t audio_test_record_once(
 
     if (ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_START_I2S_RX_16D476DE,
             "Failed to start I2S RX: %s",
             esp_err_to_name(ret));
 
@@ -1730,8 +1731,8 @@ esp_err_t audio_test_record_once(
 
     if (ret == ESP_OK)
     {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, MICROPHONE_CAPTURE_COMPLETED_3523F6B4,
             "Microphone capture completed: "
             "samples=%lu expected=%lu",
             (unsigned long)captured,
@@ -1740,8 +1741,8 @@ esp_err_t audio_test_record_once(
     }
     else
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, MICROPHONE_CAPTURE_FAILED_S_2E282177,
             "Microphone capture failed: %s",
             esp_err_to_name(ret));
     }
@@ -1749,31 +1750,31 @@ esp_err_t audio_test_record_once(
     audio_test_log_memory(
         "after RX capture");
 
-    ESP_LOGI(
-    TAG,
+    APP_LOGI(
+    TAG, RX_OVERFLOW_COUNT_LU_E3BDF99D,
     "RX overflow count: %lu",
     (unsigned long)overflow_count);
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, RX_MAX_READ_GAP_LLD_4566D36E,
         "RX max read gap: %lld us (%.2f ms)",
         max_read_gap_us,
         (double)max_read_gap_us / 1000.0);
 
-ESP_LOGI(
-    TAG,
+APP_LOGI(
+    TAG, RX_MAX_READ_DURATION_LLD_37AFC069,
     "RX max read duration: %lld us (%.2f ms)",
     s_max_rx_read_duration_us,
     (double)s_max_rx_read_duration_us / 1000.0);
 
-ESP_LOGI(
-    TAG,
+APP_LOGI(
+    TAG, RX_MAX_PROCESSING_GAP_LLD_9CF1AC5E,
     "RX max processing gap: %lld us (%.2f ms)",
     s_max_rx_processing_gap_us,
     (double)s_max_rx_processing_gap_us / 1000.0);
 
-ESP_LOGI(
-    TAG,
+APP_LOGI(
+    TAG, PCM_RANGE_MIN_LD_MAX_5E458848,
     "PCM range: min=%ld max=%ld",
     (long)pcm_stats.min_sample,
     (long)pcm_stats.max_sample);
@@ -1786,8 +1787,8 @@ const uint64_t average_absolute =
     pcm_stats.absolute_sum /
     pcm_stats.sample_count;
 
-ESP_LOGI(
-    TAG,
+APP_LOGI(
+    TAG, PCM_STATS_MIN_LD_MAX_1B629E61,
     "PCM stats: "
     "min=%ld max=%ld peak=%lu "
     "avg_abs=%llu dc_offset=%lld samples=%lu",
@@ -1809,8 +1810,8 @@ const int64_t pcm16_dc_offset =
         : pcm16_stats.signed_sum /
           (int64_t)pcm16_stats.sample_count;
 
-ESP_LOGI(
-    TAG,
+APP_LOGI(
+    TAG, PCM16_STATS_MIN_D_MAX_7A1AFC66,
     "PCM16 stats: "
     "min=%d max=%d peak=%u "
     "avg_abs=%llu dc_offset=%lld samples=%lu",
@@ -1833,8 +1834,8 @@ const int64_t gain_dc_offset =
         : gain_stats.signed_sum /
           (int64_t)gain_stats.sample_count;
 
-ESP_LOGI(
-    TAG,
+APP_LOGI(
+    TAG, PCM16_GAIN_STATS_GAIN_D_B6C7917F,
     "PCM16 gain stats: "
     "gain=%d min=%d max=%d peak=%u "
     "avg_abs=%llu dc_offset=%lld "
@@ -1858,8 +1859,8 @@ ESP_LOGI(
             (uint16_t)s_playback_buffer[i];
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, PLAYBACK_BUFFER_READY_SAMPLE_656E55BB,
         "Playback buffer ready: "
         "samples=%lu bytes=%lu checksum=%lu",
         (unsigned long)captured,
@@ -1887,8 +1888,8 @@ esp_err_t audio_test_play_tone_once(void)
         TAG,
         "Audio test is not initialized");
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, STARTING_SPEAKER_TONE_TEST_B7F7C135,
         "Starting speaker tone test");
 
     esp_err_t ret =
@@ -1896,8 +1897,8 @@ esp_err_t audio_test_play_tone_once(void)
 
     if (ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_START_I2S_TX_750443E4,
             "Failed to start I2S TX: %s",
             esp_err_to_name(ret));
 
@@ -1937,14 +1938,14 @@ esp_err_t audio_test_play_tone_once(void)
 
     if (ret == ESP_OK)
     {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, SPEAKER_TONE_TEST_COMPLETED_10478FE0,
             "Speaker tone test completed");
     }
     else
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, SPEAKER_TONE_TEST_FAILED_S_792BB1B4,
             "Speaker tone test failed: %s",
             esp_err_to_name(ret));
     }
@@ -1990,33 +1991,33 @@ esp_err_t audio_test_play_recording_once(
     const esp_err_t stop_ret =
         audio_test_stop_i2s_tx();
 
-ESP_LOGI(
-    TAG,
+APP_LOGI(
+    TAG, TX_SEND_QUEUE_OVERFLOW_COUNT_1F464130,
     "TX send queue overflow count: %lu",
     (unsigned long)
         s_tx_send_q_ovf_count);
 
-ESP_LOGI(
-    TAG,
+APP_LOGI(
+    TAG, TX_WRITE_TIMEOUT_COUNT_LU_FD151FFA,
     "TX write timeout count: %lu",
     (unsigned long)
         s_tx_write_timeout_count);
 
-ESP_LOGI(
-    TAG,
+APP_LOGI(
+    TAG, TX_PARTIAL_WRITE_COUNT_LU_B420DB9B,
     "TX partial write count: %lu",
     (unsigned long)
         s_tx_partial_write_count);
 
-ESP_LOGI(
-    TAG,
+APP_LOGI(
+    TAG, TX_MAX_WRITE_GAP_LLD_9C13EB73,
     "TX max write gap: %lld us (%.2f ms)",
     s_max_tx_write_gap_us,
     (double)s_max_tx_write_gap_us /
         1000.0);
 
-ESP_LOGI(
-    TAG,
+APP_LOGI(
+    TAG, TX_MAX_WRITE_DURATION_LLD_76E55A8D,
     "TX max write duration: %lld us (%.2f ms)",
     s_max_tx_write_duration_us,
     (double)s_max_tx_write_duration_us /

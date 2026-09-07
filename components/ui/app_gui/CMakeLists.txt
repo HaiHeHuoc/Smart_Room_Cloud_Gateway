@@ -4,6 +4,7 @@ idf_component_register(
         "fonts/app_gui_xiaozhi_latin_12.c"
     INCLUDE_DIRS "include"
     REQUIRES
+        app_log
         common
         lvgl
         heap

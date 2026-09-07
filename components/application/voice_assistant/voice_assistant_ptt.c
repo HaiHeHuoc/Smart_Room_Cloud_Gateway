@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "app_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -64,7 +65,7 @@ static void ptt_publish(void)
     void *context = NULL;
 
     if (!ptt_take_lock()) {
-        ESP_LOGW(TAG, "status publish skipped: lock timeout");
+        APP_LOGW(TAG, STATUS_PUBLISH_SKIPPED_LOCK_619C7661, "status publish skipped: lock timeout");
         return;
     }
     snapshot = s_status;
@@ -88,7 +89,7 @@ static void ptt_set_status(
     uint32_t generation = 0U;
 
     if (!ptt_take_lock()) {
-        ESP_LOGE(TAG, "state transition dropped: lock timeout");
+        APP_LOGE(TAG, STATE_TRANSITION_DROPPED_LOC_1BA6E5F7, "state transition dropped: lock timeout");
         return;
     }
     previous = s_status.state;
@@ -100,7 +101,7 @@ static void ptt_set_status(
     generation = s_status.ptt_generation;
     xSemaphoreGive(s_lock);
 
-    ESP_LOGI(TAG,
+    APP_LOGI(TAG, STATE_S_S_PTT_GENERATION_F818D0F7,
              "state %s -> %s ptt_generation=%u session_generation=%u pressed=%s authorized=%s error=%s",
              voice_assistant_ptt_state_to_string(previous),
              voice_assistant_ptt_state_to_string(state),
@@ -245,7 +246,7 @@ static void ptt_reconcile_voice_state(void)
                        (updated_ret == ESP_OK) ?
                            updated.session_generation : voice.session_generation,
                        ESP_OK);
-        ESP_LOGI(TAG, "recovery started a fresh session while press remains held");
+        APP_LOGI(TAG, RECOVERY_STARTED_A_FRESH_SES_680437F9, "recovery started a fresh session while press remains held");
         return;
     }
 
@@ -277,7 +278,7 @@ static void ptt_handle_press(const ptt_command_t *command)
                        false,
                        voice.session_generation,
                        ESP_OK);
-        ESP_LOGI(TAG,
+        APP_LOGI(TAG, PRESS_CANCELLED_BEFORE_PROCE_A90816FE,
                  "press cancelled before processing generation=%u",
                  (unsigned)command->generation);
         return;
@@ -287,7 +288,7 @@ static void ptt_handle_press(const ptt_command_t *command)
      * callback and any WAV playback complete. Do not advertise a new press as
      * authorized when uplink will correctly refuse to start it. */
     if (voice_assistant_downlink_is_busy()) {
-        ESP_LOGW(TAG, "press ignored: prior server response is still active");
+        APP_LOGW(TAG, PRESS_IGNORED_PRIOR_SERVER_R_34B26E5E, "press ignored: prior server response is still active");
         ptt_set_status(VOICE_ASSISTANT_PTT_RELEASED,
                        false,
                        false,
@@ -321,7 +322,7 @@ static void ptt_handle_press(const ptt_command_t *command)
                        false,
                        0U,
                        ESP_OK);
-        ESP_LOGI(TAG,
+        APP_LOGI(TAG, PRESS_RETAINED_THROUGH_BOUND_7A551615,
                  "press retained through bounded recovery generation=%u",
                  (unsigned)command->generation);
         return;
@@ -334,7 +335,7 @@ static void ptt_handle_press(const ptt_command_t *command)
                        false,
                        voice.session_generation,
                        ESP_OK);
-        ESP_LOGI(TAG,
+        APP_LOGI(TAG, PRESS_WAITING_FOR_BOOT_RECON_E714DFC0,
                  "press waiting for boot/reconnect session generation=%u",
                  (unsigned)voice.session_generation);
         return;
@@ -370,7 +371,7 @@ static void ptt_handle_press(const ptt_command_t *command)
                    false,
                    session_generation,
                    ESP_OK);
-    ESP_LOGI(TAG, "press armed generation=%u", (unsigned)command->generation);
+    APP_LOGI(TAG, PRESS_ARMED_GENERATION_U_C92011BD, "press armed generation=%u", (unsigned)command->generation);
 }
 
 static void ptt_handle_release(void)
@@ -403,7 +404,7 @@ static void ptt_handle_release(void)
              * physical release has no PTT turn to cancel. */
             break;
         default:
-            ESP_LOGW(TAG, "release ignored in state=%s",
+            APP_LOGW(TAG, RELEASE_IGNORED_IN_STATE_S_B06D417A, "release ignored in state=%s",
                      voice_assistant_ptt_state_to_string(current.state));
             break;
     }
@@ -600,7 +601,7 @@ esp_err_t voice_assistant_ptt_init(void)
     s_status.last_error = ESP_OK;
     s_command_pending = false;
     s_release_queued = false;
-    ESP_LOGI(TAG, "initialized without GPIO ownership");
+    APP_LOGI(TAG, INITIALIZED_WITHOUT_GPIO_OWN_5DB50327, "initialized without GPIO ownership");
     return ESP_OK;
 }
 

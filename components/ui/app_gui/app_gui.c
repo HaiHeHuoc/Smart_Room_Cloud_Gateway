@@ -13,6 +13,7 @@
 #include "fonts/app_gui_xiaozhi_latin_12.h"
 #include "time_manager.h"
 #include "esp_log.h"
+#include "app_log.h"
 #include "esp_err.h"
 #include "esp_check.h"
 #include "esp_timer.h"
@@ -1249,14 +1250,14 @@ static void app_gui_wifi_screen_timeout_cb(lv_timer_t *timer)
             APP_GUI_SCREEN_SENSOR_DASHBOARD);
 
     if (ret != ESP_OK) {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, WI_FI_TIMEOUT_SCREEN_REQUEST_BB3D30E8,
             "Wi-Fi timeout screen request failed: %s",
             esp_err_to_name(ret));
     }
     else {
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, WI_FI_SCREEN_TIMEOUT_SENSOR_14618006,
             "Wi-Fi screen timeout; sensor dashboard queued");
     }
 
@@ -1276,7 +1277,7 @@ static void app_gui_restart_wifi_screen_timer(void)
 
     lv_timer_resume(s_wifi_screen_timer);
     lv_timer_reset(s_wifi_screen_timer);
-    ESP_LOGD(TAG, "Timer restarted");
+    APP_LOGD(TAG, TIMER_RESTARTED_CB40199B, "Timer restarted");
 }
 
 /* Sensor Dashboard Clock Helpers ------------------------------------------ */
@@ -1920,7 +1921,7 @@ static esp_err_t app_gui_create_provisioning_screen(
         lv_label_create(screen);
 
     if (s_provisioning_title_label == NULL) {
-        ESP_LOGE(TAG, "Failed to create provisioning title");
+        APP_LOGE(TAG, FAILED_TO_CREATE_PROVISIONIN_93D358A9, "Failed to create provisioning title");
         return ESP_ERR_NO_MEM;
     }
 
@@ -1941,7 +1942,7 @@ static esp_err_t app_gui_create_provisioning_screen(
         lv_obj_create(screen);
 
     if (s_provisioning_state_indicator == NULL) {
-        ESP_LOGE(TAG, "Failed to create provisioning state indicator");
+        APP_LOGE(TAG, FAILED_TO_CREATE_PROVISIONIN_8E422CA8, "Failed to create provisioning state indicator");
         return ESP_ERR_NO_MEM;
     }
 
@@ -1967,7 +1968,7 @@ static esp_err_t app_gui_create_provisioning_screen(
     lv_obj_t *divider = lv_obj_create(screen);
 
     if (divider == NULL) {
-        ESP_LOGE(TAG, "Failed to create provisioning divider");
+        APP_LOGE(TAG, FAILED_TO_CREATE_PROVISIONIN_A73FE6AA, "Failed to create provisioning divider");
         return ESP_ERR_NO_MEM;
     }
 
@@ -1984,7 +1985,7 @@ static esp_err_t app_gui_create_provisioning_screen(
         lv_obj_create(screen);
 
     if (s_provisioning_qr_container == NULL) {
-        ESP_LOGE(TAG, "Failed to create provisioning QR container");
+        APP_LOGE(TAG, FAILED_TO_CREATE_PROVISIONIN_C599A4F1, "Failed to create provisioning QR container");
         return ESP_ERR_NO_MEM;
     }
 
@@ -2027,7 +2028,7 @@ static esp_err_t app_gui_create_provisioning_screen(
             s_provisioning_qr_container);
 
     if (s_provisioning_qr_code == NULL) {
-        ESP_LOGE(TAG, "Failed to create provisioning QR code");
+        APP_LOGE(TAG, FAILED_TO_CREATE_PROVISIONIN_8351D0F0, "Failed to create provisioning QR code");
         return ESP_ERR_NO_MEM;
     }
 
@@ -2057,7 +2058,7 @@ static esp_err_t app_gui_create_provisioning_screen(
          APP_GUI_PROVISIONING_QR_CANVAS_SIZE_PX) ||
         (lv_obj_get_height(s_provisioning_qr_code) !=
          APP_GUI_PROVISIONING_QR_CANVAS_SIZE_PX)) {
-        ESP_LOGE(TAG, "Failed to allocate provisioning QR canvas");
+        APP_LOGE(TAG, FAILED_TO_ALLOCATE_PROVISION_5E8EC4CF, "Failed to allocate provisioning QR canvas");
         return ESP_ERR_NO_MEM;
     }
 
@@ -2069,7 +2070,7 @@ static esp_err_t app_gui_create_provisioning_screen(
         lv_label_create(screen);
 
     if (s_provisioning_instruction_label == NULL) {
-        ESP_LOGE(TAG, "Failed to create provisioning instruction");
+        APP_LOGE(TAG, FAILED_TO_CREATE_PROVISIONIN_3BCB9079, "Failed to create provisioning instruction");
         return ESP_ERR_NO_MEM;
     }
 
@@ -2104,7 +2105,7 @@ static esp_err_t app_gui_create_provisioning_screen(
         lv_label_create(screen);
 
     if (s_provisioning_status_label == NULL) {
-        ESP_LOGE(TAG, "Failed to create provisioning status");
+        APP_LOGE(TAG, FAILED_TO_CREATE_PROVISIONIN_503FE151, "Failed to create provisioning status");
         return ESP_ERR_NO_MEM;
     }
 
@@ -2158,7 +2159,7 @@ static void app_gui_render_provisioning_qr_payload(
         lv_obj_add_flag(
             s_provisioning_qr_code,
             LV_OBJ_FLAG_HIDDEN);
-        ESP_LOGE(TAG, "Failed to encode provisioning QR payload");
+        APP_LOGE(TAG, FAILED_TO_ENCODE_PROVISIONIN_6B57BF82, "Failed to encode provisioning QR payload");
         return;
     }
 
@@ -3459,8 +3460,8 @@ static void app_gui_acknowledge_reset_presentation(void)
 
     if (presented_transaction_id != 0U)
     {
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, RESET_RESULT_PRESENTATION_AC_A9D69107,
             "Reset-result presentation acknowledged: transaction=%lu",
             (unsigned long)presented_transaction_id);
     }
@@ -4105,8 +4106,8 @@ static esp_err_t app_gui_activate_screen(
             return ESP_ERR_INVALID_STATE;
         }
 
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, IGNORING_DUPLICATE_SCREEN_RE_3B03315E,
             "Ignoring duplicate screen request: %s",
             app_gui_screen_id_to_string(target_screen));
         return ESP_OK;
@@ -4271,8 +4272,8 @@ static esp_err_t app_gui_activate_screen(
     lv_obj_delete(current_root);
     ui_manager_lvgl_release_mutex();
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, APPLICATION_SCREEN_TRANSITIO_1B8D2AD6,
         "Application screen transition: %s -> %s",
         app_gui_screen_id_to_string(current_screen),
         app_gui_screen_id_to_string(target_screen));
@@ -4290,7 +4291,7 @@ static void app_gui_process_provisioning_status(
         (status->session_number >
          status->session_limit) ||
         !app_gui_is_valid_provisioning_state(status->state)) {
-        ESP_LOGW(TAG, "Ignoring invalid provisioning GUI status");
+        APP_LOGW(TAG, IGNORING_INVALID_PROVISIONIN_0CE06695, "Ignoring invalid provisioning GUI status");
         return;
     }
 
@@ -4300,8 +4301,8 @@ static void app_gui_process_provisioning_status(
             status->session_generation,
             &is_newer_generation))
     {
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, IGNORING_STALE_PROVISIONING_E0F8BC78,
             "Ignoring stale provisioning status generation %lu",
             (unsigned long)status->session_generation);
         return;
@@ -4326,8 +4327,8 @@ static void app_gui_process_provisioning_status(
         ui_manager_lvgl_release_mutex();
     }
 
-    ESP_LOGD(
-        TAG,
+    APP_LOGD(
+        TAG, GUI_RECEIVED_PROVISIONING_ST_8B836CBA,
         "GUI received provisioning status: "
         "generation=%lu, session=%lu/%lu, state=%s, "
         "error=%s, disconnect_reason=%u",
@@ -4384,8 +4385,8 @@ static void app_gui_process_commands(void)
 
                 if (reset_route_locked)
                 {
-                    ESP_LOGD(
-                        TAG,
+                    APP_LOGD(
+                        TAG, SCREEN_REQUEST_IGNORED_DURIN_844C82FC,
                         "Screen request ignored during reset-result flow");
 
                     break;
@@ -4400,8 +4401,8 @@ static void app_gui_process_commands(void)
 
                 if (error != ESP_OK)
                 {
-                    ESP_LOGE(
-                        TAG,
+                    APP_LOGE(
+                        TAG, FAILED_TO_ACTIVATE_SCREEN_S_E1305B93,
                         "Failed to activate screen %s: %s",
                         app_gui_screen_id_to_string(
                             target_screen),
@@ -4419,8 +4420,8 @@ static void app_gui_process_commands(void)
                 if (!app_gui_is_valid_reset_status(
                         reset_status))
                 {
-                    ESP_LOGW(
-                        TAG,
+                    APP_LOGW(
+                        TAG, IGNORING_INVALID_RESET_RESUL_4B9DE216,
                         "Ignoring invalid reset-result command");
 
                     break;
@@ -4444,8 +4445,8 @@ static void app_gui_process_commands(void)
 
                 if (error != ESP_OK)
                 {
-                    ESP_LOGE(
-                        TAG,
+                    APP_LOGE(
+                        TAG, FAILED_TO_ACTIVATE_RESET_RES_25D07C1D,
                         "Failed to activate reset-result screen: %s",
                         esp_err_to_name(error));
 
@@ -4469,8 +4470,8 @@ static void app_gui_process_commands(void)
                 taskEXIT_CRITICAL(
                     &s_screen_id_lock);
 
-                ESP_LOGI(
-                    TAG,
+                APP_LOGI(
+                    TAG, RESET_RESULT_SCREEN_LOADED_T_B3FC1C14,
                     "Reset-result screen loaded: transaction=%lu, state=%s",
                     (unsigned long)
                         reset_status->transaction_id,
@@ -4482,8 +4483,8 @@ static void app_gui_process_commands(void)
 
             default:
             {
-                ESP_LOGW(
-                    TAG,
+                APP_LOGW(
+                    TAG, IGNORING_UNKNOWN_GUI_COMMAND_AE44A81E,
                     "Ignoring unknown GUI command: %d",
                     (int)command.type);
 
@@ -4511,8 +4512,8 @@ static void app_gui_process_provisioning_qr_payload(void)
             message.payload.session_generation,
             &is_newer_generation))
     {
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, IGNORING_STALE_PROVISIONING_BAC4CF01,
             "Ignoring stale provisioning QR message generation %lu",
             (unsigned long)
                 message.payload.session_generation);
@@ -4542,8 +4543,8 @@ static void app_gui_process_provisioning_qr_payload(void)
             &message,
             sizeof(message));
 
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, PROVISIONING_QR_PAYLOAD_CLEA_D908A2BD,
             "Provisioning QR payload cleared for generation %lu",
             (unsigned long)
                 s_latest_provisioning_generation);
@@ -4552,7 +4553,7 @@ static void app_gui_process_provisioning_qr_payload(void)
 
     if (!app_gui_is_valid_provisioning_qr_payload(
             &message.payload)) {
-        ESP_LOGW(TAG, "Ignoring invalid provisioning QR payload");
+        APP_LOGW(TAG, IGNORING_INVALID_PROVISIONIN_2062B271, "Ignoring invalid provisioning QR payload");
         app_gui_zeroize(
             &message,
             sizeof(message));
@@ -4574,8 +4575,8 @@ static void app_gui_process_provisioning_qr_payload(void)
         ui_manager_lvgl_release_mutex();
     }
 
-    ESP_LOGD(
-        TAG,
+    APP_LOGD(
+        TAG, PROVISIONING_QR_PAYLOAD_CACH_0A6F7995,
         "Provisioning QR payload cached for generation %lu",
         (unsigned long)
             message.payload.session_generation);
@@ -4612,8 +4613,8 @@ static void app_gui_process_sensor_status(void)
         ui_manager_lvgl_release_mutex();
     }
 
-    ESP_LOGD(
-        TAG,
+    APP_LOGD(
+        TAG, GUI_RECEIVED_SENSOR_STATUS_S_1B774D6D,
         "GUI received sensor status: \
         state=%d, temperature=%.1f C, \
         humidity=%.1f, valid=%d, \
@@ -4692,8 +4693,8 @@ static void app_gui_process_cloud_status(void)
         }
     }
 
-    ESP_LOGD(
-        TAG,
+    APP_LOGD(
+        TAG, GUI_RECEIVED_CLOUD_STATUS_ST_9F6E8F84,
         "GUI received cloud status: state=%d, error=%s, HTTP=%d",
         (int)cloud_status.state,
         esp_err_to_name(cloud_status.last_error),
@@ -4716,7 +4717,7 @@ static void app_gui_process_xiaozhi_status(void)
     }
 
     if (!app_gui_is_valid_xiaozhi_status(&status)) {
-        ESP_LOGW(TAG, "Ignoring invalid Xiaozhi GUI status");
+        APP_LOGW(TAG, IGNORING_INVALID_XIAOZHI_GUI_5A9354CE, "Ignoring invalid Xiaozhi GUI status");
         return;
     }
 
@@ -4740,8 +4741,8 @@ static void app_gui_process_xiaozhi_status(void)
         }
     }
 
-    ESP_LOGD(
-        TAG,
+    APP_LOGD(
+        TAG, GUI_RECEIVED_XIAOZHI_STATUS_13A60857,
         "GUI received Xiaozhi status: state=%s, start=%lld, stop=%lld, "
         "error=%s, user_truncated=%d, assistant_truncated=%d",
         app_gui_xiaozhi_state_to_string(status.state),
@@ -4791,8 +4792,8 @@ static void app_gui_process_wifi_status(void)
         }
     }
 
-    ESP_LOGD(
-        TAG,
+    APP_LOGD(
+        TAG, GUI_RECEIVED_WI_FI_STATUS_9DBD86C6,
         "GUI received Wi-Fi status: "
         "state=%d, ip=%s, rssi=%d",
         (int)wifi_status.state,
@@ -4813,13 +4814,13 @@ static void app_gui_log_stack_usage(const char *task_name)
         uxTaskGetStackHighWaterMark(NULL);
 
     if (minimum_free_stack < APP_GUI_STACK_WARNING_BYTES) {
-        ESP_LOGW(TAG,
+        APP_LOGW(TAG, S_MINIMUM_FREE_STACK_IS_14544F1A,
                  "%s minimum free stack is low: %u bytes",
                  task_name,
                  (unsigned int)minimum_free_stack);
     }
     else {
-        ESP_LOGD(TAG,
+        APP_LOGD(TAG, S_MINIMUM_FREE_STACK_U_43F011EC,
                  "%s minimum free stack: %u bytes",
                  task_name,
                  (unsigned int)minimum_free_stack);
@@ -4886,7 +4887,7 @@ esp_err_t app_gui_init(void)
         (s_audio_status_queue != NULL) ||
         (s_cloud_status_queue != NULL) ||
         (s_xiaozhi_status_queue != NULL)) {
-        ESP_LOGW(TAG, "Application GUI is already initialized");
+        APP_LOGW(TAG, APPLICATION_GUI_IS_ALREADY_I_393F848B, "Application GUI is already initialized");
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -4899,7 +4900,7 @@ esp_err_t app_gui_init(void)
             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
     if (s_command_queue == NULL) {
-        ESP_LOGE(TAG, "Failed to create GUI command queue");
+        APP_LOGE(TAG, FAILED_TO_CREATE_GUI_COMMAND_0BC0A845, "Failed to create GUI command queue");
         app_gui_cleanup_queues();
         return ESP_ERR_NO_MEM;
     }
@@ -4911,7 +4912,7 @@ esp_err_t app_gui_init(void)
             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
     if (s_provisioning_status_queue == NULL) {
-        ESP_LOGE(TAG, "Failed to create provisioning status queue");
+        APP_LOGE(TAG, FAILED_TO_CREATE_PROVISIONIN_52AB81A7, "Failed to create provisioning status queue");
         app_gui_cleanup_queues();
         return ESP_ERR_NO_MEM;
     }
@@ -4923,7 +4924,7 @@ esp_err_t app_gui_init(void)
             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
     if (s_provisioning_qr_queue == NULL) {
-        ESP_LOGE(TAG, "Failed to create provisioning QR queue");
+        APP_LOGE(TAG, FAILED_TO_CREATE_PROVISIONIN_C5B03CC1, "Failed to create provisioning QR queue");
         app_gui_cleanup_queues();
         return ESP_ERR_NO_MEM;
     }
@@ -4936,7 +4937,7 @@ esp_err_t app_gui_init(void)
         );
 
     if (s_wifi_status_queue == NULL) {
-        ESP_LOGE(TAG, "Failed to create Wi-Fi GUI status queue");
+        APP_LOGE(TAG, FAILED_TO_CREATE_WI_FI_3216058C, "Failed to create Wi-Fi GUI status queue");
         app_gui_cleanup_queues();
         return ESP_ERR_NO_MEM;
     }
@@ -4949,7 +4950,7 @@ esp_err_t app_gui_init(void)
         );
 
     if (s_sensor_status_queue == NULL) {
-        ESP_LOGE(TAG, "Failed to create Sensor GUI status queue");
+        APP_LOGE(TAG, FAILED_TO_CREATE_SENSOR_GUI_913EEB19, "Failed to create Sensor GUI status queue");
         app_gui_cleanup_queues();
         return ESP_ERR_NO_MEM;
     }
@@ -4962,7 +4963,7 @@ esp_err_t app_gui_init(void)
         );
 
     if (s_audio_status_queue == NULL) {
-        ESP_LOGE(TAG, "Failed to create audio GUI status queue");
+        APP_LOGE(TAG, FAILED_TO_CREATE_AUDIO_GUI_2528EE43, "Failed to create audio GUI status queue");
         app_gui_cleanup_queues();
         return ESP_ERR_NO_MEM;
     }
@@ -4975,7 +4976,7 @@ esp_err_t app_gui_init(void)
         );
 
     if (s_cloud_status_queue == NULL) {
-        ESP_LOGE(TAG, "Failed to create Cloud GUI status queue");
+        APP_LOGE(TAG, FAILED_TO_CREATE_CLOUD_GUI_0A2CBFC4, "Failed to create Cloud GUI status queue");
         app_gui_cleanup_queues();
         return ESP_ERR_NO_MEM;
     }
@@ -4988,12 +4989,12 @@ esp_err_t app_gui_init(void)
         );
 
     if (s_xiaozhi_status_queue == NULL) {
-        ESP_LOGE(TAG, "Failed to create Xiaozhi GUI status queue");
+        APP_LOGE(TAG, FAILED_TO_CREATE_XIAOZHI_GUI_0E58E6AD, "Failed to create Xiaozhi GUI status queue");
         app_gui_cleanup_queues();
         return ESP_ERR_NO_MEM;
     }
 
-    ESP_LOGI(TAG, "Application GUI initialized");
+    APP_LOGI(TAG, APPLICATION_GUI_INITIALIZED_48A59FBF, "Application GUI initialized");
 
     return ESP_OK;
 }
@@ -5008,12 +5009,12 @@ esp_err_t app_gui_start_ui_task(void)
         (s_audio_status_queue == NULL) ||
         (s_cloud_status_queue == NULL) ||
         (s_xiaozhi_status_queue == NULL)) {
-        ESP_LOGE(TAG, "Application GUI is not initialized");
+        APP_LOGE(TAG, APPLICATION_GUI_IS_NOT_INITI_D1288C6B, "Application GUI is not initialized");
         return ESP_ERR_INVALID_STATE;
     }
 
     if (s_ui_task_handle != NULL) {
-        ESP_LOGW(TAG, "Application GUI task is already running");
+        APP_LOGW(TAG, APPLICATION_GUI_TASK_IS_ALRE_C7D750A5, "Application GUI task is already running");
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -5029,13 +5030,13 @@ esp_err_t app_gui_start_ui_task(void)
 
     if (task_ret != pdPASS) {
         s_ui_task_handle = NULL;
-        ESP_LOGE(TAG,
+        APP_LOGE(TAG, FAILED_TO_CREATE_APPLICATION_B2F839C3,
                  "Failed to create application GUI task with %u-byte stack",
                  (unsigned int)APP_GUI_UI_TASK_STACK_SIZE_BYTES);
         return ESP_ERR_NO_MEM;
     }
 
-    ESP_LOGI(TAG,
+    APP_LOGI(TAG, APPLICATION_GUI_TASK_STARTED_B893E382,
              "Application GUI task started with %u-byte stack",
              (unsigned int)APP_GUI_UI_TASK_STACK_SIZE_BYTES);
 
@@ -5063,8 +5064,8 @@ esp_err_t app_gui_post_provisioning_status(
     if (!app_gui_accept_queued_provisioning_generation(
             status->session_generation))
     {
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, REJECTING_STALE_QUEUED_PROVI_952E539B,
             "Rejecting stale queued provisioning status generation %lu",
             (unsigned long)status->session_generation);
         return ESP_OK;
@@ -5073,8 +5074,8 @@ esp_err_t app_gui_post_provisioning_status(
     if (xQueueOverwrite(
             s_provisioning_status_queue,
             status) != pdTRUE) {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FAILED_TO_POST_PROVISIONING_6321DA01,
             "Failed to post provisioning status %s",
             app_gui_provisioning_state_to_string(status->state));
         return ESP_FAIL;
@@ -5097,8 +5098,8 @@ esp_err_t app_gui_post_provisioning_qr_payload(
     if (!app_gui_accept_queued_provisioning_generation(
             payload->session_generation))
     {
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, REJECTING_STALE_QUEUED_PROVI_A61A52A3,
             "Rejecting stale queued provisioning QR generation %lu",
             (unsigned long)payload->session_generation);
         return ESP_OK;
@@ -5112,7 +5113,7 @@ esp_err_t app_gui_post_provisioning_qr_payload(
     if (xQueueOverwrite(
             s_provisioning_qr_queue,
             &message) != pdTRUE) {
-        ESP_LOGW(TAG, "Failed to post provisioning QR payload");
+        APP_LOGW(TAG, FAILED_TO_POST_PROVISIONING_D7880F5B, "Failed to post provisioning QR payload");
         return ESP_FAIL;
     }
 
@@ -5133,8 +5134,8 @@ esp_err_t app_gui_clear_provisioning_qr_payload(
     if (!app_gui_accept_queued_provisioning_generation(
             session_generation))
     {
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, REJECTING_STALE_QUEUED_PROVI_9A4FE045,
             "Rejecting stale queued provisioning QR clear generation %lu",
             (unsigned long)session_generation);
         return ESP_OK;
@@ -5151,7 +5152,7 @@ esp_err_t app_gui_clear_provisioning_qr_payload(
     if (xQueueOverwrite(
             s_provisioning_qr_queue,
             &message) != pdTRUE) {
-        ESP_LOGW(TAG, "Failed to clear provisioning QR payload");
+        APP_LOGW(TAG, FAILED_TO_CLEAR_PROVISIONING_B018EFE8, "Failed to clear provisioning QR payload");
         return ESP_FAIL;
     }
 
@@ -5167,7 +5168,7 @@ esp_err_t app_gui_post_wifi_status(
     }
 
     if (s_wifi_status_queue == NULL) {
-        ESP_LOGE(TAG, "Wi-Fi GUI queue is not initialized");
+        APP_LOGE(TAG, WI_FI_GUI_QUEUE_IS_D12CB7B1, "Wi-Fi GUI queue is not initialized");
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -5182,7 +5183,7 @@ esp_err_t app_gui_post_wifi_status(
             s_wifi_status_queue,
             status) != pdTRUE) {
 
-        ESP_LOGW(TAG, "Failed to post Wi-Fi status to UI");
+        APP_LOGW(TAG, FAILED_TO_POST_WI_FI_9F4753B8, "Failed to post Wi-Fi status to UI");
         return ESP_FAIL;
     }
 
@@ -5210,7 +5211,7 @@ esp_err_t app_gui_post_sensor_status(
          * The dashboard renders a snapshot rather than a historical chart.
          * Retaining only the newest sample prevents UI lag when LVGL is busy.
          */
-        ESP_LOGW(TAG, "Failed to post sensor status to UI");
+        APP_LOGW(TAG, FAILED_TO_POST_SENSOR_STATUS_1FC81BA7, "Failed to post sensor status to UI");
         return ESP_FAIL;
     }
 
@@ -5234,7 +5235,7 @@ esp_err_t app_gui_post_audio_status(
             s_audio_status_queue,
             status) != pdTRUE)
     {
-        ESP_LOGW(TAG, "Failed to post audio status to UI");
+        APP_LOGW(TAG, FAILED_TO_POST_AUDIO_STATUS_82D8193B, "Failed to post audio status to UI");
         return ESP_FAIL;
     }
 
@@ -5253,7 +5254,7 @@ esp_err_t app_gui_post_xiaozhi_status(
     }
 
     if (xQueueOverwrite(s_xiaozhi_status_queue, status) != pdTRUE) {
-        ESP_LOGW(TAG, "Failed to post Xiaozhi status to UI");
+        APP_LOGW(TAG, FAILED_TO_POST_XIAOZHI_STATU_E874594A, "Failed to post Xiaozhi status to UI");
         return ESP_FAIL;
     }
 
@@ -5274,7 +5275,7 @@ esp_err_t app_gui_post_cloud_status(
     if (xQueueOverwrite(
             s_cloud_status_queue,
             status) != pdTRUE) {
-        ESP_LOGW(TAG, "Failed to post Cloud status to UI");
+        APP_LOGW(TAG, FAILED_TO_POST_CLOUD_STATUS_2C337299, "Failed to post Cloud status to UI");
         return ESP_FAIL;
     }
 
@@ -5291,8 +5292,8 @@ esp_err_t app_gui_request_screen(
         (screen_id ==
          APP_GUI_SCREEN_RESET_RESULT))
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, INVALID_SCREEN_REQUEST_TARGE_0D2B1955,
             "Invalid screen request target: %s (%d)",
             app_gui_screen_id_to_string(screen_id),
             (int)screen_id);
@@ -5319,8 +5320,8 @@ esp_err_t app_gui_request_screen(
             s_command_queue,
             &command,
             0) != pdTRUE) {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, GUI_COMMAND_QUEUE_IS_FULL_383EBB08,
             "GUI command queue is full; screen %s was not queued",
             app_gui_screen_id_to_string(screen_id));
         return ESP_ERR_TIMEOUT;
@@ -5376,8 +5377,8 @@ esp_err_t app_gui_show_reset_result(
             &command,
             0U) != pdTRUE)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, GUI_COMMAND_QUEUE_IS_FULL_668C7EF7,
             "GUI command queue is full; "
             "reset result was not queued");
 

@@ -9,6 +9,7 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "app_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -108,7 +109,7 @@ static void downlink_mark_response_tainted(
                      s_status.finalizing || s_status.playback_requested);
     portEXIT_CRITICAL(&s_lock);
     if (!owns_response) {
-        ESP_LOGD(TAG,
+        APP_LOGD(TAG, IGNORED_STALE_RESPONSE_TAINT_D1364F11,
                  "Ignored stale response taint generation=%u reason=%s",
                  (unsigned)generation,
                  reason);
@@ -120,7 +121,7 @@ static void downlink_mark_response_tainted(
         generation,
         memory_order_acq_rel);
     if (previous != generation) {
-        ESP_LOGW(TAG,
+        APP_LOGW(TAG, RESPONSE_TAINTED_GENERATION_6BE6DC95,
                  "response tainted generation=%u reason=%s packet_bytes=%u",
                  (unsigned)generation,
                  reason,
@@ -187,7 +188,7 @@ static esp_err_t downlink_write_pcm_with_backpressure(
         }
         if (result != ESP_ERR_TIMEOUT) {
             if (backpressured && (result == ESP_OK)) {
-                ESP_LOGI(TAG,
+                APP_LOGI(TAG, PCM_INGRESS_RESUMED_GENERATI_DF23DA1B,
                          "PCM ingress resumed generation=%u waited_ms=%u",
                          (unsigned)generation,
                          (unsigned)pdTICKS_TO_MS(
@@ -198,7 +199,7 @@ static esp_err_t downlink_write_pcm_with_backpressure(
 
         const TickType_t elapsed = xTaskGetTickCount() - started_at;
         if (!backpressured) {
-            ESP_LOGW(TAG,
+            APP_LOGW(TAG, PCM_INGRESS_BACKPRESSURE_GEN_B4BDBB0E,
                      "PCM ingress backpressure generation=%u samples=%u; retrying",
                      (unsigned)generation,
                      (unsigned)sample_count);
@@ -206,14 +207,14 @@ static esp_err_t downlink_write_pcm_with_backpressure(
         }
 
         if (downlink_response_is_tainted(generation)) {
-            ESP_LOGW(TAG,
+            APP_LOGW(TAG, PCM_INGRESS_STOPPED_GENERATI_CFCD7D0F,
                      "PCM ingress stopped generation=%u: response tainted while backpressured",
                      (unsigned)generation);
             return ESP_ERR_INVALID_RESPONSE;
         }
         if (elapsed >= pdMS_TO_TICKS(
                            DOWNLINK_STREAM_BACKPRESSURE_TIMEOUT_MS)) {
-            ESP_LOGE(TAG,
+            APP_LOGE(TAG, PCM_INGRESS_BACKPRESSURE_TIM_54B9D755,
                      "PCM ingress backpressure timeout generation=%u waited_ms=%u",
                      (unsigned)generation,
                      (unsigned)pdTICKS_TO_MS(elapsed));
@@ -250,7 +251,7 @@ static void downlink_check_stream_terminal(void)
         ++s_status.responses_completed;
         s_status.last_error = ESP_OK;
         portEXIT_CRITICAL(&s_lock);
-        ESP_LOGI(TAG,
+        APP_LOGI(TAG, RESPONSE_PLAYBACK_COMPLETE_G_65472CF0,
                  "response PLAYBACK_COMPLETE generation=%u accepted=%llu played=%llu high_water=%u starvation=%u",
                  (unsigned)generation,
                  (unsigned long long)stream.pcm_samples_accepted,
@@ -265,7 +266,7 @@ static void downlink_check_stream_terminal(void)
         const esp_err_t error = (stream.result == ESP_OK)
             ? ESP_ERR_INVALID_STATE
             : stream.result;
-        ESP_LOGW(TAG,
+        APP_LOGW(TAG, RESPONSE_STREAM_TERMINAL_FAI_24830A30,
                  "response stream terminal failure generation=%u state=%d error=%s",
                  (unsigned)generation,
                  (int)stream.state,
@@ -315,7 +316,7 @@ static void downlink_response_callback(
                 &s_callback_stack_reported,
                 true,
                 memory_order_acq_rel)) {
-            ESP_LOGI(TAG,
+            APP_LOGI(TAG, WEBSOCKET_CALLBACK_STACK_HWM_912A43C6,
                      "WebSocket callback stack_hwm=%u staging=static",
                      (unsigned)uxTaskGetStackHighWaterMark(NULL));
         }
@@ -338,7 +339,7 @@ static void downlink_response_callback(
             "packet-oversize",
             event->client_generation,
             event->data_len);
-        ESP_LOGE(TAG,
+        APP_LOGE(TAG, OPUS_PACKET_DROPPED_SIZE_U_3E42EC7B,
                  "Opus packet dropped: size=%u exceeds capacity=%u",
                  (unsigned)event->data_len,
                  (unsigned)DOWNLINK_CHUNK_BYTES);
@@ -385,7 +386,7 @@ static void downlink_abort_response(
         phase16_xiaozhi_stream_fail(normalized_error);
     if ((stream_fail_ret != ESP_OK) &&
         (stream_fail_ret != ESP_ERR_INVALID_STATE)) {
-        ESP_LOGW(TAG,
+        APP_LOGW(TAG, RESPONSE_CLEANUP_PENDING_GEN_4FCCC6E3,
                  "response cleanup pending generation=%u error=%s",
                  (unsigned)generation,
                  esp_err_to_name(stream_fail_ret));
@@ -398,7 +399,7 @@ static void downlink_abort_response(
         portEXIT_CRITICAL(&s_lock);
     }
     downlink_set_error(normalized_error);
-    ESP_LOGE(TAG,
+    APP_LOGE(TAG, RESPONSE_ABORT_GENERATION_U_83BD6F50,
              "response ABORT generation=%u timeout=%s error=%s",
              (unsigned)generation,
              timeout ? "yes" : "no",
@@ -432,7 +433,7 @@ static void downlink_check_timeout(void)
     const TickType_t now = xTaskGetTickCount();
     if ((now - response_started_at) >=
         pdMS_TO_TICKS(DOWNLINK_RESPONSE_MAX_DURATION_MS)) {
-        ESP_LOGE(TAG,
+        APP_LOGE(TAG, RESPONSE_DEADLINE_EXCEEDED_G_797F53FF,
                  "response deadline exceeded generation=%u awaiting=%s elapsed_ms=%u",
                  (unsigned)generation,
                  awaiting_response ? "yes" : "no",
@@ -444,7 +445,7 @@ static void downlink_check_timeout(void)
          * last network packet by much more than 15 seconds. */
         if ((now - last_activity) >=
             pdMS_TO_TICKS(DOWNLINK_STREAM_DRAIN_TIMEOUT_MS)) {
-            ESP_LOGE(TAG,
+            APP_LOGE(TAG, PCM_STREAM_DRAIN_TIMEOUT_GEN_CB996318,
                      "PCM stream drain timeout generation=%u elapsed_ms=%u",
                      (unsigned)generation,
                      (unsigned)pdTICKS_TO_MS(now - last_activity));
@@ -462,7 +463,7 @@ static void downlink_task(void *argument)
     portENTER_CRITICAL(&s_lock);
     s_status.running = true;
     portEXIT_CRITICAL(&s_lock);
-    ESP_LOGI(TAG, "coordinator started queue=%u frames timeout=%ums",
+    APP_LOGI(TAG, COORDINATOR_STARTED_QUEUE_U_60EA479A, "coordinator started queue=%u frames timeout=%ums",
              (unsigned)DOWNLINK_QUEUE_LENGTH,
              (unsigned)DOWNLINK_RESPONSE_TIMEOUT_MS);
 
@@ -497,7 +498,7 @@ static void downlink_task(void *argument)
             if (owns_response) {
                 const esp_err_t error =
                     (item.error == ESP_OK) ? ESP_FAIL : item.error;
-                ESP_LOGW(TAG,
+                APP_LOGW(TAG, RESPONSE_ERROR_GENERATION_U_E9EA905D,
                          "response error generation=%u error=%s; aborting collection",
                          (unsigned)item.generation,
                          esp_err_to_name(error));
@@ -558,7 +559,7 @@ static void downlink_task(void *argument)
                 downlink_abort_response(item.generation, stream_ret, false);
                 continue;
             }
-            ESP_LOGI(TAG,
+            APP_LOGI(TAG, RESPONSE_START_GENERATION_U_BDA6975A,
                      "response START generation=%u mode=pcm16_stream",
                      (unsigned)item.generation);
             continue;
@@ -584,7 +585,7 @@ static void downlink_task(void *argument)
                 VOICE_ASSISTANT_OPUS_PCM_SAMPLES,
                 &decoded_samples);
             if (decode_ret != ESP_OK) {
-                ESP_LOGW(TAG,
+                APP_LOGW(TAG, OPUS_DECODE_REJECTED_GENERAT_B5753EF2,
                          "Opus decode rejected generation=%u packet_bytes=%u error=%s",
                          (unsigned)item.generation,
                          (unsigned)item.data_len,
@@ -598,7 +599,7 @@ static void downlink_task(void *argument)
             first_packet = (s_status.response_bytes_buffered == 0U);
             portEXIT_CRITICAL(&s_lock);
             if (first_packet) {
-                ESP_LOGI(TAG,
+                APP_LOGI(TAG, FIRST_OPUS_PACKET_DECODED_GE_E8BC1A90,
                          "first Opus packet decoded generation=%u opus_bytes=%u pcm_bytes=%u stack_hwm=%u",
                          (unsigned)item.generation,
                          (unsigned)item.data_len,
@@ -610,7 +611,7 @@ static void downlink_task(void *argument)
                 s_decoded_pcm,
                 decoded_samples);
             if (stream_ret != ESP_OK) {
-                ESP_LOGW(TAG,
+                APP_LOGW(TAG, PCM_STREAM_REJECTED_GENERATI_25F37DB8,
                          "PCM stream rejected generation=%u samples=%u error=%s",
                          (unsigned)item.generation,
                          (unsigned)decoded_samples,
@@ -666,7 +667,7 @@ static void downlink_task(void *argument)
                 downlink_abort_response(item.generation, close_ret, false);
                 continue;
             }
-            ESP_LOGI(TAG,
+            APP_LOGI(TAG, RESPONSE_DRAINING_GENERATION_53FE4A86,
                      "response DRAINING generation=%u accepted_pcm_bytes=%llu",
                      (unsigned)item.generation,
                      (unsigned long long)pcm_bytes);
@@ -777,7 +778,7 @@ esp_err_t voice_assistant_downlink_begin_response_wait(uint32_t session_generati
     portEXIT_CRITICAL(&s_lock);
 
     if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "response WAIT generation=%u", (unsigned)session_generation);
+        APP_LOGI(TAG, RESPONSE_WAIT_GENERATION_U_12292D93, "response WAIT generation=%u", (unsigned)session_generation);
     }
     return ret;
 }
@@ -806,7 +807,7 @@ esp_err_t voice_assistant_downlink_cancel_response_wait(
         return ESP_ERR_INVALID_STATE;
     }
 
-    ESP_LOGW(TAG,
+    APP_LOGW(TAG, RESPONSE_WAIT_CANCELLED_GENE_AE301946,
              "response WAIT cancelled generation=%u error=%s",
              (unsigned)session_generation,
              esp_err_to_name((error == ESP_OK) ? ESP_FAIL : error));

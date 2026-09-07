@@ -4,6 +4,7 @@
 
 #include "app_gui.h"
 #include "esp_log.h"
+#include "app_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -139,8 +140,8 @@ static void gui_cancel_timer(esp_timer_handle_t timer, const char *name)
 
     const esp_err_t ret = esp_timer_stop(timer);
     if ((ret != ESP_OK) && (ret != ESP_ERR_INVALID_STATE)) {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, S_TIMER_STOP_FAILED_S_32795CF9,
             "%s timer stop failed: %s",
             name,
             esp_err_to_name(ret));
@@ -172,8 +173,8 @@ static void gui_arm_timer_once(
         const esp_err_t stop_ret = esp_timer_stop(timer);
         if ((stop_ret != ESP_OK) &&
             (stop_ret != ESP_ERR_INVALID_STATE)) {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, S_RETRY_TIMER_STOP_FAILED_205A944C,
                 "%s retry timer stop failed: %s",
                 name,
                 esp_err_to_name(stop_ret));
@@ -183,8 +184,8 @@ static void gui_arm_timer_once(
 
     const esp_err_t ret = esp_timer_start_once(timer, delay_us);
     if (ret != ESP_OK) {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, S_RETRY_TIMER_START_FAILED_E5818102,
             "%s retry timer start failed: %s",
             name,
             esp_err_to_name(ret));
@@ -202,8 +203,8 @@ static void gui_schedule_xiaozhi_open_retry_locked(void)
 {
     if (s_xiaozhi_open_retry_attempts >=
         VOICE_UI_ROUTE_RETRY_MAX_ATTEMPTS) {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, XIAOZHI_SCREEN_ROUTE_RETRY_D_8D8F84F4,
             "Xiaozhi screen route retry deferred after %u attempts",
             (unsigned)s_xiaozhi_open_retry_attempts);
         s_xiaozhi_open_retry_attempts = 0U;
@@ -242,8 +243,8 @@ static esp_err_t gui_request_xiaozhi_screen_locked(bool force_queue)
         gui_schedule_xiaozhi_open_retry_locked();
     }
     else if (ret != ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, XIAOZHI_SCREEN_REQUEST_FAILE_3517515C,
             "Xiaozhi screen request failed: %s",
             esp_err_to_name(ret));
     }
@@ -285,8 +286,8 @@ static void gui_schedule_dashboard_return_locked(void)
         s_dashboard_return_timer,
         s_dashboard_return_delay_us);
     if (ret != ESP_OK) {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, DASHBOARD_RETURN_TIMER_START_CE9AF9F7,
             "dashboard return timer start failed: %s",
             esp_err_to_name(ret));
     }
@@ -296,8 +297,8 @@ static void gui_schedule_dashboard_retry_locked(void)
 {
     if (s_dashboard_retry_attempts >=
         VOICE_UI_ROUTE_RETRY_MAX_ATTEMPTS) {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, DASHBOARD_RETURN_RETRY_DEFER_77C91A7D,
             "dashboard return retry deferred after %u attempts",
             (unsigned)s_dashboard_retry_attempts);
         /* Keep attempting at the normal post-turn cadence while the adapter
@@ -358,8 +359,8 @@ static void gui_dashboard_return_timer_cb(void *argument)
         gui_schedule_dashboard_retry_locked();
     }
     else if (ret != ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, DASHBOARD_RETURN_REQUEST_FAI_33B9734A,
             "dashboard return request failed: %s",
             esp_err_to_name(ret));
     }
@@ -438,8 +439,8 @@ static void gui_schedule_model_sync_retry(void)
         s_model_sync_retry_timer,
         VOICE_UI_ROUTE_RETRY_DELAY_US);
     if ((ret != ESP_OK) && (ret != ESP_ERR_INVALID_STATE)) {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, VOICE_GUI_MODEL_RETRY_TIMER_F6AD2C87,
             "voice GUI model retry timer start failed: %s",
             esp_err_to_name(ret));
     }
@@ -457,7 +458,7 @@ static void gui_model_callback(
         /* The model retains the newest snapshot. Retry it rather than losing a
          * terminal READY/IDLE update that may be the only dashboard-return
          * trigger for this interaction. */
-        ESP_LOGW(TAG, "voice GUI callback deferred: adapter lock timeout");
+        APP_LOGW(TAG, VOICE_GUI_CALLBACK_DEFERRED_D55A1B16, "voice GUI callback deferred: adapter lock timeout");
         gui_schedule_model_sync_retry();
         return;
     }
@@ -470,8 +471,8 @@ static void gui_model_callback(
     voice_assistant_ui_model_t latest = {0};
     const esp_err_t get_ret = voice_assistant_ui_model_get(&latest);
     if (get_ret != ESP_OK) {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, VOICE_GUI_SNAPSHOT_READ_FAIL_200B9513,
             "voice GUI snapshot read failed: %s",
             esp_err_to_name(get_ret));
         gui_release_callback_lock();
@@ -509,8 +510,8 @@ static void gui_model_callback(
     const esp_err_t post_ret = app_gui_post_xiaozhi_status(&gui);
     if ((post_ret != ESP_OK) &&
         (post_ret != ESP_ERR_INVALID_STATE)) {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, VOICE_GUI_SNAPSHOT_DROPPED_S_F2C97AB6,
             "voice GUI snapshot dropped state=%s error=%s",
             voice_assistant_ui_state_to_string(latest.state),
             esp_err_to_name(post_ret));
@@ -648,6 +649,6 @@ esp_err_t voice_assistant_ui_gui_adapter_start(void)
 
     s_started = true;
     gui_model_callback(&model, NULL);
-    ESP_LOGI(TAG, "production voice GUI adapter started");
+    APP_LOGI(TAG, PRODUCTION_VOICE_GUI_ADAPTER_231A1F97, "production voice GUI adapter started");
     return ESP_OK;
 }
