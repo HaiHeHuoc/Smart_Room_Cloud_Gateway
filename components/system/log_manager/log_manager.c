@@ -98,6 +98,16 @@ static bool policy(bool *enabled, int *maximum, esp_log_level_t level)
            (int)level <= __atomic_load_n(maximum, __ATOMIC_RELAXED);
 }
 
+/* Frontend-only policy query. It deliberately reads only atomic sink policy;
+ * lifecycle/storage readiness remains the backend's concern. This lets
+ * APP_LOG macros skip argument evaluation when neither configured sink can
+ * consume the requested level without taking the logger mutex. */
+static bool should_emit(esp_log_level_t level)
+{
+    return policy(&s_console, &s_console_level, level) ||
+           policy(&s_storage, &s_storage_level, level);
+}
+
 /* READY is the logical VFS state. sd_card_manager_is_mounted() also returns
  * false during its short idle health-check reservation, which must not be
  * mistaken for card loss by the logger. Actual file access is still protected
@@ -681,7 +691,7 @@ static void emit_record(esp_log_level_t level, const char *tag, const char *even
 
 esp_err_t log_manager_init(void)
 {
-    app_log_register_backend(emit_record);
+    app_log_register_backend(emit_record, should_emit);
 #if !CONFIG_LOG_MANAGER_ENABLE
     return ESP_ERR_NOT_SUPPORTED;
 #else
