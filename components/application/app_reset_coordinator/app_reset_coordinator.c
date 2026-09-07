@@ -15,6 +15,7 @@
 #include "app_gui.h"
 #include "app_network_coordinator.h"
 #include "config_manager.h"
+#include "log_manager.h"
 #include "wifi_manager.h"
 
 /* Macros ------------------------------------------------------------------- */
@@ -29,6 +30,7 @@
 #define APP_RESET_COORDINATOR_FALLBACK_DWELL_MS        500U
 #define APP_RESET_COORDINATOR_NETWORK_QUIESCE_TIMEOUT_MS \
     10000U
+#define APP_RESET_COORDINATOR_LOG_STOP_TIMEOUT_MS      1500U
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "APP_RESET_COORD";
@@ -226,6 +228,24 @@ static void app_reset_coordinator_restart_after_success(
         TAG, RESTARTING_AFTER_VERIFIED_WI_91DFF49E,
         "Restarting after verified Wi-Fi reset: transaction=%lu",
         (unsigned long)transaction_id);
+
+    /* The reset coordinator owns reboot policy. Give the logger one bounded
+     * chance to drain and durability-sync the final reset records, but never
+     * let logging failure prevent a verified factory reset from rebooting. */
+    const esp_err_t log_stop_error =
+        log_manager_stop(
+            APP_RESET_COORDINATOR_LOG_STOP_TIMEOUT_MS);
+
+    if ((log_stop_error != ESP_OK) &&
+        (log_stop_error != ESP_ERR_INVALID_STATE))
+    {
+        /* APP_LOG persistence may already be stopping, so this diagnostic is
+         * intentionally console-only and cannot recurse through log_manager. */
+        ESP_LOGW(
+            TAG,
+            "Log manager stop before restart returned %s; restarting anyway",
+            esp_err_to_name(log_stop_error));
+    }
 
     esp_restart();
 }
