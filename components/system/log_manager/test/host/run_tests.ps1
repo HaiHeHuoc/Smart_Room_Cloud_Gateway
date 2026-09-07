@@ -23,7 +23,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Disabled logger test failed' }
 $durabilityExe = Join-Path $outputRoot 'log_manager_durability_tests.exe'
 & gcc -std=c11 -Wall -Wextra -Werror -pthread -I "$testRoot/include" -I "$componentRoot/include" -I "$componentRoot/../app_log/include" -I $componentRoot "$testRoot/platform.c" "$componentRoot/log_buffer.c" "$componentRoot/../app_log/app_log.c" "$testRoot/test_durability.c" -o $durabilityExe
 if ($LASTEXITCODE -ne 0) { throw 'Durability regression compilation failed' }
-foreach ($case in @('flush', 'stop', 'flush_close', 'stop_close', 'background', 'background_close')) {
+foreach ($case in @('flush', 'stop', 'flush_close', 'stop_close', 'background', 'background_close', 'start_fail', 'partial_write')) {
     $caseRoot = Join-Path $outputRoot ([guid]::NewGuid().ToString())
     New-Item -ItemType Directory -Path (Join-Path $caseRoot 'sd') -Force | Out-Null
     Push-Location $caseRoot
