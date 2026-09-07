@@ -9,6 +9,7 @@
 #include "freertos/task.h"
 
 #include "esp_log.h"
+#include "app_log.h"
 #include "esp_system.h"
 
 #include "app_gui.h"
@@ -170,8 +171,8 @@ static bool app_reset_coordinator_wait_for_reset_result(
 
         if (error != ESP_OK)
         {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, FAILED_TO_INSPECT_RESET_RESU_D6953CED,
                 "Failed to inspect reset-result presentation: %s",
                 esp_err_to_name(error));
 
@@ -204,8 +205,8 @@ static void app_reset_coordinator_restart_after_success(
 
         if (!presentation_confirmed)
         {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, RESET_RESULT_PRESENTATION_WA_6724DECD,
                 "Reset-result presentation was not confirmed: "
                 "transaction=%lu",
                 (unsigned long)transaction_id);
@@ -221,8 +222,8 @@ static void app_reset_coordinator_restart_after_success(
         pdMS_TO_TICKS(
             dwell_ms));
 
-    ESP_LOGW(
-        TAG,
+    APP_LOGW(
+        TAG, RESTARTING_AFTER_VERIFIED_WI_91DFF49E,
         "Restarting after verified Wi-Fi reset: transaction=%lu",
         (unsigned long)transaction_id);
 
@@ -273,8 +274,8 @@ static esp_err_t app_reset_coordinator_clear_and_verify_wifi(void)
 
     if (error != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_CLEAR_STORED_WI_6146ACE8,
             "Failed to clear stored Wi-Fi configuration: %s",
             esp_err_to_name(error));
 
@@ -294,8 +295,8 @@ static esp_err_t app_reset_coordinator_clear_and_verify_wifi(void)
 
     if (error != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_VERIFY_STORED_WI_1EBBF6A9,
             "Failed to verify stored Wi-Fi configuration: %s",
             esp_err_to_name(error));
 
@@ -305,8 +306,8 @@ static esp_err_t app_reset_coordinator_clear_and_verify_wifi(void)
     if (wifi_state !=
         CONFIG_MANAGER_WIFI_CONFIG_STATE_NOT_CONFIGURED)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, WI_FI_CONFIGURATION_VERIFICA_E9B74989,
             "Wi-Fi configuration verification failed: state=%s",
             app_reset_coordinator_wifi_state_to_string(
                 wifi_state));
@@ -314,8 +315,8 @@ static esp_err_t app_reset_coordinator_clear_and_verify_wifi(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, WI_FI_CONFIGURATION_RESET_VE_E7F7B88D,
         "Wi-Fi configuration reset verified: state=%s",
         app_reset_coordinator_wifi_state_to_string(
             wifi_state));
@@ -359,14 +360,14 @@ static void app_reset_coordinator_task(
                     state =
                         APP_RESET_COORDINATOR_STATE_PRESS_ACTIVE;
 
-                    ESP_LOGI(
-                        TAG,
+                    APP_LOGI(
+                        TAG, FACTORY_RESET_PRESS_CYCLE_ST_BA23FAED,
                         "Factory-reset press cycle started");
                 }
                 else
                 {
-                    ESP_LOGD(
-                        TAG,
+                    APP_LOGD(
+                        TAG, DUPLICATE_PRESSED_EVENT_IGNO_3BE4DF2E,
                         "Duplicate pressed event ignored");
                 }
 
@@ -397,8 +398,8 @@ static void app_reset_coordinator_task(
                     const uint32_t transaction_id =
                         transaction_counter;
 
-                    ESP_LOGI(
-                        TAG,
+                    APP_LOGI(
+                        TAG, FACTORY_RESET_REQUEST_ACCEPT_589AB558,
                         "Factory-reset request accepted: transaction=%lu",
                         (unsigned long)transaction_id);
 
@@ -422,15 +423,15 @@ static void app_reset_coordinator_task(
 
                         if (ui_error != ESP_OK)
                         {
-                            ESP_LOGW(
-                                TAG,
+                            APP_LOGW(
+                                TAG, FAILED_TO_DISPLAY_RESET_PREP_4D3D1AAF,
                                 "Failed to display reset preparation failure: "
                                 "%s",
                                 esp_err_to_name(ui_error));
                         }
 
-                        ESP_LOGE(
-                            TAG,
+                        APP_LOGE(
+                            TAG, FACTORY_RESET_NETWORK_PREPAR_0F7D2F4E,
                             "Factory-reset network preparation failed: %s",
                             esp_err_to_name(preparation_error));
 
@@ -456,14 +457,14 @@ static void app_reset_coordinator_task(
 
                         if (ui_error != ESP_OK)
                         {
-                            ESP_LOGW(
-                                TAG,
+                            APP_LOGW(
+                                TAG, FAILED_TO_DISPLAY_DRIVER_RES_A4C9F2E3,
                                 "Failed to display driver reset failure: %s",
                                 esp_err_to_name(ui_error));
                         }
 
-                        ESP_LOGE(
-                            TAG,
+                        APP_LOGE(
+                            TAG, FACTORY_RESET_WI_FI_DRIVER_498B26D0,
                             "Factory-reset Wi-Fi driver cleanup failed: %s",
                             esp_err_to_name(driver_reset_error));
 
@@ -483,22 +484,22 @@ static void app_reset_coordinator_task(
 
                         if (ui_error != ESP_OK)
                         {
-                            ESP_LOGW(
-                                TAG,
+                            APP_LOGW(
+                                TAG, FAILED_TO_DISPLAY_STORAGE_RE_8666CA8C,
                                 "Failed to display storage reset failure: %s",
                                 esp_err_to_name(ui_error));
                         }
 
-                        ESP_LOGE(
-                            TAG,
+                        APP_LOGE(
+                            TAG, FACTORY_RESET_STORAGE_TRANSA_A7122CAA,
                             "Factory-reset storage transaction failed: %s",
                             esp_err_to_name(reset_error));
 
                         break;
                     }
 
-                    ESP_LOGI(
-                        TAG,
+                    APP_LOGI(
+                        TAG, FACTORY_RESET_VERIFIED_PREPA_615EE04D,
                         "Factory reset verified; preparing controlled "
                         "restart: transaction=%lu",
                         (unsigned long)transaction_id);
@@ -514,8 +515,8 @@ static void app_reset_coordinator_task(
 
                     if (!reset_result_queued)
                     {
-                        ESP_LOGW(
-                            TAG,
+                        APP_LOGW(
+                            TAG, FAILED_TO_QUEUE_RESET_SUCCES_298A3B0A,
                             "Failed to queue reset success UI: %s",
                             esp_err_to_name(ui_error));
                     }
@@ -527,14 +528,14 @@ static void app_reset_coordinator_task(
                 else if (state ==
                          APP_RESET_COORDINATOR_STATE_REQUEST_ACCEPTED)
                 {
-                    ESP_LOGD(
-                        TAG,
+                    APP_LOGD(
+                        TAG, DUPLICATE_LONG_PRESS_REQUEST_83135323,
                         "Duplicate long-press request ignored");
                 }
                 else
                 {
-                    ESP_LOGW(
-                        TAG,
+                    APP_LOGW(
+                        TAG, OUT_OF_ORDER_LONG_PRESS_631CD313,
                         "Out-of-order long-press event ignored");
                 }
 
@@ -546,8 +547,8 @@ static void app_reset_coordinator_task(
                 if (state !=
                     APP_RESET_COORDINATOR_STATE_ARMED)
                 {
-                    ESP_LOGI(
-                        TAG,
+                    APP_LOGI(
+                        TAG, FACTORY_RESET_INPUT_RE_ARMED_015447FE,
                         "Factory-reset input re-armed");
                 }
 
@@ -567,8 +568,8 @@ static void app_reset_coordinator_task(
                 /*
                  * Public validation should prevent this branch.
                  */
-                ESP_LOGW(
-                    TAG,
+                APP_LOGW(
+                    TAG, UNKNOWN_RESET_INPUT_EVENT_IG_9BE04D48,
                     "Unknown reset input event ignored");
 
                 break;
@@ -621,8 +622,8 @@ esp_err_t app_reset_coordinator_init(void)
     s_reset_coordinator.lifecycle =
         APP_RESET_COORDINATOR_LIFECYCLE_INITIALIZED;
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, RESET_COORDINATOR_INITIALIZE_8E34EBDA,
         "Reset coordinator initialized");
 
     return ESP_OK;
@@ -664,8 +665,8 @@ esp_err_t app_reset_coordinator_start(void)
         return ESP_ERR_NO_MEM;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, RESET_COORDINATOR_TASK_START_F15094F6,
         "Reset coordinator task started");
 
     return ESP_OK;

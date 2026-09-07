@@ -6,6 +6,7 @@ idf_component_register(
     INCLUDE_DIRS
         "."
     REQUIRES
+        app_log
         common
         display_driver
         ui_manager_lvgl
@@ -14,6 +15,7 @@ idf_component_register(
         lvgl_image_handler
         performance_monitor
         time_manager
+        log_manager
         wifi_manager
         app_gui
         sensor_manager

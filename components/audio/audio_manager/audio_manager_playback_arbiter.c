@@ -5,6 +5,7 @@
 #include "audio_manager.h"
 #include "audio_manager_pcm_stream.h"
 #include "esp_log.h"
+#include "app_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -454,7 +455,7 @@ static void playback_arbiter_task(void *arg)
         if (do_stop) {
             const esp_err_t ret = audio_manager_stop_playback();
             if ((ret != ESP_OK) && (ret != ESP_ERR_INVALID_STATE)) {
-                ESP_LOGW(TAG, "cooperative playback stop failed: %s",
+                APP_LOGW(TAG, COOPERATIVE_PLAYBACK_STOP_FA_971CFB36, "cooperative playback stop failed: %s",
                          esp_err_to_name(ret));
             }
         }
@@ -472,7 +473,7 @@ static void playback_arbiter_task(void *arg)
                         s_current.start_submitted = true;
                         s_current.stream.state =
                             AUDIO_MANAGER_PLAYBACK_REQUEST_STARTING;
-                        ESP_LOGI(TAG,
+                        APP_LOGI(TAG, ACCEPTED_REQUEST_U_CLIENT_S_EAB4A859,
                                  "accepted request=%u client=%s priority=%u source=%s",
                                  (unsigned)start_slot.request.request_id,
                                  audio_manager_client_to_string(

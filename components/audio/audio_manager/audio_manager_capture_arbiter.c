@@ -4,6 +4,7 @@
 
 #include "audio_manager.h"
 #include "esp_log.h"
+#include "app_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -202,7 +203,7 @@ static void capture_arbiter_task(void *arg)
             if (take_lock()) {
                 if (ret == ESP_OK) {
                     sync_status_locked(AUDIO_MANAGER_CAPTURE_ARBITER_STARTING, ESP_OK);
-                    ESP_LOGI(TAG,
+                    APP_LOGI(TAG, GRANT_REQUEST_U_CLIENT_S_E1DCB2CA,
                              "grant request=%u client=%s priority=%u",
                              (unsigned)start_slot.request.request_id,
                              audio_manager_client_to_string(start_slot.request.client),

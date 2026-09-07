@@ -19,6 +19,7 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "app_log.h"
 
 /* Macros ------------------------------------------------------------------- */
 #define AUDIO_WAV_RIFF_HEADER_BYTES       12U
@@ -400,8 +401,8 @@ esp_err_t audio_wav_stream_open(
     const esp_err_t lease_result = sd_card_manager_acquire();
     if (lease_result != ESP_OK)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, SD_FILESYSTEM_IS_UNAVAILABLE_0D6EFF1D,
             "SD filesystem is unavailable for WAV path %s: %s",
             path,
             esp_err_to_name(lease_result));
@@ -412,7 +413,7 @@ esp_err_t audio_wav_stream_open(
     if (file == NULL)
     {
         const int open_errno = errno;
-        ESP_LOGW(TAG, "Failed to open WAV %s: errno=%d", path, open_errno);
+        APP_LOGW(TAG, FAILED_TO_OPEN_WAV_S_481DABF4, "Failed to open WAV %s: errno=%d", path, open_errno);
 
         if (sd_card_manager_is_vfs_media_error(open_errno))
         {
@@ -425,7 +426,7 @@ esp_err_t audio_wav_stream_open(
 
     if (setvbuf(file, NULL, _IONBF, 0) != 0)
     {
-        ESP_LOGW(TAG, "Failed to configure unbuffered WAV I/O: %s", path);
+        APP_LOGW(TAG, FAILED_TO_CONFIGURE_UNBUFFER_3BA46AC2, "Failed to configure unbuffered WAV I/O: %s", path);
         if (fclose(file) != 0)
         {
             sd_card_manager_report_io_error(ESP_FAIL);
@@ -441,8 +442,8 @@ esp_err_t audio_wav_stream_open(
         const int parse_errno = errno;
         const bool parse_io_error = ferror(file) || (result == ESP_FAIL);
 
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, REJECTED_WAV_S_S_7470BA56,
             "Rejected WAV %s: %s",
             path,
             esp_err_to_name(result));
@@ -481,8 +482,8 @@ esp_err_t audio_wav_stream_open(
     stream->data_bytes_read = 0U;
     stream->sd_lease_held = true;
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, WAV_OPENED_PATH_S_FMT_2514A4C4,
         "WAV opened path=%s fmt=%u ch=%u rate=%u bits=%u data_offset=%ld data_bytes=%u duration=%ums raw_buffer=%uB",
         path,
         (unsigned)info.audio_format,
@@ -541,8 +542,8 @@ esp_err_t audio_wav_stream_read_limited(
         const esp_err_t close_result = audio_wav_stream_close(stream);
         if (close_result != ESP_OK)
         {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, WAV_CLOSE_WHILE_SD_RECOVERY_775F9806,
                 "WAV close while SD recovery was pending failed: %s",
                 esp_err_to_name(close_result));
         }
@@ -580,8 +581,8 @@ esp_err_t audio_wav_stream_read_limited(
         /* Host test logging is a no-op, but firmware keeps errno diagnostics. */
         (void)read_errno;
 
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, WAV_READ_FAILED_REQUESTED_U_C214686F,
             "WAV read failed: requested=%u received=%u errno=%d error=%s",
             (unsigned)requested_bytes,
             (unsigned)received_bytes,
@@ -601,16 +602,16 @@ esp_err_t audio_wav_stream_read_limited(
          */
         if (io_error)
         {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, DEFERRING_SD_REMOUNT_UNTIL_F_E7F2D809,
                 "Deferring SD remount until fresh-file WAV retry confirms media failure");
         }
 
         const esp_err_t close_result = audio_wav_stream_close(stream);
         if (close_result != ESP_OK)
         {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, WAV_CLEANUP_AFTER_READ_FAILU_6D8EF811,
                 "WAV cleanup after read failure failed: %s",
                 esp_err_to_name(close_result));
         }
@@ -682,8 +683,8 @@ esp_err_t audio_wav_stream_seek_data(
     if (result != ESP_OK)
     {
         const int seek_errno = errno;
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, WAV_RESUME_SEEK_FAILED_DATA_9098F737,
             "WAV resume seek failed: data_offset=%llu file_offset=%llu errno=%d error=%s",
             (unsigned long long)data_offset_bytes,
             (unsigned long long)absolute_offset,
@@ -716,7 +717,7 @@ esp_err_t audio_wav_stream_close(audio_wav_stream_t *stream)
         if (fclose(stream->file) != 0)
         {
             const int close_errno = errno;
-            ESP_LOGW(TAG, "Failed to close WAV file: errno=%d", close_errno);
+            APP_LOGW(TAG, FAILED_TO_CLOSE_WAV_FILE_940BE085, "Failed to close WAV file: errno=%d", close_errno);
             result = ESP_FAIL;
             audio_wav_report_media_error_if_needed(result, close_errno);
         }

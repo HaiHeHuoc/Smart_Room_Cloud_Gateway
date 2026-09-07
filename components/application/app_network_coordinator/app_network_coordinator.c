@@ -9,6 +9,7 @@
 
 #include "esp_check.h"
 #include "esp_log.h"
+#include "app_log.h"
 
 #include "app_gui.h"
 #include "config_manager.h"
@@ -341,8 +342,8 @@ static void app_network_coordinator_task(
 {
     (void)argument;
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, NETWORK_COORDINATOR_TASK_STA_F7E13147,
         "Network coordinator task started");
 
     const esp_err_t ret =
@@ -351,8 +352,8 @@ static void app_network_coordinator_task(
     if ((ret == ESP_ERR_NOT_ALLOWED) &&
         app_is_factory_reset_requested())
     {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, NETWORK_BOOT_POLICY_YIELDED_6E055B96,
             "Network boot policy yielded to factory-reset preparation");
     }
     else if (ret != ESP_OK)
@@ -360,8 +361,8 @@ static void app_network_coordinator_task(
         app_network_coordinator_set_state(
             APP_NETWORK_COORDINATOR_STATE_FAILED);
 
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, NETWORK_COORDINATOR_TASK_FAI_66C54621,
             "Network coordinator task failed: %s",
             esp_err_to_name(ret));
     }
@@ -375,8 +376,8 @@ static void app_network_coordinator_task(
         if (app_network_coordinator_get_state(
                 &final_state) == ESP_OK)
         {
-            ESP_LOGI(
-                TAG,
+            APP_LOGI(
+                TAG, NETWORK_COORDINATOR_BOOT_TAS_3667CA50,
                 "Network coordinator boot task completed: state=%s",
                 app_network_coordinator_state_to_string(
                     final_state));
@@ -417,8 +418,8 @@ static esp_err_t app_network_coordinator_run_boot_policy(void)
                 CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN);
         }
 
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_RESOLVE_WI_FI_6711A7A5,
             "Failed to resolve Wi-Fi configuration: %s",
             esp_err_to_name(ret));
 
@@ -444,16 +445,16 @@ static esp_err_t app_network_coordinator_run_boot_policy(void)
 
     if (ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, NETWORK_BOOT_POLICY_FAILED_S_BC985802,
             "Network boot policy failed: %s",
             esp_err_to_name(ret));
 
         return ret;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, NETWORK_BOOT_POLICY_STARTED_0D50818C,
         "Network boot policy started successfully");
 
     return ESP_OK;
@@ -477,8 +478,8 @@ static void app_network_coordinator_request_initial_screen(
 
     if (ret != ESP_OK)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FAILED_TO_QUEUE_INITIAL_APPL_0AA85EF2,
             "Failed to queue initial application screen %d: %s",
             (int)target_screen,
             esp_err_to_name(ret));
@@ -497,8 +498,8 @@ static void app_network_coordinator_wait_for_stored_wifi_boot_grace(void)
         return;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, WAITING_UP_TO_LU_MS_02E364BB,
         "Waiting up to %lu ms for stored Wi-Fi before leaving boot screen",
         (unsigned long)
             APP_NETWORK_COORDINATOR_STORED_WIFI_BOOT_GRACE_MS);
@@ -523,15 +524,15 @@ static void app_network_coordinator_wait_for_stored_wifi_boot_grace(void)
 
     if (ret != ESP_OK)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FAILED_TO_QUEUE_WI_FI_1D16AB9F,
             "Failed to queue Wi-Fi status screen after boot grace: %s",
             esp_err_to_name(ret));
         return;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, BOOT_GRACE_EXPIRED_WHILE_BOO_07D18CBF,
         "Boot grace expired while BOOT remained active; leaving boot screen state=%s",
         app_network_coordinator_state_to_string(state));
 }
@@ -656,8 +657,8 @@ static void app_publish_provisioning_qr_payload(
 
     if (ret != ESP_OK)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, ACTIVE_PROVISIONING_QR_PAYLO_990404CF,
             "Active provisioning QR payload is unavailable: %s",
             esp_err_to_name(ret));
 
@@ -678,15 +679,15 @@ static void app_publish_provisioning_qr_payload(
 
     if (ret != ESP_OK)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FAILED_TO_QUEUE_ACTIVE_PROVI_3C394AE9,
             "Failed to queue active provisioning QR payload: %s",
             esp_err_to_name(ret));
         return;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, ACTIVE_PROVISIONING_QR_PAYLO_1F8CFA74,
         "Active provisioning QR payload queued for GUI");
 }
 
@@ -734,8 +735,8 @@ static void app_publish_provisioning_status(
 
     if (ret != ESP_OK)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FAILED_TO_QUEUE_PROVISIONING_55286CC4,
             "Failed to queue provisioning UI state %d: %s",
             (int)state,
             esp_err_to_name(ret));
@@ -751,8 +752,8 @@ static void app_clear_provisioning_qr_payload(
 
     if (ret != ESP_OK)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FAILED_TO_INVALIDATE_PROVISI_D479D6C6,
             "Failed to invalidate provisioning QR payload: %s",
             esp_err_to_name(ret));
     }
@@ -789,8 +790,8 @@ static void app_provisioning_progress_callback(
     {
         portEXIT_CRITICAL(&s_state_lock);
 
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, IGNORING_STALE_MANAGER_PROGR_9E80E394,
             "Ignoring stale manager progress generation %lu; active=%lu",
             (unsigned long)status->session_generation,
             (unsigned long)active_generation);
@@ -1250,8 +1251,8 @@ static esp_err_t app_reconcile_late_provisioning_handoff(
         goto discard_and_release;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, CONNECTION_GRACE_EXPIRED_STO_1BF16223,
         "Connection grace expired; stopping BLE before bounded DHCP settle");
 
     result =
@@ -1291,8 +1292,8 @@ static esp_err_t app_reconcile_late_provisioning_handoff(
         goto discard_and_release;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, PROVISIONING_STOPPED_ALLOWIN_7AD61A3F,
         "Provisioning stopped; allowing %lu ms for late DHCP completion",
         (unsigned long)APP_NETWORK_COORDINATOR_LATE_DHCP_SETTLE_MS);
 
@@ -1341,8 +1342,8 @@ static esp_err_t app_reconcile_late_provisioning_handoff(
                 goto discard_and_release;
             }
 
-            ESP_LOGI(
-                TAG,
+            APP_LOGI(
+                TAG, LATE_DHCP_COMPLETION_RECONCI_84BBFF91,
                 "Late DHCP completion reconciled for provisioning "
                 "generation %lu",
                 (unsigned long)session_generation);
@@ -1531,8 +1532,8 @@ static esp_err_t app_wait_for_verified_provisioning_credentials(
             connection_grace_start_tick = now_tick;
             *connection_grace_used = true;
 
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, PROVISIONING_GENERATION_LU_R_B0FD27BA,
                 "Provisioning generation %lu reached its deadline with "
                 "Wi-Fi handoff pending; allowing %lu ms grace",
                 (unsigned long)session_generation,
@@ -1588,8 +1589,8 @@ static void app_release_terminal_ble_memory_best_effort(
 
     if (release_ret != ESP_OK)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, TERMINAL_BLE_MEMORY_CLEANUP_50D90716,
             "Terminal BLE memory cleanup did not change the %s outcome: %s",
             (context != NULL)
                 ? context
@@ -1604,42 +1605,42 @@ static void app_log_wifi_config_state(
     switch (state)
     {
         case CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID:
-            ESP_LOGI(TAG, "Stored Wi-Fi configuration is valid");
+            APP_LOGI(TAG, STORED_WI_FI_CONFIGURATION_I_C92C33D3, "Stored Wi-Fi configuration is valid");
             break;
 
         case CONFIG_MANAGER_WIFI_CONFIG_STATE_NOT_CONFIGURED:
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, WI_FI_CONFIGURATION_IS_REQUI_54C61F8C,
                 "Wi-Fi configuration is required; connection is not started");
             break;
 
         case CONFIG_MANAGER_WIFI_CONFIG_STATE_INCOMPLETE:
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, STORED_WI_FI_CONFIGURATION_I_C9A9D498,
                 "Stored Wi-Fi configuration is incomplete; data is preserved");
             break;
 
         case CONFIG_MANAGER_WIFI_CONFIG_STATE_UNSUPPORTED_VERSION:
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, STORED_WI_FI_SCHEMA_IS_C3A04FAC,
                 "Stored Wi-Fi schema is unsupported; data is preserved");
             break;
 
         case CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA:
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, STORED_WI_FI_CONFIGURATION_I_E526C394,
                 "Stored Wi-Fi configuration is invalid; data is preserved");
             break;
 
         case CONFIG_MANAGER_WIFI_CONFIG_STATE_MIGRATION_REQUIRED:
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, STORED_WI_FI_CONFIGURATION_S_A6231B87,
                 "Stored Wi-Fi configuration still requires migration");
             break;
 
         case CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN:
         default:
-            ESP_LOGE(TAG, "Stored Wi-Fi configuration state is unknown");
+            APP_LOGE(TAG, STORED_WI_FI_CONFIGURATION_S_D303A693, "Stored Wi-Fi configuration state is unknown");
             break;
     }
 }
@@ -1847,8 +1848,8 @@ app_run_one_wifi_provisioning_session(
         ESP_OK,
         0U);
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, PROVISIONING_GENERATION_LU_I_442C30FE,
         "Provisioning generation %lu is active",
         (unsigned long)session_generation);
 
@@ -1944,8 +1945,8 @@ app_run_one_wifi_provisioning_session(
 
     if (connection_grace_used)
     {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, PROVISIONING_GENERATION_LU_C_22CD33BC,
             "Provisioning generation %lu completed after its session deadline",
             (unsigned long)session_generation);
     }
@@ -2036,8 +2037,8 @@ app_run_one_wifi_provisioning_session(
 
     if (ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_HAND_PROVISIONING_E3D40ABA,
             "Failed to hand provisioning connection to Wi-Fi manager: %s",
             esp_err_to_name(ret));
 
@@ -2076,8 +2077,8 @@ app_run_one_wifi_provisioning_session(
         ESP_OK,
         0U);
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, WI_FI_PROVISIONING_GENERATIO_111D375E,
         "Wi-Fi provisioning generation %lu completed successfully",
         (unsigned long)session_generation);
 
@@ -2093,8 +2094,8 @@ app_run_one_wifi_provisioning_session(
 
         if (screen_ret != ESP_OK)
         {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, FAILED_TO_QUEUE_POST_PROVISI_88244274,
                 "Failed to queue post-provisioning Wi-Fi status screen: %s",
                 esp_err_to_name(screen_ret));
         }
@@ -2197,8 +2198,8 @@ static esp_err_t app_run_wifi_provisioning(void)
         if (config_state ==
             CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID)
         {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, WI_FI_CONFIGURATION_BECAME_V_1762B894,
                 "Wi-Fi configuration became valid before a new provisioning "
                 "session; using stored-configuration policy");
 
@@ -2223,8 +2224,8 @@ static esp_err_t app_run_wifi_provisioning(void)
 
                 if (screen_ret != ESP_OK)
                 {
-                    ESP_LOGW(
-                        TAG,
+                    APP_LOGW(
+                        TAG, FAILED_TO_QUEUE_SAFE_CONFIGU_29CDF4E5,
                         "Failed to queue safe configured-device screen: %s",
                         esp_err_to_name(screen_ret));
                 }
@@ -2247,8 +2248,8 @@ static esp_err_t app_run_wifi_provisioning(void)
                     "configuration integrity failure");
             }
 
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, PROVISIONING_RETRY_BLOCKED_B_32BCA5AD,
                 "Provisioning retry blocked by Wi-Fi configuration state %d",
                 (int)config_state);
 
@@ -2301,8 +2302,8 @@ static esp_err_t app_run_wifi_provisioning(void)
                 ESP_OK,
                 0U);
 
-            ESP_LOGI(
-                TAG,
+            APP_LOGI(
+                TAG, RETRYING_PROVISIONING_WITH_S_C0DC12FF,
                 "Retrying provisioning with session %lu/%lu "
                 "(generation %lu) after %lu ms",
                 (unsigned long)(session_index + 1U),
@@ -2328,8 +2329,8 @@ static esp_err_t app_run_wifi_provisioning(void)
             ESP_OK,
             0U);
 
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, STARTING_PROVISIONING_SESSIO_BCCC40DB,
             "Starting provisioning session %lu/%lu (generation %lu)",
             (unsigned long)(session_index + 1U),
             (unsigned long)
@@ -2349,8 +2350,8 @@ static esp_err_t app_run_wifi_provisioning(void)
         if (outcome.result ==
             APP_PROVISIONING_RESULT_ABORTED_BY_FACTORY_RESET)
         {
-            ESP_LOGI(
-                TAG,
+            APP_LOGI(
+                TAG, PROVISIONING_YIELDED_TO_FACT_9DBB6825,
                 "Provisioning yielded to factory-reset preparation");
 
             return ESP_ERR_NOT_ALLOWED;
@@ -2380,8 +2381,8 @@ static esp_err_t app_run_wifi_provisioning(void)
             outcome.error,
             failure_reason);
 
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, PROVISIONING_SESSION_LU_LU_E_0DE9CA79,
             "Provisioning session %lu/%lu ended: class=%s, error=%s",
             (unsigned long)(session_index + 1U),
             (unsigned long)
@@ -2407,8 +2408,8 @@ static esp_err_t app_run_wifi_provisioning(void)
             outcome.error,
             0U);
 
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, CLEANING_PROVISIONING_SESSIO_69101B9E,
             "Cleaning provisioning session %lu/%lu",
             (unsigned long)(session_index + 1U),
             (unsigned long)
@@ -2428,8 +2429,8 @@ static esp_err_t app_run_wifi_provisioning(void)
                 cleanup_ret,
                 0U);
 
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, PROVISIONING_CLEANUP_DID_NOT_2A0FE932,
                 "Provisioning cleanup did not reach STOPPED: %s",
                 esp_err_to_name(cleanup_ret));
 
@@ -2438,8 +2439,8 @@ static esp_err_t app_run_wifi_provisioning(void)
                        : cleanup_ret;
         }
 
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, PROVISIONING_SESSION_LU_LU_S_0B5FBF66,
             "Provisioning session %lu/%lu stopped",
             (unsigned long)(session_index + 1U),
             (unsigned long)
@@ -2465,8 +2466,8 @@ static esp_err_t app_run_wifi_provisioning(void)
                 verification_error,
                 0U);
 
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, PROVISIONING_CLEANUP_VERIFIC_A8E79B71,
                 "Provisioning cleanup verification failed");
 
             app_release_terminal_ble_memory_best_effort(
@@ -2490,8 +2491,8 @@ static esp_err_t app_run_wifi_provisioning(void)
                     detach_ret,
                     0U);
 
-                ESP_LOGE(
-                    TAG,
+                APP_LOGE(
+                    TAG, FAILED_TO_DETACH_UNADOPTED_P_125DE1EC,
                     "Failed to detach unadopted provisioning Station: %s",
                     esp_err_to_name(detach_ret));
 
@@ -2531,8 +2532,8 @@ static esp_err_t app_run_wifi_provisioning(void)
 
             if (retryable)
             {
-                ESP_LOGW(
-                    TAG,
+                APP_LOGW(
+                    TAG, PROVISIONING_RETRY_BUDGET_EX_A66EB66B,
                     "Provisioning retry budget exhausted after %lu sessions",
                     (unsigned long)
                         s_config.provisioning_max_sessions);
@@ -2559,8 +2560,8 @@ static esp_err_t app_apply_wifi_boot_policy(
     switch (state)
     {
         case CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID:
-            ESP_LOGI(
-                TAG,
+            APP_LOGI(
+                TAG, VALID_WI_FI_CONFIGURATION_FO_C9342F06,
                 "Valid Wi-Fi configuration found; "
                 "starting stored connection");
 
@@ -2602,8 +2603,8 @@ static esp_err_t app_apply_wifi_boot_policy(
 
             portEXIT_CRITICAL(&s_state_lock);
 
-            ESP_LOGI(
-                TAG,
+            APP_LOGI(
+                TAG, WI_FI_IS_NOT_CONFIGURED_9FF3303F,
                 "Wi-Fi is not configured; "
                 "starting BLE provisioning");
 
@@ -2623,8 +2624,8 @@ static esp_err_t app_apply_wifi_boot_policy(
                 return ret;
             }
 
-            ESP_LOGI(
-                TAG,
+            APP_LOGI(
+                TAG, LEGACY_WI_FI_CONFIGURATION_R_04F10AF4,
                 "Legacy Wi-Fi configuration requires migration");
 
             ret = config_manager_migrate_device_config();
@@ -2670,22 +2671,22 @@ release_migration:
         }
 
         case CONFIG_MANAGER_WIFI_CONFIG_STATE_INCOMPLETE:
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, STORED_WI_FI_CONFIGURATION_I_BA611DB4,
                 "Stored Wi-Fi configuration is incomplete");
 
             return ESP_ERR_INVALID_STATE;
 
         case CONFIG_MANAGER_WIFI_CONFIG_STATE_INVALID_DATA:
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, STORED_WI_FI_CONFIGURATION_C_2631BA94,
                 "Stored Wi-Fi configuration contains invalid data");
 
             return ESP_ERR_INVALID_RESPONSE;
 
         case CONFIG_MANAGER_WIFI_CONFIG_STATE_UNSUPPORTED_VERSION:
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, STORED_WI_FI_CONFIGURATION_V_86565F41,
                 "Stored Wi-Fi configuration version is unsupported");
 
             return ESP_ERR_NOT_SUPPORTED;
@@ -2693,8 +2694,8 @@ release_migration:
 
         case CONFIG_MANAGER_WIFI_CONFIG_STATE_UNKNOWN:
         default:
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, WI_FI_CONFIGURATION_STATE_IS_C6FAC87D,
                 "Wi-Fi configuration state is unknown");
 
             return ESP_FAIL;
@@ -2751,7 +2752,7 @@ static esp_err_t app_resolve_wifi_config_state(
         return ESP_OK;
     }
 
-    ESP_LOGI(TAG, "Migrating legacy Wi-Fi configuration");
+    APP_LOGI(TAG, MIGRATING_LEGACY_WI_FI_CONFI_7799B8F9, "Migrating legacy Wi-Fi configuration");
 
     err = config_manager_migrate_device_config();
 
@@ -2769,8 +2770,8 @@ static esp_err_t app_resolve_wifi_config_state(
 
     if (*state != CONFIG_MANAGER_WIFI_CONFIG_STATE_VALID)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, WI_FI_CONFIGURATION_IS_NOT_43E10447,
             "Wi-Fi configuration is not valid after migration: state=%d",
             (int)*state);
 
@@ -2859,8 +2860,8 @@ esp_err_t app_network_coordinator_init(
 
     portEXIT_CRITICAL(&s_state_lock);
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, APPLICATION_NETWORK_COORDINA_FB44FC66,
         "Application network coordinator initialized");
 
     return ESP_OK;
@@ -2957,15 +2958,15 @@ esp_err_t app_network_coordinator_start(void)
         app_network_coordinator_set_state(
             APP_NETWORK_COORDINATOR_STATE_FAILED);
 
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_CREATE_NETWORK_COO_5457CBC3,
             "Failed to create network coordinator task");
 
         return ESP_ERR_NO_MEM;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, NETWORK_COORDINATOR_TASK_SCH_DD0E63C1,
         "Network coordinator task scheduled");
 
     return ESP_OK;
@@ -3001,8 +3002,8 @@ esp_err_t app_network_coordinator_prepare_for_factory_reset(
 
     portEXIT_CRITICAL(&s_state_lock);
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, FACTORY_RESET_PREPARATION_RE_D16054AF,
         "Factory-reset preparation requested (timeout=%lu ms)",
         (unsigned long)timeout_ms);
 
@@ -3116,8 +3117,8 @@ esp_err_t app_network_coordinator_prepare_for_factory_reset(
 
                 if (discard_result == ESP_OK)
                 {
-                    ESP_LOGI(
-                        TAG,
+                    APP_LOGI(
+                        TAG, DISCARDED_RETAINED_LATE_WI_F_F883530D,
                         "Discarded retained late Wi-Fi handoff claimed by "
                         "factory reset");
                 }
@@ -3134,8 +3135,8 @@ esp_err_t app_network_coordinator_prepare_for_factory_reset(
 
             if (receive_result == ESP_OK)
             {
-                ESP_LOGI(
-                    TAG,
+                APP_LOGI(
+                    TAG, DISCARDED_VERIFIED_WI_FI_HAN_541065A9,
                     "Discarded verified Wi-Fi handoff claimed by factory reset");
             }
         }
@@ -3155,8 +3156,8 @@ esp_err_t app_network_coordinator_prepare_for_factory_reset(
 
                 wifi_quiesce_requested = true;
 
-                ESP_LOGI(
-                    TAG,
+                APP_LOGI(
+                    TAG, PROVISIONING_QUIESCED_WAITIN_AB96BCD6,
                     "Provisioning quiesced; waiting for Station detach");
             }
 
@@ -3176,8 +3177,8 @@ esp_err_t app_network_coordinator_prepare_for_factory_reset(
                 (wifi_status.state ==
                  WIFI_MANAGER_STATE_READY))
             {
-                ESP_LOGI(
-                    TAG,
+                APP_LOGI(
+                    TAG, PROVISIONING_AND_STATION_ARE_B2FF5F7E,
                     "Provisioning and Station are quiescent for factory reset");
 
                 return ESP_OK;
@@ -3212,8 +3213,8 @@ esp_err_t app_network_coordinator_prepare_for_factory_reset(
         s_factory_reset_requested = false;
         portEXIT_CRITICAL(&s_state_lock);
 
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FACTORY_RESET_PREPARATION_FA_C5D0DEA3,
             "Factory-reset preparation failed; reset gate rolled back: %s",
             esp_err_to_name(result));
     }
@@ -3341,8 +3342,8 @@ esp_err_t app_network_coordinator_notify_wifi_event(
 
     if (state_changed)
     {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, RUNTIME_NETWORK_STATE_S_S_9CED6B89,
             "Runtime network state: %s -> %s",
             app_network_coordinator_state_to_string(
                 previous_state),
@@ -3371,8 +3372,8 @@ esp_err_t app_network_coordinator_notify_wifi_event(
 
                     if (screen_ret != ESP_OK)
                     {
-                        ESP_LOGW(
-                            TAG,
+                        APP_LOGW(
+                            TAG, FAILED_TO_LEAVE_BOOT_SCREEN_FACDCB5F,
                             "Failed to leave BOOT screen after Wi-Fi ONLINE: %s",
                             esp_err_to_name(screen_ret));
                     }
@@ -3380,8 +3381,8 @@ esp_err_t app_network_coordinator_notify_wifi_event(
             }
             else
             {
-                ESP_LOGW(
-                    TAG,
+                APP_LOGW(
+                    TAG, FAILED_TO_INSPECT_ACTIVE_SCR_253D3331,
                     "Failed to inspect active screen after Wi-Fi ONLINE: %s",
                     esp_err_to_name(screen_state_ret));
             }

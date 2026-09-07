@@ -1,6 +1,7 @@
 /* Includes ----------------------------------------------------------------- */
 #include "esp_check.h"
 #include "esp_log.h"
+#include "app_log.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
 #include "esp_lcd_panel_io.h"
@@ -142,7 +143,7 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t *display_handle)
                         TAG,
                         "LVGL UI manager is already initialized");
 
-    ESP_LOGD(TAG, "Initializing LVGL UI manager");
+    APP_LOGD(TAG, INITIALIZING_LVGL_UI_MANAGER_32C12242, "Initializing LVGL UI manager");
     s_display_handle = display_handle; // Store the display handle for later use
 
     // Create a mutex for LVGL operations to ensure thread safety
@@ -150,7 +151,7 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t *display_handle)
     if (s_lvgl_mutex == NULL)
     {
         ret = ESP_ERR_NO_MEM;
-        ESP_LOGE(TAG, "Failed to create LVGL mutex");
+        APP_LOGE(TAG, FAILED_TO_CREATE_LVGL_MUTEX_66AE5491, "Failed to create LVGL mutex");
         goto cleanup;
     }
 
@@ -158,14 +159,14 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t *display_handle)
     if (s_lvgl_flush_done_sem == NULL)
     {
         ret = ESP_ERR_NO_MEM;
-        ESP_LOGE(TAG, "Failed to create LVGL flush semaphore");
+        APP_LOGE(TAG, FAILED_TO_CREATE_LVGL_FLUSH_36B1C400, "Failed to create LVGL flush semaphore");
         goto cleanup;
     }
 
     // Init lvgl core
     lv_init();
 
-    ESP_LOGD(TAG, "sizeof(lv_color_t)=%d, sizeof(uint16_t)=%d", sizeof(lv_color_t), sizeof(uint16_t));
+    APP_LOGD(TAG, SIZEOF_LV_COLOR_T_D_88FE7C88, "sizeof(lv_color_t)=%d, sizeof(uint16_t)=%d", sizeof(lv_color_t), sizeof(uint16_t));
 
     s_lvgl_draw_buffer = heap_caps_malloc(LVGL_DRAW_BUFFER_SIZE,
         MALLOC_CAP_DMA | MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -174,7 +175,7 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t *display_handle)
     if (s_lvgl_draw_buffer == NULL)
     {
         ret = ESP_ERR_NO_MEM;
-        ESP_LOGE(TAG, "Failed to allocate LVGL draw buffer");
+        APP_LOGE(TAG, FAILED_TO_ALLOCATE_LVGL_DRAW_C8497363, "Failed to allocate LVGL draw buffer");
         goto cleanup;
     }
 
@@ -186,7 +187,7 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t *display_handle)
         if (s_lvgl_rotate_buffer == NULL)
         {
             ret = ESP_ERR_NO_MEM;
-            ESP_LOGE(TAG, "Failed to allocate LVGL rotate buffer");
+            APP_LOGE(TAG, FAILED_TO_ALLOCATE_LVGL_ROTA_E4947EFC, "Failed to allocate LVGL rotate buffer");
             goto cleanup;
         }
     #endif
@@ -196,7 +197,7 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t *display_handle)
     if (s_lvgl_display == NULL)
     {
         ret = ESP_ERR_NO_MEM;
-        ESP_LOGE(TAG, "Failed to create LVGL display");
+        APP_LOGE(TAG, FAILED_TO_CREATE_LVGL_DISPLA_C98BEF36, "Failed to create LVGL display");
         goto cleanup;
     }
 
@@ -207,10 +208,10 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t *display_handle)
                            LV_DISPLAY_RENDER_MODE_PARTIAL);
 
                         
-    ESP_LOGD(TAG, "LVGL display created successfully with resolution: %dx%d", LCD_H_RES, LCD_V_RES);
+    APP_LOGD(TAG, LVGL_DISPLAY_CREATED_SUCCESS_5C6FC1E0, "LVGL display created successfully with resolution: %dx%d", LCD_H_RES, LCD_V_RES);
     
     lv_display_set_color_format(s_lvgl_display, LV_COLOR_FORMAT_RGB565);
-    ESP_LOGD(TAG, "LVGL display color format set to RGB565");
+    APP_LOGD(TAG, LVGL_DISPLAY_COLOR_FORMAT_SE_0C844ECD, "LVGL display color format set to RGB565");
 
     #if LCD_ROTATE == LCD_RORATE_LANDSCAPE
         lv_display_set_rotation(s_lvgl_display, LCD_ROTATE_ANGLE);
@@ -218,7 +219,7 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t *display_handle)
                         
     lv_display_set_flush_cb(s_lvgl_display, ui_manager_lvgl_flush_cb);
     lv_display_set_flush_wait_cb(s_lvgl_display, ui_manager_lvgl_flush_wait_cb);
-    ESP_LOGD(TAG, "LVGL display flush callback set");
+    APP_LOGD(TAG, LVGL_DISPLAY_FLUSH_CALLBACK_F820B2C8, "LVGL display flush callback set");
 
     const esp_lcd_panel_io_callbacks_t io_callbacks = {
         .on_color_trans_done = ui_manager_lvgl_color_trans_done_cb,
@@ -232,8 +233,8 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t *display_handle)
 
     if (ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_REGISTER_LCD_IO_C9FA1C4D,
             "Failed to register LCD IO callbacks: %s",
             esp_err_to_name(ret));
         goto cleanup;
@@ -256,8 +257,8 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t *display_handle)
 
     if (ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_CREATE_LVGL_TICK_826B5939,
             "Failed to create LVGL tick timer: %s",
             esp_err_to_name(ret));
         goto cleanup;
@@ -270,14 +271,14 @@ esp_err_t ui_manager_lvgl_init(display_driver_handle_t *display_handle)
 
     if (ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_START_LVGL_TICK_4B9056C5,
             "Failed to start LVGL tick timer: %s",
             esp_err_to_name(ret));
         goto cleanup;
     }
 
-    ESP_LOGI(TAG, "LVGL core and tick timer initialized");
+    APP_LOGI(TAG, LVGL_CORE_AND_TICK_TIMER_00B2BD0C, "LVGL core and tick timer initialized");
 
     return ESP_OK;
 
@@ -374,7 +375,7 @@ static void ui_manager_lvgl_flush_cb(lv_display_t *display,
 {
     if(display == NULL)
     {
-        ESP_LOGE(TAG, "Invalid display pointer");
+        APP_LOGE(TAG, INVALID_DISPLAY_POINTER_647B5E90, "Invalid display pointer");
         return;
     }
 
@@ -435,7 +436,7 @@ static void ui_manager_lvgl_flush_cb(lv_display_t *display,
     );
 
     if(ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to draw bitmap: %s", esp_err_to_name(ret));
+        APP_LOGE(TAG, FAILED_TO_DRAW_BITMAP_S_F3C91C5F, "Failed to draw bitmap: %s", esp_err_to_name(ret));
 
         /*
          * If draw fails, notify LVGL anyway to avoid LVGL getting stuck.
@@ -457,12 +458,12 @@ static void ui_manager_lvgl_flush_wait_cb(lv_display_t *display)
     (void)display;
 
     if(s_lvgl_flush_done_sem == NULL) {
-        ESP_LOGE(TAG, "LVGL flush semaphore is NULL");
+        APP_LOGE(TAG, LVGL_FLUSH_SEMAPHORE_IS_NULL_94ADDDEA, "LVGL flush semaphore is NULL");
         return;
     }
 
     if(xSemaphoreTake(s_lvgl_flush_done_sem, pdMS_TO_TICKS(LVGL_FLUSH_WAIT_TIMEOUT_MS)) != pdTRUE) {
-        ESP_LOGE(TAG, "LVGL flush wait timeout");
+        APP_LOGE(TAG, LVGL_FLUSH_WAIT_TIMEOUT_1987CC40, "LVGL flush wait timeout");
     }
 }
 
@@ -516,7 +517,7 @@ static void ui_manager_lvgl_swap_rgb565_bytes(uint16_t *buffer,
 void ui_manager_lvgl_wait_for_mutex(void)
 {
     if (s_lvgl_mutex == NULL) {
-        ESP_LOGE(TAG, "Cannot acquire LVGL mutex before initialization");
+        APP_LOGE(TAG, CANNOT_ACQUIRE_LVGL_MUTEX_BE_6F1C7B1F, "Cannot acquire LVGL mutex before initialization");
         return;
     }
 
@@ -530,7 +531,7 @@ void ui_manager_lvgl_wait_for_mutex(void)
 void ui_manager_lvgl_release_mutex(void)
 {
     if (s_lvgl_mutex == NULL) {
-        ESP_LOGE(TAG, "Cannot release LVGL mutex before initialization");
+        APP_LOGE(TAG, CANNOT_RELEASE_LVGL_MUTEX_BE_FA08C4E2, "Cannot release LVGL mutex before initialization");
         return;
     }
 

@@ -10,6 +10,7 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "app_log.h"
 #include "esp_memory_utils.h"
 #include "esp_timer.h"
 #include "sd_card_manager.h"
@@ -136,8 +137,8 @@ static esp_err_t audio_wav_prefetch_resume_after_recovery(
     prefetch->metrics.last_recovery_data_offset = committed_data_offset;
     const int64_t recovery_start_us = esp_timer_get_time();
 
-    ESP_LOGW(
-        TAG,
+    APP_LOGW(
+        TAG, WAV_RETRY_AT_DATA_OFFSET_DCA842F0,
         "WAV retry at data offset %llu: fresh reopen first, SD remount fallback if required",
         (unsigned long long)committed_data_offset);
 
@@ -148,8 +149,8 @@ static esp_err_t audio_wav_prefetch_resume_after_recovery(
         if (elapsed_ms >= AUDIO_WAV_PREFETCH_RECOVERY_TIMEOUT_MS)
         {
             prefetch->metrics.recovery_wait_ms = elapsed_ms;
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, WAV_RESUME_TIMED_OUT_AFTER_59C6BC06,
                 "WAV resume timed out after %ums at data offset %llu",
                 (unsigned)elapsed_ms,
                 (unsigned long long)committed_data_offset);
@@ -185,8 +186,8 @@ static esp_err_t audio_wav_prefetch_resume_after_recovery(
              */
             if ((result == ESP_FAIL) && !sd_card_manager_is_mounted())
             {
-                ESP_LOGW(
-                    TAG,
+                APP_LOGW(
+                    TAG, FRESH_WAV_REOPEN_CONFIRMED_M_59E9ACB3,
                     "Fresh WAV reopen confirmed media fault; waiting for SD remount");
                 vTaskDelay(pdMS_TO_TICKS(AUDIO_WAV_PREFETCH_WORKER_POLL_MS));
                 continue;
@@ -203,15 +204,15 @@ static esp_err_t audio_wav_prefetch_resume_after_recovery(
                 &prefetch->info,
                 &prefetch->stream.info))
         {
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, WAV_CHANGED_WHILE_RETRYING_R_B3D9F52C,
                 "WAV changed while retrying; refusing unsafe resume");
             const esp_err_t close_result =
                 audio_wav_stream_close(&prefetch->stream);
             if (close_result != ESP_OK)
             {
-                ESP_LOGW(
-                    TAG,
+                APP_LOGW(
+                    TAG, WAV_CLOSE_AFTER_METADATA_MIS_62A10E8F,
                     "WAV close after metadata mismatch failed: %s",
                     esp_err_to_name(close_result));
             }
@@ -227,16 +228,16 @@ static esp_err_t audio_wav_prefetch_resume_after_recovery(
                 audio_wav_stream_close(&prefetch->stream);
             if (close_result != ESP_OK)
             {
-                ESP_LOGW(
-                    TAG,
+                APP_LOGW(
+                    TAG, WAV_CLOSE_AFTER_RESUME_SEEK_8CD413EA,
                     "WAV close after resume seek failed: %s",
                     esp_err_to_name(close_result));
             }
 
             if ((result == ESP_FAIL) && !sd_card_manager_is_mounted())
             {
-                ESP_LOGW(
-                    TAG,
+                APP_LOGW(
+                    TAG, FRESH_WAV_SEEK_CONFIRMED_MED_4F17ACBF,
                     "Fresh WAV seek confirmed media fault; waiting for SD remount");
                 vTaskDelay(pdMS_TO_TICKS(AUDIO_WAV_PREFETCH_WORKER_POLL_MS));
                 continue;
@@ -249,8 +250,8 @@ static esp_err_t audio_wav_prefetch_resume_after_recovery(
             audio_wav_prefetch_bound_duration_ms(
                 esp_timer_get_time() - recovery_start_us);
         ++prefetch->metrics.recovery_success_count;
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, WAV_RESUMED_WITH_A_FRESH_C1D58B35,
             "WAV resumed with a fresh file at data offset %llu after %ums",
             (unsigned long long)committed_data_offset,
             (unsigned)prefetch->metrics.recovery_wait_ms);
@@ -491,8 +492,8 @@ static void audio_wav_prefetch_task(void *argument)
     }
 
     prefetch->metrics.task_stack_high_water = uxTaskGetStackHighWaterMark(NULL);
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, READER_STOPPED_RESULT_S_READ_FCF3710D,
         "reader stopped result=%s reads=%u blocks=%u max_fill_us=%u stack_hwm=%u",
         esp_err_to_name(stopped_by_request ? ESP_OK : result),
         (unsigned)prefetch->metrics.io_read_count,
@@ -608,8 +609,8 @@ esp_err_t audio_wav_prefetch_start(
         return ESP_ERR_NO_MEM;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, STARTED_SLOT_BYTES_U_SLOTS_B42EFDB6,
         "started slot_bytes=%u slots=%u priority=%u path=%s",
         (unsigned)slot_bytes,
         (unsigned)AUDIO_WAV_PREFETCH_SLOT_COUNT,

@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "app_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -87,14 +88,14 @@ static esp_err_t p2f_load_fixture_from_sd(void)
     const size_t buffer_size =
         (size_t)(xiaozhi_p2f_fixture_end - xiaozhi_p2f_fixture_start);
     if (buffer_size != XIAOZHI_P2F_SD_FIXTURE_SIZE) {
-        ESP_LOGE(TAG, "P2F_SD_FIXTURE result=FAIL reason=buffer-size size=%u",
+        APP_LOGE(TAG, P2F_SD_FIXTURE_RESULT_FAIL_78ACA06F, "P2F_SD_FIXTURE result=FAIL reason=buffer-size size=%u",
                  (unsigned)buffer_size);
         return ESP_ERR_INVALID_SIZE;
     }
 
     esp_err_t ret = p2f_wait_for_sd_ready();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG,
+        APP_LOGE(TAG, P2F_SD_FIXTURE_RESULT_FAIL_3B0135E7,
                  "P2F_SD_FIXTURE result=FAIL reason=sd-not-ready path=%s error=%s",
                  XIAOZHI_P2F_SD_FIXTURE_PATH,
                  esp_err_to_name(ret));
@@ -103,7 +104,7 @@ static esp_err_t p2f_load_fixture_from_sd(void)
 
     ret = sd_card_manager_acquire();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG,
+        APP_LOGE(TAG, P2F_SD_FIXTURE_RESULT_FAIL_05D2C4CC,
                  "P2F_SD_FIXTURE result=FAIL reason=lease path=%s error=%s",
                  XIAOZHI_P2F_SD_FIXTURE_PATH,
                  esp_err_to_name(ret));
@@ -113,7 +114,7 @@ static esp_err_t p2f_load_fixture_from_sd(void)
     FILE *file = fopen(XIAOZHI_P2F_SD_FIXTURE_PATH, "rb");
     if (file == NULL) {
         sd_card_manager_release();
-        ESP_LOGE(TAG,
+        APP_LOGE(TAG, P2F_SD_FIXTURE_RESULT_FAIL_A7A189B0,
                  "P2F_SD_FIXTURE result=FAIL reason=open path=%s",
                  XIAOZHI_P2F_SD_FIXTURE_PATH);
         return ESP_ERR_NOT_FOUND;
@@ -144,7 +145,7 @@ static esp_err_t p2f_load_fixture_from_sd(void)
 
     if (ret != ESP_OK) {
         memset(xiaozhi_p2f_fixture_start, 0, XIAOZHI_P2F_SD_FIXTURE_SIZE);
-        ESP_LOGE(TAG,
+        APP_LOGE(TAG, P2F_SD_FIXTURE_RESULT_FAIL_5BD340D2,
                  "P2F_SD_FIXTURE result=FAIL reason=content path=%s error=%s",
                  XIAOZHI_P2F_SD_FIXTURE_PATH,
                  esp_err_to_name(ret));
@@ -152,7 +153,7 @@ static esp_err_t p2f_load_fixture_from_sd(void)
     }
 
     s_fixture_loaded = true;
-    ESP_LOGI(TAG,
+    APP_LOGI(TAG, P2F_SD_FIXTURE_RESULT_READY_2ECEB881,
              "P2F_SD_FIXTURE result=READY path=%s bytes=%u frames=33 frame_ms=60 sample_rate=16000 channels=1",
              XIAOZHI_P2F_SD_FIXTURE_PATH,
              (unsigned)XIAOZHI_P2F_SD_FIXTURE_SIZE);

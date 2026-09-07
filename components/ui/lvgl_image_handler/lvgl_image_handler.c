@@ -2,6 +2,7 @@
 #include "lvgl_image_handler.h"
 
 #include "esp_log.h"
+#include "app_log.h"
 #include "esp_err.h"
 #include "esp_check.h"
 #include "esp_heap_caps.h"
@@ -117,7 +118,7 @@ static void displayimage(void* arg)
         switch (index%3)
         {
         case 0:
-            ESP_LOGD(TAG,"Displaying PNG image");
+            APP_LOGD(TAG, DISPLAYING_PNG_IMAGE_AFC977B0,"Displaying PNG image");
             image_ret =
                 lvgl_image_handler_show_png("S:/Hinh.png");
 
@@ -141,7 +142,7 @@ static void displayimage(void* arg)
             break;
 
         case 1:
-            ESP_LOGD(TAG,"Displaying JPG image");
+            APP_LOGD(TAG, DISPLAYING_JPG_IMAGE_FB47FF72,"Displaying JPG image");
             image_ret =
                 lvgl_image_handler_show_jpg("S:/Hinh.jpg");
 
@@ -161,7 +162,7 @@ static void displayimage(void* arg)
             break;
 
         case 2:
-            ESP_LOGD(TAG,"Displaying GIF image");
+            APP_LOGD(TAG, DISPLAYING_GIF_IMAGE_C2708076,"Displaying GIF image");
             image_ret =
                 lvgl_image_handler_show_gif("S:/Hinh.gif");
 
@@ -187,7 +188,7 @@ static void displayimage(void* arg)
         ui_manager_lvgl_release_mutex();
 
         if (image_ret != ESP_OK) {
-            ESP_LOGE(TAG,
+            APP_LOGE(TAG, FAILED_TO_SHOW_IMAGE_S_97B71BEE,
                     "Failed to show image: %s",
                     esp_err_to_name(image_ret));
         }
@@ -196,12 +197,12 @@ static void displayimage(void* arg)
             uxTaskGetStackHighWaterMark(NULL);
 
         if (minimum_free_stack < TASK_STACK_WARNING_BYTES) {
-            ESP_LOGW(TAG,
+            APP_LOGW(TAG, IMAGE_TASK_MINIMUM_FREE_STAC_1C4D58D0,
                      "Image task minimum free stack is low: %u bytes",
                      (unsigned int)minimum_free_stack);
         }
         else {
-            ESP_LOGD(TAG,
+            APP_LOGD(TAG, IMAGE_TASK_MINIMUM_FREE_STAC_A88217D8,
                      "Image task minimum free stack: %u bytes",
                      (unsigned int)minimum_free_stack);
         }
@@ -1971,8 +1972,8 @@ static esp_err_t lvgl_image_handler_apply_scale_and_align(
 
     lv_obj_invalidate(image_obj);
 
-    ESP_LOGD(
-        TAG,
+    APP_LOGD(
+        TAG, IMAGE_LAYOUT_ORIGINAL_LDX_LD_C903A02D,
         "Image layout: original=%ldx%ld, "
         "scaled=%ldx%ld, scale=%lu/256",
         (long)original_width,
@@ -2014,7 +2015,7 @@ esp_err_t lvgl_image_handler_clear(void)
 {
     lvgl_image_handler_clear_internal();
 
-    ESP_LOGD(TAG, "Active image object cleared");
+    APP_LOGD(TAG, ACTIVE_IMAGE_OBJECT_CLEARED_08804231, "Active image object cleared");
 
     return ESP_OK;
 }

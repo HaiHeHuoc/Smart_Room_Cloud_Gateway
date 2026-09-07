@@ -15,6 +15,7 @@
 #include "esp_heap_caps.h"
 #include "esp_image_format.h"
 #include "esp_log.h"
+#include "app_log.h"
 #include "esp_memory_utils.h"
 #include "esp_ota_ops.h"
 #include "esp_psram.h"
@@ -337,8 +338,8 @@ static void performance_monitor_log_boot_information(void)
     const size_t psram_size =
         esp_psram_get_size();
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, REPORT_CHIP_TARGET_S_REVISIO_CD04EDE0,
         "[REPORT:000000][CHIP] target=%s, revision=%u, cores=%u, "
         "cpu_config=%u MHz, idf=%s, reset=%s",
         CONFIG_IDF_TARGET,
@@ -351,16 +352,16 @@ static void performance_monitor_log_boot_information(void)
     );
 
     if (flash_result == ESP_OK) {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, REPORT_MEMORY_HW_FLASH_U_26417864,
             "[REPORT:000000][MEMORY_HW] flash=%u bytes, psram=%u bytes",
             (unsigned int)flash_size,
             (unsigned int)psram_size
         );
     }
     else {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, REPORT_MEMORY_HW_FLASH_UNKNO_C2D92CFB,
             "[REPORT:000000][MEMORY_HW] flash=unknown (%s), psram=%u bytes",
             esp_err_to_name(flash_result),
             (unsigned int)psram_size
@@ -378,10 +379,10 @@ static void performance_monitor_log_report_header(
     /*
      * Keep consecutive reports visually separated in the serial monitor.
      */
-    ESP_LOGI(TAG, "\n");
+    APP_LOGI(TAG, N_EEE023F8, "\n");
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, REPORT_U_SYSTEM_UPTIME_LLU_A4BDC4F2,
         "[REPORT:%06u][SYSTEM] uptime=%llu s, period=%u ms",
         (unsigned int)report_index,
         (unsigned long long)uptime_seconds,
@@ -775,8 +776,8 @@ static void performance_monitor_log_cpu(
         return;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, REPORT_U_CPU_USED_U_AE5CA014,
         "[REPORT:%06u][CPU] used=%u.%u%%, peak_500ms=%u.%u%%, "
         "idle=%u.%u%%, cores=%u",
         (unsigned int)report_index,
@@ -797,8 +798,8 @@ static void performance_monitor_log_cpu(
             continue;
         }
 
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, REPORT_U_CPU_CORE_U_A4F9FC67,
             "[REPORT:%06u][CPU:CORE%u] used=%u.%u%%",
             (unsigned int)report_index,
             (unsigned int)core_index,
@@ -834,8 +835,8 @@ static void performance_monitor_log_heap_region(
         heap_info.largest_free_block;
 
     if (total == 0U) {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, REPORT_U_RAM_S_NOT_A3A19D60,
             "[REPORT:%06u][RAM:%s] not available",
             (unsigned int)report_index,
             name
@@ -865,8 +866,8 @@ static void performance_monitor_log_heap_region(
               )
             : 0U;
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, REPORT_U_RAM_S_TOTAL_CD64F417,
         "[REPORT:%06u][RAM:%s] total=%u, used=%u (%u.%u%%), "
         "free=%u, minimum=%u, largest=%u, frag_est=%u.%u%%, "
         "alloc_blocks=%u, free_blocks=%u",
@@ -914,8 +915,8 @@ static void performance_monitor_log_app_flash(void)
         esp_ota_get_running_partition();
 
     if (running_partition == NULL) {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, REPORT_FLASH_CANNOT_OBTAIN_R_31060B83,
             "[REPORT:000000][FLASH] Cannot obtain running app partition"
         );
 
@@ -936,14 +937,14 @@ static void performance_monitor_log_app_flash(void)
         );
 
     if (metadata_result != ESP_OK) {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, REPORT_FLASH_CANNOT_READ_APP_411BF328,
             "[REPORT:000000][FLASH] Cannot read app metadata: %s",
             esp_err_to_name(metadata_result)
         );
 
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, REPORT_FLASH_PARTITION_S_CAP_D4B9D06F,
             "[REPORT:000000][FLASH] partition=%s, capacity=%u bytes",
             running_partition->label,
             (unsigned int)running_partition->size
@@ -968,8 +969,8 @@ static void performance_monitor_log_app_flash(void)
               )
             : 0U;
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, REPORT_FLASH_PARTITION_S_IMA_2BFC202B,
         "[REPORT:000000][FLASH] partition=%s, image=%u, capacity=%u, "
         "free=%u bytes, used=%u.%u%%",
         running_partition->label,
@@ -988,8 +989,8 @@ static void performance_monitor_log_task_summary(
 {
     if ((tasks == NULL) ||
         (task_count == 0U)) {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, REPORT_U_TASKS_NO_TASK_BA5085EF,
             "[REPORT:%06u][TASKS] no task snapshot available",
             (unsigned int)report_index
         );
@@ -1030,8 +1031,8 @@ static void performance_monitor_log_task_summary(
         }
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, REPORT_U_TASKS_TOTAL_U_9F77B892,
         "[REPORT:%06u][TASKS] total=%u, running=%u, ready=%u, "
         "blocked=%u, suspended=%u, deleted=%u, invalid=%u",
         (unsigned int)report_index,
@@ -1056,8 +1057,8 @@ static void performance_monitor_log_task_table(
         return;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, REPORT_U_TASK_TABLE_ENTRIES_439099A9,
         "[REPORT:%06u][TASK_TABLE] entries=%u, "
         "stack_min is the lowest remaining stack in bytes",
         (unsigned int)report_index,
@@ -1088,8 +1089,8 @@ static void performance_monitor_log_task_table(
         const UBaseType_t stack_minimum =
             end_task->usStackHighWaterMark;
 
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, REPORT_U_TASK_ID_U_5BE3F6FA,
             "[REPORT:%06u][TASK] id=%u, name=%s, state=%s, "
             "priority=%u, cpu=%u.%u%%, stack_min=%u bytes, "
             "stack_location=%s",
@@ -1108,8 +1109,8 @@ static void performance_monitor_log_task_table(
 
         if (stack_minimum <
             PERF_MONITOR_STACK_WARNING_BYTES) {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, REPORT_U_STACK_WARNING_TASK_560CAB47,
                 "[REPORT:%06u][STACK_WARNING] task=%s, "
                 "minimum_remaining=%u bytes",
                 (unsigned int)report_index,
@@ -1128,8 +1129,8 @@ static void performance_monitor_task(void *argument)
 
     uint32_t report_index = 0U;
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, PERFORMANCE_MONITOR_STARTED_A919FB94,
         "Performance monitor started: period=%u ms, "
         "full_task_interval=%u reports",
         (unsigned int)PERF_MONITOR_PERIOD_MS,
@@ -1163,8 +1164,8 @@ static void performance_monitor_task(void *argument)
                 &cpu);
         }
         else {
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, REPORT_U_CPU_MEASUREMENT_FAI_C461E63E,
                 "[REPORT:%06u][CPU] measurement failed: %s",
                 (unsigned int)report_index,
                 esp_err_to_name(cpu_result)
@@ -1185,8 +1186,8 @@ static void performance_monitor_task(void *argument)
         performance_monitor_log_report_header(
             report_index);
 
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, REPORT_U_CPU_CONFIG_FREERTOS_E66B9907,
             "[REPORT:%06u][CPU] "
             "CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS is disabled",
             (unsigned int)report_index
@@ -1230,8 +1231,8 @@ esp_err_t performance_monitor_start(void)
 {
 #if !CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
 
-    ESP_LOGE(
-        TAG,
+    APP_LOGE(
+        TAG, ENABLE_CONFIGGENERATE_RUN_TI_580FBF5F,
         "Enable configGENERATE_RUN_TIME_STATS in menuconfig"
     );
 
@@ -1259,8 +1260,8 @@ esp_err_t performance_monitor_start(void)
     if (task_result != pdPASS) {
         s_monitor_task_handle = NULL;
 
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_CREATE_PERFORMANCE_EF29D291,
             "Failed to create performance monitor task"
         );
 

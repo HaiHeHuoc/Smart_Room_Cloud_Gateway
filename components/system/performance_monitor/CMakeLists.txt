@@ -6,6 +6,7 @@ idf_component_register(
         "include"
 
     REQUIRES
+        app_log
         freertos
         esp_system
         esp_hw_support

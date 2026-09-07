@@ -5,6 +5,7 @@
 
 #include "esp_event.h"
 #include "esp_log.h"
+#include "app_log.h"
 #include "esp_mcp_engine.h"
 #include "esp_xiaozhi_chat.h"
 #include "esp_xiaozhi_info.h"
@@ -128,8 +129,8 @@ static void xiaozhi_session_set_status(
     portEXIT_CRITICAL(&s_lock);
 
     if ((previous != state) || (state == XIAOZHI_FOUNDATION_SESSION_ERROR)) {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, STATE_S_S_GENERATION_U_B4C0AAEA,
             "state %s -> %s generation=%u active=%s error=%s",
             xiaozhi_foundation_session_state_to_string(previous),
             xiaozhi_foundation_session_state_to_string(state),
@@ -177,7 +178,7 @@ static void xiaozhi_session_protocol_callback(
             (const esp_xiaozhi_chat_error_info_t *)event_data;
         const esp_err_t error =
             (info != NULL && info->code != ESP_OK) ? info->code : ESP_FAIL;
-        ESP_LOGW(TAG, "CHAT_ERROR delivered to response path: %s",
+        APP_LOGW(TAG, CHAT_ERROR_DELIVERED_TO_RESP_6F67E57F, "CHAT_ERROR delivered to response path: %s",
                  esp_err_to_name(error));
         xiaozhi_session_publish_response(
             XIAOZHI_FOUNDATION_RESPONSE_ERROR,
@@ -249,7 +250,7 @@ static void xiaozhi_session_event_handler(
             if (intentional_stop) {
                 (void)xEventGroupSetBits(
                     events, XIAOZHI_SESSION_EVENT_DISCONNECTED);
-                ESP_LOGI(TAG, "DISCONNECTED observed during intentional stop");
+                APP_LOGI(TAG, DISCONNECTED_OBSERVED_DURING_57F60AAB, "DISCONNECTED observed during intentional stop");
                 break;
             }
 
@@ -272,7 +273,7 @@ static void xiaozhi_session_event_handler(
             if (!active && !lifecycle_busy) {
                 (void)xEventGroupSetBits(
                     events, XIAOZHI_SESSION_EVENT_DISCONNECTED);
-                ESP_LOGW(TAG, "Ignored late DISCONNECTED without an active session");
+                APP_LOGW(TAG, IGNORED_LATE_DISCONNECTED_WI_1C33ABFF, "Ignored late DISCONNECTED without an active session");
                 break;
             }
 
@@ -289,7 +290,7 @@ static void xiaozhi_session_event_handler(
             }
             (void)xEventGroupSetBits(
                 events, XIAOZHI_SESSION_EVENT_DISCONNECTED);
-            ESP_LOGW(TAG,
+            APP_LOGW(TAG, DISCONNECTED_RETAINING_SESSI_F3AEEE05,
                      "DISCONNECTED; retaining session for upstream auto-reconnect");
             break;
 
@@ -297,7 +298,7 @@ static void xiaozhi_session_event_handler(
             if (intentional_stop) {
                 (void)xEventGroupSetBits(
                     events, XIAOZHI_SESSION_EVENT_GOODBYE);
-                ESP_LOGI(TAG, "SERVER_GOODBYE observed during intentional stop");
+                APP_LOGI(TAG, SERVER_GOODBYE_OBSERVED_DURI_6E2DDB1C, "SERVER_GOODBYE observed during intentional stop");
                 break;
             }
 
@@ -307,7 +308,7 @@ static void xiaozhi_session_event_handler(
             if (!active && lifecycle_busy) {
                 (void)xEventGroupSetBits(
                     events, XIAOZHI_SESSION_EVENT_GOODBYE);
-                ESP_LOGW(TAG, "SERVER_GOODBYE before initial CONNECTED");
+                APP_LOGW(TAG, SERVER_GOODBYE_BEFORE_INITIA_83B71B47, "SERVER_GOODBYE before initial CONNECTED");
                 break;
             }
             (void)xEventGroupClearBits(
@@ -317,7 +318,7 @@ static void xiaozhi_session_event_handler(
             portENTER_CRITICAL(&s_lock);
             xiaozhi_session_reset_uplink_locked();
             portEXIT_CRITICAL(&s_lock);
-            ESP_LOGI(TAG,
+            APP_LOGI(TAG, SERVER_GOODBYE_TREATED_AS_AU_439FC7B8,
                      "SERVER_GOODBYE treated as audio-channel completion; WebSocket retained");
             break;
 
@@ -528,25 +529,25 @@ esp_err_t xiaozhi_foundation_session_start(uint32_t client_generation)
     ret = esp_xiaozhi_chat_get_info(&info);
     info_must_be_freed = true;
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "get_info failed: %s", esp_err_to_name(ret));
+        APP_LOGE(TAG, GET_INFO_FAILED_S_AC4D5479, "get_info failed: %s", esp_err_to_name(ret));
         goto fail;
     }
     if (!info.has_websocket_config) {
         ret = ESP_ERR_NOT_SUPPORTED;
-        ESP_LOGE(TAG, "server did not provide WebSocket configuration");
+        APP_LOGE(TAG, SERVER_DID_NOT_PROVIDE_WEBSO_7E20F73B, "server did not provide WebSocket configuration");
         goto fail;
     }
     ret = esp_xiaozhi_chat_free_info(&info);
     info_must_be_freed = false;
     memset(&info, 0, sizeof(info));
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "free_info failed: %s", esp_err_to_name(ret));
+        APP_LOGE(TAG, FREE_INFO_FAILED_S_7B1497ED, "free_info failed: %s", esp_err_to_name(ret));
         goto fail;
     }
 
     ret = esp_mcp_create(&s_mcp);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "MCP create failed: %s", esp_err_to_name(ret));
+        APP_LOGE(TAG, MCP_CREATE_FAILED_S_4371E85C, "MCP create failed: %s", esp_err_to_name(ret));
         goto fail;
     }
 
@@ -569,7 +570,7 @@ esp_err_t xiaozhi_foundation_session_start(uint32_t client_generation)
 
     ret = esp_xiaozhi_chat_init(&chat_config, &s_chat);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "chat_init failed: %s", esp_err_to_name(ret));
+        APP_LOGE(TAG, CHAT_INIT_FAILED_S_6C275147, "chat_init failed: %s", esp_err_to_name(ret));
         goto fail;
     }
 
@@ -580,7 +581,7 @@ esp_err_t xiaozhi_foundation_session_start(uint32_t client_generation)
         NULL,
         &s_event_handler_instance);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "event handler register failed: %s", esp_err_to_name(ret));
+        APP_LOGE(TAG, EVENT_HANDLER_REGISTER_FAILE_FFDB2B58, "event handler register failed: %s", esp_err_to_name(ret));
         goto fail;
     }
     s_event_handler_registered = true;
@@ -595,7 +596,7 @@ esp_err_t xiaozhi_foundation_session_start(uint32_t client_generation)
 
     ret = esp_xiaozhi_chat_start(s_chat);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "chat_start failed: %s", esp_err_to_name(ret));
+        APP_LOGE(TAG, CHAT_START_FAILED_S_D0A17F7D, "chat_start failed: %s", esp_err_to_name(ret));
         goto fail;
     }
     s_chat_started = true;
@@ -614,7 +615,7 @@ esp_err_t xiaozhi_foundation_session_start(uint32_t client_generation)
     }
     if ((bits & XIAOZHI_SESSION_EVENT_CONNECTED) == 0U) {
         ret = ESP_ERR_TIMEOUT;
-        ESP_LOGE(TAG, "CONNECTED timeout after %u ms",
+        APP_LOGE(TAG, CONNECTED_TIMEOUT_AFTER_U_MS_0ADAD9E9, "CONNECTED timeout after %u ms",
                  (unsigned)XIAOZHI_SESSION_CONNECT_TIMEOUT_MS);
         goto fail;
     }
@@ -624,7 +625,7 @@ esp_err_t xiaozhi_foundation_session_start(uint32_t client_generation)
     s_status.active = true;
     portEXIT_CRITICAL(&s_lock);
 
-    ESP_LOGI(TAG, "WebSocket production session CONNECTED generation=%u",
+    APP_LOGI(TAG, WEBSOCKET_PRODUCTION_SESSION_553FC0DE, "WebSocket production session CONNECTED generation=%u",
              (unsigned)client_generation);
     return ESP_OK;
 
@@ -725,7 +726,7 @@ esp_err_t xiaozhi_foundation_audio_uplink_start(uint32_t client_generation)
     s_uplink.client_generation = client_generation;
     s_uplink.last_error = ESP_OK;
     portEXIT_CRITICAL(&s_lock);
-    ESP_LOGI(TAG, "audio channel READY generation=%u format=opus rate=%u channels=1 frame_ms=%u",
+    APP_LOGI(TAG, AUDIO_CHANNEL_READY_GENERATI_7B54A6E2, "audio channel READY generation=%u format=opus rate=%u channels=1 frame_ms=%u",
              (unsigned)client_generation,
              (unsigned)XIAOZHI_FOUNDATION_UPLINK_SAMPLE_RATE_HZ,
              (unsigned)XIAOZHI_FOUNDATION_OPUS_FRAME_DURATION_MS);
@@ -815,7 +816,7 @@ esp_err_t xiaozhi_foundation_audio_uplink_stop(uint32_t client_generation)
     portEXIT_CRITICAL(&s_lock);
 
     if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "listening STOP generation=%u; response channel retained",
+        APP_LOGI(TAG, LISTENING_STOP_GENERATION_U_483FF50F, "listening STOP generation=%u; response channel retained",
                  (unsigned)client_generation);
     }
     return ret;

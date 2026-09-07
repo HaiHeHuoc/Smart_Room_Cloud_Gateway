@@ -14,6 +14,7 @@
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "app_log.h"
 #include "esp_timer.h"
 #include "esp_attr.h"
 
@@ -359,8 +360,8 @@ static void cloud_manager_set_state(
 
     if (old_state != new_state)
     {
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, CLOUD_STATE_CHANGED_D_D_5A03E474,
             "Cloud state changed: %d -> %d",
             old_state,
             new_state);
@@ -696,8 +697,8 @@ static void cloud_manager_reset_http_client(
 
         if (cleanup_result != ESP_OK)
         {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, HTTP_CLIENT_CLEANUP_RETURNED_11F8B615,
                 "HTTP client cleanup returned %s",
                 esp_err_to_name(cleanup_result));
         }
@@ -726,8 +727,8 @@ static void cloud_manager_reset_http_client(
     {
         cloud_manager_record_http_client_reset();
 
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, HTTP_CLIENT_RESET_S_B8B30C17,
             "HTTP client reset: %s",
             (reason != NULL)
                 ? reason
@@ -781,8 +782,8 @@ static esp_err_t cloud_manager_prepare_http_client(
 
     if (s_http_client == NULL)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_INITIALIZE_HTTP_CL_53ABBC56,
             "Failed to initialize HTTP client");
 
         return ESP_ERR_NO_MEM;
@@ -832,8 +833,8 @@ static void cloud_manager_log_transport_failure(
         &tls_error,
         &tls_flags);
 
-    ESP_LOGW(
-        TAG,
+    APP_LOGW(
+        TAG, HTTP_TRANSPORT_ERROR_S_SOCKE_198760CC,
         "HTTP transport error=%s, socket_errno=%d, "
         "tls_error=0x%x, tls_flags=0x%x",
         esp_err_to_name(error),
@@ -886,8 +887,8 @@ cloud_manager_publish_telemetry(
                 &outcome.http_status);
         outcome.error = result;
 
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FIREBASE_AUTHENTICATION_FAIL_19CC7D48,
             "Firebase Authentication failed: %s",
             esp_err_to_name(result));
 
@@ -1069,8 +1070,8 @@ static void cloud_manager_task(
     TickType_t delay_start = 0U;
     TickType_t delay_duration = 0U;
 
-    ESP_LOGD(
-        TAG,
+    APP_LOGD(
+        TAG, CLOUD_TASK_STARTED_PUBLISH_P_7110997C,
         "Cloud task started, publish period=%lu ms",
         (unsigned long)s_config.publish_period_ms);
 
@@ -1107,8 +1108,8 @@ static void cloud_manager_task(
                 "network epoch changed",
                 true);
 
-            ESP_LOGD(
-                TAG,
+            APP_LOGD(
+                TAG, NETWORK_EPOCH_CHANGED_LU_LU_73AD6434,
                 "Network epoch changed: %lu -> %lu, online=%s",
                 (unsigned long)previous_epoch,
                 (unsigned long)network.epoch,
@@ -1193,8 +1194,8 @@ static void cloud_manager_task(
             cloud_manager_record_upload_success(
                 outcome.http_status);
 
-            ESP_LOGD(
-                TAG,
+            APP_LOGD(
+                TAG, CLOUD_RECOVERED_TO_ONLINE_2C9CA922,
                 "Cloud recovered to ONLINE");
 
             /*
@@ -1223,8 +1224,8 @@ static void cloud_manager_task(
                 cloud_manager_failure_class_from_attempt(
                     outcome.result);
 
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, CLOUD_ATTEMPT_CLASSIFIED_AS_D3055174,
             "Cloud attempt classified as %s",
             cloud_manager_failure_class_to_string(
                 failure_class));
@@ -1302,8 +1303,8 @@ static void cloud_manager_task(
                 CLOUD_MANAGER_STATE_RETRY_WAIT,
                 retry_delay_ms);
 
-            ESP_LOGD(
-                TAG,
+            APP_LOGD(
+                TAG, AUTHENTICATION_RECOVERY_SCHE_26CB1A43,
                 "Authentication recovery scheduled in %lu ms",
                 (unsigned long)retry_delay_ms);
 
@@ -1336,8 +1337,8 @@ static void cloud_manager_task(
                 CLOUD_MANAGER_STATE_RETRY_WAIT,
                 retry_delay_ms);
 
-            ESP_LOGD(
-                TAG,
+            APP_LOGD(
+                TAG, RETRY_CLASS_S_DELAY_LU_973B4A3C,
                 "Retry class=%s, delay=%lu ms",
                 cloud_manager_failure_class_to_string(
                     failure_class),
@@ -1392,8 +1393,8 @@ esp_err_t cloud_manager_init(
     if (config->publish_period_ms <
         CLOUD_MANAGER_MIN_PUBLISH_PERIOD_MS)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, PUBLISH_PERIOD_MUST_BE_AT_E1168169,
             "Publish period must be at least %u ms",
             CLOUD_MANAGER_MIN_PUBLISH_PERIOD_MS);
 
@@ -1410,8 +1411,8 @@ esp_err_t cloud_manager_init(
              config->firebase_latest_url,
              '?') != NULL))
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FIREBASE_URL_MUST_BE_A_483F863D,
             "Firebase URL must be a base .json URL without query parameters");
 
         return ESP_ERR_INVALID_ARG;
@@ -1432,8 +1433,8 @@ esp_err_t cloud_manager_init(
 
     if (s_status_mutex == NULL)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_CREATE_STATUS_MUTE_985F3760,
             "Failed to create status mutex");
 
         return ESP_ERR_NO_MEM;
@@ -1450,8 +1451,8 @@ esp_err_t cloud_manager_init(
         vSemaphoreDelete(s_status_mutex);
         s_status_mutex = NULL;
 
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_CREATE_TELEMETRY_Q_F46E3BDB,
             "Failed to create telemetry queue");
 
         return ESP_ERR_NO_MEM;
@@ -1496,8 +1497,8 @@ esp_err_t cloud_manager_init(
     s_status.network_epoch = 1U;
     s_is_initialized = true;
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, INITIALIZED_94C085C4,
         "Initialized");
 
     return ESP_OK;
@@ -1529,8 +1530,8 @@ esp_err_t cloud_manager_start(void)
     {
         s_is_started = false;
 
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_CREATE_CLOUD_TASK_094CB45C,
             "Failed to create cloud task");
 
         return ESP_ERR_NO_MEM;
@@ -1548,8 +1549,8 @@ esp_err_t cloud_manager_start(void)
     cloud_manager_wake_task(
         CLOUD_MANAGER_NOTIFY_ALL);
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, STARTED_7388E9AE,
         "Started");
 
     return ESP_OK;

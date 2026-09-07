@@ -10,6 +10,7 @@
 #include "xiaozhi_foundation.h"
 
 #include "esp_log.h"
+#include "app_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -135,7 +136,7 @@ static esp_err_t uplink_begin_turn(uint32_t generation)
     if (!uplink_ptt_authorizes(generation)) {
         (void)xiaozhi_foundation_audio_uplink_stop(generation);
         (void)xiaozhi_foundation_audio_channel_close(generation);
-        ESP_LOGI(TAG,
+        APP_LOGI(TAG, TURN_CANCELLED_BEFORE_CAPTUR_CD99854E,
                  "turn CANCELLED before capture generation=%u",
                  (unsigned)generation);
         return ESP_ERR_INVALID_STATE;
@@ -169,7 +170,7 @@ static esp_err_t uplink_begin_turn(uint32_t generation)
         return ret;
     }
 
-    ESP_LOGI(TAG, "turn START generation=%u", (unsigned)generation);
+    APP_LOGI(TAG, TURN_START_GENERATION_U_2D36C6A2, "turn START generation=%u", (unsigned)generation);
     return ESP_OK;
 }
 
@@ -241,7 +242,7 @@ static esp_err_t uplink_end_turn(uint32_t generation)
 
     (void)xQueueReset(s_queue);
     s_pcm_frame_samples = 0U;
-    ESP_LOGI(TAG,
+    APP_LOGI(TAG, TURN_STOP_GENERATION_U_RESUL_56863FFB,
              "turn STOP generation=%u result=%s opus_packets=%u opus_bytes=%u pcm_samples=%u channel_retained=%s",
              (unsigned)generation,
              esp_err_to_name(first_error),
@@ -278,7 +279,7 @@ static esp_err_t uplink_encode_and_send(
         ++s_status.frames_sent;
         portEXIT_CRITICAL(&s_lock);
         if (s_turn_packets == 1U) {
-            ESP_LOGI(TAG,
+            APP_LOGI(TAG, FIRST_OPUS_PACKET_GENERATION_BA47105F,
                      "first Opus packet generation=%u bytes=%u stack_hwm=%u",
                      (unsigned)generation,
                      (unsigned)packet_size,
@@ -341,7 +342,7 @@ static void uplink_reconcile_ptt(void)
         }
         const esp_err_t ret = uplink_begin_turn(ptt.session_generation);
         if ((ret != ESP_OK) && (ret != ESP_ERR_INVALID_STATE)) {
-            ESP_LOGE(TAG, "turn start failed: %s", esp_err_to_name(ret));
+            APP_LOGE(TAG, TURN_START_FAILED_S_98355C4A, "turn start failed: %s", esp_err_to_name(ret));
             uplink_set_error(ret);
         }
         return;
@@ -364,7 +365,7 @@ static void uplink_task(void *argument)
     portENTER_CRITICAL(&s_lock);
     s_status.running = true;
     portEXIT_CRITICAL(&s_lock);
-    ESP_LOGI(TAG, "coordinator started");
+    APP_LOGI(TAG, COORDINATOR_STARTED_E5C98CE5, "coordinator started");
 
     for (;;) {
         uplink_frame_item_t item = {0};
@@ -385,7 +386,7 @@ static void uplink_task(void *argument)
             } else {
                 const esp_err_t ret = uplink_consume_pcm(&item);
                 if (ret != ESP_OK) {
-                    ESP_LOGE(TAG,
+                    APP_LOGE(TAG, OPUS_TX_FAILED_GENERATION_U_E9E4ECC6,
                              "Opus TX failed generation=%u seq=%llu: %s",
                              (unsigned)item.generation,
                              (unsigned long long)item.sequence,

@@ -7,6 +7,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "app_log.h"
 
 #include "xiaozhi_foundation.h"
 
@@ -105,7 +106,7 @@ static void voice_assistant_publish_status(void)
     void *callback_context = NULL;
 
     if (!voice_assistant_take_lock()) {
-        ESP_LOGW(TAG, "Status publish skipped: lock timeout");
+        APP_LOGW(TAG, STATUS_PUBLISH_SKIPPED_LOCK_D87749BC, "Status publish skipped: lock timeout");
         return;
     }
     snapshot = s_status;
@@ -127,7 +128,7 @@ static void voice_assistant_set_status(
     uint32_t generation = 0U;
 
     if (!voice_assistant_take_lock()) {
-        ESP_LOGE(TAG, "State transition dropped: lock timeout");
+        APP_LOGE(TAG, STATE_TRANSITION_DROPPED_LOC_9956CA73, "State transition dropped: lock timeout");
         return;
     }
     previous_state = s_status.state;
@@ -138,7 +139,7 @@ static void voice_assistant_set_status(
     xSemaphoreGive(s_status_lock);
 
     if ((previous_state != state) || (last_error != ESP_OK)) {
-        ESP_LOGI(TAG,
+        APP_LOGI(TAG, STATE_S_S_GENERATION_U_EC75E51B,
                  "state %s -> %s generation=%u active=%s error=%s",
                  voice_assistant_state_to_string(previous_state),
                  voice_assistant_state_to_string(state),
@@ -158,7 +159,7 @@ static void voice_assistant_set_audio_status(
         return;
     }
     if (!voice_assistant_take_lock()) {
-        ESP_LOGE(TAG, "Audio status dropped: lock timeout");
+        APP_LOGE(TAG, AUDIO_STATUS_DROPPED_LOCK_TI_0FCDDB94, "Audio status dropped: lock timeout");
         return;
     }
     previous = s_status.audio.state;
@@ -167,7 +168,7 @@ static void voice_assistant_set_audio_status(
 
     if ((previous != audio_status->state) ||
         (audio_status->last_error != ESP_OK)) {
-        ESP_LOGI(TAG,
+        APP_LOGI(TAG, AUDIO_S_S_CAPTURE_S_AC4F9F5B,
                  "audio %s -> %s capture=%s playback=%s error=%s",
                  voice_assistant_audio_state_to_string(previous),
                  voice_assistant_audio_state_to_string(audio_status->state),
@@ -204,7 +205,7 @@ static voice_assistant_state_t voice_assistant_get_state_unlocked_copy(void)
 static void voice_assistant_finish_public_command(void)
 {
     if (!voice_assistant_take_lock()) {
-        ESP_LOGE(TAG, "Unable to clear public-command gate: lock timeout");
+        APP_LOGE(TAG, UNABLE_TO_CLEAR_PUBLIC_COMMA_BF3173F0, "Unable to clear public-command gate: lock timeout");
         return;
     }
     s_command_pending = false;
@@ -242,7 +243,7 @@ static void voice_assistant_foundation_status_callback(
         .type = VOICE_ASSISTANT_COMMAND_FOUNDATION_STATUS,
     };
     if (xQueueSend(s_command_queue, &command, 0U) != pdTRUE) {
-        ESP_LOGW(TAG,
+        APP_LOGW(TAG, DEFERRED_XIAOZHI_STATUS_GENE_80A36D00,
                  "Deferred Xiaozhi status generation=%u state=%s: queue full",
                  (unsigned)status->client_generation,
                  xiaozhi_foundation_session_state_to_string(status->state));
@@ -267,7 +268,7 @@ static void voice_assistant_handle_foundation_status(void)
     }
     if (!voice_assistant_generation_is_current(
             foundation_status.client_generation)) {
-        ESP_LOGW(TAG,
+        APP_LOGW(TAG, DROPPED_STALE_XIAOZHI_STATUS_3C381E79,
                  "Dropped stale Xiaozhi status generation=%u state=%s",
                  (unsigned)foundation_status.client_generation,
                  xiaozhi_foundation_session_state_to_string(
@@ -288,7 +289,7 @@ static void voice_assistant_handle_foundation_status(void)
              * retain active=true and remain observable below. */
             if ((current == VOICE_ASSISTANT_STATE_READY) &&
                 !foundation_status.active) {
-                ESP_LOGD(TAG,
+                APP_LOGD(TAG, IGNORED_STALE_INACTIVE_CONNE_45346E2C,
                          "Ignored stale inactive CONNECTING generation=%u",
                          (unsigned)foundation_status.client_generation);
                 break;
@@ -316,7 +317,7 @@ static void voice_assistant_handle_foundation_status(void)
                         ESP_OK);
                 }
             } else {
-                ESP_LOGW(TAG,
+                APP_LOGW(TAG, IGNORED_READY_IN_VOICE_STATE_860F729E,
                          "Ignored READY in voice state=%s generation=%u",
                          voice_assistant_state_to_string(current),
                          (unsigned)foundation_status.client_generation);
@@ -329,7 +330,7 @@ static void voice_assistant_handle_foundation_status(void)
              * regress a completed stop into ERROR. */
             if ((current == VOICE_ASSISTANT_STATE_IDLE) ||
                 (current == VOICE_ASSISTANT_STATE_RECOVERING)) {
-                ESP_LOGI(TAG,
+                APP_LOGI(TAG, IGNORED_LATE_XIAOZHI_ERROR_I_50936368,
                           "Ignored late Xiaozhi ERROR in state=%s generation=%u",
                           voice_assistant_state_to_string(current),
                           (unsigned)foundation_status.client_generation);
@@ -390,7 +391,7 @@ static void voice_assistant_task(void *argument)
         switch (command.type) {
             case VOICE_ASSISTANT_COMMAND_BEGIN_SESSION: {
                 if (!voice_assistant_generation_is_current(command.generation)) {
-                    ESP_LOGW(TAG, "Dropped stale begin command generation=%u",
+                    APP_LOGW(TAG, DROPPED_STALE_BEGIN_COMMAND_E0C8D9F9, "Dropped stale begin command generation=%u",
                              (unsigned)command.generation);
                     voice_assistant_finish_public_command();
                     break;
@@ -421,7 +422,7 @@ static void voice_assistant_task(void *argument)
 
             case VOICE_ASSISTANT_COMMAND_END_SESSION: {
                 if (!voice_assistant_generation_is_current(command.generation)) {
-                    ESP_LOGW(TAG, "Dropped stale end command generation=%u",
+                    APP_LOGW(TAG, DROPPED_STALE_END_COMMAND_GE_64453AAD, "Dropped stale end command generation=%u",
                              (unsigned)command.generation);
                     voice_assistant_finish_public_command();
                     break;
@@ -440,7 +441,7 @@ static void voice_assistant_task(void *argument)
 
             case VOICE_ASSISTANT_COMMAND_RECOVER: {
                 if (!voice_assistant_generation_is_current(command.generation)) {
-                    ESP_LOGW(TAG, "Dropped stale recover command generation=%u",
+                    APP_LOGW(TAG, DROPPED_STALE_RECOVER_COMMAN_A69B74E1, "Dropped stale recover command generation=%u",
                              (unsigned)command.generation);
                     voice_assistant_finish_public_command();
                     break;
@@ -476,7 +477,7 @@ static void voice_assistant_task(void *argument)
                 break;
 
             default:
-                ESP_LOGE(TAG, "Unknown command=%d", (int)command.type);
+                APP_LOGE(TAG, UNKNOWN_COMMAND_D_60C4DA83, "Unknown command=%d", (int)command.type);
                 voice_assistant_set_status(
                     VOICE_ASSISTANT_STATE_ERROR, false, ESP_ERR_INVALID_ARG);
                 break;
@@ -545,7 +546,7 @@ esp_err_t voice_assistant_init(void)
         return observer_ret;
     }
 
-    ESP_LOGI(TAG, "initialized with Xiaozhi session observer");
+    APP_LOGI(TAG, INITIALIZED_WITH_XIAOZHI_SES_ED17880B, "initialized with Xiaozhi session observer");
     voice_assistant_publish_status();
     return ESP_OK;
 }
@@ -587,7 +588,7 @@ esp_err_t voice_assistant_start(void)
     if (ulTaskNotifyTake(
             pdTRUE,
             pdMS_TO_TICKS(VOICE_ASSISTANT_START_TIMEOUT_MS)) == 0U) {
-        ESP_LOGE(TAG, "start timeout waiting for IDLE");
+        APP_LOGE(TAG, START_TIMEOUT_WAITING_FOR_ID_F5455721, "start timeout waiting for IDLE");
         return ESP_ERR_TIMEOUT;
     }
     return ESP_OK;
@@ -630,7 +631,7 @@ esp_err_t voice_assistant_begin_session(void)
         }
         return ESP_ERR_TIMEOUT;
     }
-    ESP_LOGI(TAG, "begin session queued generation=%u",
+    APP_LOGI(TAG, BEGIN_SESSION_QUEUED_GENERAT_D5F4C4B2, "begin session queued generation=%u",
              (unsigned)command.generation);
     return ESP_OK;
 }
@@ -666,7 +667,7 @@ esp_err_t voice_assistant_end_session(void)
         }
         return ESP_ERR_TIMEOUT;
     }
-    ESP_LOGI(TAG, "end session queued generation=%u",
+    APP_LOGI(TAG, END_SESSION_QUEUED_GENERATIO_84CA4638, "end session queued generation=%u",
              (unsigned)command.generation);
     return ESP_OK;
 }
@@ -700,7 +701,7 @@ esp_err_t voice_assistant_recover(void)
         }
         return ESP_ERR_TIMEOUT;
     }
-    ESP_LOGI(TAG, "recovery queued generation=%u",
+    APP_LOGI(TAG, RECOVERY_QUEUED_GENERATION_U_FA475BA5, "recovery queued generation=%u",
              (unsigned)command.generation);
     return ESP_OK;
 }
@@ -732,7 +733,7 @@ esp_err_t voice_assistant_notify_audio_status(
         .type = VOICE_ASSISTANT_COMMAND_AUDIO_STATUS,
     };
     if (xQueueSend(s_command_queue, &command, 0U) != pdTRUE) {
-        ESP_LOGW(TAG, "Deferred audio status: command queue full");
+        APP_LOGW(TAG, DEFERRED_AUDIO_STATUS_COMMAN_74A2683A, "Deferred audio status: command queue full");
     }
     return ESP_OK;
 }

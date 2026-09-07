@@ -14,6 +14,7 @@
 #include "esp_wifi_default.h"
 
 #include "esp_log.h"
+#include "app_log.h"
 #include "esp_check.h"
 /* Macros ------------------------------------------------------------------- */
 
@@ -249,8 +250,8 @@ static esp_err_t wifi_manager_lock_driver_operation(void)
             s_driver_operation_mutex,
             timeout_ticks) != pdTRUE)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, TIMED_OUT_WAITING_FOR_WI_A35B6DA1,
             "Timed out waiting for Wi-Fi driver operation lock");
 
         return ESP_ERR_TIMEOUT;
@@ -544,8 +545,8 @@ static bool wifi_manager_process_connection_timeout(void)
 
     if (!timeout_is_current)
     {
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, IGNORED_STALE_WI_FI_CONNECTI_D37DCBA0,
             "Ignored stale Wi-Fi connection timeout, generation=%lu",
             (unsigned long)timeout_generation);
 
@@ -554,8 +555,8 @@ static bool wifi_manager_process_connection_timeout(void)
 
     (void)wifi_manager_stop_connection_timeout_timer();
 
-    ESP_LOGW(
-        TAG,
+    APP_LOGW(
+        TAG, WI_FI_CONNECTION_DHCP_TIMED_A463877E,
         "Wi-Fi connection/DHCP timed out after %lu ms, generation=%lu",
         (unsigned long)WIFI_MANAGER_CONNECTION_TIMEOUT_MS,
         (unsigned long)timeout_generation);
@@ -616,14 +617,14 @@ static bool wifi_manager_process_connection_timeout(void)
 
     if (error == ESP_ERR_WIFI_NOT_CONNECT)
     {
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, TIMED_OUT_WI_FI_ATTEMPT_EE4A0D47,
             "Timed-out Wi-Fi attempt was already detached");
     }
     else
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, COULD_NOT_ABORT_TIMED_OUT_2BCCE37C,
             "Could not abort timed-out Wi-Fi attempt: %s",
             esp_err_to_name(error));
     }
@@ -636,8 +637,8 @@ static bool wifi_manager_process_connection_timeout(void)
 
     if (!wifi_manager_schedule_reconnect())
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, TIMED_OUT_WI_FI_ATTEMPT_CA73C547,
             "Timed-out Wi-Fi attempt could not schedule reconnect");
     }
 
@@ -694,8 +695,8 @@ static bool wifi_manager_schedule_reconnect(void)
     xTaskNotifyGive(
         reconnect_task_handle);
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, AUTOMATIC_WI_FI_RECONNECT_SC_EBC50B1E,
         "Automatic Wi-Fi reconnect scheduled");
 
     return true;
@@ -706,8 +707,8 @@ static void wifi_manager_reconnect_task(
 {
     (void)argument;
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, WI_FI_RECONNECT_TASK_STARTED_6FE381E5,
         "Wi-Fi reconnect task started");
 
     while(1)
@@ -759,16 +760,16 @@ static void wifi_manager_reconnect_task(
 
         if (!should_reconnect)
         {
-            ESP_LOGD(
-                TAG,
+            APP_LOGD(
+                TAG, RECONNECT_ATTEMPT_SKIPPED_465C07EF,
                 "Reconnect attempt skipped");
 
             continue;
         }
 
 
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, RETRYING_WI_FI_CONNECTION_IN_B554882E,
             "Retrying Wi-Fi connection in %lu ms",
             (unsigned long)reconnect_delay_ms);
 
@@ -831,8 +832,8 @@ static void wifi_manager_reconnect_task(
 
         if (!should_reconnect)
         {
-            ESP_LOGD(
-                TAG,
+            APP_LOGD(
+                TAG, RECONNECT_ATTEMPT_CANCELLED_D2B307AB,
                 "Reconnect attempt cancelled");
 
             continue;
@@ -845,8 +846,8 @@ static void wifi_manager_reconnect_task(
         wifi_manager_notify_status_changed();
 
 
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, STARTING_WI_FI_RECONNECT_ATT_B7E2E1C0,
             "Starting Wi-Fi reconnect attempt %lu, "
             "next retry delay=%lu ms",
             (unsigned long)reconnect_attempt,
@@ -880,15 +881,15 @@ static void wifi_manager_reconnect_task(
 
             if (!retry_allowed)
             {
-                ESP_LOGD(
-                    TAG,
+                APP_LOGD(
+                    TAG, WI_FI_RECONNECT_ATTEMPT_WAS_BBC5B547,
                     "Wi-Fi reconnect attempt was canceled");
 
                 continue;
             }
 
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, FAILED_TO_START_WI_FI_533CE756,
                 "Failed to start Wi-Fi reconnect attempt: %s",
                 esp_err_to_name(error));
 
@@ -902,15 +903,15 @@ static void wifi_manager_reconnect_task(
              */
             if (!wifi_manager_schedule_reconnect())
             {
-                ESP_LOGW(
-                    TAG,
+                APP_LOGW(
+                    TAG, FAILED_TO_RESCHEDULE_WI_FI_786B80A5,
                     "Failed to reschedule Wi-Fi reconnect");
             }
         }
 
 
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, RECONNECT_TASK_AWAKENED_NOTI_2D29872A,
             "Reconnect task awakened, notifications=%lu",
             (unsigned long)notification_count);
     }
@@ -972,7 +973,7 @@ static void wifi_manager_event_handler(
         {
             case WIFI_EVENT_STA_START:
             {
-                ESP_LOGD(TAG, "Event: WIFI_EVENT_STA_START");
+                APP_LOGD(TAG, EVENT_WIFI_EVENT_STA_START_0FC585EF, "Event: WIFI_EVENT_STA_START");
                 break;
             }
 
@@ -1014,8 +1015,8 @@ static void wifi_manager_event_handler(
 
                 taskEXIT_CRITICAL(&s_status_lock);
 
-                ESP_LOGI(TAG, "Event: WIFI_EVENT_STA_CONNECTED");
-                ESP_LOGD(TAG, "Waiting for IPv4 address");
+                APP_LOGI(TAG, EVENT_WIFI_EVENT_STA_CONNECT_01624329, "Event: WIFI_EVENT_STA_CONNECTED");
+                APP_LOGD(TAG, WAITING_FOR_IPV4_ADDRESS_ED730DD5, "Waiting for IPv4 address");
 
                 wifi_manager_notify_status_changed();
 
@@ -1038,8 +1039,8 @@ static void wifi_manager_event_handler(
                             (uint16_t)event->reason;
                     }
                     else {
-                        ESP_LOGE(
-                            TAG,
+                        APP_LOGE(
+                            TAG, WIFI_EVENT_STA_DISCONNECTED_20C4DC60,
                             "WIFI_EVENT_STA_DISCONNECTED has no event data"
                         );
                     }
@@ -1086,15 +1087,15 @@ static void wifi_manager_event_handler(
 
                         if (timer_error != ESP_OK)
                         {
-                            ESP_LOGD(
-                                TAG,
+                            APP_LOGD(
+                                TAG, FAILED_TO_STOP_CONNECTION_TI_2C87D570,
                                 "Failed to stop connection timer on "
                                 "disconnect: %s",
                                 esp_err_to_name(timer_error));
                         }
                     }
 
-                    ESP_LOGD(TAG, "Event: WIFI_EVENT_STA_DISCONNECTED");
+                    APP_LOGD(TAG, EVENT_WIFI_EVENT_STA_DISCONN_B432E25B, "Event: WIFI_EVENT_STA_DISCONNECTED");
 
                     wifi_manager_notify_status_changed();
 
@@ -1104,33 +1105,33 @@ static void wifi_manager_event_handler(
                     */
                     if (manual_disconnect)
                     {
-                        ESP_LOGI(
-                            TAG,
+                        APP_LOGI(
+                            TAG, MANUAL_WI_FI_DISCONNECT_COMP_418457C7,
                             "Manual Wi-Fi disconnect completed; "
                             "automatic reconnect suppressed");
                     }
                     else if (unmanaged_disconnect)
                     {
-                        ESP_LOGI(
-                            TAG,
+                        APP_LOGI(
+                            TAG, UNADOPTED_PROVISIONING_CONNE_645546E2,
                             "Unadopted provisioning connection detached");
                     }
                     else if (!wifi_manager_schedule_reconnect())
                     {
-                        ESP_LOGD(
-                            TAG,
+                        APP_LOGD(
+                            TAG, AUTOMATIC_RECONNECT_WAS_NOT_BC19F322,
                             "Automatic reconnect was not scheduled");
                     }
                 }
                 break;
 
             case WIFI_EVENT_STA_STOP:
-                ESP_LOGD(TAG, "Event: WIFI_EVENT_STA_STOP");
+                APP_LOGD(TAG, EVENT_WIFI_EVENT_STA_STOP_4BD830CC, "Event: WIFI_EVENT_STA_STOP");
                 break;
 
             default:
-                ESP_LOGD(
-                    TAG,
+                APP_LOGD(
+                    TAG, UNHANDLED_WIFI_EVENT_ID_LD_F44CAECB,
                     "Unhandled WIFI_EVENT id=%ld",
                     (long)event_id
                 );
@@ -1148,8 +1149,8 @@ static void wifi_manager_event_handler(
                     (const ip_event_got_ip_t *)event_data;
 
                 if (got_ip_event == NULL) {
-                    ESP_LOGE(
-                        TAG,
+                    APP_LOGE(
+                        TAG, IP_EVENT_STA_GOT_IP_1B94B16F,
                         "IP_EVENT_STA_GOT_IP contains no event data"
                     );
 
@@ -1174,8 +1175,8 @@ static void wifi_manager_event_handler(
                 if ((written <= 0) ||
                     ((size_t)written >= sizeof(ipv4_address))) {
 
-                    ESP_LOGE(
-                        TAG,
+                    APP_LOGE(
+                        TAG, FAILED_TO_FORMAT_STATION_IPV_4883CBD0,
                         "Failed to format Station IPv4 address"
                     );
 
@@ -1237,8 +1238,8 @@ static void wifi_manager_event_handler(
 
                 if (!got_ip_accepted)
                 {
-                    ESP_LOGD(
-                        TAG,
+                    APP_LOGD(
+                        TAG, IGNORED_IPV4_EVENT_IN_STATE_958F8E5C,
                         "Ignored IPv4 event in state %s or while disconnect "
                         "is in progress",
                         wifi_manager_state_to_string(state_at_event));
@@ -1251,14 +1252,14 @@ static void wifi_manager_event_handler(
 
                 if (timer_error != ESP_OK)
                 {
-                    ESP_LOGD(
-                        TAG,
+                    APP_LOGD(
+                        TAG, FAILED_TO_STOP_CONNECTION_TI_62402ADD,
                         "Failed to stop connection timer on GOT_IP: %s",
                         esp_err_to_name(timer_error));
                 }
 
-                ESP_LOGI(
-                    TAG,
+                APP_LOGI(
+                    TAG, EVENT_IP_EVENT_STA_GOT_AA4AA556,
                     "Event: IP_EVENT_STA_GOT_IP, address=%s",
                     ipv4_address
                 );
@@ -1296,8 +1297,8 @@ static void wifi_manager_event_handler(
 
                 taskEXIT_CRITICAL(&s_status_lock);
 
-                ESP_LOGW(
-                    TAG,
+                APP_LOGW(
+                    TAG, STATION_LOST_IPV4_ADDRESS_ST_44AD4850,
                     "Station lost IPv4 address, state=%s",
                     wifi_manager_state_to_string(resulting_state)
                 );
@@ -1307,8 +1308,8 @@ static void wifi_manager_event_handler(
                 break;
 
             default:
-                ESP_LOGD(
-                    TAG,
+                APP_LOGD(
+                    TAG, UNHANDLED_IP_EVENT_ID_LD_7B864352,
                     "Unhandled IP_EVENT id=%ld",
                     (long)event_id
                 );
@@ -1339,7 +1340,7 @@ esp_err_t wifi_manager_init(void)
 {
     if(s_wifi_manager.initialized == true)
     {
-        ESP_LOGW(TAG, "Wi-Fi manager is already initialized");
+        APP_LOGW(TAG, WI_FI_MANAGER_IS_ALREADY_7F4A53E7, "Wi-Fi manager is already initialized");
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -1351,8 +1352,8 @@ esp_err_t wifi_manager_init(void)
 
         if (s_driver_operation_mutex == NULL)
         {
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, FAILED_TO_CREATE_WI_FI_C30E27D3,
                 "Failed to create Wi-Fi driver operation mutex");
 
             return ESP_ERR_NO_MEM;
@@ -1373,8 +1374,8 @@ esp_err_t wifi_manager_init(void)
         esp_netif_create_default_wifi_sta();
 
     if (station_netif == NULL) {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_CREATE_DEFAULT_WI_334C329E,
             "Failed to create default Wi-Fi Station interface"
         );
 
@@ -1395,8 +1396,8 @@ esp_err_t wifi_manager_init(void)
         esp_wifi_init(&wifi_init_config);
 
     if (ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_INITIALIZE_WI_FI_A4AF3509,
             "Failed to initialize Wi-Fi driver: %s",
             esp_err_to_name(ret)
         );
@@ -1414,8 +1415,8 @@ esp_err_t wifi_manager_init(void)
     ret = esp_wifi_set_storage(WIFI_STORAGE_RAM);
 
     if (ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_CONFIGURE_WI_FI_B5C95D50,
             "Failed to configure Wi-Fi storage: %s",
             esp_err_to_name(ret)
         );
@@ -1424,8 +1425,8 @@ esp_err_t wifi_manager_init(void)
             esp_wifi_deinit();
 
         if (deinit_ret != ESP_OK) {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, WI_FI_CLEANUP_FAILED_S_EEBE1AED,
                 "Wi-Fi cleanup failed: %s",
                 esp_err_to_name(deinit_ret)
             );
@@ -1448,8 +1449,8 @@ esp_err_t wifi_manager_init(void)
 
 
     if (ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_SET_WI_FI_FA6BCDB0,
             "Failed to set Wi-Fi Station mode: %s",
             esp_err_to_name(ret)
         );
@@ -1458,8 +1459,8 @@ esp_err_t wifi_manager_init(void)
             esp_wifi_deinit();
 
         if (deinit_ret != ESP_OK) {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, WI_FI_CLEANUP_FAILED_S_EEBE1AED,
                 "Wi-Fi cleanup failed: %s",
                 esp_err_to_name(deinit_ret)
             );
@@ -1479,8 +1480,8 @@ esp_err_t wifi_manager_init(void)
     );
 
     if (ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_REGISTER_WI_FI_C2E912AB,
             "Failed to register Wi-Fi event handler: %s",
             esp_err_to_name(ret)
         );
@@ -1500,8 +1501,8 @@ esp_err_t wifi_manager_init(void)
     );
 
     if (ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_REGISTER_IP_EVENT_531220FA,
             "Failed to register IP event handler: %s",
             esp_err_to_name(ret)
         );
@@ -1533,8 +1534,8 @@ esp_err_t wifi_manager_init(void)
 
     if (ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_CREATE_WI_FI_ED459018,
             "Failed to create Wi-Fi connection timeout timer: %s",
             esp_err_to_name(ret));
 
@@ -1570,8 +1571,8 @@ esp_err_t wifi_manager_init(void)
 
     if (task_result != pdPASS)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_CREATE_WI_FI_92F4E72E,
             "Failed to create Wi-Fi reconnect task");
 
         const esp_err_t timer_delete_error =
@@ -1579,8 +1580,8 @@ esp_err_t wifi_manager_init(void)
 
         if (timer_delete_error != ESP_OK)
         {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, FAILED_TO_DELETE_CONNECTION_3359745C,
                 "Failed to delete connection timer after task error: %s",
                 esp_err_to_name(timer_delete_error));
         }
@@ -1606,8 +1607,8 @@ esp_err_t wifi_manager_init(void)
 
         if (deinit_ret != ESP_OK)
         {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, FAILED_TO_DEINITIALIZE_WI_FI_ACAC0F28,
                 "Failed to deinitialize Wi-Fi after task error: %s",
                 esp_err_to_name(deinit_ret));
         }
@@ -1621,8 +1622,8 @@ esp_err_t wifi_manager_init(void)
     ret = esp_wifi_start();
     
     if (ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_START_WI_FI_FF32850F,
             "Failed to start Wi-Fi Station: %s",
             esp_err_to_name(ret)
         );
@@ -1642,8 +1643,8 @@ esp_err_t wifi_manager_init(void)
 
             if (timer_delete_error != ESP_OK)
             {
-                ESP_LOGW(
-                    TAG,
+                APP_LOGW(
+                    TAG, FAILED_TO_DELETE_CONNECTION_501228E3,
                     "Failed to delete connection timer after start error: %s",
                     esp_err_to_name(timer_delete_error));
             }
@@ -1679,8 +1680,8 @@ esp_err_t wifi_manager_init(void)
        esp_wifi_deinit();
        
        if (deinit_ret != ESP_OK) {
-           ESP_LOGW(
-               TAG,
+           APP_LOGW(
+               TAG, FAILED_TO_DEINITIALIZE_WI_FI_5E40A3BE,
                "Failed to deinitialize Wi-Fi after start error: %s",
                esp_err_to_name(deinit_ret)
             );
@@ -1723,8 +1724,8 @@ esp_err_t wifi_manager_init(void)
         taskEXIT_CRITICAL(
             &s_status_lock);
     
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, WI_FI_MANAGER_INITIALIZED_MO_C11FDC03,
         "Wi-Fi manager initialized: mode=%s, storage=%s",
         "STATION",
         "RAM"
@@ -1772,8 +1773,8 @@ esp_err_t wifi_manager_connect(
         (current_state ==
          WIFI_MANAGER_STATE_RETRY_WAIT)) {
 
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, WI_FI_CONNECTION_IS_ALREADY_5E328CC6,
             "Wi-Fi connection is already active: state=%s",
             wifi_manager_state_to_string(
                 current_state
@@ -1822,8 +1823,8 @@ esp_err_t wifi_manager_connect(
     if (ssid_length >
         WIFI_MANAGER_SSID_MAX_LENGTH) {
 
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, SSID_IS_TOO_LONG_U_44161A12,
             "SSID is too long: %u bytes, maximum=%u",
             (unsigned int)ssid_length,
             (unsigned int)WIFI_MANAGER_SSID_MAX_LENGTH
@@ -1835,8 +1836,8 @@ esp_err_t wifi_manager_connect(
     if (password_length >
         WIFI_MANAGER_PASSWORD_MAX_LENGTH) {
 
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, PASSWORD_IS_TOO_LONG_U_3633DF05,
             "Password is too long: %u bytes, maximum=%u",
             (unsigned int)password_length,
             (unsigned int)WIFI_MANAGER_PASSWORD_MAX_LENGTH
@@ -1901,8 +1902,8 @@ esp_err_t wifi_manager_connect(
         sizeof(wifi_config));
 
     if (ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_SET_WI_FI_E64B4AEF,
             "Failed to set Wi-Fi Station config: %s",
             esp_err_to_name(ret)
         );
@@ -1971,8 +1972,8 @@ esp_err_t wifi_manager_connect(
     taskEXIT_CRITICAL(
         &s_status_lock);
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, CONNECTING_TO_CONFIGURED_WI_218F9967,
         "Connecting to configured Wi-Fi network");
 
     /*
@@ -2014,8 +2015,8 @@ esp_err_t wifi_manager_connect(
         taskEXIT_CRITICAL(
             &s_status_lock);
 
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_START_WI_FI_6BEF7973,
             "Failed to start Wi-Fi connection: %s",
             esp_err_to_name(ret));
 
@@ -2073,16 +2074,16 @@ esp_err_t wifi_manager_disconnect(void)
 
     if (timer_error != ESP_OK)
     {
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, FAILED_TO_STOP_CONNECTION_TI_D9606025,
             "Failed to stop connection timer on manual disconnect: %s",
             esp_err_to_name(timer_error));
     }
 
     if (timeout_abort_in_progress)
     {
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, MANUAL_DISCONNECT_JOINED_TIM_E58689D3,
             "Manual disconnect joined timeout abort already in progress");
 
         return ESP_OK;
@@ -2101,8 +2102,8 @@ esp_err_t wifi_manager_disconnect(void)
         return lock_error;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, MANUAL_WI_FI_DRIVER_DETACH_A05B90D8,
         "Manual Wi-Fi driver detach requested");
 
     esp_err_t error =
@@ -2132,8 +2133,8 @@ esp_err_t wifi_manager_disconnect(void)
         taskEXIT_CRITICAL(
             &s_status_lock);
 
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, WI_FI_DRIVER_WAS_ALREADY_95551484,
             "Wi-Fi driver was already detached; reconnect remains disabled");
 
         wifi_manager_notify_status_changed();
@@ -2157,8 +2158,8 @@ esp_err_t wifi_manager_disconnect(void)
         taskEXIT_CRITICAL(
             &s_status_lock);
 
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_DISCONNECT_WI_FI_CD2149E7,
             "Failed to disconnect Wi-Fi: %s",
             esp_err_to_name(error));
 
@@ -2226,8 +2227,8 @@ esp_err_t wifi_manager_discard_unmanaged_connection(void)
 
     if (timer_error != ESP_OK)
     {
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, FAILED_TO_STOP_STALE_CONNECT_3B9A3A65,
             "Failed to stop stale connection timer during provisioning "
             "cleanup: %s",
             esp_err_to_name(timer_error));
@@ -2269,8 +2270,8 @@ esp_err_t wifi_manager_discard_unmanaged_connection(void)
 
         taskEXIT_CRITICAL(&s_status_lock);
 
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_RESTORE_WI_FI_BCCE9EB2,
             "Failed to restore Wi-Fi RAM storage during provisioning "
             "cleanup: %s",
             esp_err_to_name(storage_error));
@@ -2280,8 +2281,8 @@ esp_err_t wifi_manager_discard_unmanaged_connection(void)
         return storage_error;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, DISCARDING_UNADOPTED_PROVISI_599EC97F,
         "Discarding unadopted provisioning connection");
 
     const esp_err_t error =
@@ -2316,8 +2317,8 @@ esp_err_t wifi_manager_discard_unmanaged_connection(void)
 
         wifi_manager_notify_status_changed();
 
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, NO_ACTIVE_UNADOPTED_STATION_91C30067,
             "No active unadopted Station connection remained");
 
         return ESP_OK;
@@ -2335,8 +2336,8 @@ esp_err_t wifi_manager_discard_unmanaged_connection(void)
 
         taskEXIT_CRITICAL(&s_status_lock);
 
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_DISCARD_UNADOPTED_4A11334D,
             "Failed to discard unadopted Station connection: %s",
             esp_err_to_name(error));
 
@@ -2386,16 +2387,16 @@ esp_err_t wifi_manager_clear_persistent_driver_settings(void)
 
     if (error != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_CLEAR_PERSISTENT_W_41FCC122,
             "Failed to clear persistent Wi-Fi driver settings: %s",
             esp_err_to_name(error));
 
         return error;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, PERSISTENT_WI_FI_DRIVER_SETT_F68378EE,
         "Persistent Wi-Fi driver settings cleared");
 
     return ESP_OK;
@@ -2459,7 +2460,7 @@ esp_err_t wifi_manager_get_rssi(
     taskEXIT_CRITICAL(&s_status_lock);
 
     if (!connected) {
-        ESP_LOGW(TAG, "Cannot read RSSI while Wi-Fi is disconnected");
+        APP_LOGW(TAG, CANNOT_READ_RSSI_WHILE_WI_296220EA, "Cannot read RSSI while Wi-Fi is disconnected");
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -2479,8 +2480,8 @@ esp_err_t wifi_manager_get_rssi(
 
         taskEXIT_CRITICAL(&s_status_lock);
 
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_READ_WI_FI_AED4CB08,
             "Failed to read Wi-Fi RSSI: %s",
             esp_err_to_name(ret)
         );
@@ -2537,8 +2538,8 @@ esp_err_t wifi_manager_register_status_callback(
 
     taskEXIT_CRITICAL(&s_status_lock);
 
-    ESP_LOGD(
-        TAG,
+    APP_LOGD(
+        TAG, STATUS_CALLBACK_S_1ECE06DB,
         "Status callback %s",
         callback != NULL
             ? "registered"
@@ -2595,8 +2596,8 @@ const char *wifi_manager_state_to_string(
 esp_err_t wifi_manager_scan_and_log(void)
 {
     if (!s_wifi_manager.initialized) {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, CANNOT_SCAN_BECAUSE_WI_FI_39AB8F48,
             "Cannot scan because Wi-Fi manager is not initialized"
         );
 
@@ -2634,7 +2635,7 @@ esp_err_t wifi_manager_scan_and_log(void)
         .home_chan_dwell_time = 30U,
     };
 
-    ESP_LOGI(TAG, "Starting all-channel Wi-Fi scan");
+    APP_LOGI(TAG, STARTING_ALL_CHANNEL_WI_FI_EB638034, "Starting all-channel Wi-Fi scan");
 
     /*
      * block = true:
@@ -2650,8 +2651,8 @@ esp_err_t wifi_manager_scan_and_log(void)
         );
 
     if (ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_START_WI_FI_37BAAEED,
             "Failed to start Wi-Fi scan: %s",
             esp_err_to_name(ret)
         );
@@ -2664,8 +2665,8 @@ esp_err_t wifi_manager_scan_and_log(void)
     ret = esp_wifi_scan_get_ap_num(&ap_count);
 
     if (ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_OBTAIN_SCANNED_AP_CA3E47AA,
             "Failed to obtain scanned AP count: %s",
             esp_err_to_name(ret)
         );
@@ -2677,8 +2678,8 @@ esp_err_t wifi_manager_scan_and_log(void)
             esp_wifi_clear_ap_list();
 
         if (clear_ret != ESP_OK) {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, FAILED_TO_CLEAR_WI_FI_2AF84F3F,
                 "Failed to clear Wi-Fi scan list: %s",
                 esp_err_to_name(clear_ret)
             );
@@ -2687,8 +2688,8 @@ esp_err_t wifi_manager_scan_and_log(void)
         return ret;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, WI_FI_SCAN_COMPLETED_FOUND_350B8AA8,
         "Wi-Fi scan completed: found=%u AP records",
         (unsigned int)ap_count
     );
@@ -2701,8 +2702,8 @@ esp_err_t wifi_manager_scan_and_log(void)
             esp_wifi_clear_ap_list();
 
         if (clear_ret != ESP_OK) {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, FAILED_TO_CLEAR_EMPTY_WI_4EC0C208,
                 "Failed to clear empty Wi-Fi scan list: %s",
                 esp_err_to_name(clear_ret)
             );
@@ -2720,8 +2721,8 @@ esp_err_t wifi_manager_scan_and_log(void)
         );
 
     if (ap_records == NULL) {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, NO_MEMORY_FOR_U_WI_24BA34F5,
             "No memory for %u Wi-Fi AP records",
             (unsigned int)ap_count
         );
@@ -2733,8 +2734,8 @@ esp_err_t wifi_manager_scan_and_log(void)
             esp_wifi_clear_ap_list();
 
         if (clear_ret != ESP_OK) {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, FAILED_TO_CLEAR_SCAN_LIST_9262D235,
                 "Failed to clear scan list after allocation error: %s",
                 esp_err_to_name(clear_ret)
             );
@@ -2758,8 +2759,8 @@ esp_err_t wifi_manager_scan_and_log(void)
     );
 
     if (ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_RETRIEVE_WI_FI_90920A38,
             "Failed to retrieve Wi-Fi AP records: %s",
             esp_err_to_name(ret)
         );
@@ -2771,8 +2772,8 @@ esp_err_t wifi_manager_scan_and_log(void)
             esp_wifi_clear_ap_list();
 
         if (clear_ret != ESP_OK) {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, FAILED_TO_CLEAR_SCAN_LIST_8C17B728,
                 "Failed to clear scan list after retrieval error: %s",
                 esp_err_to_name(clear_ret)
             );
@@ -2783,18 +2784,18 @@ esp_err_t wifi_manager_scan_and_log(void)
         return ret;
     }
 
-    ESP_LOGD(
-        TAG,
+    APP_LOGD(
+        TAG, MESSAGE_10224D18,
         "------------------------------------------------------------"
     );
 
-    ESP_LOGD(
-        TAG,
+    APP_LOGD(
+        TAG, NO_RSSI_CHANNEL_QUALITY_0BFA714F,
         " No. | RSSI | Channel | Quality"
     );
 
-    ESP_LOGD(
-        TAG,
+    APP_LOGD(
+        TAG, MESSAGE_10224D18,
         "------------------------------------------------------------"
     );
 
@@ -2805,8 +2806,8 @@ esp_err_t wifi_manager_scan_and_log(void)
         const wifi_ap_record_t *record =
             &ap_records[index];
 
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, U_D_U_S_FED18C4E,
             "%4u | %4d | %7u | %-9s",
             (unsigned int)(index + 1U),
             (int)record->rssi,
@@ -2815,8 +2816,8 @@ esp_err_t wifi_manager_scan_and_log(void)
         );
     }
 
-    ESP_LOGD(
-        TAG,
+    APP_LOGD(
+        TAG, MESSAGE_10224D18,
         "------------------------------------------------------------"
     );
 
@@ -2838,8 +2839,8 @@ esp_err_t wifi_manager_adopt_active_connection(void)
 
     if (!initialized)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, CANNOT_ADOPT_CONNECTION_BECA_F61698B2,
             "Cannot adopt connection because Wi-Fi manager is not initialized");
 
         return ESP_ERR_INVALID_STATE;
@@ -2856,8 +2857,8 @@ esp_err_t wifi_manager_adopt_active_connection(void)
 
     if (ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_RESTORE_WI_FI_B8C36A44,
             "Failed to restore Wi-Fi RAM storage: %s",
             esp_err_to_name(ret));
 
@@ -2873,8 +2874,8 @@ esp_err_t wifi_manager_adopt_active_connection(void)
 
     if (ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_STOP_CONNECTION_TI_C57F2057,
             "Failed to stop connection timeout during adoption: %s",
             esp_err_to_name(ret));
 
@@ -2923,15 +2924,15 @@ esp_err_t wifi_manager_adopt_active_connection(void)
 
     if (!adopted)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, ACTIVE_WI_FI_CONNECTION_IS_8CA09B58,
             "Active Wi-Fi connection is not eligible for adoption");
 
         return ESP_ERR_INVALID_STATE;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, ACTIVE_PROVISIONING_CONNECTI_B9EEB502,
         "Active provisioning connection adopted by Wi-Fi manager");
 
     /*

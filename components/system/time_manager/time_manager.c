@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "app_log.h"
 #include "esp_netif_sntp.h"
 #include "freertos/FreeRTOS.h"
 
@@ -112,8 +113,8 @@ static esp_err_t time_manager_apply_timezone(
     {
         const int saved_errno = errno;
 
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_APPLY_POSIX_TIMEZO_34510E40,
             "Failed to apply POSIX timezone (errno=%d)",
             saved_errno);
 
@@ -280,7 +281,7 @@ static void time_manager_sntp_sync_callback(
 
     if (synchronized_time == (time_t)-1)
     {
-        ESP_LOGE(TAG, "SNTP callback could not read system time");
+        APP_LOGE(TAG, SNTP_CALLBACK_COULD_NOT_READ_D09857FA, "SNTP callback could not read system time");
         time_manager_record_sync_failure(ESP_FAIL);
         return;
     }
@@ -307,8 +308,8 @@ static void time_manager_sntp_sync_callback(
 
     if (status_updated)
     {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, SNTP_SYNCHRONIZED_SYSTEM_TIM_331D795D,
             "SNTP synchronized system time (count=%" PRIu32 ")",
             sync_count);
 
@@ -472,8 +473,8 @@ esp_err_t time_manager_init(
 
     taskEXIT_CRITICAL(&s_time_manager_lock);
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, INITIALIZED_SERVER_S_TIMEZON_D3C0F6BD,
         "Initialized (server=%s, timezone=%s)",
         s_time_manager.sntp_server,
         s_time_manager.timezone);
@@ -510,8 +511,8 @@ esp_err_t time_manager_start(void)
 
     if (result != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_CONFIGURE_ESP_NETI_7C945988,
             "Failed to configure ESP-NETIF SNTP: %s",
             esp_err_to_name(result));
 
@@ -532,7 +533,7 @@ esp_err_t time_manager_start(void)
     s_time_manager.status.network_available = false;
     taskEXIT_CRITICAL(&s_time_manager_lock);
 
-    ESP_LOGI(TAG, "ESP-NETIF SNTP configured; waiting for IPv4");
+    APP_LOGI(TAG, ESP_NETIF_SNTP_CONFIGURED_WA_3CAD67AA, "ESP-NETIF SNTP configured; waiting for IPv4");
 
     time_manager_notify_status_changed();
 
@@ -602,14 +603,14 @@ esp_err_t time_manager_notify_network_state(
         return ESP_OK;
     }
 
-    ESP_LOGI(TAG, "Starting ESP-NETIF SNTP after IPv4 notification");
+    APP_LOGI(TAG, STARTING_ESP_NETIF_SNTP_AFTE_78E20F25, "Starting ESP-NETIF SNTP after IPv4 notification");
 
     const esp_err_t result = esp_netif_sntp_start();
 
     if (result != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_START_ESP_NETIF_BF67192E,
             "Failed to start ESP-NETIF SNTP: %s",
             esp_err_to_name(result));
     }
@@ -637,8 +638,8 @@ esp_err_t time_manager_register_status_callback(
 
     taskEXIT_CRITICAL(&s_time_manager_lock);
 
-    ESP_LOGD(
-        TAG,
+    APP_LOGD(
+        TAG, STATUS_CALLBACK_S_1560955E,
         "Status callback %s",
         (callback != NULL) ? "registered" : "removed");
 

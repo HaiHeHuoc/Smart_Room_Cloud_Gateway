@@ -260,6 +260,7 @@ Test/                    host and component test utilities
 
 - [Version 1 release record](VERSION_1_RELEASE.md)
 - [Architecture](docs/ARCHITECTURE.md)
+- [Centralized application logging and validation](components/system/log_manager/README.md)
 - [Setup and build](docs/SETUP.md)
 - [Firebase setup and security](components/cloud/firebase_auth/docs/FIREBASE_SETUP_AND_SECURITY.md)
 - [Hardware demo](docs/DEMO.md)

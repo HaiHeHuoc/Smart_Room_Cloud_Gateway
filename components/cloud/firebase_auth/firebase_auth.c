@@ -14,6 +14,7 @@
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "app_log.h"
 #include "esp_timer.h"
 #include "esp_attr.h"
 
@@ -317,16 +318,16 @@ static esp_err_t firebase_auth_http_post(
      */
     if (cleanup_result != ESP_OK)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FIREBASE_AUTH_HTTP_CLEANUP_R_98C3C3B8,
             "Firebase Auth HTTP cleanup returned %s",
             esp_err_to_name(cleanup_result));
     }
 
     if (response_context.overflow)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FIREBASE_AUTH_RESPONSE_BUFFE_CCCFFA22,
             "Firebase Auth response buffer overflow");
 
         firebase_auth_zeroize(
@@ -389,8 +390,8 @@ static void firebase_auth_log_server_error(void)
         message->valuestring != NULL)
     {
         /* Log only the Firebase error name, never credentials or tokens. */
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, FIREBASE_AUTH_SERVER_ERROR_S_BDA0234D,
             "Firebase Auth server error: %s",
             message->valuestring);
     }
@@ -524,8 +525,8 @@ static esp_err_t firebase_auth_parse_tokens(
             uid_value,
             s_config.expected_uid) != 0)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FIREBASE_USER_UID_DOES_NOT_11F40569,
             "Firebase user UID does not match configured device UID");
 
         cJSON_Delete(root);
@@ -769,8 +770,8 @@ static esp_err_t firebase_auth_sign_in(void)
 
     xSemaphoreGive(s_state_mutex);
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, FIREBASE_AUTHENTICATION_SIGN_DE6012F0,
         "Firebase Authentication sign-in successful");
 
     return ESP_OK;
@@ -1048,8 +1049,8 @@ static esp_err_t firebase_auth_refresh(void)
 
     xSemaphoreGive(s_state_mutex);
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, FIREBASE_ID_TOKEN_REFRESHED_F8598EDD,
         "Firebase ID token refreshed successfully");
 
     return ESP_OK;
@@ -1182,8 +1183,8 @@ esp_err_t firebase_auth_init(
 
     s_is_initialized = true;
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, FIREBASE_AUTHENTICATION_INIT_3B3E0152,
         "Firebase Authentication initialized");
 
     return ESP_OK;

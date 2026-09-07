@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "app_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -121,7 +122,7 @@ static void ui_publish(void)
     void *context = NULL;
 
     if (!ui_take_lock()) {
-        ESP_LOGW(TAG, "publish skipped: lock timeout");
+        APP_LOGW(TAG, PUBLISH_SKIPPED_LOCK_TIMEOUT_B4B510E5, "publish skipped: lock timeout");
         return;
     }
     snapshot = s_model;
@@ -144,7 +145,7 @@ static void ui_voice_status_callback(
     }
 
     if (!ui_take_lock()) {
-        ESP_LOGW(TAG, "voice status dropped: lock timeout");
+        APP_LOGW(TAG, VOICE_STATUS_DROPPED_LOCK_TI_AA2EBC01, "voice status dropped: lock timeout");
         return;
     }
     if ((status->session_generation != 0U) &&
@@ -319,7 +320,7 @@ static void ui_semantic_text_callback(
     }
 
     if ((ret != ESP_OK) && (ret != ESP_ERR_INVALID_STATE)) {
-        ESP_LOGW(TAG,
+        APP_LOGW(TAG, S_TEXT_DROPPED_GENERATION_U_8D92BC66,
                  "%s text dropped generation=%u error=%s",
                  role,
                  (unsigned)event->client_generation,
@@ -378,7 +379,7 @@ esp_err_t voice_assistant_ui_model_start(void)
 
     s_started = true;
     ui_voice_status_callback(&status, NULL);
-    ESP_LOGI(TAG, "production voice UI model started with semantic text observer");
+    APP_LOGI(TAG, PRODUCTION_VOICE_UI_MODEL_ST_AFF3E0C2, "production voice UI model started with semantic text observer");
     return ESP_OK;
 }
 

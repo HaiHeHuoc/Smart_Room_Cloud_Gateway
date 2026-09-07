@@ -7,6 +7,7 @@
 #include <stdlib.h>
 
 #include "esp_log.h"
+#include "app_log.h"
 #include "esp_err.h"
 
 #include "board_config.h"
@@ -158,7 +159,7 @@ static void *lvgl_sd_fs_open_cb(lv_fs_drv_t *drv,
 
     if (!lvgl_sd_fs_build_full_path(path, full_path, sizeof(full_path)))
     {
-        ESP_LOGE(TAG, "Failed to build full path for LVGL path: %s", path);
+        APP_LOGE(TAG, FAILED_TO_BUILD_FULL_PATH_7F06D01B, "Failed to build full path for LVGL path: %s", path);
         return NULL;
     }
 
@@ -185,15 +186,15 @@ static void *lvgl_sd_fs_open_cb(lv_fs_drv_t *drv,
     }
     else
     {
-        ESP_LOGE(TAG, "Unsupported LVGL file open mode");
+        APP_LOGE(TAG, UNSUPPORTED_LVGL_FILE_OPEN_M_A836121E, "Unsupported LVGL file open mode");
         return NULL;
     }
 
     const esp_err_t lease_result = sd_card_manager_acquire();
     if (lease_result != ESP_OK)
     {
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, SD_FILESYSTEM_IS_UNAVAILABLE_AC544338,
             "SD filesystem is unavailable for %s: %s",
             full_path,
             esp_err_to_name(lease_result));
@@ -204,7 +205,7 @@ static void *lvgl_sd_fs_open_cb(lv_fs_drv_t *drv,
     if (file == NULL)
     {
         const int open_errno = errno;
-        ESP_LOGE(TAG,
+        APP_LOGE(TAG, FAILED_TO_OPEN_FILE_S_9E2E3CEA,
                  "Failed to open file: %s, errno: %d",
                  full_path,
                  open_errno);
@@ -221,7 +222,7 @@ static void *lvgl_sd_fs_open_cb(lv_fs_drv_t *drv,
     lvgl_sd_fs_file_t *const handle = calloc(1U, sizeof(*handle));
     if (handle == NULL)
     {
-        ESP_LOGE(TAG, "Failed to allocate LVGL SD file handle");
+        APP_LOGE(TAG, FAILED_TO_ALLOCATE_LVGL_SD_11B8FF25, "Failed to allocate LVGL SD file handle");
 
         if (fclose(file) != 0)
         {
@@ -235,7 +236,7 @@ static void *lvgl_sd_fs_open_cb(lv_fs_drv_t *drv,
     handle->file = file;
     handle->sd_lease_held = true;
 
-    ESP_LOGD(TAG, "Opened file: %s", full_path);
+    APP_LOGD(TAG, OPENED_FILE_S_818167BB, "Opened file: %s", full_path);
 
     return handle;
 }
@@ -458,11 +459,11 @@ esp_err_t lvgl_sd_fs_register(void)
 {
     if (s_lvgl_sd_fs_registered)
     {
-        ESP_LOGW(TAG, "LVGL SD file system driver already registered");
+        APP_LOGW(TAG, LVGL_SD_FILE_SYSTEM_DRIVER_920C8F68, "LVGL SD file system driver already registered");
         return ESP_OK;
     }
 
-    ESP_LOGD(TAG, "Registering SD card filesystem driver with LVGL");
+    APP_LOGD(TAG, REGISTERING_SD_CARD_FILESYST_543CAA70, "Registering SD card filesystem driver with LVGL");
 
     lv_fs_drv_init(&s_lvgl_sd_fs_drv);
 
@@ -490,7 +491,7 @@ esp_err_t lvgl_sd_fs_register(void)
     s_lvgl_sd_fs_drv.seek_cb = lvgl_sd_fs_seek_cb;
     s_lvgl_sd_fs_drv.tell_cb = lvgl_sd_fs_tell_cb;
 
-    ESP_LOGD(TAG, "Before calling lv_fs_drv_register");
+    APP_LOGD(TAG, BEFORE_CALLING_LV_FS_DRV_20EE9897, "Before calling lv_fs_drv_register");
 
     /*
      * Register the driver to LVGL.
@@ -499,7 +500,7 @@ esp_err_t lvgl_sd_fs_register(void)
 
     s_lvgl_sd_fs_registered = true;
 
-    ESP_LOGI(TAG,
+    APP_LOGI(TAG, LVGL_SD_FILESYSTEM_REGISTERE_5E101D7F,
              "LVGL SD filesystem registered as %c:",
              LVGL_SD_FS_LETTER);
 

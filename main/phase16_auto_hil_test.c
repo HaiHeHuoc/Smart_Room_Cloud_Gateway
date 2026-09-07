@@ -14,6 +14,7 @@
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "app_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -132,11 +133,11 @@ static void ph16_record_case(ph16_summary_t *summary,
     switch (result.outcome) {
         case PH16_CASE_PASS:
             ++summary->passed;
-            ESP_LOGI(TAG, "PH16_TEST T16_%02" PRIu32 " PASS", case_id);
+            APP_LOGI(TAG, PH16_TEST_T16_PRIU32_PASS_93C5DE5E, "PH16_TEST T16_%02" PRIu32 " PASS", case_id);
             break;
         case PH16_CASE_SKIP:
             ++summary->skipped;
-            ESP_LOGW(TAG,
+            APP_LOGW(TAG, PH16_TEST_T16_PRIU32_SKIP_FEABA303,
                      "PH16_TEST T16_%02" PRIu32 " SKIP reason=%s",
                      case_id,
                      result.reason);
@@ -144,7 +145,7 @@ static void ph16_record_case(ph16_summary_t *summary,
         case PH16_CASE_FAIL:
         default:
             ++summary->failed;
-            ESP_LOGE(TAG,
+            APP_LOGE(TAG, PH16_TEST_T16_PRIU32_FAIL_526BF821,
                      "PH16_TEST T16_%02" PRIu32 " FAIL reason=%s",
                      case_id,
                      result.reason);
@@ -219,7 +220,7 @@ static void ph16_log_request(const char *label, const audio_manager_request_t *r
         return;
     }
 
-    ESP_LOGI(TAG,
+    APP_LOGI(TAG, PH16_TEST_S_REQUEST_PRIU32_29FF1C47,
              "PH16_TEST %s request=%" PRIu32 " client=%s resource=%s priority=%u policy=%s interruptible=%s",
              label,
              request->request_id,
@@ -237,7 +238,7 @@ static void ph16_log_playback_status(const char *label)
         return;
     }
 
-    ESP_LOGI(TAG,
+    APP_LOGI(TAG, PH16_TEST_S_PB_STATE_6C1AFD40,
              "PH16_TEST %s PB state=%s current=%s/%" PRIu32 "/%s/%u/%s/%s pending=%s/%" PRIu32 "/%s/%u/%s/%s counters=a%" PRIu32 " r%" PRIu32 " q%" PRIu32 " p%" PRIu32 " c%" PRIu32 " f%" PRIu32 " err=%s",
              label,
              audio_manager_playback_arbiter_state_to_string(status.state),
@@ -269,7 +270,7 @@ static void ph16_log_capture_status(const char *label)
         return;
     }
 
-    ESP_LOGI(TAG,
+    APP_LOGI(TAG, PH16_TEST_S_CAP_STATE_ED4262A8,
              "PH16_TEST %s CAP state=%s current=%s/%" PRIu32 "/%s/%u/%s/%s pending=%s/%" PRIu32 "/%s/%u/%s/%s counters=a%" PRIu32 " r%" PRIu32 " q%" PRIu32 " p%" PRIu32 " c%" PRIu32 " f%" PRIu32 " err=%s",
              label,
              audio_manager_capture_arbiter_state_to_string(status.state),
@@ -301,7 +302,7 @@ static void ph16_log_audio_status(const char *label)
         return;
     }
 
-    ESP_LOGI(TAG,
+    APP_LOGI(TAG, PH16_TEST_S_AUDIO_STATE_B3D1E9AE,
              "PH16_TEST %s AUDIO state=%s capture_i2s=%s playback_i2s=%s wav=start%" PRIu32 "/done%" PRIu32 "/fail%" PRIu32 "/cancel%" PRIu32 " tx=qovf%" PRIu32 "/timeout%" PRIu32 "/partial%" PRIu32 " err=%s",
              label,
              audio_manager_state_to_string(status.state),
@@ -325,7 +326,7 @@ static void ph16_log_voice_status(const char *label)
         return;
     }
 
-    ESP_LOGI(TAG,
+    APP_LOGI(TAG, PH16_TEST_S_VOICE_STATE_FE604784,
              "PH16_TEST %s VOICE state=%s active=%s generation=%" PRIu32 " err=%s xiaozhi=%s active=%s generation=%" PRIu32 " err=%s",
              label,
              voice_assistant_state_to_string(voice.state),
@@ -523,7 +524,7 @@ static esp_err_t ph16_start_synthetic_xiaozhi(uint32_t request_id)
 
 static ph16_case_result_t ph16_case_boot(void)
 {
-    ESP_LOGI(TAG, "PH16_TEST T16_02 BEGIN");
+    APP_LOGI(TAG, PH16_TEST_T16_BEGIN_CD58ECDC, "PH16_TEST T16_02 BEGIN");
     audio_manager_status_t audio = {0};
     audio_manager_playback_arbiter_status_t playback = {0};
     audio_manager_capture_arbiter_status_t capture = {0};
@@ -564,7 +565,7 @@ static ph16_case_result_t ph16_case_boot(void)
 
 static ph16_case_result_t ph16_case_notification_queue(bool wav_ready)
 {
-    ESP_LOGI(TAG, "PH16_TEST T16_05 BEGIN");
+    APP_LOGI(TAG, PH16_TEST_T16_BEGIN_C79DE5C5, "PH16_TEST T16_05 BEGIN");
     if (!wav_ready) {
         return ph16_skip("sd_vfs_not_ready");
     }
@@ -614,7 +615,7 @@ static ph16_case_result_t ph16_case_notification_queue(bool wav_ready)
 
 static ph16_case_result_t ph16_case_alarm_preempt(bool wav_ready)
 {
-    ESP_LOGI(TAG, "PH16_TEST T16_06 BEGIN");
+    APP_LOGI(TAG, PH16_TEST_T16_BEGIN_4912E226, "PH16_TEST T16_06 BEGIN");
     if (!wav_ready) {
         return ph16_skip("sd_vfs_not_ready");
     }
@@ -663,7 +664,7 @@ static ph16_case_result_t ph16_case_alarm_preempt(bool wav_ready)
 
 static ph16_case_result_t ph16_case_equal_priority(bool wav_ready)
 {
-    ESP_LOGI(TAG, "PH16_TEST T16_07 BEGIN");
+    APP_LOGI(TAG, PH16_TEST_T16_BEGIN_85B8E2B8, "PH16_TEST T16_07 BEGIN");
     if (!wav_ready) {
         return ph16_skip("sd_vfs_not_ready");
     }
@@ -714,7 +715,7 @@ static ph16_case_result_t ph16_case_equal_priority(bool wav_ready)
 
 static ph16_case_result_t ph16_case_queue_pressure(bool wav_ready)
 {
-    ESP_LOGI(TAG, "PH16_TEST T16_08 BEGIN");
+    APP_LOGI(TAG, PH16_TEST_T16_BEGIN_5C98F014, "PH16_TEST T16_08 BEGIN");
     if (!wav_ready) {
         return ph16_skip("sd_vfs_not_ready");
     }
@@ -772,7 +773,7 @@ static ph16_case_result_t ph16_case_queue_pressure(bool wav_ready)
 
 static ph16_case_result_t ph16_case_capture_contention(void)
 {
-    ESP_LOGI(TAG, "PH16_TEST T16_09 BEGIN");
+    APP_LOGI(TAG, PH16_TEST_T16_BEGIN_9032F08A, "PH16_TEST T16_09 BEGIN");
     if (ph16_wait_clean(PH16_AUTO_CLEAN_TIMEOUT_MS) != ESP_OK) {
         return ph16_fail("precondition_not_clean");
     }
@@ -863,7 +864,7 @@ static ph16_case_result_t ph16_case_capture_contention(void)
 
 static ph16_case_result_t ph16_case_cross_resource_race(bool wav_ready)
 {
-    ESP_LOGI(TAG, "PH16_TEST T16_10 BEGIN");
+    APP_LOGI(TAG, PH16_TEST_T16_BEGIN_9806FFE2, "PH16_TEST T16_10 BEGIN");
     if (!wav_ready) {
         return ph16_skip("sd_vfs_not_ready");
     }
@@ -904,7 +905,7 @@ static ph16_case_result_t ph16_case_cross_resource_race(bool wav_ready)
             : UINT32_MAX;
     ph16_log_request("T16_10_CAPTURE", &capture);
     ph16_log_request("T16_10_PLAYBACK", &playback);
-    ESP_LOGI(TAG,
+    APP_LOGI(TAG, PH16_TEST_T16_SUBMIT_DELTA_E64058DF,
              "PH16_TEST T16_10 submit_delta_us=%" PRIu32 " capture_ret=%s playback_ret=%s",
              submit_delta_us,
              esp_err_to_name(capture_ret),
@@ -964,7 +965,7 @@ static ph16_case_result_t ph16_case_cross_resource_race(bool wav_ready)
         if (capture_active && playback_waiting_for_manager) {
             capture_won = true;
             serialized_wait_observed = true;
-            ESP_LOGI(TAG,
+            APP_LOGI(TAG, PH16_TEST_T16_WINNER_CAPTURE_A0FFBB3B,
                      "PH16_TEST T16_10 winner=CAPTURE loser=PLAYBACK wait=%s",
                      (pb.last_error == ESP_ERR_INVALID_STATE)
                          ? "RETRY_AFTER_INVALID_STATE"
@@ -974,7 +975,7 @@ static ph16_case_result_t ph16_case_cross_resource_race(bool wav_ready)
         if (playback_active && capture_waiting_for_manager) {
             capture_won = false;
             serialized_wait_observed = true;
-            ESP_LOGI(TAG,
+            APP_LOGI(TAG, PH16_TEST_T16_WINNER_PLAYBAC_B0219E7A,
                      "PH16_TEST T16_10 winner=PLAYBACK loser=CAPTURE wait=%s",
                      (cap.last_error == ESP_ERR_INVALID_STATE)
                          ? "RETRY_AFTER_INVALID_STATE"
@@ -1037,7 +1038,7 @@ static ph16_case_result_t ph16_case_cross_resource_race(bool wav_ready)
 
 static ph16_case_result_t ph16_case_cancellation(bool wav_ready)
 {
-    ESP_LOGI(TAG, "PH16_TEST T16_11 BEGIN");
+    APP_LOGI(TAG, PH16_TEST_T16_BEGIN_54ACFF7C, "PH16_TEST T16_11 BEGIN");
     if (!wav_ready) {
         return ph16_skip("sd_vfs_not_ready");
     }
@@ -1164,7 +1165,7 @@ static ph16_case_result_t ph16_case_full_gateway(
     bool wav_ready,
     const ph16_gateway_snapshot_t *before)
 {
-    ESP_LOGI(TAG, "PH16_TEST T16_12 BEGIN");
+    APP_LOGI(TAG, PH16_TEST_T16_BEGIN_DA23F89F, "PH16_TEST T16_12 BEGIN");
     if (!wav_ready) {
         return ph16_skip("sd_vfs_not_ready");
     }
@@ -1185,7 +1186,7 @@ static ph16_case_result_t ph16_case_full_gateway(
                                 (int64_t)before->psram_free;
     const int64_t dma_delta = (int64_t)after.dma_free -
                               (int64_t)before->dma_free;
-    ESP_LOGI(TAG,
+    APP_LOGI(TAG, PH16_TEST_T16_GATEWAY_SENSOR_6E86BFD7,
              "PH16_TEST T16_12 gateway sensor_progress=%" PRIu32 "->%" PRIu32 " cloud_state=%d->%d sd_state=%d->%d gui=%d->%d voice=%s xiaozhi=%s heap_delta_internal=%" PRId64 " psram=%" PRId64 " dma=%" PRId64 " pb_fail=%" PRIu32 " cap_fail=%" PRIu32,
              before->sensor_progress,
              after.sensor_progress,
@@ -1225,12 +1226,12 @@ static void ph16_auto_hil_task(void *argument)
 {
     (void)argument;
     ph16_summary_t summary = {0};
-    ESP_LOGI(TAG,
+    APP_LOGI(TAG, PH16_TEST_AUTO_BEGIN_WAV_ABAFF46B,
              "PH16_TEST AUTO_BEGIN wav_path=%s gpio_ptt=unused i2s_owner=audio_manager_only",
              CONFIG_APP_PHASE16_AUTO_HIL_WAV_PATH);
 
     /* T16-01 is established by the invoking ESP-IDF build. */
-    ESP_LOGI(TAG, "PH16_TEST T16_01 PASS evidence=build_linked_auto_harness");
+    APP_LOGI(TAG, PH16_TEST_T16_PASS_EVIDENCE_BC7543F7, "PH16_TEST T16_01 PASS evidence=build_linked_auto_harness");
     ++summary.passed;
 
     const ph16_case_result_t boot_result = ph16_case_boot();
@@ -1243,7 +1244,7 @@ static void ph16_auto_hil_task(void *argument)
     /* Synthetic arbitration must not manufacture PASS evidence when the
      * production voice/Xiaozhi startup boundary did not become READY. */
     if (boot_result.outcome != PH16_CASE_PASS) {
-        ESP_LOGE(TAG,
+        APP_LOGE(TAG, PH16_TEST_ARBITRATION_CASES_0930E32F,
                  "PH16_TEST arbitration cases skipped because T16_02 boot precondition failed");
         for (uint32_t case_id = 5U; case_id <= 12U; ++case_id) {
             ph16_record_case(&summary, case_id,
@@ -1252,7 +1253,7 @@ static void ph16_auto_hil_task(void *argument)
         ph16_log_audio_status("SUMMARY");
         ph16_log_playback_status("SUMMARY");
         ph16_log_capture_status("SUMMARY");
-        ESP_LOGI(TAG,
+        APP_LOGI(TAG, PH16_TEST_SUMMARY_PASS_PRIU3_4A422758,
                  "PH16_TEST SUMMARY pass=%" PRIu32 " fail=%" PRIu32 " skip=%" PRIu32,
                  summary.passed,
                  summary.failed,
@@ -1264,7 +1265,7 @@ static void ph16_auto_hil_task(void *argument)
 
     const bool wav_ready = (ph16_wait_sd_ready() == ESP_OK);
     if (!wav_ready) {
-        ESP_LOGW(TAG,
+        APP_LOGW(TAG, PH16_TEST_WAV_PREREQUISITE_U_3503F599,
                  "PH16_TEST WAV prerequisite unavailable path=%s; playback cases will SKIP",
                  CONFIG_APP_PHASE16_AUTO_HIL_WAV_PATH);
     }
@@ -1273,7 +1274,7 @@ static void ph16_auto_hil_task(void *argument)
     const bool gateway_baseline_ready =
         (ph16_capture_gateway_snapshot(&gateway_before) == ESP_OK);
     if (!gateway_baseline_ready) {
-        ESP_LOGW(TAG, "PH16_TEST T16_12 baseline snapshot unavailable");
+        APP_LOGW(TAG, PH16_TEST_T16_BASELINE_SNAPS_BC211A4F, "PH16_TEST T16_12 baseline snapshot unavailable");
     }
 
     ph16_record_case(&summary, 5U, ph16_case_notification_queue(wav_ready));
@@ -1292,7 +1293,7 @@ static void ph16_auto_hil_task(void *argument)
     ph16_log_audio_status("SUMMARY");
     ph16_log_playback_status("SUMMARY");
     ph16_log_capture_status("SUMMARY");
-    ESP_LOGI(TAG,
+    APP_LOGI(TAG, PH16_TEST_SUMMARY_PASS_PRIU3_B9A11E68,
              "PH16_TEST SUMMARY pass=%" PRIu32 " fail=%" PRIu32 " skip=%" PRIu32,
              summary.passed,
              summary.failed,

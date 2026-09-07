@@ -14,6 +14,7 @@
 #include "esp_check.h"
 #include "esp_bt.h"
 #include "esp_log.h"
+#include "app_log.h"
 #include "esp_mac.h"
 #include "esp_wifi_types.h"
 
@@ -623,14 +624,14 @@ static void provisioning_manager_cleanup_task(
     {
         if (late_handoff_retained)
         {
-            ESP_LOGI(
-                TAG,
+            APP_LOGI(
+                TAG, RETAINED_GENERATION_BOUND_WI_CB0F5F64,
                 "Retained generation-bound Wi-Fi handoff for bounded "
                 "post-stop reconciliation");
         }
 
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, PROVISIONING_MANAGER_DE_INIT_2779A94C,
             "Provisioning manager de-initialized");
 
         provisioning_manager_publish_progress_for_generation(
@@ -641,8 +642,8 @@ static void provisioning_manager_cleanup_task(
     }
     else
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_DE_INITIALIZE_PROV_122E97E2,
             "Failed to de-initialize provisioning framework: %s",
             esp_err_to_name(ret));
 
@@ -666,14 +667,14 @@ static void provisioning_manager_event_callback(
     switch (event)
     {
         case NETWORK_PROV_INIT:
-            ESP_LOGD(
-                TAG,
+            APP_LOGD(
+                TAG, UNDERLYING_PROVISIONING_FRAM_6D15B1FB,
                 "Underlying provisioning framework initialized");
             break;
 
         case NETWORK_PROV_START:
-            ESP_LOGD(
-                TAG,
+            APP_LOGD(
+                TAG, UNDERLYING_PROVISIONING_SERV_5B12A1E2,
                 "Underlying provisioning service started");
             break;
 
@@ -708,8 +709,8 @@ static void provisioning_manager_event_callback(
                     &credentials_copy,
                     sizeof(credentials_copy));
 
-                ESP_LOGE(
-                    TAG,
+                APP_LOGE(
+                    TAG, RECEIVED_INVALID_WI_FI_CREDE_1843CF66,
                     "Received invalid Wi-Fi credentials");
 
                 provisioning_manager_publish_progress(
@@ -742,8 +743,8 @@ static void provisioning_manager_event_callback(
                 &credentials_copy,
                 sizeof(credentials_copy));
 
-            ESP_LOGI(
-                TAG,
+            APP_LOGI(
+                TAG, WI_FI_CREDENTIALS_RECEIVED_A_EB9F76B9,
                 "Wi-Fi credentials received; awaiting connection result");
 
             provisioning_manager_publish_progress(
@@ -784,8 +785,8 @@ static void provisioning_manager_event_callback(
 
             portEXIT_CRITICAL(&s_state_lock);
 
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, PROVISIONED_WI_FI_CONNECTION_4F169F13,
                 "Provisioned Wi-Fi connection failed; pending credentials "
                 "discarded");
 
@@ -841,8 +842,8 @@ static void provisioning_manager_event_callback(
                     &credentials_copy,
                     sizeof(credentials_copy));
 
-                ESP_LOGE(
-                    TAG,
+                APP_LOGE(
+                    TAG, PROVISIONED_CONNECTION_SUCCE_7D15D8A1,
                     "Provisioned connection succeeded but credential "
                     "handoff is unavailable");
 
@@ -871,8 +872,8 @@ static void provisioning_manager_event_callback(
 
                 portEXIT_CRITICAL(&s_state_lock);
 
-                ESP_LOGE(
-                    TAG,
+                APP_LOGE(
+                    TAG, FAILED_TO_QUEUE_VERIFIED_WI_EF52DA90,
                     "Failed to queue verified Wi-Fi credentials");
 
                 provisioning_manager_publish_progress(
@@ -883,8 +884,8 @@ static void provisioning_manager_event_callback(
                 break;
             }
 
-            ESP_LOGI(
-                TAG,
+            APP_LOGI(
+                TAG, PROVISIONED_WI_FI_CONNECTION_DA16F15F,
                 "Provisioned Wi-Fi connection succeeded; credentials ready "
                 "for application handoff");
 
@@ -918,8 +919,8 @@ static void provisioning_manager_event_callback(
                 ESP_OK,
                 0U);
 
-            ESP_LOGI(
-                TAG,
+            APP_LOGI(
+                TAG, PROVISIONING_SERVICE_STOPPED_1702D36E,
                 "Provisioning service stopped");
 
             /*
@@ -963,14 +964,14 @@ static void provisioning_manager_event_callback(
                     provisioning_manager_clear_credentials_queue(
                         credentials_queue);
 
-                ESP_LOGE(
-                    TAG,
+                APP_LOGE(
+                    TAG, FAILED_TO_CREATE_PROVISIONIN_945FB07C,
                     "Failed to create provisioning cleanup task");
 
                 if (queue_cleanup_ret != ESP_OK)
                 {
-                    ESP_LOGE(
-                        TAG,
+                    APP_LOGE(
+                        TAG, FAILED_TO_CLEAR_RETAINED_PRO_4EF9C25C,
                         "Failed to clear retained provisioning credential "
                         "queue");
                 }
@@ -990,8 +991,8 @@ static void provisioning_manager_event_callback(
              * network_prov_mgr_deinit() has returned. Keeping STOPPING here
              * prevents a new session from racing the old cleanup task.
              */
-            ESP_LOGD(
-                TAG,
+            APP_LOGD(
+                TAG, UNDERLYING_PROVISIONING_FRAM_89804900,
                 "Underlying provisioning framework de-initialized");
             break;
 
@@ -1171,8 +1172,8 @@ esp_err_t provisioning_manager_init(
 
         portEXIT_CRITICAL(&s_state_lock);
 
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_RESET_PROVISIONING_BE6EC10A,
             "Failed to reset provisioning credential queue");
 
         provisioning_manager_publish_progress(
@@ -1192,8 +1193,8 @@ esp_err_t provisioning_manager_init(
 
         portEXIT_CRITICAL(&s_state_lock);
 
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_CREATE_PROVISIONIN_DC04FD2D,
             "Failed to create provisioning credential queue");
 
         provisioning_manager_publish_progress(
@@ -1248,8 +1249,8 @@ esp_err_t provisioning_manager_init(
 
     if (ret != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_INITIALIZE_PROVISI_1DB46A04,
             "Failed to initialize provisioning framework: %s",
             esp_err_to_name(ret));
 
@@ -1261,8 +1262,8 @@ esp_err_t provisioning_manager_init(
         return ret;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, PROVISIONING_MANAGER_INITIAL_6153E671,
         "Provisioning manager initialized");
 
     return ESP_OK;
@@ -1307,8 +1308,8 @@ esp_err_t provisioning_manager_start(void)
         provisioning_manager_set_state(
             PROVISIONING_MANAGER_STATE_FAILED);
 
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_BUILD_PROVISIONING_66D26652,
             "Failed to build provisioning service name: %s",
             esp_err_to_name(ret));
 
@@ -1357,8 +1358,8 @@ esp_err_t provisioning_manager_start(void)
 
         portEXIT_CRITICAL(&s_state_lock);
 
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_START_BLE_PROVISIO_3ED9CD3B,
             "Failed to start BLE provisioning: %s",
             esp_err_to_name(ret));
 
@@ -1400,8 +1401,8 @@ esp_err_t provisioning_manager_start(void)
             return ret;
         }
 
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_CLEAN_PROVISIONING_1455252D,
             "Failed to clean provisioning framework after start error: %s",
             esp_err_to_name(cleanup_ret));
 
@@ -1457,15 +1458,15 @@ esp_err_t provisioning_manager_start(void)
         qr_payload,
         sizeof(qr_payload));
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, BLE_PROVISIONING_ACTIVE_WITH_B523256D,
         "BLE provisioning active with service name: %s",
         service_name);
 
     if (qr_ret != ESP_OK)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, BLE_PROVISIONING_QR_PAYLOAD_AA7823A8,
             "BLE provisioning QR payload is unavailable: %s",
             esp_err_to_name(qr_ret));
     }
@@ -1553,8 +1554,8 @@ esp_err_t provisioning_manager_stop(void)
      */
     network_prov_mgr_stop_provisioning();
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, PROVISIONING_STOP_REQUESTED_AC25441E,
         "Provisioning stop requested");
 
     return ESP_OK;
@@ -1614,8 +1615,8 @@ esp_err_t provisioning_manager_release_ble_memory(void)
 
         portEXIT_CRITICAL(&s_state_lock);
 
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_CLEAR_TERMINAL_PRO_3BA5C288,
             "Failed to clear terminal provisioning credential queue");
 
         return queue_cleanup_ret;
@@ -1647,8 +1648,8 @@ esp_err_t provisioning_manager_release_ble_memory(void)
 
         portEXIT_CRITICAL(&s_state_lock);
 
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, TERMINAL_BLE_MEMORY_RELEASE_06D3026B,
             "Terminal BLE memory release unavailable: %s "
             "(failure_count=%lu)",
             esp_err_to_name(ret),
@@ -1666,14 +1667,14 @@ esp_err_t provisioning_manager_release_ble_memory(void)
 
     if (ret == ESP_ERR_NOT_FOUND)
     {
-        ESP_LOGD(
-            TAG,
+        APP_LOGD(
+            TAG, TERMINAL_BLE_MEMORY_WAS_ALRE_16692724,
             "Terminal BLE memory was already released");
     }
     else
     {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, TERMINAL_BLE_MEMORY_RELEASED_D27FB7FB,
             "Terminal BLE memory released");
     }
 
@@ -1788,8 +1789,8 @@ esp_err_t provisioning_manager_arm_late_wifi_handoff(
 
     if (newly_armed)
     {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, ARMED_BOUNDED_POST_STOP_WI_38E811F1,
             "Armed bounded post-stop Wi-Fi handoff reconciliation");
     }
 
@@ -1874,8 +1875,8 @@ esp_err_t provisioning_manager_confirm_late_wifi_handoff(
         s_wifi_handoff_pending = false;
         portEXIT_CRITICAL(&s_state_lock);
 
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_QUEUE_LATE_VERIFIE_B7DCBAF0,
             "Failed to queue late verified Wi-Fi credentials");
 
         provisioning_manager_publish_progress_for_generation(
@@ -1887,8 +1888,8 @@ esp_err_t provisioning_manager_confirm_late_wifi_handoff(
         return ESP_FAIL;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, LATE_PROVISIONING_HANDOFF_VE_74FE5AD2,
         "Late provisioning handoff verified by Station IPv4 state");
 
     provisioning_manager_publish_progress_for_generation(
@@ -1930,8 +1931,8 @@ esp_err_t provisioning_manager_discard_late_wifi_handoff(
 
     portEXIT_CRITICAL(&s_state_lock);
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, DISCARDED_RETAINED_LATE_WI_F_E430FCDD,
         "Discarded retained late Wi-Fi handoff");
 
     return ESP_OK;
@@ -1993,8 +1994,8 @@ esp_err_t provisioning_manager_receive_wifi_credentials(
 
         portEXIT_CRITICAL(&s_state_lock);
 
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, FAILED_TO_CLEAR_DELIVERED_CR_3B88A0CA,
             "Failed to clear delivered credential queue storage");
 
         return queue_cleanup_ret;
@@ -2008,8 +2009,8 @@ esp_err_t provisioning_manager_receive_wifi_credentials(
 
     portEXIT_CRITICAL(&s_state_lock);
 
-    ESP_LOGD(
-        TAG,
+    APP_LOGD(
+        TAG, VERIFIED_WI_FI_CREDENTIALS_D_99E6EE28,
         "Verified Wi-Fi credentials delivered to application");
 
     return ESP_OK;

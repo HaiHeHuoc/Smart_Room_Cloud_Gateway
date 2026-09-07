@@ -30,6 +30,7 @@
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "app_log.h"
 #include "esp_memory_utils.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -511,8 +512,8 @@ static bool audio_manager_take_status_mutex(const char *operation)
         return true;
     }
 
-    ESP_LOGE(
-        TAG,
+    APP_LOGE(
+        TAG, STATUS_MUTEX_TIMEOUT_WHILE_S_18EB6A28,
         "Status mutex timeout while %s",
         (operation != NULL) ? operation : "updating diagnostics");
     return false;
@@ -532,8 +533,8 @@ static bool audio_manager_take_pcm_stream_mutex(const char *operation)
         return true;
     }
 
-    ESP_LOGE(
-        TAG,
+    APP_LOGE(
+        TAG, PCM_STREAM_MUTEX_TIMEOUT_WHI_E592C47F,
         "PCM stream mutex timeout while %s",
         (operation != NULL) ? operation : "updating stream state");
     return false;
@@ -1100,7 +1101,7 @@ static void audio_manager_set_state(audio_manager_state_t state)
 
     if (changed)
     {
-        ESP_LOGD(TAG, "State -> %s", audio_manager_state_to_string(state));
+        APP_LOGD(TAG, STATE_S_44CF8134, "State -> %s", audio_manager_state_to_string(state));
         audio_manager_notify_status_changed();
     }
 }
@@ -1153,8 +1154,8 @@ static void log_heap_state(const char *label)
     const size_t psram_largest =
         heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, HEAP_S_INTERNAL_U_MIN_74CF414A,
         "HEAP[%s] internal=%u min=%u largest=%u dma=%u min=%u largest=%u psram=%u min=%u largest=%u",
         (label != NULL) ? label : "?",
         (unsigned)internal_free,
@@ -1329,8 +1330,8 @@ static esp_err_t read_rx_block(size_t *frames_read)
         AUDIO_MANAGER_SLOT_COUNT * sizeof(int32_t);
     if ((bytes_read % bytes_per_frame) != 0U)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, RX_BYTE_COUNT_IS_NOT_B78C9762,
             "RX byte count is not frame aligned: %u",
             (unsigned)bytes_read);
     }
@@ -1441,8 +1442,8 @@ static esp_err_t detect_microphone_slot(
             ? MICROPHONE_SLOT_RIGHT
             : MICROPHONE_SLOT_LEFT;
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, SLOT_DETECT_LEFT_AVG_LLU_D7D37C52,
         "SLOT_DETECT left_avg=%llu left_peak=%u right_avg=%llu right_peak=%u selected=%s",
         (unsigned long long)left_average,
         (unsigned)left.peak,
@@ -1511,8 +1512,8 @@ static esp_err_t record_audio(
         while ((captured >= next_progress) &&
                (next_progress <= target_sample_count))
         {
-            ESP_LOGI(
-                TAG,
+            APP_LOGI(
+                TAG, RECORDED_U_U_SECONDS_6D1F33DF,
                 "Recorded %u/%u seconds",
                 (unsigned)(next_progress / AUDIO_MANAGER_SAMPLE_RATE_HZ),
                 (unsigned)(target_sample_count / AUDIO_MANAGER_SAMPLE_RATE_HZ));
@@ -1920,8 +1921,8 @@ static esp_err_t audio_manager_take_prefetched_wav_item(
             ++metrics->prefetch_starvation_count;
             metrics->prefetch_wait_ms +=
                 AUDIO_MANAGER_WAV_PREFETCH_WAIT_POLL_MS;
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, WAV_PREFETCH_STARVATION_NO_R_999126B7,
                 "WAV prefetch starvation: no READY block after %ums",
                 (unsigned)AUDIO_MANAGER_WAV_PREFETCH_WAIT_POLL_MS);
             return ESP_ERR_TIMEOUT;
@@ -2228,7 +2229,7 @@ static esp_err_t play_pcm16_stream(
         }
         if (initial_waited_ms >= AUDIO_MANAGER_PCM_STREAM_INITIAL_WAIT_MS)
         {
-            ESP_LOGE(TAG,
+            APP_LOGE(TAG, PCM_STREAM_INITIAL_PREFILL_T_8524E6CE,
                      "PCM stream initial prefill timed out generation=%u",
                      (unsigned)generation);
             return ESP_ERR_TIMEOUT;
@@ -2239,7 +2240,7 @@ static esp_err_t play_pcm16_stream(
         initial_waited_ms += AUDIO_MANAGER_PCM_STREAM_INITIAL_WAIT_POLL_MS;
     }
 
-    ESP_LOGI(TAG,
+    APP_LOGI(TAG, PCM_STREAM_START_GENERATION_55FAC83A,
              "PCM_STREAM START generation=%u prefill=%u samples ring=%u samples",
              (unsigned)generation,
              (unsigned)AUDIO_MANAGER_PCM_STREAM_PREFILL_SAMPLES,
@@ -2324,7 +2325,7 @@ static esp_err_t play_pcm16_stream(
             if (starvation_waited_ms >=
                 AUDIO_MANAGER_PCM_STREAM_STARVATION_WAIT_MS)
             {
-                ESP_LOGE(TAG,
+                APP_LOGE(TAG, PCM_STREAM_STARVED_GENERATIO_8BE8D1BD,
                          "PCM stream starved generation=%u waited=%ums",
                          (unsigned)generation,
                          (unsigned)starvation_waited_ms);
@@ -2347,7 +2348,7 @@ static esp_err_t play_pcm16_stream(
 
         if (starvation_active)
         {
-            ESP_LOGW(TAG,
+            APP_LOGW(TAG, PCM_STREAM_INGRESS_RESUMED_G_7C6FB360,
                      "PCM stream ingress resumed generation=%u silence=%ums",
                      (unsigned)generation,
                      (unsigned)starvation_waited_ms);
@@ -2420,7 +2421,7 @@ static esp_err_t audio_manager_copy_prefetch_metrics(
     {
         if ((wait_rounds == 0U) || ((wait_rounds % 10U) == 9U))
         {
-            ESP_LOGW(TAG, "Waiting for WAV prefetch reader to drain");
+            APP_LOGW(TAG, WAITING_FOR_WAV_PREFETCH_REA_1A36C5F7, "Waiting for WAV prefetch reader to drain");
         }
         ++wait_rounds;
     }
@@ -2494,8 +2495,8 @@ static void log_ns_metrics(const audio_dsp_ns_metrics_t *metrics)
     const uint32_t maximum_gain_milli =
         (uint32_t)(metrics->maximum_gain * 1000.0f + 0.5f);
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, NS_FRAMES_U_UPDATES_U_60F68A0C,
         "NS frames=%u updates=%u yields=%u avg_gain=%u.%03u min=%u.%03u max=%u.%03u floor=%u.%u%% protected=%u.%u%%",
         (unsigned)metrics->processed_frames,
         (unsigned)metrics->noise_updates,
@@ -2524,8 +2525,8 @@ static void log_playback_result(const audio_dsp_playback_stats_t *playback)
             ? 0U
             : (uint32_t)(playback->absolute_sum / playback->sample_count);
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, PLAYBACK_OUTPUT_AVG_U_PEAK_A035815C,
         "PLAYBACK output_avg=%u peak=%u soft=%u/%u limited=%u/%u",
         (unsigned)output_average,
         (unsigned)playback->peak,
@@ -2579,8 +2580,8 @@ static esp_err_t record_once_controlled(
 
     if ((result == ESP_OK) && (*stop_reason == AUDIO_RECORD_STOP_NONE))
     {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, RECORDING_TARGET_U_SAMPLES_U_4EE0A79C,
             "RECORDING target=%u samples (%u seconds) mode=%s",
             (unsigned)target_sample_count,
             (unsigned)(target_sample_count / AUDIO_MANAGER_SAMPLE_RATE_HZ),
@@ -2699,8 +2700,8 @@ static esp_err_t process_once(
             : (uint32_t)(((uint64_t)elapsed_us * 1000ULL) /
                          audio_duration_us);
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, DSP_DC_LD_PCM16_EQ_AAC46990,
         "DSP dc=%ld pcm16_eq raw_avg=%u raw_peak=%u band_avg=%u band_peak=%u ns_avg=%u ns_peak=%u time=%ums rt=%u.%03u",
         (long)metrics->dc_offset_pcm24,
         (unsigned)(metrics->raw_average_pcm24 / AUDIO_DSP_PCM24_SCALE_FACTOR),
@@ -2745,8 +2746,8 @@ static esp_err_t playback_once(
             {
                 return ESP_ERR_INVALID_STATE;
             }
-            ESP_LOGI(
-                TAG,
+            APP_LOGI(
+                TAG, WAV_PREFETCH_PLAYBACK_BLOCK_26BE1A17,
                 "WAV prefetch playback block=%uB cache=%us x%u volume=%u/100 policy=fixed_full_scale_pcm16 fixed_gain_q16=%u ceiling=+/-%u",
                 (unsigned)AUDIO_MANAGER_WAV_PREFETCH_SLOT_BYTES,
                 (unsigned)CONFIG_AUDIO_MANAGER_WAV_PREFETCH_SECONDS,
@@ -2788,8 +2789,8 @@ static esp_err_t playback_once(
     {
         audio_manager_set_state(AUDIO_MANAGER_STATE_PLAYBACK);
 
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, PLAYBACK_SAMPLES_U_VOLUME_U_9D833C5E,
             "PLAYBACK samples=%u volume=%u/100 gain=%u.%02ux limiter=+/-%u",
             (unsigned)source->recorded_sample_count,
             (unsigned)s_runtime.config.playback_volume_percent,
@@ -2922,7 +2923,7 @@ static esp_err_t audio_manager_release_playback_source(void)
             {
                 if ((wait_rounds == 0U) || ((wait_rounds % 10U) == 9U))
                 {
-                    ESP_LOGW(TAG, "Waiting to release WAV prefetch reader");
+                    APP_LOGW(TAG, WAITING_TO_RELEASE_WAV_PREFE_9AF2F66B, "Waiting to release WAV prefetch reader");
                 }
                 ++wait_rounds;
             }
@@ -2987,8 +2988,8 @@ static esp_err_t run_cycle(audio_cycle_metrics_t *metrics)
     if ((result == ESP_OK) &&
         (samples_recorded != s_runtime.fixed_record_sample_count))
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, RECORDING_INCOMPLETE_GOT_U_E_FB3425AD,
             "Recording incomplete: got=%u expected=%u",
             (unsigned)samples_recorded,
             (unsigned)s_runtime.fixed_record_sample_count);
@@ -3182,8 +3183,8 @@ static void audio_manager_wav_stress_task(void *argument)
     bool waiting_for_sd = false;
     uint32_t iteration = 0U;
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, WAV_STRESS_COORDINATOR_START_B5C10204,
         "WAV stress coordinator started: path=%s priority=%u delay=%us",
         path,
         (unsigned)AUDIO_MANAGER_WAV_STRESS_TASK_PRIORITY,
@@ -3195,7 +3196,7 @@ static void audio_manager_wav_stress_task(void *argument)
         {
             if (!waiting_for_sd)
             {
-                ESP_LOGI(TAG, "WAV stress waiting for SD VFS readiness");
+                APP_LOGI(TAG, WAV_STRESS_WAITING_FOR_SD_7A9A71F2, "WAV stress waiting for SD VFS readiness");
                 waiting_for_sd = true;
             }
 
@@ -3206,7 +3207,7 @@ static void audio_manager_wav_stress_task(void *argument)
 
         if (waiting_for_sd)
         {
-            ESP_LOGI(TAG, "WAV stress detected SD VFS readiness");
+            APP_LOGI(TAG, WAV_STRESS_DETECTED_SD_VFS_A363BBBA, "WAV stress detected SD VFS readiness");
             waiting_for_sd = false;
         }
 
@@ -3233,8 +3234,8 @@ static void audio_manager_wav_stress_task(void *argument)
         if (request_result == ESP_OK)
         {
             ++iteration;
-            ESP_LOGI(
-                TAG,
+            APP_LOGI(
+                TAG, WAV_STRESS_U_ACCEPTED_WAITIN_F46F0F28,
                 "WAV_STRESS #%u accepted; waiting for terminal result",
                 (unsigned)iteration);
 
@@ -3264,8 +3265,8 @@ static void audio_manager_wav_stress_task(void *argument)
                 completion_after.cancelled
                     ? "cancelled"
                     : (completion_after.result == ESP_OK) ? "completed" : "failed";
-            ESP_LOGI(
-                TAG,
+            APP_LOGI(
+                TAG, WAV_STRESS_U_S_S_BF940E00,
                 "WAV_STRESS #%u %s: %s; sleeping %us",
                 (unsigned)iteration,
                 outcome,
@@ -3280,8 +3281,8 @@ static void audio_manager_wav_stress_task(void *argument)
         if ((request_result != ESP_ERR_INVALID_STATE) &&
             (request_result != ESP_ERR_TIMEOUT))
         {
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, WAV_STRESS_REQUEST_REJECTED_065FF0D2,
                 "WAV stress request rejected: %s; retrying after %us",
                 esp_err_to_name(request_result),
                 (unsigned)CONFIG_AUDIO_MANAGER_WAV_STRESS_POST_COMPLETION_DELAY_SECONDS);
@@ -3301,15 +3302,15 @@ static void audio_manager_wav_stress_task(void *argument)
         s_runtime.lifecycle_events,
         AUDIO_MANAGER_WAV_STRESS_TASK_STOPPED_BIT);
 
-    ESP_LOGI(TAG, "WAV stress coordinator stopped");
+    APP_LOGI(TAG, WAV_STRESS_COORDINATOR_STOPP_314BC2BA, "WAV stress coordinator stopped");
     vTaskDelete(NULL);
 }
 #endif
 
 static void audio_manager_handle_record_command(bool manual)
 {
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, S_RECORDING_7CC265FE,
         "========== %s RECORDING ==========" ,
         manual ? "MANUAL" : "FIXED");
 
@@ -3358,8 +3359,8 @@ static void audio_manager_handle_record_command(bool manual)
         }
         else if (manual && manual_stopped)
         {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, MANUAL_RECORDING_STOPPED_BEF_C4AF29C4,
                 "Manual recording stopped before DSP minimum: samples=%u minimum=%u; discarded",
                 (unsigned)samples_recorded,
                 (unsigned)AUDIO_DSP_NS_FFT_SIZE);
@@ -3386,8 +3387,8 @@ static void audio_manager_handle_record_command(bool manual)
     }
     else if ((result != ESP_OK) && (cleanup_result != ESP_OK))
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, RECORDING_CLEANUP_ALSO_FAILE_1D0278F6,
             "Recording cleanup also failed: %s",
             esp_err_to_name(cleanup_result));
     }
@@ -3437,15 +3438,15 @@ static void audio_manager_handle_record_command(bool manual)
 
     if (aborted)
     {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, S_RECORDING_ABORTED_BY_MANAG_3BB8A036,
             "%s recording aborted by manager shutdown",
             manual ? "Manual" : "Fixed");
     }
     else if (result != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, S_RECORDING_FAILED_S_1B234FDD,
             "%s recording failed: %s",
             manual ? "Manual" : "Fixed",
             esp_err_to_name(result));
@@ -3456,8 +3457,8 @@ static void audio_manager_handle_record_command(bool manual)
     }
     else if (processed)
     {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, S_RECORDING_COMPLETED_SAMPLE_16D3F247,
             "%s recording completed: samples=%u manual_stop=%s",
             manual ? "Manual" : "Fixed",
             (unsigned)samples_recorded,
@@ -3465,8 +3466,8 @@ static void audio_manager_handle_record_command(bool manual)
     }
     else
     {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, MANUAL_RECORDING_ENDED_WITHO_230458E1,
             "Manual recording ended without retained audio: samples=%u",
             (unsigned)samples_recorded);
     }
@@ -3474,7 +3475,7 @@ static void audio_manager_handle_record_command(bool manual)
 
 static void audio_manager_handle_recorded_playback_command(void)
 {
-    ESP_LOGI(TAG, "========== RECORDED PLAYBACK ==========");
+    APP_LOGI(TAG, RECORDED_PLAYBACK_CB11BCBF, "========== RECORDED PLAYBACK ==========");
 
     if (audio_manager_take_status_mutex("starting recorded playback"))
     {
@@ -3513,8 +3514,8 @@ static void audio_manager_handle_recorded_playback_command(void)
     }
     else if ((result != ESP_OK) && (cleanup_result != ESP_OK))
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, RECORDED_PLAYBACK_CLEANUP_AL_93088591,
             "Recorded playback cleanup also failed: %s",
             esp_err_to_name(cleanup_result));
     }
@@ -3553,8 +3554,8 @@ static void audio_manager_handle_recorded_playback_command(void)
 
     if (result != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, RECORDED_PLAYBACK_FAILED_S_C73F775E,
             "Recorded playback failed: %s",
             esp_err_to_name(result));
         if (status_updated)
@@ -3564,18 +3565,18 @@ static void audio_manager_handle_recorded_playback_command(void)
     }
     else if (cancelled)
     {
-        ESP_LOGI(TAG, "Recorded playback cancelled");
+        APP_LOGI(TAG, RECORDED_PLAYBACK_CANCELLED_366AB6AA, "Recorded playback cancelled");
     }
     else
     {
-        ESP_LOGI(TAG, "Recorded playback completed");
+        APP_LOGI(TAG, RECORDED_PLAYBACK_COMPLETED_99A3A041, "Recorded playback completed");
     }
 }
 
 static void audio_manager_handle_wav_command(const char *path)
 {
-    ESP_LOGI(TAG, "========== WAV PLAYBACK ==========");
-    ESP_LOGI(TAG, "WAV path=%s", path);
+    APP_LOGI(TAG, WAV_PLAYBACK_EF4C2B80, "========== WAV PLAYBACK ==========");
+    APP_LOGI(TAG, WAV_PATH_S_53E379BA, "WAV path=%s", path);
 
     if (audio_manager_take_status_mutex("starting WAV playback"))
     {
@@ -3619,8 +3620,8 @@ static void audio_manager_handle_wav_command(const char *path)
         else if ((result != ESP_OK) && (prefetch_result != ESP_OK) &&
                  (prefetch_result != result))
         {
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, WAV_PREFETCH_READER_ALSO_FAI_FD2BAD4F,
                 "WAV prefetch reader also failed: %s",
                 esp_err_to_name(prefetch_result));
         }
@@ -3637,8 +3638,8 @@ static void audio_manager_handle_wav_command(const char *path)
     }
     else if ((result != ESP_OK) && (cleanup_result != ESP_OK))
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, WAV_CLEANUP_ALSO_FAILED_S_1E2F345D,
             "WAV cleanup also failed: %s",
             esp_err_to_name(cleanup_result));
     }
@@ -3646,8 +3647,8 @@ static void audio_manager_handle_wav_command(const char *path)
     audio_manager_diagnostics_t diagnostics_after = {0};
     audio_manager_snapshot_diagnostics(&diagnostics_after);
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, WAV_DIAG_RESULT_S_CANCELLED_832A9A3F,
         "WAV_DIAG result=%s cancelled=%s expected_bytes=%u duration=%ums fixed_gain_q16=%u output_peak=%u read_bytes=%llu streamed_bytes=%llu raw_reads=%u raw_read_fail=%u max_raw_read_us=%u prefetch_block=%u prefetch_fills=%u prefetch_fill_fail=%u max_prefetch_fill_us=%u sd_resume_offset=%llu sd_resume_attempt=%u sd_resume_ok=%u sd_resume_wait=%ums initial_wait=%ums boundary_wait=%ums prefetch_starve=%u reader_hwm=%u elapsed=%ums tx_requested=%llu tx_written=%llu tx_q_ovf=%u tx_timeout=%u tx_partial=%u max_tx_us=%u",
         esp_err_to_name(result),
         cancelled ? "yes" : "no",
@@ -3725,7 +3726,7 @@ static void audio_manager_handle_wav_command(const char *path)
 
     if (result != ESP_OK)
     {
-        ESP_LOGE(TAG, "WAV playback failed: %s", esp_err_to_name(result));
+        APP_LOGE(TAG, WAV_PLAYBACK_FAILED_S_C73F9DC7, "WAV playback failed: %s", esp_err_to_name(result));
         if (status_updated)
         {
             audio_manager_set_state(AUDIO_MANAGER_STATE_IDLE);
@@ -3733,17 +3734,17 @@ static void audio_manager_handle_wav_command(const char *path)
     }
     else if (cancelled)
     {
-        ESP_LOGI(TAG, "WAV playback cancelled");
+        APP_LOGI(TAG, WAV_PLAYBACK_CANCELLED_A0B2FA79, "WAV playback cancelled");
     }
     else
     {
-        ESP_LOGI(TAG, "WAV playback completed");
+        APP_LOGI(TAG, WAV_PLAYBACK_COMPLETED_0F7BEC92, "WAV playback completed");
     }
 }
 
 static void audio_manager_handle_pcm_stream_command(uint32_t generation)
 {
-    ESP_LOGI(TAG,
+    APP_LOGI(TAG, PCM16_STREAM_PLAYBACK_GENERA_F537C991,
              "========== PCM16 STREAM PLAYBACK generation=%u ==========",
              (unsigned)generation);
 
@@ -3786,7 +3787,7 @@ static void audio_manager_handle_pcm_stream_command(uint32_t generation)
     }
     else if ((result != ESP_OK) && (cleanup_result != ESP_OK))
     {
-        ESP_LOGE(TAG,
+        APP_LOGE(TAG, PCM_STREAM_CLEANUP_ALSO_FAIL_EEBB1848,
                  "PCM stream cleanup also failed: %s",
                  esp_err_to_name(cleanup_result));
     }
@@ -3797,7 +3798,7 @@ static void audio_manager_handle_pcm_stream_command(uint32_t generation)
         &terminal);
     audio_manager_pcm_stream_close_from_owner(generation);
 
-    ESP_LOGI(TAG,
+    APP_LOGI(TAG, PCM_STREAM_DIAG_GENERATION_U_7D243BC2,
              "PCM_STREAM_DIAG generation=%u result=%s cancelled=%s accepted=%llu played=%llu queued=%u high_water=%u full=%u starvation=%u",
              (unsigned)generation,
              esp_err_to_name(result),
@@ -3810,7 +3811,7 @@ static void audio_manager_handle_pcm_stream_command(uint32_t generation)
              (unsigned)terminal.starvation_count);
     if (terminal_status_result != ESP_OK)
     {
-        ESP_LOGW(TAG,
+        APP_LOGW(TAG, PCM_STREAM_TERMINAL_DIAGNOST_9E20B2A2,
                  "PCM stream terminal diagnostics unavailable generation=%u error=%s",
                  (unsigned)generation,
                  esp_err_to_name(terminal_status_result));
@@ -3853,7 +3854,7 @@ static void audio_manager_handle_pcm_stream_command(uint32_t generation)
 
     if (result != ESP_OK)
     {
-        ESP_LOGE(TAG,
+        APP_LOGE(TAG, PCM_STREAM_PLAYBACK_FAILED_G_CA4E5C14,
                  "PCM stream playback failed generation=%u: %s",
                  (unsigned)generation,
                  esp_err_to_name(result));
@@ -3864,13 +3865,13 @@ static void audio_manager_handle_pcm_stream_command(uint32_t generation)
     }
     else if (cancelled)
     {
-        ESP_LOGI(TAG,
+        APP_LOGI(TAG, PCM_STREAM_PLAYBACK_CANCELLE_54B13A30,
                  "PCM stream playback cancelled generation=%u",
                  (unsigned)generation);
     }
     else
     {
-        ESP_LOGI(TAG,
+        APP_LOGI(TAG, PCM_STREAM_PLAYBACK_COMPLETE_AF4DB41E,
                  "PCM stream playback completed generation=%u",
                  (unsigned)generation);
     }
@@ -3904,8 +3905,8 @@ static void log_cycle_diagnostics(
     const uint64_t tx_bytes_delta =
         after.tx_bytes_written - before->tx_bytes_written;
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, CYCLE_DIAG_U_RX_BYTES_19E56C82,
         "CYCLE_DIAG #%u rx_bytes=%llu tx_bytes=%llu rx_ovf=%u rx_timeout=%u tx_q_ovf=%u tx_timeout=%u tx_partial=%u max_rx_us=%u max_tx_us=%u stack_hwm=%u_bytes",
         (unsigned)cycle,
         (unsigned long long)rx_bytes_delta,
@@ -3933,8 +3934,8 @@ static void audio_manager_run_stability_iteration(void)
     audio_manager_diagnostics_t diagnostics_before = {0};
     audio_manager_snapshot_diagnostics(&diagnostics_before);
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, AUDIO_MANAGER_CYCLE_U_36080E93,
         "========== AUDIO MANAGER CYCLE #%u ==========",
         (unsigned)cycle);
 
@@ -3966,16 +3967,16 @@ static void audio_manager_run_stability_iteration(void)
 
     if (result == ESP_OK)
     {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, CYCLE_U_PASS_SAMPLES_U_7A4FF6AA,
             "CYCLE #%u PASS samples=%u",
             (unsigned)cycle,
             (unsigned)metrics.samples_recorded);
     }
     else
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, CYCLE_U_FAIL_S_B3098400,
             "CYCLE #%u FAIL: %s",
             (unsigned)cycle,
             esp_err_to_name(result));
@@ -3984,8 +3985,8 @@ static void audio_manager_run_stability_iteration(void)
         const esp_err_t cleanup_result = force_cycle_cleanup();
         if (cleanup_result != ESP_OK)
         {
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, CYCLE_CLEANUP_FAILED_S_0A397BA9,
                 "Cycle cleanup failed: %s",
                 esp_err_to_name(cleanup_result));
         }
@@ -4008,8 +4009,8 @@ static void audio_manager_task(void *argument)
     const bool stability_mode = audio_manager_stability_mode_enabled();
     const bool mixed_stress_mode = audio_manager_mixed_stress_mode_enabled();
     const bool wav_stress_mode = audio_manager_wav_stress_mode_enabled();
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, AUDIO_MANAGER_TASK_STARTED_M_64BC47F1,
         "Audio manager task started: mode=%s priority=%u volume=%u/100",
         stability_mode
             ? (mixed_stress_mode ? "golden_wav_stress" : "golden_stability")
@@ -4027,8 +4028,8 @@ static void audio_manager_task(void *argument)
     bool wav_regression_pending = (wav_regression_path != NULL);
     if (wav_regression_pending)
     {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, WAV_STARTUP_REGRESSION_IS_WA_8AEF6E54,
             "WAV startup regression is waiting for SD VFS readiness: %s",
             wav_regression_path);
     }
@@ -4065,8 +4066,8 @@ static void audio_manager_task(void *argument)
                     }
                     else
                     {
-                        ESP_LOGE(
-                            TAG,
+                        APP_LOGE(
+                            TAG, UNKNOWN_AUDIO_COMMAND_D_4B91134B,
                             "Unknown audio command: %d",
                             (int)command.kind);
                     }
@@ -4107,8 +4108,8 @@ static void audio_manager_task(void *argument)
                 }
                 else
                 {
-                    ESP_LOGE(
-                        TAG,
+                    APP_LOGE(
+                        TAG, UNEXPECTED_AUDIO_COMMAND_IN_89611EFE,
                         "Unexpected audio command in golden mode: %d",
                         (int)command.kind);
                 }
@@ -4130,14 +4131,14 @@ static void audio_manager_task(void *argument)
             if (regression_result == ESP_OK)
             {
                 wav_regression_pending = false;
-                ESP_LOGI(TAG, "WAV startup regression command accepted");
+                APP_LOGI(TAG, WAV_STARTUP_REGRESSION_COMMA_EC985630, "WAV startup regression command accepted");
             }
             else if ((regression_result != ESP_ERR_INVALID_STATE) &&
                      (regression_result != ESP_ERR_TIMEOUT))
             {
                 wav_regression_pending = false;
-                ESP_LOGE(
-                    TAG,
+                APP_LOGE(
+                    TAG, WAV_STARTUP_REGRESSION_COMMA_76AA5F58,
                     "WAV startup regression command failed permanently: %s",
                     esp_err_to_name(regression_result));
             }
@@ -4177,8 +4178,8 @@ static void audio_manager_task(void *argument)
                     break;
 
                 default:
-                    ESP_LOGE(
-                        TAG,
+                    APP_LOGE(
+                        TAG, UNKNOWN_AUDIO_COMMAND_D_DC41E118,
                         "Unknown audio command: %d",
                         (int)command.kind);
                     break;
@@ -4246,8 +4247,8 @@ static void audio_manager_task(void *argument)
             AUDIO_MANAGER_TASK_STOPPED_BIT);
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, AUDIO_MANAGER_TASK_STOPPED_S_5859C682,
         "Audio manager task stopped: %s",
         esp_err_to_name(task_result));
     vTaskDelete(NULL);
@@ -4438,17 +4439,17 @@ esp_err_t audio_manager_init(const audio_manager_config_t *config)
         .last_error = ESP_OK,
     };
 
-    ESP_LOGI(TAG, "================================================");
-    ESP_LOGI(TAG, "Audio manager initialized");
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(TAG, MESSAGE_69F65059, "================================================");
+    APP_LOGI(TAG, AUDIO_MANAGER_INITIALIZED_7B71541D, "Audio manager initialized");
+    APP_LOGI(
+        TAG, PINS_BCLK_GPIO_D_WS_33446E3D,
         "Pins BCLK=GPIO%d WS=GPIO%d MIC_DIN=GPIO%d SPK_DOUT=GPIO%d",
         AUDIO_GPIO_BCLK,
         AUDIO_GPIO_WS,
         AUDIO_GPIO_MIC_DIN,
         AUDIO_GPIO_SPK_DOUT);
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, CONFIG_SAMPLE_RATE_U_FIXED_3E4198E4,
         "Config sample_rate=%u fixed_record=%us manual_max=%us capacity_samples=%u PCM24_PSRAM=%uB volume=%u/100 DMA=%ux%u",
         (unsigned)AUDIO_MANAGER_SAMPLE_RATE_HZ,
         (unsigned)config->record_duration_seconds,
@@ -4458,8 +4459,8 @@ esp_err_t audio_manager_init(const audio_manager_config_t *config)
         (unsigned)config->playback_volume_percent,
         (unsigned)AUDIO_MANAGER_DMA_DESC_NUM,
         (unsigned)AUDIO_MANAGER_FRAMES_PER_BLOCK);
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, WAV_PREFETCH_US_SLOT_UB_DC966F5C,
         "WAV prefetch=%us slot=%uB slots=%u PSRAM_total=%uB reader_priority=%u",
         (unsigned)CONFIG_AUDIO_MANAGER_WAV_PREFETCH_SECONDS,
         (unsigned)AUDIO_MANAGER_WAV_PREFETCH_SLOT_BYTES,
@@ -4467,18 +4468,18 @@ esp_err_t audio_manager_init(const audio_manager_config_t *config)
         (unsigned)(AUDIO_MANAGER_WAV_PREFETCH_SLOT_BYTES *
                    AUDIO_WAV_PREFETCH_SLOT_COUNT),
         (unsigned)AUDIO_MANAGER_WAV_PREFETCH_READER_PRIORITY);
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, PCM_STREAM_RING_U_SAMPLES_64B75EE7,
         "PCM stream ring=%u samples=%uB prefill=%u samples=%ums",
         (unsigned)AUDIO_MANAGER_PCM_STREAM_RING_SAMPLES,
         (unsigned)(AUDIO_MANAGER_PCM_STREAM_RING_SAMPLES * sizeof(int16_t)),
         (unsigned)AUDIO_MANAGER_PCM_STREAM_PREFILL_SAMPLES,
         (unsigned)((AUDIO_MANAGER_PCM_STREAM_PREFILL_SAMPLES * 1000U) /
                    AUDIO_MANAGER_SAMPLE_RATE_HZ));
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, DSP_HPF80X2_LPF6KX2_ADAPTIVE_E25F8B02,
         "DSP HPF80x2 + LPF6kx2 + adaptive NS + 16x speaker conditioning + limiter");
-    ESP_LOGI(TAG, "================================================");
+    APP_LOGI(TAG, MESSAGE_69F65059, "================================================");
 
     log_heap_state("after_audio_alloc");
     return ESP_OK;
@@ -4596,12 +4597,12 @@ esp_err_t audio_manager_start(void)
         pdMS_TO_TICKS(AUDIO_MANAGER_TASK_START_TIMEOUT_MS));
     if ((ready_bits & AUDIO_MANAGER_TASK_READY_BIT) == 0U)
     {
-        ESP_LOGE(TAG, "Manager task did not reach IDLE before timeout");
+        APP_LOGE(TAG, MANAGER_TASK_DID_NOT_REACH_1502025B, "Manager task did not reach IDLE before timeout");
         (void)audio_manager_stop();
         return ESP_ERR_TIMEOUT;
     }
 
-    ESP_LOGI(TAG, "Started and ready for commands");
+    APP_LOGI(TAG, STARTED_AND_READY_FOR_COMMAN_D6A037B6, "Started and ready for commands");
 
 #ifdef CONFIG_AUDIO_MANAGER_WAV_STRESS_TESTAPP
     const BaseType_t wav_stress_task_result = xTaskCreate(
@@ -4614,7 +4615,7 @@ esp_err_t audio_manager_start(void)
     if (wav_stress_task_result != pdPASS)
     {
         s_runtime.wav_stress_task_handle = NULL;
-        ESP_LOGE(TAG, "Failed to create WAV stress coordinator task");
+        APP_LOGE(TAG, FAILED_TO_CREATE_WAV_STRESS_D3E63EB5, "Failed to create WAV stress coordinator task");
         (void)audio_manager_stop();
         return ESP_ERR_NO_MEM;
     }
@@ -4823,8 +4824,8 @@ esp_err_t audio_manager_stop(void)
         };
         if (xQueueSend(s_runtime.command_queue, &command, 0U) != pdTRUE)
         {
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, SHUTDOWN_COMMAND_QUEUE_FULL_31C1BE66,
                 "Shutdown command queue full; polling fallback active");
         }
     }
@@ -4856,8 +4857,8 @@ esp_err_t audio_manager_stop(void)
         pdMS_TO_TICKS(AUDIO_MANAGER_TASK_STOP_TIMEOUT_MS));
     if ((stopped_bits & expected_stopped_bits) != expected_stopped_bits)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, AUDIO_TASK_STOP_TIMED_OUT_2FC4F4DF,
             "Audio task stop timed out; shutdown remains pending");
         return ESP_ERR_TIMEOUT;
     }

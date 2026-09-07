@@ -11,6 +11,7 @@
 
 #include "esp_check.h"
 #include "esp_log.h"
+#include "app_log.h"
 
 /* Macros ------------------------------------------------------------------- */
 #define BUTTON_MANAGER_TASK_STACK_SIZE_BYTES  3072U
@@ -260,8 +261,8 @@ static esp_err_t button_manager_validate_config(
         (pdMS_TO_TICKS(config->debounce_ms) == 0U) ||
         (pdMS_TO_TICKS(config->long_press_ms) == 0U))
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, POLL_DEBOUNCE_AND_LONG_PRESS_9F7B858E,
             "Poll, debounce, and long press times must be greater than 0"
         );
         return ESP_ERR_INVALID_ARG;
@@ -334,8 +335,8 @@ esp_err_t button_manager_init(
     s_button_manager.lifecycle =
         BUTTON_MANAGER_LIFECYCLE_INITIALIZED;
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, INITIALIZED_GPIO_D_ACTIVE_LE_E4699035,
         "Initialized: gpio=%d, active_level=%u, poll=%u ms, "
         "debounce=%u ms, long_press=%u ms",
         (int)config->gpio_num,
@@ -403,8 +404,8 @@ esp_err_t button_manager_start(void)
         return ESP_ERR_NO_MEM;
     }
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, POLLING_TASK_STARTED_9A1F13E9,
         "Polling task started");
 
     return ESP_OK;

@@ -7,6 +7,7 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "app_log.h"
 #include "esp_memory_utils.h"
 
 /* Macros ------------------------------------------------------------------ */
@@ -29,8 +30,8 @@ void lv_mem_init(void)
 {
     s_first_allocation_verified = false;
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, CUSTOM_LVGL_ALLOCATOR_INITIA_DC4DCC31,
         "Custom LVGL allocator initialized: free=%u, largest=%u",
         (unsigned int)heap_caps_get_free_size(
             LVGL_PSRAM_CAPABILITIES),
@@ -76,8 +77,8 @@ void *lv_malloc_core(size_t size)
 
     if (pointer == NULL)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, LVGL_PSRAM_ALLOCATION_FAILED_3A40D839,
             "LVGL PSRAM allocation failed: requested=%u, free=%u, largest=%u",
             (unsigned int)size,
             (unsigned int)heap_caps_get_free_size(
@@ -90,8 +91,8 @@ void *lv_malloc_core(size_t size)
 
     if (!esp_ptr_external_ram(pointer))
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, LVGL_ALLOCATION_IS_NOT_IN_1F4B07FB,
             "LVGL allocation is not in external RAM: pointer=%p, size=%u",
             pointer,
             (unsigned int)size);
@@ -104,8 +105,8 @@ void *lv_malloc_core(size_t size)
     {
         s_first_allocation_verified = true;
 
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, LVGL_HEAP_VERIFIED_IN_PSRAM_3AD29F03,
             "LVGL heap verified in PSRAM: pointer=%p, first_size=%u",
             pointer,
             (unsigned int)size);
@@ -132,8 +133,8 @@ void *lv_realloc_core(
 
     if (new_pointer == NULL)
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, LVGL_PSRAM_REALLOCATION_FAIL_DAAE6D1E,
             "LVGL PSRAM reallocation failed: requested=%u, free=%u, largest=%u",
             (unsigned int)new_size,
             (unsigned int)heap_caps_get_free_size(
@@ -146,8 +147,8 @@ void *lv_realloc_core(
 
     if (!esp_ptr_external_ram(new_pointer))
     {
-        ESP_LOGE(
-            TAG,
+        APP_LOGE(
+            TAG, LVGL_REALLOCATION_IS_NOT_IN_2011BA81,
             "LVGL reallocation is not in external RAM: pointer=%p, size=%u",
             new_pointer,
             (unsigned int)new_size);

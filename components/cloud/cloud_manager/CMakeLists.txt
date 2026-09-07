@@ -7,6 +7,7 @@ idf_component_register(
         "include"
 
     REQUIRES
+        app_log
         esp_common
 
     PRIV_REQUIRES

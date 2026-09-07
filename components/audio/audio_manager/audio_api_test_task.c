@@ -5,6 +5,7 @@
 
 #include "audio_manager.h"
 #include "esp_log.h"
+#include "app_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
@@ -263,8 +264,8 @@ static esp_err_t audio_api_test_manual_record(void)
 
     if (stop_result == ESP_ERR_INVALID_STATE)
     {
-        ESP_LOGW(
-            TAG,
+        APP_LOGW(
+            TAG, MANUAL_STOP_FOUND_NO_ACTIVE_69BA8878,
             "Manual stop found no active recording; configured maximum may already be complete");
     }
 
@@ -319,8 +320,8 @@ static esp_err_t audio_api_test_run_cycle(
 
     *wav_skipped = false;
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, PUBLIC_AUDIO_STRESS_CYCLE_U_E3959FC9,
         "========== PUBLIC AUDIO STRESS CYCLE %u =========",
         (unsigned)cycle);
 
@@ -328,8 +329,8 @@ static esp_err_t audio_api_test_run_cycle(
 
     if (AUDIO_API_TEST_ENABLE_FIXED_RECORD != 0U)
     {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, CYCLE_U_FIXED_RECORD_RECORDE_39103362,
             "CYCLE %u FIXED record -> recorded playback",
             (unsigned)cycle);
         result = audio_api_test_fixed_record();
@@ -341,8 +342,8 @@ static esp_err_t audio_api_test_run_cycle(
 
     if (AUDIO_API_TEST_ENABLE_MANUAL_RECORD != 0U)
     {
-        ESP_LOGI(
-            TAG,
+        APP_LOGI(
+            TAG, CYCLE_U_MANUAL_RECORD_HOLD_F98FD410,
             "CYCLE %u MANUAL record hold=%ums -> recorded playback",
             (unsigned)cycle,
             (unsigned)AUDIO_API_TEST_MANUAL_HOLD_MS);
@@ -358,16 +359,16 @@ static esp_err_t audio_api_test_run_cycle(
         if (!sd_card_manager_is_mounted())
         {
             *wav_skipped = true;
-            ESP_LOGW(
-                TAG,
+            APP_LOGW(
+                TAG, CYCLE_U_WAV_SKIPPED_SD_2B6395C0,
                 "CYCLE %u WAV skipped: SD VFS is not READY; "
                 "continuing record/playback stress",
                 (unsigned)cycle);
         }
         else
         {
-            ESP_LOGI(
-                TAG,
+            APP_LOGI(
+                TAG, CYCLE_U_WAV_PLAYBACK_S_3CDB28BD,
                 "CYCLE %u WAV playback: %s",
                 (unsigned)cycle,
                 AUDIO_API_TEST_WAV_PATH);
@@ -386,8 +387,8 @@ static void audio_api_test_task(void *argument)
 {
     (void)argument;
 
-    ESP_LOGI(
-        TAG,
+    APP_LOGI(
+        TAG, PUBLIC_AUDIO_API_STRESS_STAR_B6259515,
         "Public audio API stress started: priority=%u fixed=%u manual=%u "
         "wav=%u sd_unavailable=skip continuous=yes",
         (unsigned)AUDIO_API_TEST_TASK_PRIORITY,
@@ -415,8 +416,8 @@ static void audio_api_test_task(void *argument)
             if (cycle_wav_skipped)
             {
                 ++wav_skipped;
-                ESP_LOGW(
-                    TAG,
+                APP_LOGW(
+                    TAG, PUBLIC_AUDIO_STRESS_CYCLE_U_5FC63DE8,
                     "PUBLIC AUDIO STRESS CYCLE %u PARTIAL: "
                     "record/playback passed, WAV skipped; "
                     "totals: completed=%u wav_skip=%u fail=%u",
@@ -427,8 +428,8 @@ static void audio_api_test_task(void *argument)
             }
             else
             {
-                ESP_LOGI(
-                    TAG,
+                APP_LOGI(
+                    TAG, PUBLIC_AUDIO_STRESS_CYCLE_U_490F816E,
                     "PUBLIC AUDIO STRESS CYCLE %u PASS totals: "
                     "completed=%u wav_skip=%u fail=%u",
                     (unsigned)cycle,
@@ -442,8 +443,8 @@ static void audio_api_test_task(void *argument)
             ++failed;
             audio_manager_status_t status = {0};
             (void)audio_manager_get_status(&status);
-            ESP_LOGE(
-                TAG,
+            APP_LOGE(
+                TAG, PUBLIC_AUDIO_STRESS_CYCLE_U_DC6C62B4,
                 "PUBLIC AUDIO STRESS CYCLE %u FAIL: %s state=%s "
                 "last_error=%s totals: completed=%u wav_skip=%u fail=%u",
                 (unsigned)cycle,
