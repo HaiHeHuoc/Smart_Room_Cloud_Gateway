@@ -21,10 +21,10 @@ idf_component_register(
         "modules/stream/include"
         "modules/wav/include"
     REQUIRES
-        app_log
         esp_common
-        common
     PRIV_REQUIRES
+        app_log
+        common
         freertos
         log
         esp_driver_i2s
