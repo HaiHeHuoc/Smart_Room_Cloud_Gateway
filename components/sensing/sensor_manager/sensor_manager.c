@@ -13,6 +13,7 @@
 #include "esp_check.h"
 #include "esp_err.h"
 
+#include "board_config.h"
 #include "sensor_DHT22.h"
 
 /* Macros ------------------------------------------------------------------- */
@@ -369,6 +370,24 @@ esp_err_t sensor_manager_init(
             "Stale timeout must be greater than sample period");
 
         return ESP_ERR_INVALID_ARG;
+    }
+
+    const dht22_sensor_config_t dht22_config =
+    {
+        .gpio_num = DHT22_PIN_GPIO,
+    };
+
+    esp_err_t dht22_init_result =
+        dht22_sensor_init(&dht22_config);
+
+    if (dht22_init_result != ESP_OK)
+    {
+        APP_LOGE(
+            TAG, DHT22_SENSOR_INIT_FAILED,
+            "DHT22 initialization failed: %s",
+            esp_err_to_name(dht22_init_result));
+
+        return dht22_init_result;
     }
 
     s_status_mutex =

@@ -5,6 +5,8 @@
 
 #include "esp_err.h"
 
+#define SD_CARD_MANAGER_PATH_MAX_LEN 256U
+
 /**
  * @brief Observable lifecycle state of the SD recovery service.
  *
