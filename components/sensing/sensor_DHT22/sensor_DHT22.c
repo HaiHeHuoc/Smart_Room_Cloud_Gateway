@@ -89,7 +89,8 @@ static void dht22_bringup_task(void *argument)
 esp_err_t dht22_sensor_init(
     const dht22_sensor_config_t *config)
 {
-    if (config == NULL)
+    if ((config == NULL) ||
+        !GPIO_IS_VALID_OUTPUT_GPIO(config->gpio_num))
     {
         return ESP_ERR_INVALID_ARG;
     }
