@@ -6,6 +6,7 @@ set(xiaozhi_foundation_sources
     "modules/websocket/src/xiaozhi_websocket_tx_timeout.c")
 
 set(xiaozhi_foundation_private_requires
+    app_log
     esp_event
     heap
     esp_timer
@@ -31,7 +32,6 @@ idf_component_register(
         "include"
 
     REQUIRES
-        app_log
         esp_common
 
     PRIV_REQUIRES
