@@ -16,6 +16,30 @@ roadmap ownership.
 This refactor intentionally targets ESP-IDF/ESP32 reuse. It does not claim
 cross-platform STM32, Zephyr, or Linux portability.
 
+## Current initiative status — 2026-09-08
+
+Repository snapshot at the latest review:
+
+- branch: `refactor/component-portability-hardening`
+- current remote HEAD: `3da32caeb8abd10326a92d4d705d1ea9d94221fb`
+- base/merge-base: `52721668e9a7682db1b9e42d9971a7d322c3a420`
+- ahead base: 71 commits
+- behind base: 0 commits
+
+Status split:
+
+- architecture direction: **DONE / FROZEN**
+- agreed refactor implementation: **DONE / FROZEN**
+- repository/private-module documentation: **DONE / FROZEN**
+- automated acceptance: **PENDING**
+- target-board smoke acceptance: **PENDING**
+- overall initiative: **REFACTOR IMPLEMENTATION DONE — ACCEPTANCE PENDING**
+
+Do not open another architecture or portability-refactor wave unless validation
+finds a confirmed defect that requires a scoped fix. Validation failures should
+be handled by identifying the failing component/path and applying the smallest
+safe correction.
+
 ## Architecture decisions
 
 ### 1. Three reuse levels
@@ -228,9 +252,29 @@ Static validation completed:
   explicit external-RAM task-stack prerequisites;
 - centralized configuration ownership was reviewed after the refactor.
 
-The current ChatGPT execution environment could not resolve GitHub from the
-local shell, so it could not clone the branch or execute `idf.py build` itself.
-No full firmware build or target-board acceptance is claimed by this file.
+The latest validation-only follow-up commit at the time of this update is:
+
+```text
+3da32caeb8abd10326a92d4d705d1ea9d94221fb
+```
+
+`test(log-manager): fix host durability fault shims` changes only host-test code.
+It corrects the host `open()` compatibility shim so calls with and without
+`O_CREAT` preserve the real variadic contract, and improves background-storage
+state observation. It does not change production `log_manager` behavior.
+
+A review follow-up remains for the durability test matrix: `background_close`
+is still listed as a separate case, but the current test code uses
+`inject_close_error = close_error && !background`, so that case does not
+currently inject a close failure and substantially overlaps the plain
+`background` path. Treat this as a validation-test coverage item, not as an
+unfinished architecture/refactor implementation item. Either restore a
+deterministic background close-failure injection if that scenario remains part
+of the intended regression contract, or explicitly remove/rename the redundant
+case after confirming the intended coverage.
+
+No full firmware build, complete host-test PASS, or target-board acceptance is
+claimed by this document unless explicit execution evidence is recorded below.
 
 ## Required acceptance gate on a machine with ESP-IDF 6.0.1
 
@@ -250,25 +294,37 @@ check of at least:
 
 1. boot and GUI initialization;
 2. Wi-Fi connect/reconnect;
-3. SD mount/recovery and persistent logging;
-4. DHT22 sensor sampling;
-5. LVGL SD image path;
-6. audio manager capture/playback path used by the current branch;
-7. voice/Xiaozhi path relevant to the current Phase-16.1 baseline.
+3. BLE provisioning if needed for regression coverage;
+4. SD mount/recovery and persistent logging;
+5. DHT22 sensor sampling;
+6. LVGL SD image path;
+7. audio manager capture/playback path used by the current branch;
+8. voice/Xiaozhi path relevant to the current Phase-16.1 baseline;
+9. factory-reset/reboot path if dependency changes could affect it.
 
 Any failure after the structural moves must be treated as a refactor regression
 until proven otherwise.
 
-## Refactor completion definition
+## Completion definition
 
-The implementation and repository documentation for this portability-hardening
-wave are complete when:
+### Implementation/documentation completion
 
-- no additional architecture/ownership refactor is required for the agreed
-  scope;
-- all private module structure and CMake references are consistent;
-- the clean ESP-IDF build and host regression tests pass;
-- the bounded hardware smoke test shows no behavior regression.
+For the agreed portability-hardening scope, architecture, implementation, and
+repository documentation are complete and frozen. No additional genericization,
+component split/merge, or ownership redesign is required unless acceptance
+reveals a confirmed defect.
 
-Do not merge into `main_including_Firebase_security` automatically. Create/review
-a PR only when Hải explicitly requests it; Hải owns the final merge decision.
+### Overall initiative completion
+
+Only report **REFACTOR DONE** after all of the following are evidenced:
+
+- clean `idf.py build` passes;
+- relevant host regression tests pass;
+- bounded target-board smoke testing shows no behavior regression;
+- no remaining compile/path/dependency regression is known.
+
+After acceptance passes, perform the final diff review and secret check and then
+prepare a PR to `main_including_Firebase_security` when Hải requests it.
+
+Do not merge into `main_including_Firebase_security` automatically. Hải owns the
+final merge decision.
