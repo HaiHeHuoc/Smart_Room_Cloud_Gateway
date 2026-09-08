@@ -214,6 +214,13 @@ the discrepancy instead of silently choosing one.
 
 ```text
 components/
+├── application/
+│   ├── app_network_coordinator/
+│   ├── app_reset_coordinator/
+│   ├── voice_assistant/
+│   └── xiaozhi_foundation/
+├── audio/
+│   └── audio_manager/
 ├── cloud/
 │   ├── cloud_manager/
 │   └── firebase_auth/
@@ -223,6 +230,8 @@ components/
 ├── display/
 │   ├── display_driver/
 │   └── waveshare__esp_lcd_st7735/
+├── input/
+│   └── button_manager/
 ├── sensing/
 │   ├── sensor_manager/
 │   └── sensor_DHT22/
@@ -230,18 +239,37 @@ components/
 │   ├── config_manager/
 │   └── sd_card_manager/
 ├── system/
+│   ├── app_log/
 │   ├── common/
-│   └── performance_monitor/
+│   ├── log_manager/
+│   ├── performance_monitor/
+│   └── time_manager/
 └── ui/
     ├── app_gui/
-    ├── ui_manager_lvgl/
     ├── lvgl_image_handler/
-    └── lvgl_sd_fs/
+    ├── lvgl_sd_fs/
+    └── ui_manager_lvgl/
 ```
 
-The first-level folders are organizational domains. Their children remain
-independent ESP-IDF components with separate public APIs. Only create
-components required by the current sprint.
+The first-level folders are organizational domains. Their direct children are
+independent ESP-IDF components with separate public APIs and dependency
+ownership.
+
+A large component may contain tightly coupled private subsystems under
+`modules/<name>/`. These private modules are not independent ESP-IDF components:
+parent CMake owns their sources, lifecycle, synchronization, and public facade.
+Use `include/`, `src/`, and a short README inside a private module when that
+structure makes ownership clear. Do not add a child `CMakeLists.txt` merely to
+make the directory look component-like.
+
+Other components must not include headers from another component's `modules/`
+directory. Promote a private module into a standalone component only when it
+acquires a real independent reuse or lifecycle requirement.
+
+For portability and dependency rules, keep `components/README.md` and
+`AI_Stored_Data/COMPONENT_PORTABILITY_HARDENING.md` aligned with this authority.
+Only create components required by the current sprint or an explicitly approved
+architecture/refactor task.
 
 ---
 
@@ -361,15 +389,18 @@ Do not assume the COM port. Ask the user to provide it or leave `<PORT>` placeho
 ## Hardware Assumptions
 
 Target board:
-- ESP32-S3, likely N16R3 variant
+- ESP32-S3 N16R8 (16 MB flash, 8 MB PSRAM)
 
 Potential peripherals:
 - ST7735 LCD 128x160 over SPI
 - DHT22 or similar temperature/humidity sensor
 - Button for factory reset
-- LED or RGB LED for status
+- INMP441 I2S microphone
+- MAX98357 I2S DAC/amplifier
+- NeoPixel/WS2812 status LED
 
-Do not assume exact pins unless the user provides them.
+Use `components/system/common/include/board_config.h` as the current hardware
+mapping source of truth. Do not invent or duplicate pin assignments elsewhere.
 
 ---
 
@@ -534,6 +565,14 @@ changes them:
 - `wifi_manager` owns Wi-Fi Station connection and reconnect behavior.
 - `provisioning_manager` owns temporary BLE provisioning transport.
 - `app_network_coordinator` owns application-level network orchestration.
+- `audio_manager` owns microphone/speaker I2S, PCM buffers, playback/capture
+  arbitration, and audio pipeline resources.
+- `xiaozhi_foundation` owns the managed Xiaozhi provider boundary and prevents
+  provider handles/credentials from escaping.
+- `voice_assistant` owns product-level voice conversation orchestration; it does
+  not take I2S ownership from `audio_manager`.
+- `app_log` owns the reusable logging frontend; `log_manager` owns optional
+  persistent storage/backend behavior.
 - `app_gui` owns GUI screens, models, and UI queues.
 - `ui_manager_lvgl` owns LVGL runtime and synchronization.
 - Callbacks must not call LVGL directly.
@@ -541,8 +580,8 @@ changes them:
 - Configuration locks and NVS handles are released before calling Wi-Fi
   connection APIs.
 - Sensitive temporary buffers are cleared after use.
-- Network, GUI, sensor, storage, and cloud components do not take over one
-  another's responsibilities.
+- Network, GUI, sensor, storage, audio, voice, logging, and cloud components do
+  not take over one another's responsibilities.
 
 Apply the smallest safe fix when an ownership violation is confirmed.
 
