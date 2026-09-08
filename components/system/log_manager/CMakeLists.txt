@@ -7,7 +7,11 @@ idf_component_register(
         "include"
     PRIV_INCLUDE_DIRS
         "modules/buffer/include"
+    REQUIRES
+        esp_common
+        log
     PRIV_REQUIRES
+        app_log
         freertos
         heap
         esp_timer
@@ -15,9 +19,6 @@ idf_component_register(
         sd_card_manager
         time_manager
         common
-    REQUIRES
-        log
-        app_log
 )
 
 # Keep console coloring local to log_manager's direct esp_log_write() call.
