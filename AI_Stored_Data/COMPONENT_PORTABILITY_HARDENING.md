@@ -18,13 +18,16 @@ cross-platform STM32, Zephyr, or Linux portability.
 
 ## Current initiative status — 2026-09-08
 
-Repository snapshot at the latest review:
+Code/test baseline reviewed immediately before this documentation update:
 
 - branch: `refactor/component-portability-hardening`
-- current remote HEAD: `3da32caeb8abd10326a92d4d705d1ea9d94221fb`
+- latest reviewed code/test commit: `3da32caeb8abd10326a92d4d705d1ea9d94221fb`
 - base/merge-base: `52721668e9a7682db1b9e42d9971a7d322c3a420`
-- ahead base: 71 commits
-- behind base: 0 commits
+- at that baseline: ahead base 71 commits, behind base 0 commits
+
+Documentation-only commits may advance the branch HEAD after the reviewed
+code/test baseline above; do not treat that baseline SHA as a permanent branch
+HEAD assertion.
 
 Status split:
 
@@ -252,7 +255,8 @@ Static validation completed:
   explicit external-RAM task-stack prerequisites;
 - centralized configuration ownership was reviewed after the refactor.
 
-The latest validation-only follow-up commit at the time of this update is:
+The latest validation-only code/test follow-up commit reviewed at the time of
+this update is:
 
 ```text
 3da32caeb8abd10326a92d4d705d1ea9d94221fb
