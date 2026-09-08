@@ -5,10 +5,10 @@ idf_component_register(
         "include"
 
     REQUIRES
-        app_log
         esp_common
 
     PRIV_REQUIRES
+        app_log
         bt
         esp_hw_support
         esp_wifi
