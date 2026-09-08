@@ -82,3 +82,6 @@ Desktop.ini
 *.workspace
 *.suo
 *.sln.docstates
+
+# FireBaseKey
+.FireBaseKey
