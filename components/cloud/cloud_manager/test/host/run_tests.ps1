@@ -6,6 +6,7 @@ $repoRoot = (Resolve-Path (Join-Path $componentRoot '..\..\..')).Path
 $outputRoot = Join-Path $repoRoot 'build\host_cloud_telemetry_json_tests'
 $testExecutable = Join-Path $outputRoot 'cloud_telemetry_json_tests.exe'
 $gcc = (Get-Command gcc -ErrorAction Stop).Source
+$telemetryModule = Join-Path $componentRoot 'modules\telemetry_json'
 
 New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
 
@@ -15,9 +16,9 @@ New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
     -Wextra `
     -Werror `
     -I (Join-Path $testRoot 'include') `
-    -I $componentRoot `
+    -I (Join-Path $telemetryModule 'include') `
     -I (Join-Path $componentRoot 'include') `
-    (Join-Path $componentRoot 'cloud_telemetry_json.c') `
+    (Join-Path $telemetryModule 'src\cloud_telemetry_json.c') `
     (Join-Path $testRoot 'test_cloud_telemetry_json.c') `
     -o $testExecutable
 

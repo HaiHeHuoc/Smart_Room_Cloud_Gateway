@@ -1,5 +1,8 @@
 /* Includes ----------------------------------------------------------------- */
+#include "sensor_DHT22.h"
+
 #include <math.h>
+#include <stdbool.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -11,9 +14,6 @@
 
 #include "dht.h"
 
-#include "board_config.h"
-#include "sensor_DHT22.h"
-
 /* Macros ------------------------------------------------------------------- */
 #define DHT22_BRINGUP_TASK_NAME         "DHT22 task test"
 #define DHT22_BRINGUP_TASK_STACK_SIZE   2048
@@ -23,6 +23,10 @@
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "DHT22 Sensor";
+
+/* Static Variables --------------------------------------------------------- */
+static gpio_num_t s_gpio_num;
+static bool s_is_initialized;
 
 /* Function Prototypes ------------------------------------------------------ */
 static void dht22_bringup_task(void *argument);
@@ -82,8 +86,43 @@ static void dht22_bringup_task(void *argument)
 }
 
 /* Functions ---------------------------------------------------------------- */
+esp_err_t dht22_sensor_init(
+    const dht22_sensor_config_t *config)
+{
+    if ((config == NULL) ||
+        !GPIO_IS_VALID_OUTPUT_GPIO(config->gpio_num))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_is_initialized)
+    {
+        return (s_gpio_num == config->gpio_num)
+                   ? ESP_OK
+                   : ESP_ERR_INVALID_STATE;
+    }
+
+    s_gpio_num = config->gpio_num;
+    s_is_initialized = true;
+
+    APP_LOGI(
+        TAG, DHT22_SENSOR_INITIALIZED,
+        "gpio=%d",
+        (int)s_gpio_num);
+
+    return ESP_OK;
+}
+
 void dht22_bringup_start(void)
 {
+    if (!s_is_initialized)
+    {
+        APP_LOGE(
+            TAG, DHT22_BRINGUP_BEFORE_INIT,
+            "DHT22 bring-up requested before initialization");
+        return;
+    }
+
     /* Start the standalone periodic sensor logging task used for bring-up. */
     xTaskCreate(
         &dht22_bringup_task,
@@ -105,6 +144,13 @@ esp_err_t dht22_sensor_read(
         "Invalid output variable"
     );
 
+    ESP_RETURN_ON_FALSE(
+        s_is_initialized,
+        ESP_ERR_INVALID_STATE,
+        TAG,
+        "DHT22 sensor is not initialized"
+    );
+
     float temperature_c = 0.0f;
     float humidity_percent = 0.0f;
 
@@ -112,7 +158,7 @@ esp_err_t dht22_sensor_read(
     ESP_RETURN_ON_ERROR(
         dht_read_float_data(
             DHT_TYPE_AM2301,
-            DHT22_PIN_GPIO,
+            s_gpio_num,
             &humidity_percent,
             &temperature_c
         ),
