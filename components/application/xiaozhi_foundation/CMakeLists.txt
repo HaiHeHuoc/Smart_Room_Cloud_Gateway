@@ -1,11 +1,12 @@
 set(xiaozhi_foundation_sources
     "xiaozhi_foundation.c"
-    "xiaozhi_session.c"
-    "xiaozhi_text_bridge.c"
-    "xiaozhi_websocket_task_policy.c"
-    "xiaozhi_websocket_tx_timeout.c")
+    "modules/session/src/xiaozhi_session.c"
+    "modules/text_bridge/src/xiaozhi_text_bridge.c"
+    "modules/websocket/src/xiaozhi_websocket_task_policy.c"
+    "modules/websocket/src/xiaozhi_websocket_tx_timeout.c")
 
 set(xiaozhi_foundation_private_requires
+    app_log
     esp_event
     heap
     esp_timer
@@ -17,8 +18,8 @@ set(xiaozhi_foundation_private_requires
 
 if(CONFIG_XIAOZHI_FOUNDATION_P2F_SD_FIXTURE)
     list(APPEND xiaozhi_foundation_sources
-        "p2f_sd_fixture_loader.c"
-        "p2f_sd_fixture_buffer.S")
+        "modules/fixture/src/p2f_sd_fixture_loader.c"
+        "modules/fixture/src/p2f_sd_fixture_buffer.S")
     list(APPEND xiaozhi_foundation_private_requires
         sd_card_manager)
 endif()
@@ -31,7 +32,6 @@ idf_component_register(
         "include"
 
     REQUIRES
-        app_log
         esp_common
 
     PRIV_REQUIRES
@@ -42,7 +42,7 @@ idf_component_register(
 # semantic-text init bridge. The bridge calls the real esp_xiaozhi_chat_init()
 # from its own translation unit, so transport behavior remains unchanged.
 set_source_files_properties(
-    xiaozhi_session.c
+    modules/session/src/xiaozhi_session.c
     PROPERTIES
     COMPILE_DEFINITIONS
         "esp_xiaozhi_chat_init=xiaozhi_foundation_chat_init_bridge")

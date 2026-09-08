@@ -8,6 +8,8 @@ $parserExecutable = Join-Path $outputRoot 'audio_wav_parser_tests.exe'
 $streamExecutable = Join-Path $outputRoot 'audio_wav_stream_tests.exe'
 $pcmStreamExecutable = Join-Path $outputRoot 'audio_pcm_stream_core_tests.exe'
 $gcc = (Get-Command gcc -ErrorAction Stop).Source
+$wavModule = Join-Path $componentRoot 'modules\wav'
+$streamModule = Join-Path $componentRoot 'modules\stream'
 
 New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
 
@@ -17,8 +19,8 @@ New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
     -Wextra `
     -Werror `
     -I (Join-Path $testRoot 'include') `
-    -I $componentRoot `
-    (Join-Path $componentRoot 'audio_wav.c') `
+    -I (Join-Path $wavModule 'include') `
+    (Join-Path $wavModule 'src\audio_wav.c') `
     (Join-Path $testRoot 'test_audio_wav_parser.c') `
     -o $parserExecutable
 
@@ -37,8 +39,8 @@ if ($LASTEXITCODE -ne 0) {
     -Wextra `
     -Werror `
     -I (Join-Path $testRoot 'include') `
-    -I $componentRoot `
-    (Join-Path $componentRoot 'audio_wav.c') `
+    -I (Join-Path $wavModule 'include') `
+    (Join-Path $wavModule 'src\audio_wav.c') `
     (Join-Path $testRoot 'test_audio_wav_stream.c') `
     -o $streamExecutable
 
@@ -57,8 +59,8 @@ if ($LASTEXITCODE -ne 0) {
     -Wextra `
     -Werror `
     -I (Join-Path $testRoot 'include') `
-    -I $componentRoot `
-    (Join-Path $componentRoot 'audio_manager_pcm_stream_core.c') `
+    -I (Join-Path $streamModule 'include') `
+    (Join-Path $streamModule 'src\audio_manager_pcm_stream_core.c') `
     (Join-Path $testRoot 'test_audio_pcm_stream_core.c') `
     -o $pcmStreamExecutable
 

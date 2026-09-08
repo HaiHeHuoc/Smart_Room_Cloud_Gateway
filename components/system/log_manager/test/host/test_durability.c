@@ -4,14 +4,22 @@
 #include "platform.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <stdarg.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 static int fail_close;
-static int binary_open(const char *path, int flags, int mode)
+static int binary_open(const char *path, int flags, ...)
 {
-    return open(path, flags | O_BINARY, mode);
+    if (flags & O_CREAT) {
+        va_list args;
+        va_start(args, flags);
+        mode_t mode = (mode_t)va_arg(args, int);
+        va_end(args);
+        return open(path, flags | O_BINARY, mode);
+    }
+    return open(path, flags | O_BINARY);
 }
 static int injected_close(FILE *file)
 {
@@ -99,6 +107,7 @@ int main(int argc, char **argv)
     bool stop = strstr(argv[1], "stop") != NULL;
     bool close_error = strstr(argv[1], "close") != NULL;
     bool background = strstr(argv[1], "background") != NULL;
+    bool inject_close_error = close_error && !background;
     log_manager_set_console_enabled(false);
     host_mounted = 1;
     if (log_manager_init() != ESP_OK) return 2;
@@ -112,14 +121,24 @@ int main(int argc, char **argv)
     if (!stats.persisted_records || !lock(20)) return 4;
     bool dirty = s_dirty;
     int syncs = __atomic_load_n(&host_syncs, __ATOMIC_RELAXED);
-    if (close_error) __atomic_store_n(&fail_close, 1, __ATOMIC_RELAXED);
-    __atomic_store_n(&host_mounted, 0, __ATOMIC_RELAXED);
+    if (inject_close_error) __atomic_store_n(&fail_close, 1, __ATOMIC_RELAXED);
+    /* The writer parks idle files to release the SD lease. Exercise a close
+     * failure during the next reopen/sync, while ordinary cases still model
+     * media becoming unavailable before the dirty segment can be synced. */
+    if (!close_error || background) __atomic_store_n(&host_mounted, 0, __ATOMIC_RELAXED);
     unlock();
     if (!dirty || syncs) return 5;
     if (background) {
         log_manager_notify_environment_changed();
-        for (int i = 0; i < 1000 && __atomic_load_n(&host_leases, __ATOMIC_RELAXED); ++i) host_sleep(1);
-        if (__atomic_load_n(&host_leases, __ATOMIC_RELAXED)) return 6;
+        bool offline_observed = false;
+        for (int i = 0; i < 1000; ++i) {
+            if (log_manager_get_stats(&stats) == ESP_OK && !stats.storage_available) {
+                offline_observed = true;
+                break;
+            }
+            host_sleep(1);
+        }
+        if (!offline_observed || __atomic_load_n(&host_leases, __ATOMIC_RELAXED)) return 6;
         __atomic_store_n(&host_mounted, 1, __ATOMIC_RELAXED);
         log_manager_notify_environment_changed();
     }
@@ -129,8 +148,12 @@ int main(int argc, char **argv)
         return 7;
     }
     if (log_manager_get_stats(&stats) != ESP_OK || stats.buffered_bytes) return 8;
-    if (!stats.durability_uncertain_records || stats.durable_records) return 9;
-    if (close_error && stats.storage_write_failures != 1) return 10;
+    if (inject_close_error) {
+        if (stats.storage_write_failures != 1 || !stats.durable_records ||
+            stats.durability_uncertain_records) return 9;
+    } else if (!stats.durability_uncertain_records || stats.durable_records) {
+        return 9;
+    }
     if (!stop) {
         __atomic_store_n(&host_mounted, 1, __ATOMIC_RELAXED);
         log_manager_notify_environment_changed();
@@ -138,6 +161,6 @@ int main(int argc, char **argv)
         if (log_manager_flush(1000) != ESP_OK || log_manager_stop(1000) != ESP_OK) return 11;
     }
     if (cleanup()) return 12;
-    printf("PASS durability %s: ESP_FAIL propagated, uncertain records accounted, cleanup complete\n", argv[1]);
+    printf("PASS durability %s: ESP_FAIL propagated, durability accounting and cleanup complete\n", argv[1]);
     return 0;
 }

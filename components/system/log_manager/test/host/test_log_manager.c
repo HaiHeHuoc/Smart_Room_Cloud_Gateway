@@ -10,10 +10,18 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <stdarg.h>
 #include <unistd.h>
-static int binary_open(const char *path, int flags, int mode)
+static int binary_open(const char *path, int flags, ...)
 {
-    return open(path, flags | O_BINARY, mode);
+    if (flags & O_CREAT) {
+        va_list args;
+        va_start(args, flags);
+        mode_t mode = (mode_t)va_arg(args, int);
+        va_end(args);
+        return open(path, flags | O_BINARY, mode);
+    }
+    return open(path, flags | O_BINARY);
 }
 #define open binary_open
 #define fwrite host_fwrite
