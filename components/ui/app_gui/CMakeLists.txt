@@ -6,6 +6,8 @@ idf_component_register(
     PRIV_INCLUDE_DIRS
         "modules/theme/include"
     REQUIRES
+        esp_common
+    PRIV_REQUIRES
         app_log
         common
         lvgl
