@@ -7,9 +7,11 @@
 #include <stdint.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/task.h"
 
 #include "esp_check.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "app_log.h"
 
@@ -385,13 +387,14 @@ esp_err_t button_manager_start(void)
         BUTTON_MANAGER_LIFECYCLE_RUNNING;
 
     BaseType_t task_result =
-        xTaskCreate(
+        xTaskCreateWithCaps(
             button_manager_task,
             BUTTON_MANAGER_TASK_NAME,
             BUTTON_MANAGER_TASK_STACK_SIZE_BYTES,
             NULL,
             BUTTON_MANAGER_TASK_PRIORITY,
-            &s_button_manager.task_handle);
+            &s_button_manager.task_handle,
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
     if (task_result != pdPASS)
     {
