@@ -1,7 +1,7 @@
 idf_component_register(
     SRCS
         "ui_manager_lvgl.c"
-        "lvgl_psram_allocator.c"
+        "modules/allocator/src/lvgl_psram_allocator.c"
 
     INCLUDE_DIRS
         "include"
