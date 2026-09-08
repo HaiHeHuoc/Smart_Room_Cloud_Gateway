@@ -7,9 +7,12 @@ idf_component_register(
         "include"
 
     REQUIRES
+        esp_common
+        display_driver
+
+    PRIV_REQUIRES
         app_log
         common
-        display_driver
         lvgl
         esp_lcd
         esp_timer
