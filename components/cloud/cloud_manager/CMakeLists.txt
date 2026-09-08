@@ -10,10 +10,10 @@ idf_component_register(
         "modules/telemetry_json/include"
 
     REQUIRES
-        app_log
         esp_common
 
     PRIV_REQUIRES
+        app_log
         common
         firebase_auth
         esp_http_client
