@@ -8,9 +8,9 @@
 #include "log_manager.h"
 #include "app_log.h"
 
-int host_mounted, host_synced, host_leases, host_allocations, host_tasks;
-int host_console, host_writes, host_syncs, host_fail_write, host_fail_sync, host_delay;
-int host_fail_alloc, host_fail_task, host_fail_unlink;
+int host_mounted, host_health_check, host_synced, host_leases, host_allocations, host_tasks;
+int host_console, host_writes, host_syncs, host_fail_write, host_partial_write, host_fail_sync, host_delay;
+int host_fail_alloc, host_fail_task, host_fail_unlink, host_notify_waits, host_zero_boot_console;
 struct host_task {
     pthread_mutex_t mutex;
     pthread_cond_t cond;
@@ -72,10 +72,16 @@ void xTaskNotify(TaskHandle_t t, uint32_t bits, int action)
 }
 void xTaskNotifyWait(uint32_t entry, uint32_t exit, uint32_t *bits, TickType_t ticks)
 {
-    (void)entry; struct timespec until = deadline(ticks);
+    (void)entry;
+    __atomic_add_fetch(&host_notify_waits, 1, __ATOMIC_RELAXED);
     pthread_mutex_lock(&current->mutex);
-    while (!current->bits) {
-        if (pthread_cond_timedwait(&current->cond, &current->mutex, &until) == ETIMEDOUT) break;
+    if (ticks == portMAX_DELAY) {
+        while (!current->bits) pthread_cond_wait(&current->cond, &current->mutex);
+    } else {
+        struct timespec until = deadline(ticks);
+        while (!current->bits) {
+            if (pthread_cond_timedwait(&current->cond, &current->mutex, &until) == ETIMEDOUT) break;
+        }
     }
     *bits = current->bits; current->bits &= ~exit; pthread_mutex_unlock(&current->mutex);
 }
@@ -104,15 +110,35 @@ void heap_caps_free(void *p) { if (p) --host_allocations; free(p); }
 bool esp_ptr_external_ram(const void *p) { return p != NULL; }
 void esp_log_write(esp_log_level_t level, const char *tag, const char *format, ...)
 {
-    (void)format;
     if (!strcmp(tag, "APP_LOG_SINK") && (int)level > __atomic_load_n(&sink_level, __ATOMIC_RELAXED)) return;
+    if (!strcmp(tag, "APP_LOG_SINK")) {
+        char text[1024];
+        va_list args;
+        va_start(args, format);
+        vsnprintf(text, sizeof(text), format, args);
+        va_end(args);
+        if (strstr(text, "[boot=0000000000000000]"))
+            __atomic_add_fetch(&host_zero_boot_console, 1, __ATOMIC_RELAXED);
+    }
     __atomic_add_fetch(&host_console, 1, __ATOMIC_RELAXED);
 }
 void esp_log_level_set(const char *tag, esp_log_level_t level)
 {
     assert(!strcmp(tag, "APP_LOG_SINK")); __atomic_store_n(&sink_level, level, __ATOMIC_RELAXED);
 }
-bool sd_card_manager_is_mounted(void) { return __atomic_load_n(&host_mounted, __ATOMIC_RELAXED); }
+bool sd_card_manager_is_mounted(void)
+{
+    return __atomic_load_n(&host_mounted, __ATOMIC_RELAXED) &&
+           !__atomic_load_n(&host_health_check, __ATOMIC_RELAXED);
+}
+esp_err_t sd_card_manager_get_status(sd_card_manager_status_t *status)
+{
+    if (!status) return ESP_ERR_INVALID_ARG;
+    status->state = __atomic_load_n(&host_mounted, __ATOMIC_RELAXED)
+        ? SD_CARD_MANAGER_STATE_READY
+        : SD_CARD_MANAGER_STATE_UNAVAILABLE;
+    return ESP_OK;
+}
 esp_err_t sd_card_manager_acquire(void)
 {
     if (!sd_card_manager_is_mounted()) return ESP_ERR_INVALID_STATE;
@@ -136,6 +162,13 @@ size_t host_fwrite(const void *data, size_t size, size_t count, FILE *file)
     __atomic_add_fetch(&host_writes, 1, __ATOMIC_RELAXED);
     int delay = __atomic_load_n(&host_delay, __ATOMIC_RELAXED); if (delay) host_sleep(delay);
     if (__atomic_exchange_n(&host_fail_write, 0, __ATOMIC_RELAXED)) { errno = EIO; return 0; }
+    if (__atomic_exchange_n(&host_partial_write, 0, __ATOMIC_RELAXED)) {
+        size_t partial = count > 1 ? count / 2 : 0;
+        if (!partial) { errno = EIO; return 0; }
+        size_t written = fwrite(data, size, partial, file);
+        errno = EIO;
+        return written;
+    }
     return fwrite(data, size, count, file);
 }
 int host_fsync(int fd)
