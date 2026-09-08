@@ -4,7 +4,6 @@ idf_component_register(
     PRIV_REQUIRES
         app_log
         common
-        dht
         esp_timer
         freertos
         heap
