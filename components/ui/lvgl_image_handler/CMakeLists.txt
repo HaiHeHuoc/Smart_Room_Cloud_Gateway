@@ -11,9 +11,10 @@ idf_component_register(
     PRIV_INCLUDE_DIRS
         "modules/animated_gif/include"
     REQUIRES
+        esp_common
+    PRIV_REQUIRES
         app_log
         common
-        display_driver
         freertos
         libpng
         lvgl
