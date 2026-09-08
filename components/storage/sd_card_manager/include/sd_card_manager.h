@@ -121,44 +121,107 @@ void sd_card_manager_register_availability_callback(void (*callback)(void));
 /**
  * @brief Reserve the mounted SD VFS for one open-file lifetime.
  *
- * A successful acquire increments the manager's active lease count. The caller
- * must pair it with sd_card_manager_release() after closing the file, including
- * every failure path after the acquire succeeds. Recovery waits for active
- * leases to drain before unmounting the VFS.
+ * A successful caller must pair this with sd_card_manager_release() after the
+ * corresponding FILE/DIR handle has been closed. Keep the lease from before
+ * fopen()/opendir() until after fclose()/closedir(). The recovery task blocks
+ * new leases and waits for all outstanding leases before unmounting the VFS.
  *
- * @return ESP_OK when a lease is granted, ESP_ERR_INVALID_STATE before init(),
- *         or ESP_ERR_NOT_FOUND while the SD VFS is unavailable/recovering.
+ * This API is non-ISR task-context code. It does not open a file or perform
+ * media I/O.
+ *
+ * @return ESP_OK when the lease was reserved, ESP_ERR_INVALID_STATE when the
+ *         VFS is not currently available.
  */
 esp_err_t sd_card_manager_acquire(void);
 
 /**
- * @brief Release one previously acquired SD VFS lease.
+ * @brief Release one lease after its FILE/DIR handle is closed.
  *
- * Calling this without a matching successful acquire is a programming error;
- * the manager ignores the underflow attempt and logs a diagnostic.
+ * This API is task-context only. It is safe to call while recovery is pending;
+ * the final release wakes the recovery task so it can unmount safely.
  */
 void sd_card_manager_release(void);
 
 /**
- * @brief Report a managed SD I/O failure and request recovery.
+ * @brief Notify the manager about a confirmed SD VFS I/O failure.
  *
- * Consumers call this after a file operation indicates a media/VFS failure.
- * The manager records the error, rejects new leases, waits for current leases
- * to drain, unmounts, and retries mounting in the background. Calls are
- * coalesced while recovery is already pending.
+ * Call this only after a real media/VFS error (for example ferror(), fseek(),
+ * or fclose() failure), not for normal EOF or a missing file. New leases are
+ * rejected immediately, while existing lease owners close their handles. The
+ * manager then unmounts and retries in its own task; it never calls LVGL or
+ * consumer callbacks.
  *
- * @param error ESP-IDF error associated with the failed operation. ESP_OK is
- *              normalized to ESP_FAIL because this API represents a failure.
+ * This API is non-blocking task-context code and is not ISR-safe.
+ *
+ * @param error Non-ESP_OK error that describes the observed failure.
  */
 void sd_card_manager_report_io_error(esp_err_t error);
 
 /**
- * @brief Classify a stdio/VFS errno as likely SD-media unavailability.
+ * @brief Classify a mounted FAT VFS errno that warrants SD recovery.
  *
- * This helper keeps consumer error handling consistent without exposing the
- * recovery state machine. It is pure and safe from normal task context.
+ * ESP-IDF's FAT VFS maps disk/transport failure to `EIO`, an unavailable or
+ * invalid drive/filesystem to `ENODEV`/`ENXIO`, and a media command timeout to
+ * `ETIMEDOUT`. This helper recognizes those cases without doing I/O or
+ * changing manager state. It lets consumers distinguish them from expected
+ * file errors such as `ENOENT` before calling sd_card_manager_report_io_error().
  *
- * @param error_number errno captured immediately after the failed VFS call.
- * @return true when the errno should trigger sd_card_manager_report_io_error().
+ * @param error_number errno captured immediately after a failed VFS call.
+ * @return true when the error indicates a recoverable SD VFS/media failure.
  */
 bool sd_card_manager_is_vfs_media_error(int error_number);
+
+/**
+ * @brief Create or overwrite a small test file on the SD card.
+ *
+ * This task-context bring-up helper acquires and releases its own VFS lease,
+ * then writes a fixed implementation-owned test path. It requires the manager
+ * to be READY and reports a confirmed write/close failure to recovery.
+ *
+ * @return ESP_OK on success, or an ESP-IDF error code on failure.
+ */
+esp_err_t sd_card_manager_write_test_file(void);
+
+/**
+ * @brief Read the SD card test file and print its content to the log.
+ *
+ * This task-context helper acquires and releases its own VFS lease. It is
+ * paired with sd_card_manager_write_test_file() and expects the test file to
+ * already exist.
+ *
+ * @return ESP_OK on success, or an ESP-IDF error code on failure.
+ */
+esp_err_t sd_card_manager_read_test_file(void);
+
+/**
+ * @brief List files and directories inside one SD card directory.
+ *
+ * This task-context helper acquires one VFS lease, opens the requested
+ * directory, reads each entry with readdir(), checks type/size with stat(),
+ * and prints the result to the ESP-IDF log.
+ *
+ * This is a non-recursive listing. It only prints entries directly inside
+ * dir_path and does not enter subdirectories.
+ *
+ * @param dir_path Directory path to scan. Pass NULL to use SD_MOUNT_POINT.
+ * @return ESP_OK on success, or an ESP-IDF error code on failure.
+ */
+esp_err_t sd_card_manager_list_files(const char *dir_path);
+
+/**
+ * @brief Recursively list files and directories inside an SD card directory.
+ *
+ * This task-context helper holds one VFS lease while it logs each discovered
+ * file, directory, and other filesystem entry. It is intended for debugging
+ * and SD card bring-up, not for returning a file list to application code.
+ *
+ * max_depth controls how far the scanner can enter subdirectories:
+ * - 0 scans only the starting directory.
+ * - 1 scans the starting directory and its direct child directories.
+ * - Higher values allow deeper traversal.
+ *
+ * @param dir_path Directory path to scan. Pass NULL to use SD_MOUNT_POINT.
+ * @param max_depth Maximum subdirectory depth to scan.
+ * @return ESP_OK on success, or an ESP-IDF error code on failure.
+ */
+esp_err_t sd_card_manager_list_files_recursive(const char *dir_path, uint8_t max_depth);
