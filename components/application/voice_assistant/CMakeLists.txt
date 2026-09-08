@@ -18,7 +18,6 @@ idf_component_register(
         "modules/codec/include"
 
     REQUIRES
-        app_log
         esp_common
         esp_driver_gpio
         xiaozhi_foundation
@@ -26,6 +25,7 @@ idf_component_register(
         app_gui
 
     PRIV_REQUIRES
+        app_log
         esp_audio_codec
         esp_timer
         freertos
