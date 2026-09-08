@@ -189,7 +189,7 @@ objective of this repository.
 - Xiaozhi boundary:
   [`application/xiaozhi_foundation/docs/README.md`](application/xiaozhi_foundation/docs/README.md)
 - Voice assistant:
-  [`application/voice_assistant/docs/README.md`](application/voice_assistant/docs/README.md)
+  [`application/voice_assistant/README.md`](application/voice_assistant/README.md)
 - Audio manager: [`audio/audio_manager/docs/README.md`](audio/audio_manager/docs/README.md)
 - Firebase Authentication component:
   [`cloud/firebase_auth/docs/README.md`](cloud/firebase_auth/docs/README.md)
@@ -199,4 +199,4 @@ objective of this repository.
   [`cloud/cloud_manager/docs/README.md`](cloud/cloud_manager/docs/README.md)
 
 Other component-specific behavior and limitations remain in each component's
-`docs/README.md`.
+root `README.md` or `docs/README.md`.
