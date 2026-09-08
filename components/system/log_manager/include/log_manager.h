@@ -16,10 +16,16 @@ extern "C" {
 #endif
 typedef struct {
     uint64_t produced_records;
-    uint64_t persisted_records; /* fwrite accepted; not a durability guarantee */
+    uint64_t persisted_records; /* complete records accepted by fwrite; not a durability guarantee */
+    uint64_t durable_records; /* subset confirmed by successful fsync */
+    uint64_t durability_uncertain_records; /* fwrite-accepted records lost behind an uncertain/failed sync boundary */
     uint64_t dropped_records;
     uint32_t storage_write_failures;
     uint32_t storage_recoveries;
+    uint32_t durability_syncs;
+    uint32_t durability_sync_failures;
+    uint32_t partial_write_events;
+    uint32_t writer_start_failures;
     uint32_t file_rotations;
     uint32_t truncated_records;
     uint32_t contention_drops;
@@ -35,7 +41,11 @@ typedef struct {
  * Static synchronization objects remain for application lifetime, even deinit.
  */
 esp_err_t log_manager_init(void);
-/** Create unpinned internal-stack writer; idempotent; requires init. */
+/** Create unpinned internal-stack writer; idempotent; requires init.
+ * If task creation fails, persistence enters a fail-closed degraded state:
+ * console logging continues, but new persistent records are not enqueued until
+ * a later successful start. Any backlog captured before the failure is retained.
+ */
 esp_err_t log_manager_start(void);
 /** Best effort sync of the current backlog, bounded caller wait in milliseconds.
  * Returns FAIL if storage unavailable/failing, TIMEOUT if still in progress.
@@ -57,7 +67,11 @@ esp_err_t log_manager_stop(uint32_t timeout_ms);
  * Idempotent. Static locks are deliberately retained, never dynamically leaked.
  */
 esp_err_t log_manager_deinit(void);
-/** Coherent bounded snapshot; INVALID_ARG for NULL, TIMEOUT on contention. */
+/** Coherent bounded snapshot; INVALID_ARG for NULL, TIMEOUT on contention.
+ * persisted_records counts complete records accepted by fwrite. durable_records
+ * advances only after fsync succeeds. durability_uncertain_records counts
+ * previously accepted records whose durability later became uncertain.
+ */
 esp_err_t log_manager_get_stats(log_manager_stats_t *stats);
 void log_manager_set_console_enabled(bool enabled);
 void log_manager_set_storage_enabled(bool enabled);
