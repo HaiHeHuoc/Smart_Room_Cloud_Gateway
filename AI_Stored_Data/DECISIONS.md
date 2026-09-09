@@ -6,7 +6,7 @@ This file records compact decisions that future AI sessions should preserve unle
 
 Date: 2026-08-25
 
-`AI_Stored_Data/` is the shared repository-local synchronization area for important AI handoff context across ChatGPT conversations, Codex, and other AI-assisted workflows.
+`AI_Stored_Data/` is the shared repository-local synchronization area for important AI handoff context across ChatGPT conversations, Codex sessions, and other AI-assisted workflows.
 
 AI assistants are authorized by Hải to create, overwrite, reorganize, and update content inside this directory without treating those metadata edits as production architecture changes.
 
@@ -110,6 +110,29 @@ full Gateway/Firebase + voice integration regression
 -> documentation/release/portfolio closure
 ```
 
-Historical roadmap labels that still describe a different future "Sprint 16"
-must be treated as a documentation mismatch to reconcile explicitly, not as a
-reason to overwrite completed Phase-16 evidence silently.
+## DECISION — Voice roadmap numbering after Phase 16.1
+
+Date: 2026-09-09
+
+The old planned numbering that called MCP read-only "Sprint 16" is superseded.
+Completed implementation history must not be renumbered. The canonical Version-2
+sequence is now:
+
+```text
+Sprint 16   Audio Arbitration & Multi-Client Audio Policy       COMPLETE
+Phase 16.1  Xiaozhi PCM Streaming Downlink                     COMPLETE
+Sprint 17   MCP Read-Only Tools                                NOT STARTED
+Sprint 18   MCP Controlled Actions                             NOT STARTED
+Sprint 19   Wake Word And Advanced Voice UX                    NOT STARTED
+```
+
+Consequences:
+
+- when Hải says "read-only MCP", treat it as **Phase/Sprint 17**;
+- Phase/Sprint 18 is reserved for allowlisted MCP side effects;
+- Phase/Sprint 19 is the wake-word/advanced-voice stage;
+- do not reuse Phase 16 for MCP work or rewrite Phase-16/16.1 acceptance history;
+- `XIAOZHI_IMPLEMENTATION_ROADMAP.md` is the canonical detailed Version-2
+  roadmap for this numbering;
+- if older historical roadmap text still contains the prior 16/17/18 mapping,
+  treat that text as superseded numbering rather than current plan.
