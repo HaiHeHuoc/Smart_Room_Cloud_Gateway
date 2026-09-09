@@ -131,7 +131,7 @@ including:
 
 ## Version 2 Voice Extension
 
-The approved post-Version 1 order is:
+The reconciled post-Version 1 order is:
 
 ```text
 Sprint 10: audio hardware validation
@@ -140,10 +140,17 @@ Sprint 12: Xiaozhi build and WebSocket transport validation
 Sprint 13: voice assistant adapter
 Sprint 14: push-to-talk MVP
 Sprint 15: GUI voice integration
-Sprint 16: MCP read-only tools
-Sprint 17: controlled MCP actions
-Sprint 18: wake word and advanced voice UX
+Sprint 16: audio arbitration and multi-client audio policy — complete
+Phase 16.1: Xiaozhi PCM streaming downlink — complete
+Sprint 17: MCP read-only tools — not started
+Sprint 18: controlled MCP actions — not started
+Sprint 19: wake word and advanced voice UX — not started
 ```
+
+This numbering preserves the completed Phase-16/16.1 implementation history.
+The older plan that used Sprint 16 for MCP read-only is superseded; future
+sessions must use Sprint 17 for read-only MCP, Sprint 18 for controlled MCP
+actions, and Sprint 19 for wake-word/advanced voice work.
 
 Version 2 must not replace existing Wi-Fi, provisioning, storage, cloud, GUI,
 or reset ownership.
