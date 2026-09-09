@@ -2,7 +2,7 @@
 
 ## Scope
 
-Working branch: `refactor/component-portability-hardening`
+Historical working branch: `refactor/component-portability-hardening`
 
 Base branch/commit at refactor start:
 
@@ -16,27 +16,53 @@ roadmap ownership.
 This refactor intentionally targets ESP-IDF/ESP32 reuse. It does not claim
 cross-platform STM32, Zephyr, or Linux portability.
 
-## Current initiative status — 2026-09-08
+## Current initiative status — 2026-09-09
 
-Code/test baseline reviewed immediately before this documentation update:
+The agreed portability-hardening implementation has been merged into
+`main_including_Firebase_security`.
+
+Integration evidence:
+
+```text
+b7ef51a87dcefa330cd0aa42e4d52dafe60f2bba
+Merge component portability hardening into main_including_Firebase_security
+```
+
+Post-merge branch history then added:
+
+```text
+1c26433364dd75fc2b1537c2a50fa35468c07cf1
+Add firebase key to gitignore
+
+7a74086b8211aff635a2651cbc54edab014a8920
+fix security
+```
+
+At the time this document is synchronized, `AI_Stored_Data/PROJECT_STATE.md`
+tracks the latest observed integration baseline. Do not treat the historical
+refactor-side baseline SHA below as the current main-branch HEAD.
+
+Historical code/test baseline reviewed before merge:
 
 - branch: `refactor/component-portability-hardening`
 - latest reviewed code/test commit: `3da32caeb8abd10326a92d4d705d1ea9d94221fb`
 - base/merge-base: `52721668e9a7682db1b9e42d9971a7d322c3a420`
 - at that baseline: ahead base 71 commits, behind base 0 commits
 
-Documentation-only commits may advance the branch HEAD after the reviewed
-code/test baseline above; do not treat that baseline SHA as a permanent branch
-HEAD assertion.
+Current status split:
 
-Status split:
+```text
+Architecture direction                      DONE / FROZEN
+Agreed refactor implementation              DONE / FROZEN
+Repository/private-module documentation     DONE / FROZEN
+Integration into main_including_Firebase_security COMPLETE
+Full automated acceptance after integration PENDING unless newer evidence is recorded
+Target-board smoke acceptance               PENDING unless newer evidence is recorded
+Overall initiative                          IMPLEMENTATION MERGED — ACCEPTANCE FOLLOW-UP PENDING
+```
 
-- architecture direction: **DONE / FROZEN**
-- agreed refactor implementation: **DONE / FROZEN**
-- repository/private-module documentation: **DONE / FROZEN**
-- automated acceptance: **PENDING**
-- target-board smoke acceptance: **PENDING**
-- overall initiative: **REFACTOR IMPLEMENTATION DONE — ACCEPTANCE PENDING**
+The merge itself is no longer pending. Do not prepare or open another PR merely
+to re-merge this initiative.
 
 Do not open another architecture or portability-refactor wave unless validation
 finds a confirmed defect that requires a scoped fix. Validation failures should
@@ -198,7 +224,7 @@ mapping.
 `button_manager` now uses ESP-IDF's explicit PSRAM task-creation API rather than
 depending on the project `common` helper.
 
-`sdkconfig.defaults` now enables:
+`sdkconfig.defaults` enables:
 
 ```text
 CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y
@@ -208,10 +234,18 @@ This is required by ESP-IDF for explicit task stacks allocated in external RAM.
 
 ## Configuration/security cleanup
 
-Firebase development values are no longer hard-coded in `app_common.h` on the
-refactor branch. The header maps to `CONFIG_APP_FIREBASE_*` options defined in
-`main/Kconfig.projbuild`; defaults are empty and real development values belong
-only in local generated configuration.
+Firebase development values are no longer hard-coded in `app_common.h`. The
+header maps to `CONFIG_APP_FIREBASE_*` options defined in `main/Kconfig.projbuild`;
+defaults are empty and real development values belong only in local generated
+configuration.
+
+Post-merge repository hardening also added `.FireBaseKey` to `.gitignore` and
+replaced several remaining unbounded `strcpy` calls in `log_manager` and its host
+test with bounded `snprintf` in commit `7a74086b...`.
+
+Those post-merge changes are robustness/security follow-ups, not a new
+portability architecture wave. This document records their existence but does
+not claim a build or HIL result for them unless explicit evidence is added.
 
 Never reintroduce real account credentials into tracked source or documentation.
 
@@ -221,7 +255,7 @@ The following are deliberate boundaries, not unfinished mistakes:
 
 - `audio_manager` remains a platform/service component and still consumes the
   centralized audio board mapping; converting its large lifecycle to a runtime
-  pin config was not justified without a build/HIL gate.
+  pin config was not justified without evidence.
 - `sd_card_manager` remains board-integrated for SDSPI host/pins/mount policy in
   this wave. Its dependency visibility was cleaned without rewriting the
   recovery state machine.
@@ -237,12 +271,12 @@ The following are deliberate boundaries, not unfinished mistakes:
 - Xiaozhi's validation-only SD fixture keeps its existing conditional test
   integration. Do not redesign fixture ownership without a separate decision.
 
-## Validation performed in this refactor session
+## Validation performed before merge
 
-Static validation completed:
+Static validation completed during the refactor work:
 
-- branch remains a clean descendant of the selected base;
-- moved implementation files are represented as Git renames rather than
+- refactor branch remained a clean descendant of the selected base;
+- moved implementation files were represented as Git renames rather than
   behavior rewrites;
 - CMake source paths and private include paths were reviewed for the moved
   modules;
@@ -255,34 +289,39 @@ Static validation completed:
   explicit external-RAM task-stack prerequisites;
 - centralized configuration ownership was reviewed after the refactor.
 
-The latest validation-only code/test follow-up commit reviewed at the time of
-this update is:
+The latest validation-only code/test follow-up commit recorded before merge was:
 
 ```text
 3da32caeb8abd10326a92d4d705d1ea9d94221fb
 ```
 
-`test(log-manager): fix host durability fault shims` changes only host-test code.
-It corrects the host `open()` compatibility shim so calls with and without
-`O_CREAT` preserve the real variadic contract, and improves background-storage
-state observation. It does not change production `log_manager` behavior.
+`test(log-manager): fix host durability fault shims` changed only host-test code.
+It corrected the host `open()` compatibility shim so calls with and without
+`O_CREAT` preserve the real variadic contract, and improved background-storage
+state observation. It did not intentionally change production `log_manager`
+behavior.
 
 A review follow-up remains for the durability test matrix: `background_close`
-is still listed as a separate case, but the current test code uses
-`inject_close_error = close_error && !background`, so that case does not
-currently inject a close failure and substantially overlaps the plain
-`background` path. Treat this as a validation-test coverage item, not as an
-unfinished architecture/refactor implementation item. Either restore a
-deterministic background close-failure injection if that scenario remains part
-of the intended regression contract, or explicitly remove/rename the redundant
-case after confirming the intended coverage.
+was still listed as a separate case while the test code used
+`inject_close_error = close_error && !background`, so that case did not inject a
+close failure and substantially overlapped the plain `background` path. Treat
+this as a validation-test coverage item, not as unfinished architecture/refactor
+implementation. Either restore deterministic background close-failure injection
+if that scenario remains part of the intended regression contract, or explicitly
+remove/rename the redundant case after confirming intended coverage.
 
 No full firmware build, complete host-test PASS, or target-board acceptance is
-claimed by this document unless explicit execution evidence is recorded below.
+claimed by this document for the merged integration unless explicit execution
+evidence is recorded below or in a newer acceptance record.
 
-## Required acceptance gate on a machine with ESP-IDF 6.0.1
+## Remaining acceptance follow-up
 
-Run from a clean checkout of `refactor/component-portability-hardening`:
+Run acceptance from a clean checkout of the current integrated baseline,
+preferably `main_including_Firebase_security` at the exact commit being accepted.
+Do not validate an old refactor-branch SHA and silently generalize that result to
+newer main commits.
+
+With ESP-IDF 6.0.1:
 
 ```powershell
 idf.py fullclean
@@ -306,29 +345,28 @@ check of at least:
 8. voice/Xiaozhi path relevant to the current Phase-16.1 baseline;
 9. factory-reset/reboot path if dependency changes could affect it.
 
-Any failure after the structural moves must be treated as a refactor regression
-until proven otherwise.
+Any failure attributable to the structural/dependency changes should be treated
+as a refactor regression until proven otherwise.
 
 ## Completion definition
 
-### Implementation/documentation completion
+### Implementation/integration completion
 
-For the agreed portability-hardening scope, architecture, implementation, and
-repository documentation are complete and frozen. No additional genericization,
-component split/merge, or ownership redesign is required unless acceptance
-reveals a confirmed defect.
+For the agreed portability-hardening scope, architecture, implementation,
+documentation, and integration into `main_including_Firebase_security` are
+complete and frozen. No additional genericization, component split/merge, or
+ownership redesign is required unless acceptance reveals a confirmed defect.
 
-### Overall initiative completion
+### Acceptance completion
 
-Only report **REFACTOR DONE** after all of the following are evidenced:
+Only report **PORTABILITY ACCEPTANCE COMPLETE** after all of the following are
+evidenced on the integrated baseline being accepted:
 
 - clean `idf.py build` passes;
 - relevant host regression tests pass;
 - bounded target-board smoke testing shows no behavior regression;
 - no remaining compile/path/dependency regression is known.
 
-After acceptance passes, perform the final diff review and secret check and then
-prepare a PR to `main_including_Firebase_security` when Hải requests it.
-
-Do not merge into `main_including_Firebase_security` automatically. Hải owns the
-final merge decision.
+The refactor merge itself is already complete. Acceptance failures now require a
+scoped corrective change on an appropriate branch; they do not justify silently
+reopening the entire portability architecture.
