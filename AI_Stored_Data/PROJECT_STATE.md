@@ -2,7 +2,7 @@
 
 Updated from branch: `main_including_Firebase_security`
 Snapshot date: 2026-09-09
-Observed branch HEAD at snapshot: `7a74086b8211aff635a2651cbc54edab014a8920` (`fix security`)
+Production/source baseline before the documentation-sync commits: `7a74086b8211aff635a2651cbc54edab014a8920` (`fix security`)
 
 ## Working Constitution
 
@@ -16,14 +16,13 @@ Observed branch HEAD at snapshot: `7a74086b8211aff635a2651cbc54edab014a8920` (`f
 
 ## Current branch anchor
 
-At this snapshot, the requested integration branch is:
+The requested integration branch is:
 
 ```text
 main_including_Firebase_security
-HEAD 7a74086b8211aff635a2651cbc54edab014a8920  fix security
 ```
 
-Recent integration/security history relevant to future sessions:
+Production/source history relevant to this snapshot:
 
 ```text
 b7ef51a87dcefa330cd0aa42e4d52dafe60f2bba
@@ -41,22 +40,59 @@ The `fix security` commit replaces several unbounded `strcpy` calls in
 the source change only; it does not claim a new firmware build or HIL run for
 that commit.
 
+Documentation-only synchronization commits may advance the branch HEAD beyond
+`7a74086b...`; do not mistake those metadata/documentation commits for a newer
+production validation baseline.
+
 ## Current high-level state
 
 ```text
-Sprint 12  Software complete / HIL PASS
-Sprint 13  Software complete / HIL PASS
-Sprint 14  Software complete / BUILD PASS / golden-path HIL PASS / targeted regression partial
-Sprint 15  COMPLETE / BUILD VERIFIED / HIL ACCEPTED
-Sprint 16  SOFTWARE COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / BOUNDED HIL ACCEPTED
+Sprint 12   Software complete / HIL PASS
+Sprint 13   Software complete / HIL PASS
+Sprint 14   Software complete / BUILD PASS / golden-path HIL PASS / targeted regression partial
+Sprint 15   COMPLETE / BUILD VERIFIED / HIL ACCEPTED
+Sprint 16   Audio Arbitration / SOFTWARE COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / BOUNDED HIL ACCEPTED
 Phase 16.1  PCM streaming downlink IMPLEMENTED / BUILD VERIFIED / automated HIL PASS / audible recovery confirmed
-Major feature-coding stage through Phase 16  COMPLETE
+Sprint 17   MCP Read-Only Tools / NOT STARTED
+Sprint 18   MCP Controlled Actions / NOT STARTED
+Sprint 19   Wake Word And Advanced Voice UX / NOT STARTED
+Major feature-coding stage through Phase 16.1 COMPLETE; later feature phases require explicit start
 ```
 
 Authoritative Phase-16 closure: `AI_Stored_Data/PHASE16_PROGRESS.md`.
 Phase-16 HIL plan: `AI_Stored_Data/PHASE16_HIL_TEST_PLAN.md`.
 Phase-16 HIL evidence: `AI_Stored_Data/PHASE16_HIL_EVIDENCE.md`.
 Phase-16.1 streaming record: `AI_Stored_Data/PHASE16_1_STREAMING_DOWNLINK.md`.
+Canonical detailed Version-2 phase numbering: `XIAOZHI_IMPLEMENTATION_ROADMAP.md`.
+
+## Roadmap numbering reconciliation
+
+The previous roadmap draft used Sprint 16 for MCP read-only. That numbering is
+superseded because Sprint 16 and Phase 16.1 now have completed, accepted
+implementation history that must not be renumbered.
+
+Use this sequence from now on:
+
+```text
+Sprint 16   Audio Arbitration & Multi-Client Audio Policy       COMPLETE
+Phase 16.1  Xiaozhi PCM Streaming Downlink                     COMPLETE
+Sprint 17   MCP Read-Only Tools                                NOT STARTED
+Sprint 18   MCP Controlled Actions                             NOT STARTED
+Sprint 19   Wake Word And Advanced Voice UX                    NOT STARTED
+```
+
+Interpretation rule:
+
+- "read-only MCP" = **Sprint/Phase 17**;
+- "controlled MCP actions" = **Sprint/Phase 18**;
+- "wake word / advanced voice UX" = **Sprint/Phase 19**;
+- never reuse Phase 16 for MCP work;
+- never rewrite Phase-16/16.1 closure evidence merely to match an older draft.
+
+`XIAOZHI_IMPLEMENTATION_ROADMAP.md` and `docs/KNOWN_LIMITATIONS.md` were
+reconciled to this numbering on 2026-09-09. If an older historical roadmap
+snapshot still shows the old 16/17/18 mapping, this reconciliation supersedes
+that numbering only; preserve the historical implementation content.
 
 ## Component portability hardening integration
 
@@ -288,19 +324,6 @@ bounded recovery window.
   unbounded `strcpy` calls in `log_manager`; validation of that exact commit must
   be reported separately when actually performed.
 
-## Documentation consistency note
-
-The repository contains historical roadmap text whose phase labels do not fully
-match the later accepted implementation record. In particular, older roadmap
-sections can still describe a future "Sprint 16 — MCP read-only tools" while the
-current Phase-16 closure records describe the completed audio-arbitration work
-and Phase 16.1 streaming extension.
-
-Do not silently reinterpret or delete roadmap history. When planning future
-phases, inspect current source plus closure/evidence documents, call out the
-mismatch explicitly, and reconcile canonical roadmap wording only when Hải asks
-for roadmap maintenance.
-
 ## Known pending acceptance / technical debt
 
 1. Phase-16 bounded target HIL is accepted; endurance and broader full-integration regression remain deferred.
@@ -321,4 +344,4 @@ for roadmap maintenance.
 4. Treat Phase 12 and Phase 13 as closed regression baselines; retain Phase 14's recorded golden-path result and run only relevant regressions.
 5. Complete the post-portability-refactor build/host-test/target-smoke acceptance before reopening architecture work.
 6. Run full Gateway/Firebase + voice integration regression, bug fixing, hardening, performance/resource validation, documentation, and release/portfolio closure.
-7. Do not start Phase 17 or another major feature phase automatically.
+7. Do not start Phase 17 or another major feature phase automatically. If Hải explicitly starts Phase 17, its scope is MCP Read-Only Tools.
