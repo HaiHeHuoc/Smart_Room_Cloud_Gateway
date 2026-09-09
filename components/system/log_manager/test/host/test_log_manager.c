@@ -128,7 +128,7 @@ int main(void)
     wait_persisted(1);
     wait_no_leases();
     assert(log_manager_flush(1000) == ESP_OK);
-    char unknown[PATH_BYTES]; strcpy(unknown, s_path);
+    char unknown[PATH_BYTES]; snprintf(unknown, sizeof(unknown), "%s", s_path);
     assert(strstr(unknown, "/unknown/boot_"));
     char content[8192]; read_text(unknown, content, sizeof(content));
     assert(strstr(content, "[UNSYNCED]") && strstr(content, "[OFFLINE]"));

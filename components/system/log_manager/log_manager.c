@@ -392,7 +392,7 @@ static bool retain(size_t incoming)
                 total += st.st_size;
                 if (strcmp(path, s_path) && (!oldest[0] || st.st_mtime < oldest_time ||
                     (st.st_mtime == oldest_time && strcmp(path, oldest) < 0))) {
-                    strcpy(oldest, path);
+                    (void)snprintf(oldest, sizeof(oldest), "%s", path);
                     oldest_time = st.st_mtime;
                 }
                 errno = 0;
@@ -413,7 +413,9 @@ static bool retain(size_t incoming)
 
 static void record_day(const char *line, char day[11])
 {
-    if (!strncmp(line, "[UNSYNCED]", 10)) strcpy(day, "unknown");
+    if (!strncmp(line, "[UNSYNCED]", 10)) {
+        (void)snprintf(day, 11, "%s", "unknown");
+    }
     else {
         memcpy(day, line + 1, 10);
         day[4] = day[7] = '_';
@@ -595,7 +597,9 @@ static size_t take_batch(void)
         while ((n = log_buffer_peek(&s.ring, line, sizeof(line)))) {
             record_day(line, day);
             if (s.pending_bytes && (s.pending_bytes + n > BATCH_BYTES || strcmp(day, first_day))) break;
-            if (!s.pending_bytes) strcpy(first_day, day);
+            if (!s.pending_bytes) {
+                (void)snprintf(first_day, sizeof(first_day), "%s", day);
+            }
             memcpy(s.batch + s.pending_bytes, line, n);
             s.pending_bytes += n;
             ++s.pending_records;
