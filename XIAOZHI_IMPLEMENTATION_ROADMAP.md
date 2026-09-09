@@ -1,15 +1,22 @@
 # ESP32-S3 Smart Room Cloud Gateway — Xiaozhi Implementation Roadmap
 
-**Status:** Approved syllabus / Not started  
+**Status:** Active roadmap / implemented through Phase 16.1; later phases pending  
 **Target:** ESP32-S3 N16R8, ESP-IDF 6.0.1  
 **Resolved dependency:** `espressif/esp_xiaozhi: 0.1.2` (manifest constraint: `^0.1.1`)
 **Voice MVP closure:** End of Sprint 15  
-**Advanced voice closure:** End of Sprint 18
+**Advanced voice closure:** End of Sprint 19
 
 > This roadmap extends the existing project roadmap. It does not replace,
 > reorder, skip, or silently close Sprints 0-9. Pending acceptance work in the
 > original roadmap remains visible and higher priority unless explicitly
 > deferred.
+>
+> **Numbering reconciliation (2026-09-09):** completed implementation history is
+> preserved. Sprint 16 is the accepted Audio Arbitration & Multi-Client Audio
+> Policy work, with Phase 16.1 as the Xiaozhi PCM streaming-downlink extension.
+> The previously unimplemented MCP/wake-word roadmap items are shifted forward:
+> Sprint 17 = MCP read-only, Sprint 18 = controlled MCP actions, Sprint 19 =
+> wake word and advanced voice UX. Do not reuse Sprint 16 for MCP work.
 
 ---
 
@@ -23,9 +30,11 @@ Sprints 0-9 and pending acceptance
     -> Sprint 13 project-owned voice_assistant adapter
     -> Sprint 14 push-to-talk and limited multi-turn MVP
     -> Sprint 15 GUI voice and interactive chatbot animation
-    -> Sprint 16 MCP read-only tools
-    -> Sprint 17 MCP controlled actions
-    -> Sprint 18 wake word and advanced voice UX
+    -> Sprint 16 audio arbitration and multi-client audio policy
+    -> Phase 16.1 Xiaozhi PCM streaming downlink
+    -> Sprint 17 MCP read-only tools
+    -> Sprint 18 MCP controlled actions
+    -> Sprint 19 wake word and advanced voice UX
 ```
 
 ## 2. Ownership
@@ -36,16 +45,18 @@ provisioning_manager     owns temporary BLE provisioning transport
 config_manager           owns persistent application configuration
 cloud_manager            owns Firebase telemetry and retry policy
 audio_manager            owns microphone, speaker, I2S, DMA staging and PCM flow
-voice_assistant          owns esp_xiaozhi lifecycle and protocol adaptation
+xiaozhi_foundation       owns the direct managed esp_xiaozhi/provider boundary
+voice_assistant          owns product voice-session orchestration and protocol adaptation
 app_gui                  owns GUI models, queues, screens and animation selection
 ui_manager_lvgl          owns LVGL runtime and synchronization
 lvgl_image_handler       owns decoded image/GIF resources and active image objects
 device/application APIs  own validated sensor and actuator operations
 ```
 
-Only `voice_assistant` may include `esp_xiaozhi` headers. External handles,
-enums, callback payloads, and transport objects must not leak into other public
-component APIs.
+Only `xiaozhi_foundation` may directly depend on managed `esp_xiaozhi` provider
+handles/types. Provider handles, enums, callback-lifetime payloads, credentials,
+and transport objects must not leak into unrelated public component APIs.
+`voice_assistant` consumes only the project-owned foundation boundary.
 
 No Xiaozhi, audio, network, or MCP callback may directly call LVGL, change
 Wi-Fi lifecycle, start/stop provisioning, erase/write application NVS, reboot,
@@ -530,14 +541,15 @@ ERROR
 
 - [ ] Define copied config/status and lifecycle, PTT, cancel, network, and status
       APIs without external types.
-- [ ] Keep the Xiaozhi handle private and single-owner.
+- [ ] Keep the Xiaozhi handle private and single-owner inside the project-owned
+      foundation boundary.
 
 ### 13.2 Command Queue And State Machine
 
 Commands: START, STOP, NETWORK_ONLINE, NETWORK_OFFLINE, BEGIN_LISTENING,
 END_LISTENING, CANCEL, SHUTDOWN.
 
-- [ ] Call Xiaozhi APIs only from the owning worker context.
+- [ ] Call Xiaozhi-facing APIs only through the owning foundation/worker context.
 - [ ] Define valid transitions, finite timeouts/retries, and terminal failures.
 - [ ] Use generation/epoch filtering for stale events.
 
@@ -561,7 +573,8 @@ arbitrary GPIO, shell/system commands.
 
 ## Acceptance
 
-- [ ] Only `voice_assistant` directly depends on `esp_xiaozhi`.
+- [ ] Only `xiaozhi_foundation` directly depends on managed `esp_xiaozhi` provider types.
+- [ ] `voice_assistant` uses the project-owned foundation API; no provider types escape.
 - [ ] No external types in public headers.
 - [ ] No callback ownership violations.
 - [ ] Stale events rejected; repeated lifecycle creates no duplicate resources.
@@ -712,7 +725,8 @@ Event flow:
 
 ```text
 esp_xiaozhi callback
-    -> voice_assistant copies/validates
+    -> xiaozhi_foundation copies/provider-adapts
+    -> voice_assistant copies/validates product state
     -> project state/emotion model
     -> bounded app_gui queue
     -> GUI task animation resolver
@@ -749,7 +763,68 @@ Push-to-Talk
 
 ---
 
-# Sprint 16 — MCP Read-Only Tools
+# Sprint 16 — Audio Arbitration & Multi-Client Audio Policy — Complete
+
+**Status:** Software complete / static review complete / build verified / bounded HIL accepted.
+
+**Goal:** Preserve `audio_manager` as the sole I2S/DMA owner while allowing
+multiple logical audio clients to request capture/playback through deterministic,
+bounded policy.
+
+Accepted policy summary:
+
+```text
+XIAOZHI      priority=70  CAPTURE=REJECT  PLAYBACK=QUEUE  interruptible=true
+NOTIFICATION priority=50  PLAYBACK=QUEUE  interruptible=true
+ALARM        priority=100 PLAYBACK=PREEMPT_LOWER_PRIORITY interruptible=false
+```
+
+- [x] Project-owned request metadata and deterministic GRANT/WAIT/REJECT/PREEMPT policy.
+- [x] Separate bounded capture/playback arbiters above the existing manager.
+- [x] Real manager state evidence required before ACTIVE ownership is claimed.
+- [x] Unknown/legacy activity is never preempted without trusted owner metadata.
+- [x] Notification/alarm policy integrated without transferring I2S/DMA ownership.
+- [x] Bounded target arbitration matrix accepted.
+
+Authoritative closure and HIL evidence live in:
+
+```text
+AI_Stored_Data/PHASE16_PROGRESS.md
+AI_Stored_Data/PHASE16_HIL_TEST_PLAN.md
+AI_Stored_Data/PHASE16_HIL_EVIDENCE.md
+```
+
+Known deferred items include long-duration endurance, global cross-resource
+fairness guarantees, dedicated arbiter stop/deinit APIs, and migration of
+recorded-audio playback into arbitration.
+
+## Phase 16.1 — Xiaozhi PCM Streaming Downlink — Complete
+
+The accepted post-Phase-16 extension replaces full-response aggregation and
+SD/WAV handoff with a bounded streaming path:
+
+```text
+WebSocket callback copy
+-> bounded packet queue
+-> Opus decode worker
+-> bounded audio_manager-owned PCM16 PSRAM ring
+-> audio_manager task
+-> sole I2S/DMA playback
+-> MAX98357A
+```
+
+- [x] PCM16 mono 16-kHz manager-owned ingress ring.
+- [x] 7.68-second bounded capacity and 1.44-second normal prefill.
+- [x] Finite packet-preserving backpressure rather than silent PCM drop.
+- [x] Explicit bounded silence during transient post-start ingress gaps.
+- [x] Automated target matrix PASS and audible recovery confirmed.
+- [ ] Long-duration cloud/Firebase coexistence and endurance remain separate acceptance work.
+
+Detailed record: `AI_Stored_Data/PHASE16_1_STREAMING_DOWNLINK.md`.
+
+---
+
+# Sprint 17 — MCP Read-Only Tools — Not Started
 
 **Goal:** Expose bounded, non-sensitive project status.
 
@@ -778,7 +853,7 @@ display.get_current_screen
 
 ---
 
-# Sprint 17 — MCP Controlled Actions
+# Sprint 18 — MCP Controlled Actions — Not Started
 
 **Goal:** Add allowlisted side effects only for real project-owned actuators.
 
@@ -821,25 +896,25 @@ control, and shell/system commands.
 
 ---
 
-# Sprint 18 — Wake Word And Advanced Voice UX
+# Sprint 19 — Wake Word And Advanced Voice UX — Not Started
 
 **Goal:** Evaluate and optionally add local wake word, VAD, privacy UX, and
 advanced conversation after PTT is stable.
 
-## Phase 18.1 — ESP-SR/WakeNet Feasibility
+## Phase 19.1 — ESP-SR/WakeNet Feasibility
 
 - [ ] Select and pin exact ESP-SR/WakeNet model/dependencies.
 - [ ] Measure flash, PSRAM, internal/DMA, CPU, stacks, and continuous I2S.
 - [ ] Validate coexistence with LCD, SD, Wi-Fi, cloud, and Xiaozhi.
 
-## Phase 18.2 — Continuous Capture, Wake Word, And VAD
+## Phase 19.2 — Continuous Capture, Wake Word, And VAD
 
 - [ ] Continuous local capture without continuous network transmission.
 - [ ] Project-owned wake/VAD state flow.
 - [ ] Visible microphone/listening and local mute indicators.
 - [ ] Define false accept/reject, timeout, and re-arm.
 
-## Phase 18.3 — Advanced Conversation
+## Phase 19.3 — Advanced Conversation
 
 Optional measured features:
 
@@ -864,7 +939,7 @@ half-duplex closure, AEC before measurement, or unversioned models.
 
 # Cross-Sprint Validation
 
-Each Sprint 10-18 closure records:
+Each Sprint 10-19 closure records:
 
 - exact firmware revision and dependency lock;
 - board, microphone, amplifier, speaker, power, and GPIO map;
@@ -879,7 +954,7 @@ Each Sprint 10-18 closure records:
 Integrated fault cases include Wi-Fi loss during all voice states, Internet or
 server outage, activation/auth rejection, transport reconnect, cloud overlap,
 queue full/overflow, rapid PTT, cancel/abort, missing/corrupt GIF, SD unmount,
-reset/provisioning preemption, 100-turn endurance, and Sprint 18 eight-hour
+reset/provisioning preemption, 100-turn endurance, and Sprint 19 eight-hour
 endurance when enabled.
 
 # Final Definition Of Done
