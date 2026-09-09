@@ -61,3 +61,55 @@ Production `voice_assistant` ownership/state-machine work belongs to Sprint 13 u
 ## DECISION — Roadmap continuity
 
 Do not skip, replace, or silently close existing phases. New work must respect the established roadmap and acceptance state. Cleanup work must not silently become a new feature phase.
+
+## DECISION — Component portability hardening is integrated and frozen
+
+Date: 2026-09-09
+
+The agreed `refactor/component-portability-hardening` work has been merged into
+`main_including_Firebase_security` through merge commit
+`b7ef51a87dcefa330cd0aa42e4d52dafe60f2bba`.
+
+Preserve these conclusions:
+
+- component dependency direction is `application -> service -> driver/framework`;
+- domain folders are organizational containers; their direct children are
+  ESP-IDF components;
+- tightly coupled internal subsystems may live under parent-owned `modules/`
+  directories and are not standalone ESP-IDF components by default;
+- other components must not include another component's private module headers;
+- reusable libraries, platform/service components, and product/application
+  components have intentionally different reuse targets;
+- product-specific coordinators/GUI/voice orchestration must not be generalized
+  merely to increase a portability score;
+- `board_config.h` remains the Smart Room physical hardware mapping authority;
+- architecture and agreed refactor scope are frozen unless validation exposes a
+  concrete defect.
+
+The merge is complete even though full post-refactor automated and target-board
+smoke acceptance may still be pending. Do not open a second portability wave to
+solve an unproven problem; fix validated regressions narrowly.
+
+## DECISION — Post-Phase-16 project stage
+
+Date: 2026-09-09
+
+Phase 16 audio arbitration is closed and Phase 16.1 streaming downlink has build
+and bounded target acceptance recorded. The major feature-coding stage through
+Phase 16 is complete.
+
+Do not start Phase 17 or another major feature phase automatically.
+
+Preferred work after remaining targeted acceptance gaps:
+
+```text
+full Gateway/Firebase + voice integration regression
+-> confirmed bug fixes
+-> hardening
+-> performance/resource validation
+-> documentation/release/portfolio closure
+```
+
+Historical roadmap labels that still describe a different future "Sprint 16"
+must be treated as a documentation mismatch to reconcile explicitly, not as a
+reason to overwrite completed Phase-16 evidence silently.
