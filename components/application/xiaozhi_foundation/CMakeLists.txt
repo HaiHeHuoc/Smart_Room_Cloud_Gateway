@@ -1,5 +1,6 @@
 set(xiaozhi_foundation_sources
     "xiaozhi_foundation.c"
+    "modules/mcp_sensor_query/src/xiaozhi_mcp_sensor_query.c"
     "modules/session/src/xiaozhi_session.c"
     "modules/text_bridge/src/xiaozhi_text_bridge.c"
     "modules/websocket/src/xiaozhi_websocket_task_policy.c"
@@ -30,6 +31,9 @@ idf_component_register(
 
     INCLUDE_DIRS
         "include"
+
+    PRIV_INCLUDE_DIRS
+        "modules/mcp_sensor_query/include"
 
     REQUIRES
         esp_common

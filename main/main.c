@@ -43,6 +43,7 @@
 
 /* Sensor manager ---------------------------------------------------------- */
 #include "sensor_manager.h"
+#include "xiaozhi_sensor_query_composition.h"
 
 /* cloud_manager ----------------------------------------------------------- */
 #include "cloud_manager.h"
@@ -747,6 +748,17 @@ void app_main(void)
         app_route_boot_failure_to_wifi_status(
             "sensor_manager_start",
             service_ret);
+        return;
+    }
+
+    service_ret = app_xiaozhi_sensor_query_register_provider();
+
+    if (service_ret != ESP_OK)
+    {
+        APP_LOGE(
+            TAG, XIAOZHI_SENSOR_QUERY_PROVIDER_3CD6B8A7,
+            "Failed to register Xiaozhi room-sensor query provider: %s",
+            esp_err_to_name(service_ret));
         return;
     }
 

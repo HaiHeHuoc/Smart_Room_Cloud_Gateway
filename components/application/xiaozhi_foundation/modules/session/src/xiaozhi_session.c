@@ -10,6 +10,8 @@
 #include "esp_xiaozhi_chat.h"
 #include "esp_xiaozhi_info.h"
 
+#include "xiaozhi_mcp_sensor_query.h"
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 
@@ -456,6 +458,7 @@ static esp_err_t xiaozhi_session_cleanup(void)
     }
 
     if (s_mcp != NULL) {
+        xiaozhi_mcp_sensor_query_detach();
         const esp_err_t ret = esp_mcp_destroy(s_mcp);
         if ((ret != ESP_OK) && (first_error == ESP_OK)) {
             first_error = ret;
@@ -548,6 +551,14 @@ esp_err_t xiaozhi_foundation_session_start(uint32_t client_generation)
     ret = esp_mcp_create(&s_mcp);
     if (ret != ESP_OK) {
         APP_LOGE(TAG, MCP_CREATE_FAILED_S_4371E85C, "MCP create failed: %s", esp_err_to_name(ret));
+        goto fail;
+    }
+
+    ret = xiaozhi_mcp_sensor_query_attach(s_mcp);
+    if (ret != ESP_OK) {
+        APP_LOGE(TAG, SENSOR_QUERY_MCP_ATTACH_FAILED_93A649F7,
+                 "Smart Room sensor MCP attach failed: %s",
+                 esp_err_to_name(ret));
         goto fail;
     }
 
