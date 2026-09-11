@@ -1,7 +1,7 @@
 # Smart Room Cloud Gateway — AI Project State
 
-Updated from branch: `phase/16.1-streaming-downlink`
-Snapshot date: 2026-09-05
+Updated from branch: `main_including_Firebase_security` at `7a74086`
+Snapshot date: 2026-09-12
 
 ## Working Constitution
 
@@ -20,13 +20,23 @@ Sprint 13  Software complete / HIL PASS
 Sprint 14  Software complete / BUILD PASS / golden-path HIL PASS / targeted regression partial
 Sprint 15  COMPLETE / BUILD VERIFIED / HIL ACCEPTED
 Sprint 16  SOFTWARE COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / BOUNDED HIL ACCEPTED
-Phase 16.1  PCM streaming downlink IMPLEMENTED / BUILD VERIFIED / automated HIL PASS / audible recovery confirmed
+Phase 16.1  PCM streaming downlink IMPLEMENTED / BUILD VERIFIED / automated HIL PASS / audible recovery confirmed / endurance pending
 Major feature-coding stage through Phase 16  COMPLETE
 ```
 
 Authoritative Phase-16 closure: `AI_Stored_Data/PHASE16_PROGRESS.md`.
 Phase-16 HIL plan: `AI_Stored_Data/PHASE16_HIL_TEST_PLAN.md`.
 Phase-16 HIL evidence: `AI_Stored_Data/PHASE16_HIL_EVIDENCE.md`.
+
+## Branch boundary at this snapshot
+
+`main_including_Firebase_security` is the source branch for this snapshot. It
+does not contain the Phase-17 Smart Room sensor-query MCP implementation.
+
+That work is a separate, pushed candidate on
+`phase/17-xiaozhi-sensor-answer` at `ddfb4eb`. Its user-confirmed voice HIL
+evidence is three correct sensor-query cases, but it must not be described as a
+capability of `main_including_Firebase_security` until a reviewed merge lands.
 
 ## HIL routing
 
@@ -150,5 +160,6 @@ Phase 16.1's Xiaozhi downlink reserves the bounded stream through the playback a
 1. Retain the Phase-16 HIL branch as a regression baseline.
 2. Finish the still-pending Phase-15 visible UI/text acceptance.
 3. Treat Phase 12 and Phase 13 as closed regression baselines; retain Phase 14's recorded golden-path result and run only relevant regressions.
-4. Do not start Phase 17 automatically.
+4. Phase 17 was explicitly started on a separate branch; keep its read-only
+   MCP sensor-query work out of this branch until it is reviewed and merged.
 5. After independent acceptance, enter full Gateway/Firebase integration regression, bug fixing, hardening, performance/resource validation, documentation, and release/portfolio closure.
