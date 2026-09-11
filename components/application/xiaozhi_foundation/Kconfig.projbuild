@@ -148,4 +148,14 @@ config XIAOZHI_FOUNDATION_P26_WEBSOCKET_HEAP_TRACE
         not an acceptance workaround. It increases diagnostic image/RAM cost
         and remains disabled unless standalone heap tracing is also selected.
 
+config XIAOZHI_FOUNDATION_SENSOR_QUERY_TOOL
+    bool "Enable the Smart Room sensor query MCP tool"
+    depends on !XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+    default y
+    help
+        Register one read-only MCP tool in the production Xiaozhi WebSocket
+        session. The tool exposes only the latest valid, non-stale temperature
+        and humidity sample. It performs no configuration, actuator, storage,
+        network, audio, or GUI action.
+
 endmenu

@@ -68,6 +68,36 @@ esp_err_t xiaozhi_foundation_session_get_status(
 const char *xiaozhi_foundation_session_state_to_string(
     xiaozhi_foundation_session_state_t state);
 
+/* Production Smart Room sensor MCP boundary ------------------------------ */
+
+/** A copied, non-sensitive sample supplied to the read-only MCP tool. */
+typedef struct {
+    bool available;
+    float temperature_c;
+    float humidity_percent;
+} xiaozhi_foundation_sensor_query_snapshot_t;
+
+/**
+ * @brief Copy the latest valid, non-stale room sensor sample.
+ *
+ * The callback runs in normal task context for a no-argument MCP tool call.
+ * It must not perform I/O, state changes, LVGL calls, or expose identifiers,
+ * credentials, logs, or provider handles.
+ */
+typedef esp_err_t (*xiaozhi_foundation_sensor_query_provider_t)(
+    xiaozhi_foundation_sensor_query_snapshot_t *snapshot,
+    void *user_context);
+
+/**
+ * @brief Register the composition-owned room sensor snapshot provider.
+ *
+ * Registration must happen before the production voice session starts. The
+ * provider and context remain borrowed for the firmware lifetime.
+ */
+esp_err_t xiaozhi_foundation_register_sensor_query_provider(
+    xiaozhi_foundation_sensor_query_provider_t provider,
+    void *user_context);
+
 /* Phase 14 production audio boundary -------------------------------------- */
 
 #define XIAOZHI_FOUNDATION_UPLINK_SAMPLE_RATE_HZ 16000U
