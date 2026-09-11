@@ -43,6 +43,7 @@
 
 /* Sensor manager ---------------------------------------------------------- */
 #include "sensor_manager.h"
+#include "xiaozhi_cloud_sync_composition.h"
 #include "xiaozhi_sensor_query_composition.h"
 
 /* cloud_manager ----------------------------------------------------------- */
@@ -758,6 +759,17 @@ void app_main(void)
         APP_LOGE(
             TAG, XIAOZHI_SENSOR_QUERY_PROVIDER_3CD6B8A7,
             "Failed to register Xiaozhi room-sensor query provider: %s",
+            esp_err_to_name(service_ret));
+        return;
+    }
+
+    service_ret = app_xiaozhi_cloud_sync_query_register_provider();
+
+    if (service_ret != ESP_OK)
+    {
+        APP_LOGE(
+            TAG, XIAOZHI_CLOUD_SYNC_QUERY_PROVIDER_1C4F20D9,
+            "Failed to register Xiaozhi cloud-sync query provider: %s",
             esp_err_to_name(service_ret));
         return;
     }

@@ -142,7 +142,8 @@ Sprint 14: push-to-talk MVP
 Sprint 15: GUI voice integration
 Sprint 16: audio arbitration and multi-client audio policy — complete
 Phase 16.1: Xiaozhi PCM streaming downlink — complete
-Sprint 17: MCP read-only tools — not started
+Sprint 17: MCP read-only tools — in progress; sensor-query and cloud-sync
+voice HIL accepted by user
 Sprint 18: controlled MCP actions — not started
 Sprint 19: wake word and advanced voice UX — not started
 ```

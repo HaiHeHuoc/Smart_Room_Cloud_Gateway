@@ -14,6 +14,25 @@ substitute for real network/service fault evidence.
 The project keeps the external component behind the `xiaozhi_foundation`
 boundary and exposes only copied, non-sensitive scalar state.
 
+## Production Read-Only MCP Tools
+
+The production Xiaozhi session can register independently gated, no-argument
+Smart Room MCP tools. `smart_room.get_current_temperature_humidity` receives a
+valid, non-stale copied sensor sample. `smart_room.get_cloud_sync_status`
+receives a copied cloud-uploader snapshot: normalized lifecycle and failure
+class, age of the most recent successful upload, consecutive failure count, and
+retry policy. The cloud tool never exposes Firebase endpoints, HTTP bodies,
+credentials, tokens, identifiers, or configuration; neither tool performs a
+state-changing operation.
+
+`main` owns both providers and reads only public component snapshots. The
+foundation owns MCP tool attachment/detachment with the Xiaozhi session, so no
+`cloud_manager` or `sensor_manager` dependency crosses into this component.
+`CONFIG_XIAOZHI_FOUNDATION_SENSOR_QUERY_TOOL` and
+`CONFIG_XIAOZHI_FOUNDATION_CLOUD_SYNC_QUERY_TOOL` each default to enabled in a
+normal production session and are unavailable while the Phase-12 validation
+runtime is selected.
+
 ## Temporary Validation Feature Gate
 
 `Component config -> Xiaozhi Phase 12 validation -> Enable temporary Phase 12

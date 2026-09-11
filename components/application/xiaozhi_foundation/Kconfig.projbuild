@@ -158,4 +158,16 @@ config XIAOZHI_FOUNDATION_SENSOR_QUERY_TOOL
         and humidity sample. It performs no configuration, actuator, storage,
         network, audio, or GUI action.
 
+config XIAOZHI_FOUNDATION_CLOUD_SYNC_QUERY_TOOL
+    bool "Enable the Smart Room cloud-sync MCP tool"
+    depends on !XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+    default y
+    help
+        Register one read-only MCP tool in the production Xiaozhi WebSocket
+        session. The tool exposes only normalized cloud uploader state,
+        non-sensitive failure classification, retry policy, and age of the
+        latest successful upload. It never exposes Firebase endpoints,
+        credentials, tokens, HTTP bodies, or configuration, and it performs
+        no configuration, storage, network, audio, or GUI action.
+
 endmenu

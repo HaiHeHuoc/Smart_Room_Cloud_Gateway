@@ -98,6 +98,45 @@ esp_err_t xiaozhi_foundation_register_sensor_query_provider(
     xiaozhi_foundation_sensor_query_provider_t provider,
     void *user_context);
 
+/* Production Smart Room cloud-sync MCP boundary -------------------------- */
+
+#define XIAOZHI_FOUNDATION_CLOUD_SYNC_STATE_MAX_BYTES          24U
+#define XIAOZHI_FOUNDATION_CLOUD_SYNC_FAILURE_CLASS_MAX_BYTES  32U
+
+/** A copied, non-sensitive cloud uploader snapshot for the read-only MCP tool. */
+typedef struct {
+    bool available;
+    char state[XIAOZHI_FOUNDATION_CLOUD_SYNC_STATE_MAX_BYTES];
+    bool last_success_available;
+    uint32_t last_success_age_seconds;
+    uint32_t consecutive_failure_count;
+    char failure_class[XIAOZHI_FOUNDATION_CLOUD_SYNC_FAILURE_CLASS_MAX_BYTES];
+    bool retry_scheduled;
+    uint32_t retry_delay_seconds;
+} xiaozhi_foundation_cloud_sync_query_snapshot_t;
+
+/**
+ * @brief Copy the current non-sensitive cloud uploader status.
+ *
+ * The callback runs in normal task context for a no-argument MCP tool call.
+ * It must not perform I/O, state changes, LVGL calls, or expose endpoint
+ * URLs, HTTP bodies, credentials, tokens, identifiers, logs, or provider
+ * handles.
+ */
+typedef esp_err_t (*xiaozhi_foundation_cloud_sync_query_provider_t)(
+    xiaozhi_foundation_cloud_sync_query_snapshot_t *snapshot,
+    void *user_context);
+
+/**
+ * @brief Register the composition-owned cloud-sync snapshot provider.
+ *
+ * Registration must happen before the production voice session starts. The
+ * provider and context remain borrowed for the firmware lifetime.
+ */
+esp_err_t xiaozhi_foundation_register_cloud_sync_query_provider(
+    xiaozhi_foundation_cloud_sync_query_provider_t provider,
+    void *user_context);
+
 /* Phase 14 production audio boundary -------------------------------------- */
 
 #define XIAOZHI_FOUNDATION_UPLINK_SAMPLE_RATE_HZ 16000U

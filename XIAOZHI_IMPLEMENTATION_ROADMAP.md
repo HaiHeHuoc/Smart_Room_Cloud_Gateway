@@ -824,20 +824,30 @@ Detailed record: `AI_Stored_Data/PHASE16_1_STREAMING_DOWNLINK.md`.
 
 ---
 
-# Sprint 17 — MCP Read-Only Tools — Not Started
+# Sprint 17 — MCP Read-Only Tools — In Progress
 
 **Goal:** Expose bounded, non-sensitive project status.
 
-Initial candidates:
+Implemented slices:
 
 ```text
-room.get_environment
-network.get_status
+smart_room.get_current_temperature_humidity
+smart_room.get_cloud_sync_status
+```
+
+The sensor and cloud-sync slices are build verified and voice-HIL accepted by
+the user. Do not add `network.get_status`: an offline device cannot receive a
+Xiaozhi MCP call.
+
+Deferred candidates, subject to explicit scope approval:
+
+```text
 system.get_status
 display.get_current_screen
 ```
 
-- [ ] Define exact schemas, timeout, errors, and stale semantics.
+- [x] Define exact schemas, timeout, errors, and stale semantics for the
+      sensor and cloud-sync slices.
 - [ ] Read only through public snapshot APIs.
 - [ ] Bound JSON/text and prefer PSRAM where safe.
 - [ ] Exclude credentials, tokens, activation data, QR payloads, private NVS,
