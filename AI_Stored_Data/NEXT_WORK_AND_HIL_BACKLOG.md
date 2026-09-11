@@ -1,22 +1,33 @@
 # Next Work + Deferred HIL Backlog
 
-Updated: 2026-09-05
-Authoritative development branch: `phase/16.1-streaming-downlink`
+Updated: 2026-09-12
+Snapshot source branch: `main_including_Firebase_security` at `34a01c8934dd01555f75ecef7925c55aeec3a4df`
 Purpose: cross-session/Codex routing for **"hiện tại nên làm gì tiếp theo?"** and HIL activation from any clean working branch.
 
 ## Current software state
 
 ```text
-Phase 12 SW  -> COMPLETE / HIL PASS
-Phase 13 SW  -> COMPLETE / HIL PASS
-Phase 14 SW  -> COMPLETE / BUILD PASS / golden-path HIL PASS / targeted regression partial
-Phase 15 SW  -> COMPLETE / BUILD VERIFIED / HIL ACCEPTED
-Phase 16 SW  -> COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / BOUNDED HIL ACCEPTED
-Phase 16.1 SW -> IMPLEMENTED / BUILD VERIFIED / HIL PENDING
-Major feature coding -> COMPLETE through Phase 16
+Phase 12 SW   -> COMPLETE / HIL PASS
+Phase 13 SW   -> COMPLETE / HIL PASS
+Phase 14 SW   -> COMPLETE / BUILD PASS / golden-path HIL PASS / targeted regression partial
+Phase 15 SW   -> COMPLETE / BUILD VERIFIED / HIL ACCEPTED
+Phase 16 SW   -> COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / BOUNDED HIL ACCEPTED
+Phase 16.1 SW -> IMPLEMENTED / BUILD VERIFIED / automated HIL PASS / audible recovery confirmed / endurance pending
+Phase 17      -> IN PROGRESS; sensor-answer read-only MCP slice merged / BUILD VERIFIED / user-confirmed voice HIL accepted
+Phase 18      -> NOT STARTED
+Phase 19      -> NOT STARTED
 ```
 
-Do not start Phase 17 automatically. The next project stage is acceptance, integration, hardening, and evidence-driven fixes unless Hải explicitly expands feature scope.
+Phase 17 was explicitly started. The first production read-only MCP vertical slice,
+`smart_room.get_current_temperature_humidity`, was merged from
+`phase/17-xiaozhi-sensor-answer` into `main_including_Firebase_security` by merge
+commit `34a01c8934dd01555f75ecef7925c55aeec3a4df`. The accepted evidence records
+three correct user-confirmed voice-query cases. Treat Phase 17 overall as
+**IN PROGRESS**, not complete; remaining read-only MCP scope must be implemented
+and accepted separately.
+
+Do not start Phase 18 automatically. Continue Phase 17 only when Hải explicitly
+requests the next read-only MCP slice.
 
 ## Global Codex HIL routing
 
@@ -57,7 +68,11 @@ Phase 15 is closed. Hardware/manual acceptance was confirmed by the user on 2026
 
 ### Phase 16.1
 
-`phase/16.1-streaming-downlink` replaces Xiaozhi's full-response PSRAM/SD/WAV handoff with bounded decoded PCM16 ingress to the manager-owned playback ring. The public foundation callback remains copy-only; the downlink worker is the single decoder/producer and `audio_manager` remains the sole I2S/DMA owner. Required HIL: first `PCM_STREAM START`/PLAYBACK before TTS_STOP, audible continuity through a normal answer, EOS drain to `PLAYBACK_COMPLETE`, clean failure on ingress backpressure/starvation, and alarm-preemption recovery without stale PCM.
+`phase/16.1-streaming-downlink` replaces Xiaozhi's full-response PSRAM/SD/WAV handoff with bounded decoded PCM16 ingress to the manager-owned playback ring. The public foundation callback remains copy-only; the downlink worker is the single decoder/producer and `audio_manager` remains the sole I2S/DMA owner. The automated target matrix and audible recovery are accepted. The remaining Phase-16.1 item is endurance coverage, not first-pass streaming acceptance.
+
+### Phase 17
+
+The first accepted read-only MCP slice is the Smart Room temperature/humidity query tool. It reads only a valid, non-stale copied sensor snapshot through the composition root and performs no device-side state change. Build and user-confirmed voice HIL are accepted for that slice. Remaining Phase-17 work is additional read-only MCP capability and its acceptance, not Phase-18 controlled actions.
 
 ## Production-vs-test fix policy
 
@@ -89,11 +104,11 @@ inspect branch + worktree
 
 ## Recommended next acceptance order
 
-1. Keep Phase 16 as a closed HIL regression baseline.
-2. On available hardware, run Phase-16.1 streaming HIL on `phase/16.1-streaming-downlink` before merging it forward.
-3. Run the full Gateway/Firebase integration regression.
-4. Preserve Phase 12/13/15 as regression baselines and Phase 14's recorded golden-path PASS; rerun them only for a relevant regression.
-5. The next full Gateway/Firebase integration regression should cover Wi-Fi/provisioning, sensor, Firebase, GUI, SD, audio, Xiaozhi, simultaneous cloud/Xiaozhi traffic, repeated PTT, notification queueing, and critical-alarm preemption.
+1. Keep Phase 16 and Phase 16.1 as accepted regression baselines; run endurance only when explicitly scheduled.
+2. Continue Phase 17 with the next bounded read-only MCP vertical slice; `network.get_status` / `smart_room.get_network_status` is the current recommended next candidate, subject to current public API inspection.
+3. Keep Phase 18 controlled actions NOT STARTED until Phase 17 is explicitly closed.
+4. Run full Gateway/Firebase integration regression as appropriate, covering Wi-Fi/provisioning, sensor, Firebase, GUI, SD, audio, Xiaozhi, simultaneous cloud/Xiaozhi traffic, repeated PTT, notification queueing, and critical-alarm preemption.
+5. Preserve Phase 12/13/15 as regression baselines and Phase 14's recorded golden-path PASS; rerun them only for a relevant regression.
 
 ## Evidence discipline
 
