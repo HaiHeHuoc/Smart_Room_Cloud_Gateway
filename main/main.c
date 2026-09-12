@@ -83,7 +83,7 @@
 #include "light_manager.h"
 
 /* Macros ------------------------------------------------------------------- */
-#define PERFORMANCE_MONITOR 1
+#define PERFORMANCE_MONITOR 0
 
 #if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
 #define APP_XIAOZHI_VALIDATION_QUIESCENCE_MS \
