@@ -116,14 +116,22 @@ static const char *xiaozhi_mcp_light_parse_request(
             }
             request->has_power = true;
         } else if (strcmp(field->string, "color") == 0) {
-            if (!cJSON_IsString(field) || !xiaozhi_mcp_light_copy_named_color(field->valuestring, request)) {
+            if (!cJSON_IsString(field) || (field->valuestring == NULL) ||
+                (strlen(field->valuestring) > XIAOZHI_MCP_LIGHT_MAX_COLOR_BYTES)) {
+                error_code = "invalid_input";
+                break;
+            }
+            if (!xiaozhi_mcp_light_copy_named_color(field->valuestring, request)) {
                 error_code = "unsupported_color";
                 break;
             }
         } else if (strcmp(field->string, "brightness_percent") == 0) {
-            if (!cJSON_IsNumber(field) || (field->valuedouble < 0.0) ||
-                (field->valuedouble > 100.0) ||
+            if (!cJSON_IsNumber(field) ||
                 (field->valuedouble != (double)field->valueint)) {
+                error_code = "invalid_input";
+                break;
+            }
+            if ((field->valuedouble < 0.0) || (field->valuedouble > 100.0)) {
                 error_code = "brightness_out_of_range";
                 break;
             }
