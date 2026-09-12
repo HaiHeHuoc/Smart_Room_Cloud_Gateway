@@ -9,6 +9,7 @@
 #include "voice_assistant_ptt.h"
 #include "xiaozhi_foundation.h"
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "app_log.h"
 #include "freertos/FreeRTOS.h"
@@ -16,12 +17,17 @@
 #include "freertos/task.h"
 
 #define UPLINK_TASK_NAME             "voice_uplink"
-/* Keep Opus processing on an Internal-RAM stack. Target HIL retained enough
- * margin for a conservative 4 KiB trim from the original 40 KiB allocation. */
-#define UPLINK_TASK_STACK_BYTES      (36U * 1024U)
+/* The target's failed-turn high-water mark left 11 KiB unused at 36 KiB.
+ * 32 KiB retains more than 7 KiB stack margin while returning 4 KiB of
+ * Internal RAM to the TLS/I2S contention boundary. */
+#define UPLINK_TASK_STACK_BYTES      (32U * 1024U)
 #define UPLINK_TASK_PRIORITY         5U
 #define UPLINK_QUEUE_LENGTH          8U
 #define UPLINK_RECONCILE_MS          20U
+/* A first Opus packet causes mbedTLS to allocate its bounded TX record after
+ * capture starts. Fail the turn cleanly before touching the transport when
+ * its contiguous Internal heap reserve is not available. */
+#define UPLINK_MIN_TLS_HEADROOM_BYTES 6144U
 
 typedef struct {
     uint32_t generation;
@@ -33,6 +39,11 @@ typedef struct {
 static const char *const TAG = "VOICE_UPLINK";
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static QueueHandle_t s_queue = NULL;
+/* Audio-manager calls the stream callback only from task context. Its copied
+ * queue payload can therefore live in PSRAM, retaining Internal/DMA heap for
+ * I2S descriptors and mbedTLS/AES allocations. */
+static StaticQueue_t s_queue_control = {0};
+static uint8_t *s_queue_storage = NULL;
 static TaskHandle_t s_task = NULL;
 static voice_assistant_uplink_status_t s_status = {0};
 /* Owned exclusively by the uplink task after initialization. */
@@ -168,6 +179,23 @@ static esp_err_t uplink_begin_turn(uint32_t generation)
         (void)xiaozhi_foundation_audio_uplink_stop(generation);
         (void)xiaozhi_foundation_audio_channel_close(generation);
         return ret;
+    }
+
+    const size_t tls_largest_internal = heap_caps_get_largest_free_block(
+        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (tls_largest_internal < UPLINK_MIN_TLS_HEADROOM_BYTES) {
+        APP_LOGW(TAG, TLS_HEADROOM_REJECTED_AFTER_465B1E3E,
+                 "turn rejected after capture: largest_internal=%u required=%u",
+                 (unsigned)tls_largest_internal,
+                 (unsigned)UPLINK_MIN_TLS_HEADROOM_BYTES);
+        portENTER_CRITICAL(&s_lock);
+        s_status.turn_active = false;
+        portEXIT_CRITICAL(&s_lock);
+        (void)audio_manager_stream_disarm(generation);
+        (void)audio_manager_stop_recording();
+        (void)xiaozhi_foundation_audio_uplink_stop(generation);
+        (void)xiaozhi_foundation_audio_channel_close(generation);
+        return ESP_ERR_NO_MEM;
     }
 
     APP_LOGI(TAG, TURN_START_GENERATION_U_2D36C6A2, "turn START generation=%u", (unsigned)generation);
@@ -344,6 +372,10 @@ static void uplink_reconcile_ptt(void)
         if ((ret != ESP_OK) && (ret != ESP_ERR_INVALID_STATE)) {
             APP_LOGE(TAG, TURN_START_FAILED_S_98355C4A, "turn start failed: %s", esp_err_to_name(ret));
             uplink_set_error(ret);
+            /* Do not retry a resource-rejected turn every 20 ms while the
+             * physical button remains held. The next deliberate press may
+             * retry after memory pressure has cleared. */
+            (void)voice_assistant_ptt_cancel();
         }
         return;
     }
@@ -407,8 +439,23 @@ esp_err_t voice_assistant_uplink_init(void)
         return ESP_OK;
     }
 
-    s_queue = xQueueCreate(UPLINK_QUEUE_LENGTH, sizeof(uplink_frame_item_t));
+    const size_t queue_storage_bytes =
+        (size_t)UPLINK_QUEUE_LENGTH * sizeof(uplink_frame_item_t);
+    s_queue_storage = (uint8_t *)heap_caps_malloc(
+        queue_storage_bytes,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_queue_storage == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    s_queue = xQueueCreateStatic(
+        UPLINK_QUEUE_LENGTH,
+        sizeof(uplink_frame_item_t),
+        s_queue_storage,
+        &s_queue_control);
     if (s_queue == NULL) {
+        heap_caps_free(s_queue_storage);
+        s_queue_storage = NULL;
         return ESP_ERR_NO_MEM;
     }
     memset(&s_status, 0, sizeof(s_status));
@@ -418,6 +465,8 @@ esp_err_t voice_assistant_uplink_init(void)
     if (codec_ret != ESP_OK) {
         vQueueDelete(s_queue);
         s_queue = NULL;
+        heap_caps_free(s_queue_storage);
+        s_queue_storage = NULL;
         return codec_ret;
     }
 
@@ -426,6 +475,8 @@ esp_err_t voice_assistant_uplink_init(void)
     if (ret != ESP_OK) {
         vQueueDelete(s_queue);
         s_queue = NULL;
+        heap_caps_free(s_queue_storage);
+        s_queue_storage = NULL;
         return ret;
     }
     return ESP_OK;

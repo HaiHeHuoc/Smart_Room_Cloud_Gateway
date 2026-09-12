@@ -807,7 +807,6 @@ void app_main(void)
     }
 
     bool cloud_started = false;
-    /* Preserve the prior one-shot audio lifecycle attempt after the new gate. */
     bool audio_start_attempted = false;
     bool network_failure_screen_requested = false;
 #if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE

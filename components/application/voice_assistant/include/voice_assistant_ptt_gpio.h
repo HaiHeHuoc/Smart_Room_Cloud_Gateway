@@ -24,8 +24,10 @@ typedef struct {
  * A stable edge that is temporarily rejected by the bounded policy queue is
  * retried while the sampled level remains unchanged, so queue pressure cannot
  * silently discard one physical press or release.
- * GPIO is configured as input with the ESP32-S3 internal pull-down enabled;
- * Phase 14's current board assignment is active-high GPIO38.
+ * GPIO uses any-edge interrupts to wake the debounce task and has the ESP32-S3
+ * internal pull-down enabled. Phase 14's active-high GPIO38 switch also
+ * requires a 10 kOhm external pull-down at the physical switch; software
+ * cannot identify a release while the electrical level remains HIGH.
  */
 esp_err_t voice_assistant_ptt_gpio_init(
     const voice_assistant_ptt_gpio_config_t *config);

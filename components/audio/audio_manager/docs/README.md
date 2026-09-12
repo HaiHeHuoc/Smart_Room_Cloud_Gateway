@@ -419,7 +419,8 @@ fixed full-scale WAV mapping:
 - I2S0 master ownership remains private to `audio_manager`.
 - RX remains Philips standard I2S, 32-bit stereo, 16 kHz.
 - TX remains Philips standard I2S, signed PCM16 stereo, 16 kHz.
-- DMA remains 8 descriptors with 256 frames per descriptor.
+- RX DMA uses 6 descriptors with 256 frames per descriptor (96 ms slack),
+  preserving Internal/DMA heap headroom for the concurrent Xiaozhi TLS uplink.
 - Startup discard remains 40 blocks.
 - Left/Right slot detection remains 20 blocks.
 - Selected microphone data remains packed PCM24-in-int32.

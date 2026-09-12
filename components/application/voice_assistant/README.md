@@ -98,7 +98,17 @@ independent.
 After network `ONLINE` and audio startup, the Phase-14 composition queues one
 `voice_assistant_begin_session()` call. This establishes the long-lived service
 connection without opening a microphone/audio channel; GPIO38 remains the sole
-user authorization for a conversation turn.
+user authorization for a conversation turn. GPIO38 is active-high: wire the
+switch to 3.3 V and fit a 10 kOhm external pull-down to GND at the switch. The
+ESP32-S3 internal pull-down remains enabled as a supplementary boot bias, but
+is not sufficient as the sole release path on a long/noisy external wire.
+
+The PTT adapter uses any-edge GPIO interrupts to wake its debouncing task, so
+a stable release is not delayed by its periodic poll. Once policy revokes a
+turn, the capture arbiter is notified immediately rather than waiting for its
+normal status-poll timeout. A release whose raw level never becomes LOW is an
+electrical wiring fault; software then bounds the behavior only through the
+manual-recording safety limit and cannot infer a physical release.
 
 ## Callback and stale-event policy
 
@@ -174,10 +184,11 @@ producer; `audio_manager` remains the sole I2S/DMA owner. Its copied Opus queue
 is bounded, the manager-owned PCM ingress ring is bounded in PSRAM, and a
 damaged packet taints only its owning response generation.
 
-Response control uses three separate bounds: a 15-second server-inactivity
-watchdog while waiting/collecting, a 90-second post-`TTS_STOP` PCM drain
-watchdog, and a ten-minute absolute response ceiling. Finalizing never falls
-through to the short inactivity watchdog.
+Response control uses four separate bounds: a 30-second wait for the first
+server `TTS_START`, a 15-second server-inactivity watchdog once TTS is
+collecting, a 90-second post-`TTS_STOP` PCM drain watchdog, and a ten-minute
+absolute response ceiling. Finalizing never falls through to either shorter
+watchdog.
 
 ## GUI contract
 

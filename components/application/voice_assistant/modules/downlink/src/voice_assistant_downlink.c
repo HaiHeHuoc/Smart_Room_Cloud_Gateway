@@ -28,7 +28,12 @@
  * 128-frame ring holds 7.68 seconds of 60 ms Opus audio bursts; it resides in
  * PSRAM so a long cloud response cannot exhaust microphone/DMA internal RAM. */
 #define DOWNLINK_CHUNK_BYTES               2304U
-#define DOWNLINK_RESPONSE_TIMEOUT_MS       15000U
+#define DOWNLINK_RESPONSE_START_TIMEOUT_MS 30000U
+/* Once TTS has started, a 15-second audio/control silence is abnormal. Keep
+ * this distinct from the longer initial server-thinking window: the Xiaozhi
+ * foundation's WebSocket E2E acceptance already allows 30 seconds for a
+ * server response to begin. */
+#define DOWNLINK_RESPONSE_ACTIVITY_TIMEOUT_MS 15000U
 /* Bound the server collection too, so duplicate protocol events or a missing
  * TTS_STOP cannot hold the next PTT turn forever. */
 /* Keep a finite turn bound, but allow unusually long cloud answers to finish
@@ -451,8 +456,30 @@ static void downlink_check_timeout(void)
                      (unsigned)pdTICKS_TO_MS(now - last_activity));
             downlink_abort_response(generation, ESP_ERR_TIMEOUT, true);
         }
-    } else if ((now - last_activity) >=
-               pdMS_TO_TICKS(DOWNLINK_RESPONSE_TIMEOUT_MS)) {
+    } else if (awaiting_response) {
+        if ((now - last_activity) >=
+            pdMS_TO_TICKS(DOWNLINK_RESPONSE_START_TIMEOUT_MS)) {
+            xiaozhi_foundation_audio_uplink_status_t uplink = {0};
+            const esp_err_t uplink_status_ret =
+                xiaozhi_foundation_audio_uplink_get_status(&uplink);
+            APP_LOGE(TAG, RESPONSE_START_TIMEOUT_GENER_6400501C,
+                     "response start timeout generation=%u waited_ms=%u uplink_frames=%llu channel_open=%s listening=%s uplink_error=%s status=%s",
+                     (unsigned)generation,
+                     (unsigned)pdTICKS_TO_MS(now - last_activity),
+                     (unsigned long long)uplink.frames_sent,
+                     uplink.audio_channel_open ? "yes" : "no",
+                     uplink.listening ? "yes" : "no",
+                     esp_err_to_name(uplink.last_error),
+                     esp_err_to_name(uplink_status_ret));
+            downlink_abort_response(generation, ESP_ERR_TIMEOUT, true);
+        }
+    } else if (collecting &&
+               ((now - last_activity) >=
+                pdMS_TO_TICKS(DOWNLINK_RESPONSE_ACTIVITY_TIMEOUT_MS))) {
+        APP_LOGE(TAG, RESPONSE_ACTIVITY_TIMEOUT_GEN_12D00C27,
+                 "response audio inactivity timeout generation=%u waited_ms=%u",
+                 (unsigned)generation,
+                 (unsigned)pdTICKS_TO_MS(now - last_activity));
         downlink_abort_response(generation, ESP_ERR_TIMEOUT, true);
     }
 }
@@ -463,9 +490,10 @@ static void downlink_task(void *argument)
     portENTER_CRITICAL(&s_lock);
     s_status.running = true;
     portEXIT_CRITICAL(&s_lock);
-    APP_LOGI(TAG, COORDINATOR_STARTED_QUEUE_U_60EA479A, "coordinator started queue=%u frames timeout=%ums",
+    APP_LOGI(TAG, COORDINATOR_STARTED_QUEUE_U_60EA479A, "coordinator started queue=%u frames start_timeout=%ums activity_timeout=%ums",
              (unsigned)DOWNLINK_QUEUE_LENGTH,
-             (unsigned)DOWNLINK_RESPONSE_TIMEOUT_MS);
+             (unsigned)DOWNLINK_RESPONSE_START_TIMEOUT_MS,
+             (unsigned)DOWNLINK_RESPONSE_ACTIVITY_TIMEOUT_MS);
 
     for (;;) {
         /* Check before every dequeue, not only after an empty poll. This keeps

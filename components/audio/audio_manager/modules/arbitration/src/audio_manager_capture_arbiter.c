@@ -39,6 +39,13 @@ static bool take_lock(void)
            (xSemaphoreTake(s_lock, pdMS_TO_TICKS(CAPTURE_ARBITER_LOCK_MS)) == pdTRUE);
 }
 
+static void notify_arbiter_task(void)
+{
+    if (s_task != NULL) {
+        xTaskNotifyGive(s_task);
+    }
+}
+
 static void clear_slot(capture_slot_t *slot)
 {
     if (slot != NULL) {
@@ -222,7 +229,9 @@ static void capture_arbiter_task(void *arg)
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(CAPTURE_ARBITER_POLL_MS));
+        (void)ulTaskNotifyTake(
+            pdTRUE,
+            pdMS_TO_TICKS(CAPTURE_ARBITER_POLL_MS));
     }
 }
 
@@ -306,6 +315,7 @@ esp_err_t audio_manager_capture_arbiter_submit(
         ++s_status.accepted_count;
         sync_status_locked(AUDIO_MANAGER_CAPTURE_ARBITER_IDLE, ESP_OK);
         xSemaphoreGive(s_lock);
+        notify_arbiter_task();
         return ESP_OK;
     }
 
@@ -344,6 +354,9 @@ esp_err_t audio_manager_capture_arbiter_submit(
     }
     sync_status_locked(s_status.state, s_status.last_error);
     xSemaphoreGive(s_lock);
+    if (result == ESP_OK) {
+        notify_arbiter_task();
+    }
     return result;
 }
 
@@ -361,6 +374,7 @@ esp_err_t audio_manager_capture_arbiter_cancel(uint32_t request_id)
         s_pending_valid = false;
         sync_status_locked(s_status.state, ESP_OK);
         xSemaphoreGive(s_lock);
+        notify_arbiter_task();
         return ESP_OK;
     }
 
@@ -368,6 +382,7 @@ esp_err_t audio_manager_capture_arbiter_cancel(uint32_t request_id)
         s_cancel_current = true;
         sync_status_locked(s_status.state, ESP_OK);
         xSemaphoreGive(s_lock);
+        notify_arbiter_task();
         return ESP_OK;
     }
 

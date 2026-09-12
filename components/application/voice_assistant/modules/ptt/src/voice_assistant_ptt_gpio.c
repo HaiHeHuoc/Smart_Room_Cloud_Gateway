@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "app_log.h"
 #include "freertos/FreeRTOS.h"
@@ -11,7 +12,7 @@
 
 #define PTT_GPIO_TASK_NAME        "voice_ptt_gpio"
 #define PTT_GPIO_TASK_STACK_BYTES 3072U
-#define PTT_GPIO_TASK_PRIORITY    4U
+#define PTT_GPIO_TASK_PRIORITY    6U
 #define PTT_GPIO_DELIVERY_RETRY_MS 50U
 
 static const char *const TAG = "VOICE_PTT_GPIO";
@@ -19,6 +20,21 @@ static const char *const TAG = "VOICE_PTT_GPIO";
 static voice_assistant_ptt_gpio_config_t s_config = {0};
 static TaskHandle_t s_task = NULL;
 static bool s_initialized = false;
+
+static void IRAM_ATTR ptt_gpio_edge_isr(void *argument)
+{
+    (void)argument;
+
+    if (s_task == NULL) {
+        return;
+    }
+
+    BaseType_t higher_priority_task_woken = pdFALSE;
+    vTaskNotifyGiveFromISR(s_task, &higher_priority_task_woken);
+    if (higher_priority_task_woken == pdTRUE) {
+        portYIELD_FROM_ISR();
+    }
+}
 
 static bool ptt_gpio_is_pressed(void)
 {
@@ -88,7 +104,11 @@ static void ptt_gpio_task(void *argument)
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(s_config.poll_period_ms));
+        /* The periodic timeout completes debounce even without another edge;
+         * an interrupt wakes this task immediately on a physical release. */
+        (void)ulTaskNotifyTake(
+            pdTRUE,
+            pdMS_TO_TICKS(s_config.poll_period_ms));
     }
 }
 
@@ -113,11 +133,24 @@ esp_err_t voice_assistant_ptt_gpio_init(
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_ENABLE,
-        .intr_type = GPIO_INTR_DISABLE,
+        .intr_type = GPIO_INTR_ANYEDGE,
     };
     const esp_err_t ret = gpio_config(&io_config);
     if (ret != ESP_OK) {
         return ret;
+    }
+
+    const esp_err_t service_ret = gpio_install_isr_service(0U);
+    if ((service_ret != ESP_OK) && (service_ret != ESP_ERR_INVALID_STATE)) {
+        return service_ret;
+    }
+
+    const esp_err_t handler_ret = gpio_isr_handler_add(
+        config->gpio_num,
+        ptt_gpio_edge_isr,
+        NULL);
+    if (handler_ret != ESP_OK) {
+        return handler_ret;
     }
 
     s_config = *config;

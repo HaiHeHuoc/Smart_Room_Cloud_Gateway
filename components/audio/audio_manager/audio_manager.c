@@ -54,8 +54,12 @@
 #define AUDIO_MANAGER_WAV_PREFETCH_READER_PRIORITY         5U
 #define AUDIO_MANAGER_PCM_STREAM_RING_SAMPLES \
     (128U * AUDIO_MANAGER_PCM_STREAM_MAX_WRITE_SAMPLES)
+/* 0.96 s is enough to absorb normal packet scheduling jitter while allowing
+ * short Xiaozhi replies to start before a delayed TTS_STOP arrives. The
+ * larger 7.68 s ingress ring and the post-start starvation recovery remain
+ * responsible for longer network gaps. */
 #define AUDIO_MANAGER_PCM_STREAM_PREFILL_SAMPLES \
-    (24U * AUDIO_MANAGER_PCM_STREAM_MAX_WRITE_SAMPLES)
+    (16U * AUDIO_MANAGER_PCM_STREAM_MAX_WRITE_SAMPLES)
 #define AUDIO_MANAGER_PCM_STREAM_INITIAL_WAIT_MS        5000U
 #define AUDIO_MANAGER_PCM_STREAM_INITIAL_WAIT_POLL_MS     20U
 #define AUDIO_MANAGER_PCM_STREAM_STARVATION_WAIT_MS     8000U
@@ -100,11 +104,12 @@
 #define AUDIO_MANAGER_TASK_PRIORITY                   7U
 #endif
 
-/* Proven transport baseline. Do not change during structural refactor. */
+/* Six 16-ms RX descriptors retain 96 ms of microphone DMA slack while freeing
+ * 4 KiB of Internal/DMA heap for the concurrent TLS uplink record. */
 #define AUDIO_MANAGER_SAMPLE_RATE_HZ                  AUDIO_DSP_SAMPLE_RATE_HZ
 #define AUDIO_MANAGER_SLOT_COUNT                      2U
 #define AUDIO_MANAGER_FRAMES_PER_BLOCK                256U
-#define AUDIO_MANAGER_DMA_DESC_NUM                    8U
+#define AUDIO_MANAGER_DMA_DESC_NUM                    6U
 #define AUDIO_MANAGER_I2S_TIMEOUT_MS                  1000U
 
 /* Proven INMP441/MAX98357 cycle policy. */
@@ -1253,6 +1258,12 @@ static esp_err_t start_i2s_rx(void)
         result = i2s_channel_enable(s_runtime.rx_channel);
         s_runtime.rx_enabled = (result == ESP_OK);
         audio_manager_set_capture_i2s_active(s_runtime.rx_enabled);
+        if (s_runtime.rx_enabled)
+        {
+            /* This is the allocation boundary shared with the first Xiaozhi
+             * Opus TLS write; retain one compact snapshot per capture. */
+            log_heap_state("capture_i2s_enabled");
+        }
     }
 
     if (result != ESP_OK)
@@ -2180,7 +2191,7 @@ static esp_err_t play_wav_stream(
  *        conversion path.
  *
  * The producer never touches I2S: it only wakes this task after a bounded
- * copy. A 1.44 s prefill and 7.68 s bounded PSRAM ring absorb ordinary
+ * copy. A 0.96 s prefill and 7.68 s bounded PSRAM ring absorb ordinary
  * WebSocket/Opus burst and scheduling jitter without reverting to full-file
  * buffering. A later dry ingress is still reported and bounded, but feeds
  * explicit silence to I2S until it recovers. This prevents a DMA-held audio

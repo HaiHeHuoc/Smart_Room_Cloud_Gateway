@@ -136,6 +136,10 @@
  *
  * GPIO48 remains reserved for the board's NeoPixel LED. GPIO38 is not a
  * strapping, native-USB, UART0, or external-JTAG pin on ESP32-S3.
+ *
+ * Hardware requirement: fit a 10 kOhm external pull-down from GPIO38 to GND
+ * at the physical switch. The internal pull-down is only a supplementary
+ * boot/default bias; it is not a reliable release path for a long/noisy wire.
  */
 #define PTT_BUTTON_GPIO                         GPIO_NUM_38
 #define PTT_BUTTON_ACTIVE_LEVEL                 1

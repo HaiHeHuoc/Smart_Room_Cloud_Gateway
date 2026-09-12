@@ -155,10 +155,9 @@ static esp_err_t phase14_start_voice_stack(void)
         return ret;
     }
 
-    /* Composition reaches this point only after app_main has observed network
-     * ONLINE and every production callback consumer is registered. Queue the
-     * long-lived session now so PTT controls one ready connection instead of
-     * using the first button press as a transport-start race. */
+    /* Start the long-lived session as soon as the audio stack is ready. The
+     * PTT path then only opens a turn; it must not become a boot-time
+     * connection gate. */
     ret = voice_assistant_begin_session();
     if (ret != ESP_OK) {
         APP_LOGE(TAG, PHASE_BOOT_XIAOZHI_CONNECTIO_796AACCE,
