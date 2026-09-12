@@ -23,6 +23,7 @@ idf_component_register(
         xiaozhi_foundation
         audio_manager
         app_gui
+        app_network_coordinator
 
     PRIV_REQUIRES
         app_log

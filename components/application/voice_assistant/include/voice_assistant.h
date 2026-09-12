@@ -75,11 +75,13 @@ esp_err_t voice_assistant_begin_session(void);
 esp_err_t voice_assistant_end_session(void);
 
 /**
- * Recover explicitly from ERROR with bounded cleanup and no automatic reconnect.
+ * Recover explicitly from ERROR with bounded cleanup.
  *
  * Recovery is asynchronous. The orchestration task enters RECOVERING, cleans a
  * still-active Xiaozhi session when necessary, and returns to IDLE on success.
- * This API deliberately does not loop or reconnect automatically.
+ * This API performs one caller-requested cleanup. Independently, terminal
+ * Xiaozhi session errors use the voice task's network-gated retry policy; it
+ * never replays a user turn or takes ownership of Wi-Fi reconnect.
  */
 esp_err_t voice_assistant_recover(void);
 

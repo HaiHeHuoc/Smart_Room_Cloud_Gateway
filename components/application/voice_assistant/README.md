@@ -130,7 +130,7 @@ copied snapshot if the command queue is temporarily full; after consuming any
 command, the voice task drains that snapshot. A queue-pressure transient
 therefore cannot leave the UI with an obsolete terminal state.
 
-## Explicit recovery policy
+## Recovery policy
 
 `voice_assistant_recover()` is accepted only from `ERROR`:
 
@@ -142,10 +142,13 @@ ERROR -> RECOVERING
       -> ERROR on cleanup failure
 ```
 
-There is no project-owned automatic reconnect loop. The upstream WebSocket
-client reconnects the retained active session after transport loss. When an
-initial session cannot be recovered, a later explicit `begin_session()` starts
-a fresh generation.
+The upstream WebSocket client reconnects a retained active session after
+transport loss. A terminal inactive session error, including a failed boot
+connection, is retried by the voice task after 5, 10, 20, 40, then 60 seconds.
+The retry is deferred while `app_network_coordinator` is not `ONLINE`; it
+starts a fresh session only after the coordinator reports a usable IPv4 path.
+This recovery never replays a captured turn or server response, and it does not
+own Wi-Fi reconnect. A successful Xiaozhi `READY` resets the retry backoff.
 
 PTT additionally retains a still-held press across one bounded `ERROR` recovery:
 when cleanup returns the voice state to `IDLE`, it starts the fresh session and
