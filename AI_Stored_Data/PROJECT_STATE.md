@@ -1,7 +1,7 @@
 # Smart Room Cloud Gateway — AI Project State
 
-Updated: 2026-09-12
-Active integration branch: `main_including_Firebase_security`
+Updated: 2026-09-13
+Integration base branch: `main_including_Firebase_security`
 Observed production/source HEAD before this AI metadata synchronization: `15cd0f06d25142a6ed7672bc99dfd4ec396184b0`
 
 ## Working authority
@@ -24,6 +24,30 @@ CMake, Kconfig, tests, and runtime code must never depend on it.
 This snapshot is based on the remote GitHub branch. A local worktree with
 uncommitted or unpushed changes cannot be observed through this handoff and must
 be inspected separately before implementation work.
+
+## Unmerged application-structure cleanup
+
+The local branch `refactor/application-structure-cleanup` is a focused,
+behavior-preserving source-organization change based on
+`main_including_Firebase_security`. It is not an integration baseline until a
+separate reviewed merge is authorized.
+
+- `main/main.c` is now a thin ESP-IDF entrypoint that calls `smart_room_app`.
+- `smart_room_app` owns product startup order, application policy values, and
+  copied cross-component callback routing; managers and drivers keep their
+  existing ownership.
+- `smart_room_mcp_adapter` consolidates the existing sensor, cloud-sync,
+  system-status, light-state, and light-set-state provider bridges. The
+  `xiaozhi_foundation` MCP engine/session lifecycle remains unchanged.
+- `app_hil_test` holds the default-off public-audio and Phase-16 target-HIL
+  coordinator facades. The retired direct-I2S `audio_test` source is outside
+  the production application under `test_apps/audio_legacy_test`.
+- This refactor adds no MCP tool, light/audio behavior, protocol, credential,
+  board mapping, or Phase-18.2 work. Phase 18.2 remains **NOT STARTED**.
+
+The normal ESP-IDF build passed on this branch after the structural moves.
+No target HIL was run as part of the refactor; prior user-confirmed HIL evidence
+remains separate from this source-organization build result.
 
 ## Current high-level phase state
 
@@ -164,7 +188,12 @@ are stale and must not be reused.
 
 Preserve these unless an explicitly approved phase changes them:
 
-- `main`: application composition root.
+- `main`: thin ESP-IDF entrypoint into product composition.
+- `smart_room_app`: product composition, startup policy, and copied callback
+  routing.
+- `smart_room_mcp_adapter`: application-owned MCP provider adaptation through
+  public service APIs only.
+- `app_hil_test`: default-off target-HIL coordinator facade through public APIs.
 - `config_manager`: persistent application configuration owner.
 - `wifi_manager`: Wi-Fi Station connection/reconnect owner.
 - `provisioning_manager`: temporary BLE provisioning transport owner.

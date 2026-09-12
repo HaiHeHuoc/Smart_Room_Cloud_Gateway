@@ -16,6 +16,10 @@ flowchart LR
     Button[Reset button]
 
     subgraph ESP32S3[ESP32-S3]
+        Entry[main/main.c]
+        App[smart_room_app]
+        MCP[smart_room_mcp_adapter]
+        Xiaozhi[xiaozhi_foundation]
         Coordinator[app_network_coordinator]
         Provisioning[provisioning_manager]
         WiFi[wifi_manager]
@@ -31,6 +35,9 @@ flowchart LR
         Perf[performance_monitor]
     end
 
+    Entry --> App
+    App --> Coordinator
+    App --> MCP --> Xiaozhi
     Phone <-->|BLE Security 1| Provisioning
     Provisioning --> Coordinator
     Coordinator --> Config
@@ -53,7 +60,8 @@ flowchart LR
 ## Component Ownership
 
 Application logging is centralized in [`log_manager`](../components/system/log_manager/README.md).
-`main` initializes it at entry, after platform PSRAM/RTOS startup, and forwards
+`smart_room_app` initializes it after the thin `main` entrypoint transfers
+control to product composition, and forwards
 SD/time availability hints. `APP_LOGx` sends independently filtered console output
 and bounded PSRAM records; one unpinned writer owns all log file I/O, batching,
 sync, rotation and retention. `sd_card_manager` retains mount/recovery and lease
@@ -62,6 +70,10 @@ logger. Early/pre-init logs remain console-only. Hardware acceptance is pending.
 
 | Component | Owns | Does not own |
 |---|---|---|
+| `main/main.c` | ESP-IDF entry into product composition | Product callbacks, policy, manager lifecycle, or hardware resources |
+| `smart_room_app` | Startup ordering, product policy, copied cross-component callback routing | Manager/driver implementation, LVGL, I2S, MCP engine/session |
+| `smart_room_mcp_adapter` | Registration and public-snapshot implementation of Smart Room MCP providers | MCP engine/session, domain manager ownership, drivers, GPIO, RMT, I2S, LVGL |
+| `app_hil_test` | Default-off target-HIL orchestration through public APIs | I2S, DMA, GPIO/PTT, SD handles, raw audio buffers |
 | `wifi_manager` | Station lifecycle, driver serialization, reconnect | Provisioning policy, NVS schema, GUI |
 | `light_manager` | Static product light state and board-injected NeoPixel composition | RMT/LED-strip handles, named-color parsing, MCP, GUI policy |
 | `provisioning_manager` | Temporary BLE provisioning lifecycle and verified credential handoff | Persistent storage, reconnect, GUI |
@@ -80,7 +92,8 @@ logger. Early/pre-init logs remain console-only. Hardware acceptance is pending.
 
 ```mermaid
 sequenceDiagram
-    participant Main as app_main
+    participant Main as main/main.c
+    participant App as smart_room_app
     participant GUI as app_gui
     participant Local as Local services
     participant Coord as app_network_coordinator
@@ -88,13 +101,14 @@ sequenceDiagram
     participant Prov as provisioning_manager
     participant Cloud as cloud_manager
 
-    Main->>Main: NVS, config, netif, event loop
-    Main->>GUI: display, LVGL, SD, GUI task
-    Main->>Local: performance, reset, button
-    Main->>WiFi: initialize and register callback
-    Main->>Cloud: initialize auth and telemetry queue
-    Main->>Local: start sensor sampling
-    Main->>Coord: start one-shot boot coordinator
+    Main->>App: smart_room_app_start()
+    App->>App: NVS, config, netif, event loop
+    App->>GUI: display, LVGL, SD, GUI task
+    App->>Local: performance, reset, button
+    App->>WiFi: initialize and register callback
+    App->>Cloud: initialize auth and telemetry queue
+    App->>Local: start sensor sampling
+    App->>Coord: start one-shot boot coordinator
 
     alt valid stored Wi-Fi configuration
         Coord->>WiFi: connect stored credentials
@@ -109,7 +123,7 @@ sequenceDiagram
         Coord-->>GUI: success and Wi-Fi status route
     end
 
-    Main->>Cloud: start only after network handoff permits
+    App->>Cloud: start only after network handoff permits
 ```
 
 ## Runtime Event Flow

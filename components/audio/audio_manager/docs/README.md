@@ -68,7 +68,7 @@ calls. Busy audio requests are rejected rather than accumulated as a playlist.
 ## Public-API Hardware Stress Coordinator
 
 Enable `CONFIG_AUDIO_MANAGER_PUBLIC_API_TEST` only for a target-hardware
-validation run. It causes `main` to call `app_audio_api_test_task_start()`,
+validation run. It causes `app_hil_test` to call `app_audio_api_test_task_start()`,
 which starts the test-only, priority-6 coordinator implemented in
 `audio_api_test_task.c` after the application network coordinator reaches
 `ONLINE`. It calls only public `audio_manager` APIs and polls copied status; it
@@ -138,8 +138,8 @@ the resource-owning task. A later `audio_manager_stop()` may observe completion.
 
 ## GUI Integration Contract
 
-The manager does not depend on `app_gui` or LVGL. The application composition
-registers one callback in `main`, maps the copied `audio_manager_status_t` to
+The manager does not depend on `app_gui` or LVGL. `smart_room_app` registers
+one callback, maps the copied `audio_manager_status_t` to
 `ui_audio_status_t`, and posts it to the length-one GUI queue.
 
 ```c

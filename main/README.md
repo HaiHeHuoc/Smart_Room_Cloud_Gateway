@@ -2,10 +2,11 @@
 
 ## Purpose
 
-`main/main.c` is the firmware composition root. It initializes platform,
-light, display, storage, GUI, input, Wi-Fi, sensor, Firebase Authentication, and cloud
-components in dependency order. It maps manager-owned snapshots into copied GUI
-and cloud data without calling LVGL or HTTPS from producer callbacks.
+`main/main.c` is the firmware entrypoint and deliberately contains only the
+top-level call to `smart_room_app_start()`. The product composition component
+`smart_room_app` owns the established startup order, application policy values,
+and copied manager-to-GUI/cloud callbacks. It does not take ownership of any
+manager, driver, LVGL, I2S, or network implementation.
 
 Reusable component ownership is documented in [`components/README.md`](../components/README.md).
 
@@ -16,6 +17,25 @@ Release: v1.0.0
 Status: Implemented and hardware accepted
 SD recovery extension: target-hardware acceptance pending
 ```
+
+## Source Structure
+
+```text
+main/
+  main.c                         ESP-IDF app_main() entrypoint only
+components/application/
+  smart_room_app/                product composition, startup and adapters
+  smart_room_mcp_adapter/        domain snapshot providers for Xiaozhi MCP
+  app_hil_test/                  default-off target-HIL coordinator facade
+test_apps/
+  audio_legacy_test/             retired direct-I2S test source; not a product app
+```
+
+`smart_room_app` registers all local service callbacks before starting network
+boot and registers MCP providers before a production voice session can start.
+`xiaozhi_foundation` remains the sole managed Xiaozhi/MCP engine and session
+lifecycle boundary. The small `app_hil_test` facade is always present, but it
+does no work unless a test Kconfig gate is enabled.
 
 ## Startup Order
 
@@ -80,18 +100,20 @@ Callbacks return quickly. The GUI task owns LVGL; the cloud task owns Firebase
 Authentication and HTTPS; the reset coordinator owns the ordered persistent
 cleanup transaction.
 
-## Main Configuration
+## Application Configuration
 
-- DHT22 sample period: 2000 ms.
+- DHT22 sample period: 3000 ms.
 - Sensor stale timeout: 10000 ms.
-- Cloud successful publish period: 10000 ms.
+- Cloud successful publish period: 60000 ms.
 - Firebase token refresh margin: 300 seconds.
 - Telemetry path: `devices/esp32s3-001/latest.json`.
 - Provisioning session timeout: 120 seconds.
 - Provisioning IPv4 grace: 30 seconds.
 - Maximum provisioning sessions: 3.
 - Cloud retry: 5 seconds to 60 seconds.
-- Factory-reset input: active-low GPIO9, five-second hold.
+- Factory-reset input: board-configured GPIO9, active-high, five-second hold.
+- NeoPixel mapping: board-configured GPIO48 and one GRB pixel; initial logical
+  brightness is 100%.
 - Audio startup gate: coordinator `ONLINE` after a valid IPv4 address and, for
   a provisioned device, BLE cleanup plus Station adoption.
 - Audio stability default: five-second recording, DSP, and playback at 100% volume.
@@ -107,8 +129,10 @@ mechanism.
 
 ## Ownership Rules
 
-- `main` composes services but does not own reusable domain logic.
-- `main` passes the board NeoPixel mapping from `board_config.h` to
+- `main` only enters `smart_room_app`.
+- `smart_room_app` composes services and application callback routes but does
+  not own reusable domain logic.
+- `smart_room_app` passes the board NeoPixel mapping from `board_config.h` to
   `light_manager`; it does not own GPIO/RMT or product light state.
 - `app_network_coordinator` owns boot/config-driven network policy.
 - `wifi_manager` owns Station connection, reconnect, and driver persistence.
@@ -117,7 +141,7 @@ mechanism.
 - `sensor_manager` owns DHT22 sampling.
 - `audio_manager` owns I2S RX/TX, PCM stability buffers, and audio diagnostics;
   its private WAV reader owns the active VFS lease/file and bounded PSRAM cache.
-- `main` owns only the one-shot audio startup timing policy; it never starts
+- `smart_room_app` owns only the one-shot audio startup timing policy; it never starts
   audio from a Wi-Fi or provisioning callback.
 - `sd_card_manager` owns SDSPI/FAT VFS lifecycle and background recovery;
   `lvgl_sd_fs` and private WAV playback hold managed VFS leases while files are
@@ -127,6 +151,8 @@ mechanism.
 - `app_gui` and `ui_manager_lvgl` own screens and LVGL synchronization.
 - `button_manager` publishes input events only.
 - `app_reset_coordinator` owns reset qualification and execution.
+- `smart_room_mcp_adapter` maps copied public service state to registered
+  Xiaozhi provider callbacks; it never owns a driver, manager, or MCP session.
 
 ## Build And Run
 

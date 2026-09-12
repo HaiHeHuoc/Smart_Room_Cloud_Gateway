@@ -69,6 +69,24 @@ finds a confirmed defect that requires a scoped fix. Validation failures should
 be handled by identifying the failing component/path and applying the smallest
 safe correction.
 
+## Subsequent application-structure cleanup â€” 2026-09-13
+
+The unmerged `refactor/application-structure-cleanup` branch applies the
+already-frozen direction to current product composition; it is not a new
+generic portability initiative. It keeps the dependency direction unchanged:
+
+- a thin `main` entrypoint delegates product composition to `smart_room_app`;
+- `smart_room_mcp_adapter/modules/provider` groups the existing Smart Room
+  provider bridges without moving domain or managed-MCP ownership;
+- `app_hil_test/modules/phase16` groups the default-off target-HIL coordinator
+  while normal production builds retain only its small facade;
+- `voice_assistant` implementation-only application dependencies are private
+  in CMake because its public headers do not expose their types.
+
+No historical portability merge record above is rewritten by this note. The
+branch requires its own review and authorized integration before it can become
+the current production/source baseline.
+
 ## Architecture decisions
 
 ### 1. Three reuse levels

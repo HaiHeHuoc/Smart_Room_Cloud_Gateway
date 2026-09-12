@@ -95,7 +95,7 @@ an 8-second timeout; provider source and private transport handles remain
 unchanged, while the existing session-close and reconnect policies remain
 independent.
 
-After network `ONLINE` and audio startup, the Phase-14 composition queues one
+After network `ONLINE` and audio startup, the production composition queues one
 `voice_assistant_begin_session()` call. This establishes the long-lived service
 connection without opening a microphone/audio channel; GPIO38 remains the sole
 user authorization for a conversation turn. GPIO38 is active-high: wire the
@@ -254,7 +254,7 @@ so normal Phase-13 firmware does not automatically run the temporary validator.
 Dedicated HIL/test branches may opt in explicitly.
 
 Phase 13 deliberately did not auto-call `voice_assistant_begin_session()` at
-boot. The current Phase-14 composition queues the connection after `ONLINE`,
+boot. The current production composition queues the connection after `ONLINE`,
 but a conversation remains user-authorized: Sprint 14 owns the GPIO38 PTT
 trigger, mic uplink and response-audio lifecycle.
 

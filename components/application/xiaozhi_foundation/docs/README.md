@@ -29,8 +29,9 @@ audio. It never exposes SSID, IP address, Wi-Fi status, Internet reachability,
 files, or configuration. None of these tools performs a state-changing
 operation.
 
-`main` owns all three providers and reads only public component snapshots. The
-foundation owns MCP tool attachment/detachment with the Xiaozhi session, so no
+`smart_room_mcp_adapter` owns the five provider bridges and reads only public
+component snapshots. The foundation owns MCP tool attachment/detachment with
+the Xiaozhi session, so no
 `cloud_manager`, `sensor_manager`, `time_manager`, `sd_card_manager`, or
 `audio_manager` dependency crosses into this component.
 `CONFIG_XIAOZHI_FOUNDATION_SENSOR_QUERY_TOOL` and
@@ -45,8 +46,9 @@ runtime is selected.
 `CONFIG_XIAOZHI_FOUNDATION_LIGHT_SET_STATE_TOOL` (default `y`, unavailable
 while the temporary validation runtime is selected). The MCP-C-SDK exposes one
 required object property, `state`; the foundation validates its bounded nested
-fields before invoking the borrowed composition provider. `main` is the only
-adapter that includes `light_manager.h`; it snapshots the existing manager,
+fields before invoking the borrowed composition provider.
+`smart_room_mcp_adapter` is the only adapter that includes `light_manager.h`;
+it snapshots the existing manager,
 applies one atomic `light_manager_set_state()` request, and copies the final
 logical state. The foundation never includes board mappings, GPIO, NeoPixel,
 RMT, or LVGL APIs.
@@ -65,7 +67,8 @@ the user on 2026-09-13.
 `light.get_state` is the read-only companion for questions about the current
 light. It is independently gated by
 `CONFIG_XIAOZHI_FOUNDATION_LIGHT_STATE_QUERY_TOOL` (default `y`) and always
-reads a copied `light_manager_get_state()` snapshot through the `main` adapter.
+reads a copied `light_manager_get_state()` snapshot through the
+`smart_room_mcp_adapter` provider.
 It returns logical power, brightness, RGB, effect, and a bounded color name
 (`custom` when the RGB does not match the Phase-18.1 named-color palette). It
 neither changes device state nor accesses a driver from MCP.
@@ -108,7 +111,7 @@ or `ALL_SUPPORTED` only after the preceding target result is clean. The
 validation implementation and public `xiaozhi_foundation` APIs remain compiled
 for this project; the application composition layer simply makes no automatic
 request while the gate is off. `app_network_coordinator` has no
-`xiaozhi_foundation` dependency or validation trigger. Only `main`, after all
+`xiaozhi_foundation` dependency or validation trigger. Only `smart_room_app`, after all
 long-lived managers are started and observed through public snapshots, owns
 the temporary feature-on timing decision.
 
@@ -121,7 +124,7 @@ boot -> existing application init -> Wi-Fi ONLINE
     -> no Xiaozhi validation worker or automatic Xiaozhi screen
 
 Master gate enabled:
-Wi-Fi ONLINE -> main starts cloud/audio and routes the validation GUI
+Wi-Fi ONLINE -> smart_room_app starts cloud/audio and routes the validation GUI
     -> 5000 ms uninterrupted steady-state window
     -> xiaozhi_foundation_request_transport_validation()
     -> P2-E by default, P2-F with its fixture gate, repeated P2.6,
@@ -601,7 +604,7 @@ must copy the borrowed snapshot before returning.
 ```text
 foundation worker / Xiaozhi event callback
     -> copied xiaozhi_foundation_ui_status_t
-    -> main copies to ui_xiaozhi_status_t
+    -> smart_room_app copies to ui_xiaozhi_status_t
     -> app_gui length-one latest-value queue
     -> app_gui UI task and optional XIAOZHI screen
 ```
@@ -695,7 +698,7 @@ or simulate a network outage.
 
 The old Wi-Fi-ONLINE baseline preceded deferred audio, cloud/Firebase TLS, and
 validation-GUI startup, so its -21,420 Internal/-32,768 largest-block result is
-retained as `CONTAMINATED_BASELINE`, not attributed to Xiaozhi. `main` now
+retained as `CONTAMINATED_BASELINE`, not attributed to Xiaozhi. `smart_room_app` now
 requests validation only after those long-lived managers and the validation
 screen remain ready for 5000 ms. Cleanup captures t+0, 250, 1000, 3000, and
 5000 ms samples; attribution adds a 125-second sample only after a material
