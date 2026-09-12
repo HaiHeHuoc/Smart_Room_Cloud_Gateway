@@ -6,8 +6,9 @@ menu "Light manager"
         help
             Starts a target-hardware-only task immediately after successful
             light_manager initialization. The task loops forever through the
-            static light-manager APIs and every whole-strip NeoPixel effect,
-            logging each action and waiting eight seconds between actions.
+            five public Smart Room effects, their state snapshots, a solid
+            restore, and blink OFF/ON resumption, logging each action and
+            waiting eight seconds between actions.
 
             This is validation infrastructure, not product behavior. Keep it
             disabled in normal firmware. It does not add MCP, GUI, cloud, or

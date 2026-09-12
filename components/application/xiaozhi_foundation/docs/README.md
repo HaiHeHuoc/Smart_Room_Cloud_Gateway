@@ -52,20 +52,28 @@ logical state. The foundation never includes board mappings, GPIO, NeoPixel,
 RMT, or LVGL APIs.
 
 The nested allowlist is `power` (`on`/`off`), `color` (`red`, `green`, `blue`,
-`white`, `yellow`, `cyan`, `magenta`/`pink`, `purple`, or `orange`), and integer
-`brightness_percent` (`0..100`). At least one field is required. Omitted fields
-preserve copied logical state; `off` is deliberately incompatible with a color
-or brightness in the same call. Results return either the copied final RGB,
-power, and brightness or a bounded error code. Phase-18.1 hardware voice HIL
-is pending.
+`white`, `yellow`, `cyan`, `magenta`/`pink`, `purple`, or `orange`), integer
+`brightness_percent` (`0..100`), and `effect` (`solid`, `blink`, `breath`,
+`pulse`, or `rainbow`). At least one field is required. Omitted fields preserve
+copied logical state; `off` is deliberately incompatible with a color or
+brightness in the same call. Selecting an effect while off stores it without
+lighting the LED; turning power on resumes the stored effect. Results return
+either the copied final RGB, power, brightness, and effect or a bounded error
+code. Phase-18.1 hardware voice HIL is pending.
 
 `light.get_state` is the read-only companion for questions about the current
 light. It is independently gated by
 `CONFIG_XIAOZHI_FOUNDATION_LIGHT_STATE_QUERY_TOOL` (default `y`) and always
 reads a copied `light_manager_get_state()` snapshot through the `main` adapter.
-It returns logical power, brightness, RGB, and a bounded color name (`custom`
-when the RGB does not match the Phase-18.1 named-color palette). It neither
-changes device state nor accesses a driver from MCP.
+It returns logical power, brightness, RGB, effect, and a bounded color name
+(`custom` when the RGB does not match the Phase-18.1 named-color palette). It
+neither changes device state nor accesses a driver from MCP.
+
+`light.get_capabilities` is a read-only, static product-contract query gated by
+`CONFIG_XIAOZHI_FOUNDATION_LIGHT_CAPABILITIES_TOOL` (default `y`). It reports
+the supported power, color, brightness, and effect features; the named-color
+and effect allowlists; and the brightness range `0..100`. The tool has no
+composition provider and does not read or control a driver.
 
 ## Temporary Validation Feature Gate
 

@@ -18,6 +18,16 @@ typedef enum
     LIGHT_MANAGER_PIXEL_FORMAT_GRB,
 } light_manager_pixel_format_t;
 
+/** Product effects intentionally exposed by the Smart Room light contract. */
+typedef enum
+{
+    LIGHT_MANAGER_EFFECT_SOLID = 0,
+    LIGHT_MANAGER_EFFECT_BLINK,
+    LIGHT_MANAGER_EFFECT_BREATH,
+    LIGHT_MANAGER_EFFECT_PULSE,
+    LIGHT_MANAGER_EFFECT_RAINBOW,
+} light_manager_effect_t;
+
 /**
  * @brief Board-supplied initialization configuration.
  *
@@ -33,7 +43,7 @@ typedef struct
 } light_manager_config_t;
 
 /**
- * @brief Copyable product-level state for static light control.
+ * @brief Copyable product-level state for Smart Room light control.
  *
  * RGB remains logical color data when @c power_on is false. Brightness zero is
  * valid and means a zero-output ON state; it does not alter the stored RGB.
@@ -45,6 +55,7 @@ typedef struct
     uint8_t green;
     uint8_t blue;
     uint8_t brightness_percent;
+    light_manager_effect_t effect;
 } light_manager_state_t;
 
 /**
@@ -73,9 +84,10 @@ esp_err_t light_manager_init(const light_manager_config_t *config);
 esp_err_t light_manager_deinit(void);
 
 /**
- * @brief Atomically apply power, RGB, and brightness as one product request.
+ * @brief Atomically apply power, RGB, brightness, and effect as one request.
  *
- * @param[in] state Requested logical state. Brightness must be 0..100.
+ * @param[in] state Requested logical state. Brightness must be 0..100 and
+ *                  effect must be a @c light_manager_effect_t value.
  *
  * @return ESP_OK on success, ESP_ERR_INVALID_ARG for NULL or invalid
  *         brightness, ESP_ERR_INVALID_STATE before initialization, or an
@@ -83,11 +95,11 @@ esp_err_t light_manager_deinit(void);
  */
 esp_err_t light_manager_set_state(const light_manager_state_t *state);
 
-/** @brief Replace logical RGB while preserving current power and brightness. */
+/** @brief Replace logical RGB while preserving current power, brightness, and effect. */
 esp_err_t light_manager_set_color(uint8_t red, uint8_t green, uint8_t blue);
 
 /**
- * @brief Replace logical brightness while preserving current power and RGB.
+ * @brief Replace logical brightness while preserving current power, RGB, and effect.
  *
  * @return ESP_ERR_INVALID_ARG when @p brightness_percent exceeds 100.
  */
@@ -109,10 +121,11 @@ esp_err_t light_manager_get_state(light_manager_state_t *state);
 /**
  * @brief Start the Kconfig-gated infinite target-hardware test loop.
  *
- * When @c CONFIG_LIGHT_MANAGER_TEST_LOOP is enabled, the task exercises the
- * static manager APIs and all whole-strip NeoPixel effects, waits the
- * configured interval after every action, and logs each result. It is for
- * explicit hardware validation only, not production behavior.
+ * When @c CONFIG_LIGHT_MANAGER_TEST_LOOP is enabled, the task exercises all
+ * five public product effects, state snapshots, a solid restore, and blink
+ * OFF/ON resumption. It waits the configured interval after every action and
+ * logs each result. It is for explicit hardware validation only, not
+ * production behavior.
  *
  * @return ESP_OK when the task is created, ESP_ERR_INVALID_STATE before init
  *         or when already started, ESP_ERR_NOT_SUPPORTED when disabled in

@@ -49,6 +49,19 @@ static const char *xiaozhi_mcp_light_state_color_name(
     return "custom";
 }
 
+static const char *xiaozhi_mcp_light_state_effect_name(
+    xiaozhi_foundation_light_effect_t effect)
+{
+    switch (effect) {
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_SOLID: return "solid";
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_BLINK: return "blink";
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_BREATH: return "breath";
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_PULSE: return "pulse";
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_RAINBOW: return "rainbow";
+    default: return NULL;
+    }
+}
+
 static esp_err_t xiaozhi_mcp_light_state_query_callback(
     const esp_mcp_property_list_t *properties,
     esp_mcp_tool_result_t *result)
@@ -70,37 +83,43 @@ static esp_err_t xiaozhi_mcp_light_state_query_callback(
         (provider == NULL) ? ESP_ERR_INVALID_STATE : provider(&snapshot, provider_context);
     const bool available = (provider_ret == ESP_OK) && snapshot.available;
 
-    char text[200] = {0};
-    char json[176] = {0};
+    char text[240] = {0};
+    char json[224] = {0};
     int text_written = 0;
     int json_written = 0;
     if (available) {
         const char *const color_name = xiaozhi_mcp_light_state_color_name(&snapshot);
+        const char *const effect_name = xiaozhi_mcp_light_state_effect_name(snapshot.effect);
+        if (effect_name == NULL) {
+            return ESP_ERR_INVALID_STATE;
+        }
         text_written = snprintf(
             text, sizeof(text),
-            "SMART_ROOM_LIGHT_STATE: power=%s; color=%s; red=%u; green=%u; blue=%u; brightness_percent=%u. Use these exact values to answer the user.",
+            "SMART_ROOM_LIGHT_STATE: power=%s; color=%s; red=%u; green=%u; blue=%u; brightness_percent=%u; effect=%s. Use these exact values to answer the user.",
             snapshot.power_on ? "on" : "off",
             color_name,
             (unsigned)snapshot.red,
             (unsigned)snapshot.green,
             (unsigned)snapshot.blue,
-            (unsigned)snapshot.brightness_percent);
+            (unsigned)snapshot.brightness_percent,
+            effect_name);
         json_written = snprintf(
             json, sizeof(json),
-            "{\"state_available\":true,\"power\":\"%s\",\"color\":\"%s\",\"red\":%u,\"green\":%u,\"blue\":%u,\"brightness_percent\":%u}",
+            "{\"state_available\":true,\"power\":\"%s\",\"color\":\"%s\",\"red\":%u,\"green\":%u,\"blue\":%u,\"brightness_percent\":%u,\"effect\":\"%s\"}",
             snapshot.power_on ? "on" : "off",
             color_name,
             (unsigned)snapshot.red,
             (unsigned)snapshot.green,
             (unsigned)snapshot.blue,
-            (unsigned)snapshot.brightness_percent);
+            (unsigned)snapshot.brightness_percent,
+            effect_name);
     } else {
         text_written = snprintf(
             text, sizeof(text),
             "SMART_ROOM_LIGHT_STATE_UNAVAILABLE: no current logical light state is available.");
         json_written = snprintf(
             json, sizeof(json),
-            "{\"state_available\":false,\"power\":null,\"color\":null,\"red\":null,\"green\":null,\"blue\":null,\"brightness_percent\":null}");
+            "{\"state_available\":false,\"power\":null,\"color\":null,\"red\":null,\"green\":null,\"blue\":null,\"brightness_percent\":null,\"effect\":null}");
     }
 
     if ((text_written < 0) || ((size_t)text_written >= sizeof(text)) ||
@@ -165,7 +184,7 @@ esp_err_t xiaozhi_mcp_light_state_query_attach(esp_mcp_t *mcp)
     esp_mcp_tool_t *tool = esp_mcp_tool_create_ex(
         "light.get_state",
         "Smart Room: Trang thai den hien tai",
-        "AUTHORITATIVE Smart Room logical light state. ALWAYS call this tool before answering any user question, in any language, about whether the light is on or off, its current brightness, color, or RGB values. Report only the returned fields. The tool is read-only and never changes the device.",
+        "AUTHORITATIVE Smart Room logical light state. ALWAYS call this tool before answering any user question, in any language, about whether the light is on or off, its current brightness, color, RGB values, or active product effect. Report only the returned fields. The tool is read-only and never changes the device.",
         xiaozhi_mcp_light_state_query_callback);
     if (tool == NULL) {
         return ESP_ERR_NO_MEM;
@@ -173,7 +192,7 @@ esp_err_t xiaozhi_mcp_light_state_query_attach(esp_mcp_t *mcp)
 
     esp_err_t ret = esp_mcp_tool_set_output_schema_json(
         tool,
-        "{\"type\":\"object\",\"properties\":{\"state_available\":{\"type\":\"boolean\"},\"power\":{\"type\":[\"string\",\"null\"],\"enum\":[\"on\",\"off\",null]},\"color\":{\"type\":[\"string\",\"null\"]},\"red\":{\"type\":[\"integer\",\"null\"],\"minimum\":0,\"maximum\":255},\"green\":{\"type\":[\"integer\",\"null\"],\"minimum\":0,\"maximum\":255},\"blue\":{\"type\":[\"integer\",\"null\"],\"minimum\":0,\"maximum\":255},\"brightness_percent\":{\"type\":[\"integer\",\"null\"],\"minimum\":0,\"maximum\":100}},\"required\":[\"state_available\",\"power\",\"color\",\"red\",\"green\",\"blue\",\"brightness_percent\"]}");
+        "{\"type\":\"object\",\"properties\":{\"state_available\":{\"type\":\"boolean\"},\"power\":{\"type\":[\"string\",\"null\"],\"enum\":[\"on\",\"off\",null]},\"color\":{\"type\":[\"string\",\"null\"]},\"red\":{\"type\":[\"integer\",\"null\"],\"minimum\":0,\"maximum\":255},\"green\":{\"type\":[\"integer\",\"null\"],\"minimum\":0,\"maximum\":255},\"blue\":{\"type\":[\"integer\",\"null\"],\"minimum\":0,\"maximum\":255},\"brightness_percent\":{\"type\":[\"integer\",\"null\"],\"minimum\":0,\"maximum\":100},\"effect\":{\"type\":[\"string\",\"null\"],\"enum\":[\"solid\",\"blink\",\"breath\",\"pulse\",\"rainbow\",null]}},\"required\":[\"state_available\",\"power\",\"color\",\"red\",\"green\",\"blue\",\"brightness_percent\",\"effect\"]}");
     if (ret == ESP_OK) {
         ret = esp_mcp_tool_set_annotations_json(
             tool,

@@ -10,6 +10,12 @@
 #include "sdkconfig.h"
 
 #define LIGHT_MANAGER_LOCK_TIMEOUT_MS 1000U
+#define LIGHT_MANAGER_BLINK_ON_TIME_MS 500U
+#define LIGHT_MANAGER_BLINK_OFF_TIME_MS 500U
+#define LIGHT_MANAGER_BREATH_PERIOD_MS 2000U
+#define LIGHT_MANAGER_PULSE_DURATION_MS 300U
+#define LIGHT_MANAGER_PULSE_REPEAT_COUNT UINT32_MAX
+#define LIGHT_MANAGER_RAINBOW_STEP_MS 10U
 
 #if CONFIG_LIGHT_MANAGER_TEST_LOOP
 #define LIGHT_MANAGER_TEST_TASK_STACK_SIZE 4096U
@@ -85,13 +91,83 @@ static uint32_t light_manager_state_to_rgb(const light_manager_state_t *state)
            (uint32_t)state->blue;
 }
 
+static bool light_manager_effect_is_valid(light_manager_effect_t effect)
+{
+    return effect <= LIGHT_MANAGER_EFFECT_RAINBOW;
+}
+
+static esp_err_t light_manager_start_effect_locked(
+    const light_manager_state_t *state)
+{
+    const uint32_t color = light_manager_state_to_rgb(state);
+    esp_err_t ret = neopixel_set_brightness(state->brightness_percent);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    switch (state->effect) {
+    case LIGHT_MANAGER_EFFECT_BLINK:
+        ret = neopixel_blink(color, state->brightness_percent,
+                             LIGHT_MANAGER_BLINK_ON_TIME_MS,
+                             LIGHT_MANAGER_BLINK_OFF_TIME_MS);
+        break;
+    case LIGHT_MANAGER_EFFECT_BREATH:
+        ret = neopixel_breath(color, LIGHT_MANAGER_BREATH_PERIOD_MS);
+        break;
+    case LIGHT_MANAGER_EFFECT_PULSE:
+        ret = neopixel_pulse(color, state->brightness_percent,
+                             LIGHT_MANAGER_PULSE_DURATION_MS,
+                             LIGHT_MANAGER_PULSE_REPEAT_COUNT);
+        break;
+    case LIGHT_MANAGER_EFFECT_RAINBOW:
+        ret = neopixel_rainbow_cycle(LIGHT_MANAGER_RAINBOW_STEP_MS);
+        break;
+    case LIGHT_MANAGER_EFFECT_SOLID:
+    default:
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if ((ret == ESP_OK) && !state->power_on) {
+        ret = neopixel_off();
+    }
+    return ret;
+}
+
 static esp_err_t light_manager_apply_state_locked(
     const light_manager_state_t *state)
 {
-    const esp_err_t ret = neopixel_set_static_state(
-        light_manager_state_to_rgb(state),
-        state->brightness_percent,
-        state->power_on);
+    if (!light_manager_effect_is_valid(state->effect)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const light_manager_state_t previous = s_context.state;
+    const bool state_unchanged =
+        (state->power_on == previous.power_on) &&
+        (state->red == previous.red) &&
+        (state->green == previous.green) &&
+        (state->blue == previous.blue) &&
+        (state->brightness_percent == previous.brightness_percent) &&
+        (state->effect == previous.effect);
+    const bool only_power_changed =
+        (state->effect != LIGHT_MANAGER_EFFECT_SOLID) &&
+        (state->effect == previous.effect) &&
+        (state->red == previous.red) &&
+        (state->green == previous.green) &&
+        (state->blue == previous.blue) &&
+        (state->brightness_percent == previous.brightness_percent);
+    esp_err_t ret = ESP_OK;
+
+    if (state_unchanged) {
+        ret = ESP_OK;
+    } else if (state->effect == LIGHT_MANAGER_EFFECT_SOLID) {
+        ret = neopixel_set_static_state(light_manager_state_to_rgb(state),
+                                        state->brightness_percent,
+                                        state->power_on);
+    } else if (only_power_changed && (state->power_on != previous.power_on)) {
+        ret = state->power_on ? neopixel_on() : neopixel_off();
+    } else {
+        ret = light_manager_start_effect_locked(state);
+    }
 
     if (ret == ESP_OK)
     {
@@ -102,41 +178,13 @@ static esp_err_t light_manager_apply_state_locked(
 }
 
 #if CONFIG_LIGHT_MANAGER_TEST_LOOP
-typedef enum
-{
-    LIGHT_MANAGER_TEST_EFFECT_BLINK = 0,
-    LIGHT_MANAGER_TEST_EFFECT_FADE_IN,
-    LIGHT_MANAGER_TEST_EFFECT_FADE_OUT,
-    LIGHT_MANAGER_TEST_EFFECT_FADE,
-    LIGHT_MANAGER_TEST_EFFECT_TRANSITION,
-    LIGHT_MANAGER_TEST_EFFECT_RAINBOW,
-    LIGHT_MANAGER_TEST_EFFECT_RAINBOW_CYCLE,
-    LIGHT_MANAGER_TEST_EFFECT_BREATH,
-    LIGHT_MANAGER_TEST_EFFECT_PULSE,
-    LIGHT_MANAGER_TEST_EFFECT_CHASE,
-    LIGHT_MANAGER_TEST_EFFECT_COLOR_WIPE,
-    LIGHT_MANAGER_TEST_EFFECT_THEATER_CHASE,
-    LIGHT_MANAGER_TEST_EFFECT_GRADIENT,
-    LIGHT_MANAGER_TEST_EFFECT_RAINBOW_GRADIENT,
-    LIGHT_MANAGER_TEST_EFFECT_COUNT,
-} light_manager_test_effect_t;
-
 static const char *const s_test_effect_names[] =
 {
-    "effect blink",
-    "effect fade_in",
-    "effect fade_out",
-    "effect fade",
-    "effect transition",
-    "effect rainbow",
-    "effect rainbow_cycle",
-    "effect breath",
-    "effect pulse",
-    "effect chase",
-    "effect color_wipe",
-    "effect theater_chase",
-    "effect gradient",
-    "effect rainbow_gradient",
+    "solid",
+    "blink",
+    "breath",
+    "pulse",
+    "rainbow",
 };
 
 static void light_manager_test_wait(void)
@@ -171,127 +219,6 @@ static void light_manager_test_run_action(
     light_manager_test_wait();
 }
 
-static esp_err_t light_manager_test_start_effect(
-    light_manager_test_effect_t effect)
-{
-    const esp_err_t lock_ret = light_manager_take_lock();
-    if (lock_ret != ESP_OK)
-    {
-        return lock_ret;
-    }
-
-    if (!s_context.initialized)
-    {
-        light_manager_give_lock();
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    esp_err_t ret = ESP_ERR_INVALID_ARG;
-
-    switch (effect)
-    {
-        case LIGHT_MANAGER_TEST_EFFECT_BLINK:
-            ret = neopixel_blink(NEOPIXEL_COLOR_RED, 100U, 1000U, 1000U);
-            break;
-
-        case LIGHT_MANAGER_TEST_EFFECT_FADE_IN:
-            ret = neopixel_fade_in(NEOPIXEL_COLOR_MAGENTA, 4000U);
-            break;
-
-        case LIGHT_MANAGER_TEST_EFFECT_FADE_OUT:
-            ret = neopixel_fade_out(4000U);
-            break;
-
-        case LIGHT_MANAGER_TEST_EFFECT_FADE:
-            ret = neopixel_fade(NEOPIXEL_COLOR_GREEN, 0U, 100U, 4000U);
-            break;
-
-        case LIGHT_MANAGER_TEST_EFFECT_TRANSITION:
-            ret = neopixel_transition(
-                NEOPIXEL_COLOR_RED,
-                NEOPIXEL_COLOR_BLUE,
-                4000U);
-            break;
-
-        case LIGHT_MANAGER_TEST_EFFECT_RAINBOW:
-            ret = neopixel_rainbow(6000U);
-            break;
-
-        case LIGHT_MANAGER_TEST_EFFECT_RAINBOW_CYCLE:
-            ret = neopixel_rainbow_cycle(100U);
-            break;
-
-        case LIGHT_MANAGER_TEST_EFFECT_BREATH:
-            ret = neopixel_breath(NEOPIXEL_COLOR_CYAN, 4000U);
-            break;
-
-        case LIGHT_MANAGER_TEST_EFFECT_PULSE:
-            ret = neopixel_pulse(NEOPIXEL_COLOR_YELLOW, 100U, 1000U, 3U);
-            break;
-
-        case LIGHT_MANAGER_TEST_EFFECT_CHASE:
-            ret = neopixel_chase(NEOPIXEL_COLOR_ORANGE, 200U);
-            break;
-
-        case LIGHT_MANAGER_TEST_EFFECT_COLOR_WIPE:
-            ret = neopixel_color_wipe(NEOPIXEL_COLOR_PURPLE, 300U);
-            break;
-
-        case LIGHT_MANAGER_TEST_EFFECT_THEATER_CHASE:
-            ret = neopixel_theater_chase(NEOPIXEL_COLOR_WHITE, 200U);
-            break;
-
-        case LIGHT_MANAGER_TEST_EFFECT_GRADIENT:
-            ret = neopixel_gradient(NEOPIXEL_COLOR_RED, NEOPIXEL_COLOR_BLUE);
-            break;
-
-        case LIGHT_MANAGER_TEST_EFFECT_RAINBOW_GRADIENT:
-            ret = neopixel_rainbow_gradient();
-            break;
-
-        case LIGHT_MANAGER_TEST_EFFECT_COUNT:
-        default:
-            break;
-    }
-
-    light_manager_give_lock();
-    return ret;
-}
-
-static esp_err_t light_manager_test_effect_control(
-    const char *operation)
-{
-    const esp_err_t lock_ret = light_manager_take_lock();
-    if (lock_ret != ESP_OK)
-    {
-        return lock_ret;
-    }
-
-    if (!s_context.initialized)
-    {
-        light_manager_give_lock();
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    esp_err_t ret = ESP_ERR_INVALID_ARG;
-
-    if (strcmp(operation, "pause") == 0)
-    {
-        ret = neopixel_pause_effect();
-    }
-    else if (strcmp(operation, "resume") == 0)
-    {
-        ret = neopixel_resume_effect();
-    }
-    else if (strcmp(operation, "stop") == 0)
-    {
-        ret = neopixel_stop_effect();
-    }
-
-    light_manager_give_lock();
-    return ret;
-}
-
 static void light_manager_test_log_state(void)
 {
     light_manager_state_t state = {0};
@@ -301,12 +228,15 @@ static void light_manager_test_log_state(void)
     {
         ESP_LOGI(
             TAG,
-            "LIGHT_TEST: get_state: PASS power=%d rgb=(%u,%u,%u) brightness=%u",
+            "LIGHT_TEST: get_state: PASS power=%d rgb=(%u,%u,%u) brightness=%u effect=%s",
             state.power_on,
             (unsigned)state.red,
             (unsigned)state.green,
             (unsigned)state.blue,
-            (unsigned)state.brightness_percent);
+            (unsigned)state.brightness_percent,
+            state.effect <= LIGHT_MANAGER_EFFECT_RAINBOW
+                ? s_test_effect_names[state.effect]
+                : "invalid");
     }
     else
     {
@@ -327,56 +257,31 @@ static void light_manager_test_task(void *context)
         .green = 0U,
         .blue = 255U,
         .brightness_percent = 100U,
+        .effect = LIGHT_MANAGER_EFFECT_SOLID,
     };
 
     for (;;)
     {
         ESP_LOGI(TAG, "LIGHT_TEST: starting a new complete test cycle");
 
-        light_manager_test_run_action(
-            "set_state magenta at 100 percent",
-            light_manager_set_state(&magenta));
-        light_manager_test_log_state();
-        light_manager_test_run_action(
-            "set_color green",
-            light_manager_set_color(0U, 255U, 0U));
-        light_manager_test_run_action(
-            "set_brightness 20 percent",
-            light_manager_set_brightness(20U));
-        light_manager_test_run_action("off", light_manager_off());
-        light_manager_test_run_action("on (restore green at 20 percent)", light_manager_on());
-        light_manager_test_run_action(
-            "set_brightness 0 percent",
-            light_manager_set_brightness(0U));
-        light_manager_test_run_action(
-            "set_brightness 100 percent",
-            light_manager_set_brightness(100U));
-
-        for (size_t index = 0U;
-             index < LIGHT_MANAGER_TEST_EFFECT_COUNT;
-             ++index)
-        {
-            const light_manager_test_effect_t effect =
-                (light_manager_test_effect_t)index;
-
-            light_manager_test_run_action(
-                s_test_effect_names[index],
-                light_manager_test_start_effect(effect));
-
-            if (effect == LIGHT_MANAGER_TEST_EFFECT_BLINK)
-            {
-                light_manager_test_run_action(
-                    "effect pause",
-                    light_manager_test_effect_control("pause"));
-                light_manager_test_run_action(
-                    "effect resume",
-                    light_manager_test_effect_control("resume"));
-            }
-
-            light_manager_test_run_action(
-                "effect stop",
-                light_manager_test_effect_control("stop"));
+        for (size_t index = 0U; index < LIGHT_MANAGER_EFFECT_RAINBOW + 1U; ++index) {
+            light_manager_state_t state = magenta;
+            state.effect = (light_manager_effect_t)index;
+            light_manager_test_run_action(s_test_effect_names[index],
+                                          light_manager_set_state(&state));
+            light_manager_test_log_state();
         }
+
+        light_manager_test_run_action("solid restore", light_manager_set_state(&magenta));
+        light_manager_test_log_state();
+
+        light_manager_state_t blink = magenta;
+        blink.effect = LIGHT_MANAGER_EFFECT_BLINK;
+        light_manager_test_run_action("blink before off/on", light_manager_set_state(&blink));
+        light_manager_test_run_action("off (preserve blink)", light_manager_off());
+        light_manager_test_log_state();
+        light_manager_test_run_action("on (resume blink)", light_manager_on());
+        light_manager_test_log_state();
     }
 }
 #endif
@@ -420,6 +325,7 @@ esp_err_t light_manager_init(const light_manager_config_t *config)
             .green = 0U,
             .blue = 0U,
             .brightness_percent = config->default_brightness_percent,
+            .effect = LIGHT_MANAGER_EFFECT_SOLID,
         };
 
         ret = light_manager_apply_state_locked(&initial_state);
@@ -487,7 +393,8 @@ esp_err_t light_manager_deinit(void)
 
 esp_err_t light_manager_set_state(const light_manager_state_t *state)
 {
-    if ((state == NULL) || (state->brightness_percent > 100U))
+    if ((state == NULL) || (state->brightness_percent > 100U) ||
+        !light_manager_effect_is_valid(state->effect))
     {
         return ESP_ERR_INVALID_ARG;
     }

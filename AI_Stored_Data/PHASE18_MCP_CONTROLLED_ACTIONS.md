@@ -61,7 +61,7 @@ preserves optional partial-update semantics inside the bounded object.
 {"state":{"power":"off"}}
 ```
 
-Only `power`, `color`, and `brightness_percent` are accepted in `state`; at
+Only `power`, `color`, `brightness_percent`, and `effect` are accepted in `state`; at
 least one is required. `power` is `on` or `off`; brightness is an integer from
 0 through 100; color is one of `red`, `green`, `blue`, `white`, `yellow`,
 `cyan`, `magenta`, `pink`, `purple`, or `orange`. `pink` and `magenta` both
@@ -69,22 +69,36 @@ map to RGB `(255,0,255)`; `purple` is `(128,0,255)` and `orange` is
 `(255,96,0)`.
 
 `power=off` cannot be combined with color or brightness. When power is omitted,
-color-only and brightness-only calls preserve the current logical power. Omitted
-color or brightness always preserves its current logical value. After all
-validation passes, the composition adapter snapshots `light_manager`, builds
-one `light_manager_state_t`, calls `light_manager_set_state()` once, then copies
-the confirmed logical state for the MCP response. Validation errors create no
-light-manager call. HIL remains pending.
+color-only, brightness-only, and effect-only calls preserve the current logical
+power. `effect` is one of `solid`, `blink`, `breath`, `pulse`, or `rainbow`.
+Omitted color, brightness, or effect always preserves its current logical value.
+The manager owns fixed product timing: blink is 500 ms ON/500 ms OFF, breath is
+2000 ms, pulse repeats a 300 ms cycle, and rainbow uses the single-LED rainbow
+cycle. After all validation passes, the composition adapter snapshots
+`light_manager`, builds one `light_manager_state_t`, calls
+`light_manager_set_state()` once, then copies the confirmed logical state for
+the MCP response. Validation errors create no light-manager call. Turning power
+OFF darkens the LED while preserving logical RGB, brightness, and effect;
+turning it ON resumes the stored effect. HIL remains pending.
 
 #### 18.1 read-only state companion
 
 `light.get_state` is a read-only companion to the approved `light.set_state`
 action, not a fifth controlled action. It calls the composition-owned provider,
 which makes exactly one `light_manager_get_state()` call and copies logical
-power, RGB, and brightness. The MCP layer maps only the known Phase-18.1 RGB
+power, RGB, brightness, and effect. The MCP layer maps only the known Phase-18.1 RGB
 values to a bounded name; other valid RGB values are returned as `custom` with
 their exact RGB components. The tool does not change state or access GPIO,
 NeoPixel, RMT, LVGL, cloud, audio, or network APIs. HIL remains pending.
+
+#### 18.1 read-only capabilities companion
+
+`light.get_capabilities` is a read-only companion, not a fifth controlled
+action. It has no provider and no hardware side effect. It reports only the
+implemented product contract: `power`, `color`, `brightness`, and `effect`; the
+ten named colors already accepted by `light.set_state`; the five effects above;
+and brightness range `0..100`. It never reports GPIO, RMT, driver, task, or
+other implementation details.
 
 ### 18.2 — Stop audio playback
 

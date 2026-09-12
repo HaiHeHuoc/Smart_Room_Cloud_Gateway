@@ -13,6 +13,7 @@
 
 #define XIAOZHI_MCP_LIGHT_MAX_POWER_BYTES  3U
 #define XIAOZHI_MCP_LIGHT_MAX_COLOR_BYTES  7U
+#define XIAOZHI_MCP_LIGHT_MAX_EFFECT_BYTES 7U
 
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static xiaozhi_foundation_light_set_state_provider_t s_provider = NULL;
@@ -76,6 +77,45 @@ static bool xiaozhi_mcp_light_copy_named_color(
     return true;
 }
 
+static bool xiaozhi_mcp_light_copy_effect(
+    const char *effect_name,
+    xiaozhi_foundation_light_set_state_request_t *request)
+{
+    if ((effect_name == NULL) || (request == NULL)) {
+        return false;
+    }
+
+    if (strcmp(effect_name, "solid") == 0) {
+        request->effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_SOLID;
+    } else if (strcmp(effect_name, "blink") == 0) {
+        request->effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_BLINK;
+    } else if (strcmp(effect_name, "breath") == 0) {
+        request->effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_BREATH;
+    } else if (strcmp(effect_name, "pulse") == 0) {
+        request->effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_PULSE;
+    } else if (strcmp(effect_name, "rainbow") == 0) {
+        request->effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_RAINBOW;
+    } else {
+        return false;
+    }
+
+    request->has_effect = true;
+    return true;
+}
+
+static const char *xiaozhi_mcp_light_effect_name(
+    xiaozhi_foundation_light_effect_t effect)
+{
+    switch (effect) {
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_SOLID: return "solid";
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_BLINK: return "blink";
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_BREATH: return "breath";
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_PULSE: return "pulse";
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_RAINBOW: return "rainbow";
+    default: return NULL;
+    }
+}
+
 static const char *xiaozhi_mcp_light_parse_request(
     const char *state_json,
     xiaozhi_foundation_light_set_state_request_t *request)
@@ -95,7 +135,8 @@ static const char *xiaozhi_mcp_light_parse_request(
     for (const cJSON *field = state->child; field != NULL; field = field->next) {
         if ((field->string == NULL) || (strcmp(field->string, "power") == 0 && request->has_power) ||
             (strcmp(field->string, "color") == 0 && request->has_color) ||
-            (strcmp(field->string, "brightness_percent") == 0 && request->has_brightness)) {
+            (strcmp(field->string, "brightness_percent") == 0 && request->has_brightness) ||
+            (strcmp(field->string, "effect") == 0 && request->has_effect)) {
             error_code = "invalid_input";
             break;
         }
@@ -137,6 +178,16 @@ static const char *xiaozhi_mcp_light_parse_request(
             }
             request->brightness_percent = (uint8_t)field->valueint;
             request->has_brightness = true;
+        } else if (strcmp(field->string, "effect") == 0) {
+            if (!cJSON_IsString(field) || (field->valuestring == NULL) ||
+                (strlen(field->valuestring) > XIAOZHI_MCP_LIGHT_MAX_EFFECT_BYTES)) {
+                error_code = "invalid_input";
+                break;
+            }
+            if (!xiaozhi_mcp_light_copy_effect(field->valuestring, request)) {
+                error_code = "unsupported_effect";
+                break;
+            }
         } else {
             error_code = "invalid_input";
             break;
@@ -144,7 +195,7 @@ static const char *xiaozhi_mcp_light_parse_request(
     }
 
     if ((error_code == NULL) && !request->has_power && !request->has_color &&
-        !request->has_brightness) {
+        !request->has_brightness && !request->has_effect) {
         error_code = "invalid_input";
     }
     if ((error_code == NULL) && request->has_power && !request->power_on &&
@@ -240,25 +291,31 @@ static esp_err_t xiaozhi_mcp_light_set_state_callback(
         return xiaozhi_mcp_light_set_error(result, error_code);
     }
 
-    char json[144] = {0};
-    char text[176] = {0};
+    char json[176] = {0};
+    char text[208] = {0};
+    const char *const effect_name = xiaozhi_mcp_light_effect_name(applied.effect);
+    if (effect_name == NULL) {
+        return xiaozhi_mcp_light_set_error(result, "internal_snapshot_failed");
+    }
     const int json_written = snprintf(
         json, sizeof(json),
         "{\"success\":true,\"power\":\"%s\",\"red\":%u,\"green\":%u,"
-        "\"blue\":%u,\"brightness_percent\":%u}",
+        "\"blue\":%u,\"brightness_percent\":%u,\"effect\":\"%s\"}",
         applied.power_on ? "on" : "off",
         (unsigned)applied.red,
         (unsigned)applied.green,
         (unsigned)applied.blue,
-        (unsigned)applied.brightness_percent);
+        (unsigned)applied.brightness_percent,
+        effect_name);
     const int text_written = snprintf(
         text, sizeof(text),
-        "SMART_ROOM_LIGHT_SET_STATE: success; power=%s; red=%u; green=%u; blue=%u; brightness_percent=%u.",
+        "SMART_ROOM_LIGHT_SET_STATE: success; power=%s; red=%u; green=%u; blue=%u; brightness_percent=%u; effect=%s.",
         applied.power_on ? "on" : "off",
         (unsigned)applied.red,
         (unsigned)applied.green,
         (unsigned)applied.blue,
-        (unsigned)applied.brightness_percent);
+        (unsigned)applied.brightness_percent,
+        effect_name);
     if ((json_written < 0) || ((size_t)json_written >= sizeof(json)) ||
         (text_written < 0) || ((size_t)text_written >= sizeof(text))) {
         return ESP_ERR_INVALID_SIZE;
@@ -322,7 +379,7 @@ esp_err_t xiaozhi_mcp_light_set_state_attach(esp_mcp_t *mcp)
     esp_mcp_tool_t *tool = esp_mcp_tool_create_ex(
         "light.set_state",
         "Smart Room: Dieu khien den",
-        "Set the Smart Room NeoPixel logical state. Arguments must be {state:{...}}. Inside state, allow only power ('on' or 'off'), color (red, green, blue, white, yellow, cyan, magenta, pink, purple, or orange), and brightness_percent (integer 0..100). Provide at least one field. power='off' cannot be combined with color or brightness. Omitted fields preserve their current logical value. This is a controlled device action; report the returned state exactly.",
+        "Set the Smart Room NeoPixel logical state. Arguments must be {state:{...}}. Inside state, allow only power ('on' or 'off'), color (red, green, blue, white, yellow, cyan, magenta, pink, purple, or orange), brightness_percent (integer 0..100), and effect (solid, blink, breath, pulse, or rainbow). Provide at least one field. power='off' cannot be combined with color or brightness. Omitted fields preserve their current logical value. This is a controlled device action; report the returned state exactly.",
         xiaozhi_mcp_light_set_state_callback);
     if (tool == NULL) {
         return ESP_ERR_NO_MEM;
@@ -340,7 +397,7 @@ esp_err_t xiaozhi_mcp_light_set_state_attach(esp_mcp_t *mcp)
     if (ret == ESP_OK) {
         ret = esp_mcp_tool_set_output_schema_json(
             tool,
-            "{\"type\":\"object\",\"properties\":{\"success\":{\"type\":\"boolean\"},\"error_code\":{\"type\":\"string\"},\"power\":{\"type\":\"string\",\"enum\":[\"on\",\"off\"]},\"red\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":255},\"green\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":255},\"blue\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":255},\"brightness_percent\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100}},\"required\":[\"success\"]}");
+            "{\"type\":\"object\",\"properties\":{\"success\":{\"type\":\"boolean\"},\"error_code\":{\"type\":\"string\"},\"power\":{\"type\":\"string\",\"enum\":[\"on\",\"off\"]},\"red\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":255},\"green\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":255},\"blue\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":255},\"brightness_percent\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100},\"effect\":{\"type\":\"string\",\"enum\":[\"solid\",\"blink\",\"breath\",\"pulse\",\"rainbow\"]}},\"required\":[\"success\"]}");
     }
     if (ret == ESP_OK) {
         ret = esp_mcp_tool_set_annotations_json(

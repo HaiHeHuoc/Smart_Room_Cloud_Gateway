@@ -1,9 +1,9 @@
 # light_manager
 
-`light_manager` is the Smart Room product-level owner for static
-WS2812-compatible NeoPixel state. It accepts board configuration at runtime,
-owns the copyable product state, and delegates RMT/LED-strip details to the
-reusable sibling `neopixel` component.
+`light_manager` is the Smart Room product-level owner for bounded
+WS2812-compatible NeoPixel state and effects. It accepts board configuration at
+runtime, owns the copyable product state, and delegates RMT/LED-strip details to
+the reusable sibling `neopixel` component.
 
 ## Ownership and dependencies
 
@@ -15,7 +15,7 @@ Only `light_manager` exposes application-facing light control. It does not
 depend on `board_config.h`, GUI, Xiaozhi/MCP, Wi-Fi, cloud, NVS, or application
 coordinators. `neopixel` owns the device-driver handle, pixel buffer, RMT
 backend, and optional effect worker. This manager deliberately exposes only
-static power/RGB/brightness control.
+power/RGB/brightness/effect control.
 
 ## Configuration and lifecycle
 
@@ -41,11 +41,12 @@ and the configured default brightness is retained for future requests.
 that driver, and clears product state. Calling init twice, deinit before init,
 or a runtime control API before init returns `ESP_ERR_INVALID_STATE`.
 
-## Static API and state semantics
+## Product API and state semantics
 
-`light_manager_set_state()` applies power, RGB, and brightness as one logical
-operation. The lower layer receives an atomic static-state update and renders
-once, avoiding temporary frames from a sequence of unrelated setters.
+`light_manager_set_state()` applies power, RGB, brightness, and one bounded
+product effect as one logical operation. The public effect set is deliberately
+small: `solid`, `blink`, `breath`, `pulse`, and `rainbow`; it never exposes the
+lower-level NeoPixel effect enum or timing/configuration knobs.
 
 ```c
 const light_manager_state_t magenta = {
@@ -60,9 +61,16 @@ ESP_ERROR_CHECK(light_manager_set_state(&magenta));
 ```
 
 - `light_manager_set_color()` and `light_manager_set_brightness()` preserve
-  other fields.
-- `light_manager_off()` preserves RGB and brightness. A following
-  `light_manager_on()` restores that stored state.
+  other fields, including the selected effect.
+- `solid` renders stored RGB at stored brightness. Switching from an effect to
+  `solid` stops that effect and restores the logical static output.
+- `blink` uses fixed 500 ms ON / 500 ms OFF timing; `breath` uses a fixed
+  2000 ms period; `pulse` repeats a fixed 300 ms triangular pulse; `rainbow`
+  uses the lower-layer single-LED rainbow-cycle behavior. No public API accepts
+  arbitrary effect timing or raw NeoPixel configuration.
+- `light_manager_off()` preserves RGB, brightness, and effect while darkening
+  the LED. A following `light_manager_on()` resumes the same effect when one
+  was active, or restores the stored solid state.
 - Brightness is an inclusive `0..100` percentage. `0` is valid and produces
   zero light output while preserving RGB and the ON logical state.
 - Brightness above `100` and NULL state/output pointers return
@@ -84,8 +92,9 @@ object remains valid across deinit/reinit; all NeoPixel resources are released
 by the underlying component.
 
 The lower NeoPixel library also serializes its own state and owns its optional
-effect worker. `light_manager` does not expose effects because the Phase-18
-product contract is static light control only.
+effect worker. `light_manager` translates only the five product effects above
+to lower-layer operations; MCP and other application components do not access
+that worker or lower-level effects directly.
 
 ## Target test loop
 
@@ -95,19 +104,18 @@ successful `light_manager_init()`. It writes `LIGHT_TEST` serial markers and
 waits `CONFIG_LIGHT_MANAGER_TEST_STEP_DELAY_MS` (default: 8000 ms) after every
 operation.
 
-One loop exercises all static manager APIs (`set_state`, `get_state`, color,
-brightness 0/20/100, OFF, and ON state restoration) and all whole-strip
-NeoPixel effects: blink, fade-in/out, fade, transition, rainbow, rainbow
-cycle, breath, pulse, chase, color wipe, theater chase, gradient, and rainbow
-gradient. It also pause/resumes and stops the blink effect. Effect calls remain
-private to the manager test implementation; `main` never accesses `neopixel`
-directly.
+One loop exercises the five public product effects through
+`light_manager_set_state()` and logs the copied state after each request. It
+then verifies the product transition from an effect to `solid` and the
+OFF/ON preservation and resumption path for `blink`. The loop does not expose
+or independently test lower-level NeoPixel-only effects; `main` never accesses
+`neopixel` directly.
 
 The test loop is intentionally non-terminating. While it is enabled and
 running, `light_manager_deinit()` returns `ESP_ERR_INVALID_STATE`; flash a
 normal configuration with the option disabled before production use. With the
-current one-LED board, spatial effects such as chase/gradient are API/lifecycle
-coverage, not proof of their multi-LED visual pattern.
+current one-LED board, `rainbow` is visual acceptance of its single-LED cycle,
+not proof of a multi-LED pattern.
 
 ## Known limitations
 

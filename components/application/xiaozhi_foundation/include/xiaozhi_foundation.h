@@ -177,6 +177,15 @@ esp_err_t xiaozhi_foundation_register_system_status_query_provider(
 
 /* Production Smart Room light-control MCP boundary ----------------------- */
 
+/** Bounded product effect values shared by the light MCP providers. */
+typedef enum {
+    XIAOZHI_FOUNDATION_LIGHT_EFFECT_SOLID = 0,
+    XIAOZHI_FOUNDATION_LIGHT_EFFECT_BLINK,
+    XIAOZHI_FOUNDATION_LIGHT_EFFECT_BREATH,
+    XIAOZHI_FOUNDATION_LIGHT_EFFECT_PULSE,
+    XIAOZHI_FOUNDATION_LIGHT_EFFECT_RAINBOW,
+} xiaozhi_foundation_light_effect_t;
+
 /** A validated, bounded logical light partial-update request. */
 typedef struct {
     bool has_power;
@@ -187,6 +196,8 @@ typedef struct {
     uint8_t blue;
     bool has_brightness;
     uint8_t brightness_percent;
+    bool has_effect;
+    xiaozhi_foundation_light_effect_t effect;
 } xiaozhi_foundation_light_set_state_request_t;
 
 typedef enum {
@@ -204,6 +215,7 @@ typedef struct {
     uint8_t green;
     uint8_t blue;
     uint8_t brightness_percent;
+    xiaozhi_foundation_light_effect_t effect;
 } xiaozhi_foundation_light_set_state_result_t;
 
 /**
@@ -234,6 +246,7 @@ typedef struct {
     uint8_t green;
     uint8_t blue;
     uint8_t brightness_percent;
+    xiaozhi_foundation_light_effect_t effect;
 } xiaozhi_foundation_light_state_query_snapshot_t;
 
 /**
