@@ -2,6 +2,7 @@ idf_component_register(
     SRCS
         "main.c"
         "xiaozhi_cloud_sync_composition.c"
+        "xiaozhi_light_state_query_composition.c"
         "xiaozhi_light_set_state_composition.c"
         "xiaozhi_sensor_query_composition.c"
         "xiaozhi_system_status_composition.c"

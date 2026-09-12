@@ -76,6 +76,16 @@ one `light_manager_state_t`, calls `light_manager_set_state()` once, then copies
 the confirmed logical state for the MCP response. Validation errors create no
 light-manager call. HIL remains pending.
 
+#### 18.1 read-only state companion
+
+`light.get_state` is a read-only companion to the approved `light.set_state`
+action, not a fifth controlled action. It calls the composition-owned provider,
+which makes exactly one `light_manager_get_state()` call and copies logical
+power, RGB, and brightness. The MCP layer maps only the known Phase-18.1 RGB
+values to a bounded name; other valid RGB values are returned as `custom` with
+their exact RGB components. The tool does not change state or access GPIO,
+NeoPixel, RMT, LVGL, cloud, audio, or network APIs. HIL remains pending.
+
 ### 18.2 — Stop audio playback
 
 Preferred product action:

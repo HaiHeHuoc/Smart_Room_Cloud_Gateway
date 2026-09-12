@@ -194,4 +194,15 @@ config XIAOZHI_FOUNDATION_LIGHT_SET_STATE_TOOL
         request to the composition-owned light-manager adapter. It never
         accesses GPIO, NeoPixel, RMT, LVGL, cloud, audio, or network APIs.
 
+config XIAOZHI_FOUNDATION_LIGHT_STATE_QUERY_TOOL
+    bool "Enable the Smart Room light-state MCP tool"
+    depends on !XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+    default y
+    help
+        Register the read-only Smart Room light.get_state MCP tool in the
+        production Xiaozhi WebSocket session. It returns only the copied
+        logical power, named/color RGB values, and brightness currently held
+        by light_manager. It never accesses GPIO, NeoPixel, RMT, LVGL, cloud,
+        audio, or network APIs and never changes the device.
+
 endmenu

@@ -224,6 +224,34 @@ esp_err_t xiaozhi_foundation_register_light_set_state_provider(
     xiaozhi_foundation_light_set_state_provider_t provider,
     void *user_context);
 
+/* Production Smart Room light-state MCP boundary ------------------------- */
+
+/** A copied logical light state supplied to the read-only MCP tool. */
+typedef struct {
+    bool available;
+    bool power_on;
+    uint8_t red;
+    uint8_t green;
+    uint8_t blue;
+    uint8_t brightness_percent;
+} xiaozhi_foundation_light_state_query_snapshot_t;
+
+/**
+ * @brief Copy the current logical light state in normal task context.
+ *
+ * The provider is borrowed for firmware lifetime and must route only through
+ * the product light owner. It must not access GPIO, NeoPixel, RMT, LVGL, or
+ * provider APIs directly, and it must not make any state change.
+ */
+typedef esp_err_t (*xiaozhi_foundation_light_state_query_provider_t)(
+    xiaozhi_foundation_light_state_query_snapshot_t *snapshot,
+    void *user_context);
+
+/** Register the composition-owned read-only light provider before voice start. */
+esp_err_t xiaozhi_foundation_register_light_state_query_provider(
+    xiaozhi_foundation_light_state_query_provider_t provider,
+    void *user_context);
+
 /* Phase 14 production audio boundary -------------------------------------- */
 
 #define XIAOZHI_FOUNDATION_UPLINK_SAMPLE_RATE_HZ 16000U

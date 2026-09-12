@@ -55,7 +55,7 @@ Sprint 16   Audio Arbitration / SOFTWARE COMPLETE / STATIC REVIEW COMPLETE / BUI
 Phase 16.1  PCM streaming downlink IMPLEMENTED / BUILD VERIFIED / automated HIL PASS / audible recovery confirmed
 Sprint 17   MCP Read-Only Tools / COMPLETE / BUILD VERIFIED / voice HIL accepted by user
 Sprint 18   MCP Controlled Actions / IN PROGRESS
-Phase 18.1  light.set_state IMPLEMENTED / BUILD VERIFIED / HIL PENDING
+Phase 18.1  light.set_state + light.get_state IMPLEMENTED / BUILD VERIFIED / HIL PENDING
 Sprint 19   Wake Word And Advanced Voice UX / NOT STARTED
 Read-only MCP through Sprint 17 COMPLETE; later feature phases require explicit start
 ```
@@ -79,7 +79,7 @@ Sprint 16   Audio Arbitration & Multi-Client Audio Policy       COMPLETE
 Phase 16.1  Xiaozhi PCM Streaming Downlink                     COMPLETE
 Sprint 17   MCP Read-Only Tools                                COMPLETE
 Sprint 18   MCP Controlled Actions                             IN PROGRESS
-Phase 18.1  light.set_state                                    IMPLEMENTED / BUILD VERIFIED / HIL PENDING
+Phase 18.1  light.set_state + light.get_state                  IMPLEMENTED / BUILD VERIFIED / HIL PENDING
 Sprint 19   Wake Word And Advanced Voice UX                    NOT STARTED
 ```
 

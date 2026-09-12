@@ -59,6 +59,14 @@ or brightness in the same call. Results return either the copied final RGB,
 power, and brightness or a bounded error code. Phase-18.1 hardware voice HIL
 is pending.
 
+`light.get_state` is the read-only companion for questions about the current
+light. It is independently gated by
+`CONFIG_XIAOZHI_FOUNDATION_LIGHT_STATE_QUERY_TOOL` (default `y`) and always
+reads a copied `light_manager_get_state()` snapshot through the `main` adapter.
+It returns logical power, brightness, RGB, and a bounded color name (`custom`
+when the RGB does not match the Phase-18.1 named-color palette). It neither
+changes device state nor accesses a driver from MCP.
+
 ## Temporary Validation Feature Gate
 
 `Component config -> Xiaozhi Phase 12 validation -> Enable temporary Phase 12

@@ -11,6 +11,7 @@
 #include "esp_xiaozhi_info.h"
 
 #include "xiaozhi_mcp_cloud_sync.h"
+#include "xiaozhi_mcp_light_state_query.h"
 #include "xiaozhi_mcp_light_set_state.h"
 #include "xiaozhi_mcp_sensor_query.h"
 #include "xiaozhi_mcp_system_status.h"
@@ -463,6 +464,7 @@ static esp_err_t xiaozhi_session_cleanup(void)
     if (s_mcp != NULL) {
         xiaozhi_mcp_system_status_detach();
         xiaozhi_mcp_cloud_sync_detach();
+        xiaozhi_mcp_light_state_query_detach();
         xiaozhi_mcp_light_set_state_detach();
         xiaozhi_mcp_sensor_query_detach();
         const esp_err_t ret = esp_mcp_destroy(s_mcp);
@@ -588,6 +590,14 @@ esp_err_t xiaozhi_foundation_session_start(uint32_t client_generation)
     if (ret != ESP_OK) {
         APP_LOGE(TAG, LIGHT_SET_STATE_MCP_ATTACH_FAILED_02E039A1,
                  "Smart Room light set-state MCP attach failed: %s",
+                 esp_err_to_name(ret));
+        goto fail;
+    }
+
+    ret = xiaozhi_mcp_light_state_query_attach(s_mcp);
+    if (ret != ESP_OK) {
+        APP_LOGE(TAG, LIGHT_STATE_QUERY_MCP_ATTACH_FAILED_BB5C5A9A,
+                 "Smart Room light-state MCP attach failed: %s",
                  esp_err_to_name(ret));
         goto fail;
     }

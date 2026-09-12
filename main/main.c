@@ -44,6 +44,7 @@
 /* Sensor manager ---------------------------------------------------------- */
 #include "sensor_manager.h"
 #include "xiaozhi_cloud_sync_composition.h"
+#include "xiaozhi_light_state_query_composition.h"
 #include "xiaozhi_light_set_state_composition.h"
 #include "xiaozhi_sensor_query_composition.h"
 #include "xiaozhi_system_status_composition.h"
@@ -806,6 +807,17 @@ void app_main(void)
         APP_LOGE(
             TAG, XIAOZHI_LIGHT_SET_STATE_PROVIDER_181E5BE9,
             "Failed to register Xiaozhi light set-state provider: %s",
+            esp_err_to_name(service_ret));
+        return;
+    }
+
+    service_ret = app_xiaozhi_light_state_query_register_provider();
+
+    if (service_ret != ESP_OK)
+    {
+        APP_LOGE(
+            TAG, XIAOZHI_LIGHT_STATE_QUERY_PROVIDER_A7402F43,
+            "Failed to register Xiaozhi light-state query provider: %s",
             esp_err_to_name(service_ret));
         return;
     }
