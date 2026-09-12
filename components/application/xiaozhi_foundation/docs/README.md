@@ -59,7 +59,8 @@ copied logical state except an effect request: it automatically turns the light
 on when power is omitted, and uses white when the preserved RGB value is black.
 `off` is deliberately incompatible with a color, brightness, or effect in the
 same call. Results return either the copied final RGB, power, brightness, and
-effect or a bounded error code. Phase-18.1 hardware voice HIL is pending.
+effect or a bounded error code. Phase-18.1 target voice HIL was accepted by
+the user on 2026-09-13.
 
 `light.get_state` is the read-only companion for questions about the current
 light. It is independently gated by

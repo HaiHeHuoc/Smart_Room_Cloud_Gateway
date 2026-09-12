@@ -91,12 +91,12 @@ Current major state:
 Phase 16 / 16.1  accepted baseline, endurance/integration follow-up remains
 Phase 17         COMPLETE, read-only MCP voice HIL accepted
 Phase 18         IN PROGRESS
-Phase 18.1       light control implemented; current HEAD rebuild/HIL pending
+Phase 18.1       COMPLETE; current-source build PASS; target HIL accepted by user
 Phase 18.2-18.4  NOT STARTED
 Phase 19         NOT STARTED
 ```
 
-Important current-source updates after the last Phase-18.1 full-build checkpoint
+Important current-source updates verified during the Phase-18.1 closure
 include dynamic TLS buffers in PSRAM, a 20 KiB PSRAM pre-PTT headroom gate,
 0.96-second streaming prefill with the timeout starting after first PCM, and
 updated Phase-18.1 effect semantics. Read `PROJECT_STATE.md` before relying on

@@ -1,6 +1,6 @@
 # Next Work + Deferred HIL Backlog
 
-Updated: 2026-09-12
+Updated: 2026-09-13
 Active branch: `main_including_Firebase_security`
 Observed production/source HEAD before AI metadata sync: `15cd0f06d25142a6ed7672bc99dfd4ec396184b0`
 
@@ -19,37 +19,35 @@ Phase 16     COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / BOUNDED HIL AC
 Phase 16.1   IMPLEMENTED / BUILD VERIFIED / automated HIL PASS / audible recovery accepted / endurance pending
 Phase 17     COMPLETE / BUILD VERIFIED / read-only MCP voice HIL accepted
 Phase 18     IN PROGRESS
-Phase 18.1   IMPLEMENTED / current HEAD rebuild + HIL pending
+Phase 18.1   COMPLETE / BUILD PASS / target HIL accepted by user
 Phase 18.2   NOT STARTED
 Phase 18.3   NOT STARTED
 Phase 18.4   NOT STARTED
 Phase 19     NOT STARTED
 ```
 
-Phase 18.1 is no longer "not started". See
+Phase 18.1 is complete. See
 `AI_Stored_Data/PHASE18_MCP_CONTROLLED_ACTIONS.md` for the exact current light
 contract and validation matrix.
 
 ## Immediate next work
 
-The highest-value next step is **revalidation of the current source HEAD**, not
-starting 18.2.
+The highest-value next step is the deferred PTT/TLS and streaming regression,
+not starting 18.2.
 
 Recommended order:
 
 ```text
-1. Clean ESP-IDF build on current source HEAD.
-2. Boot target and run repeated PTT smoke/regression.
-3. Verify current TLS-in-PSRAM headroom behavior.
-4. Run Phase-18.1 light HIL matrix.
-5. Exercise delayed-first-PCM / streaming path touched by current HEAD.
-6. Record evidence and reconcile stale canonical roadmap status.
-7. Start 18.2 only when Hải explicitly requests it.
+1. Boot target and run repeated PTT smoke/regression.
+2. Verify current TLS-in-PSRAM headroom behavior.
+3. Exercise delayed-first-PCM / streaming path touched by current HEAD.
+4. Record evidence.
+5. Start 18.2 only when explicitly requested.
 ```
 
-Why: the last explicit full Phase-18.1 build PASS is at `f00e106...`, but
-`15cd0f06...` changes Phase-18.1 light behavior, voice uplink/TLS memory policy,
-and audio streaming prefill behavior after that checkpoint.
+Why: the current source checkpoint was rebuilt and Phase-18.1 light HIL was
+accepted by the user on 2026-09-13. The remaining work is the independent
+PTT/TLS and streaming regression affected by the same source checkpoint.
 
 ## Current-head regression focus
 
@@ -75,9 +73,9 @@ starts only after the first PCM packet, not at TTS_START. Validate at least one
 reply where server/tool/synthesis delay precedes first audio and confirm there
 is no false prefill timeout.
 
-### Phase 18.1 light
+### Phase 18.1 light — accepted
 
-Minimum target checks:
+The target matrix was accepted by the user on 2026-09-13:
 
 ```text
 pink 100%

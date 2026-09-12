@@ -862,17 +862,17 @@ display.get_current_screen
 
 ---
 
-# Sprint 18 — MCP Controlled Actions — Not Started
+# Sprint 18 — MCP Controlled Actions — In Progress
 
 **Goal:** Add allowlisted side effects only for real project-owned actuators.
 
-Candidate actions:
+Approved actions:
 
 ```text
-display.set_brightness
 light.set_state
-fan.set_state
-servo.set_angle
+audio.stop_playback
+audio.play_recorded / bounded allowlisted playback variant
+cloud.push_latest
 ```
 
 Execution:
@@ -886,22 +886,27 @@ MCP request
     -> bounded MCP response
 ```
 
-- [ ] Define allowlist, ranges, timeout, errors, request ID, idempotency,
-      duplicate suppression, and late-result policy.
-- [ ] Route every action through the owning manager.
-- [ ] Report actual execution results.
-- [ ] Test malformed, repeated, out-of-range, unavailable, timeout, and
-      concurrent requests.
+- [x] Phase 18.1 defines a bounded light allowlist, validation, errors, and
+      idempotent partial-state contract.
+- [x] Phase 18.1 routes light control through the composition provider and
+      `light_manager` owner.
+- [x] Phase 18.1 reports the applied logical state through bounded MCP output.
+- [x] Phase 18.1 target HIL accepted by the user on 2026-09-13.
+- [ ] Define and validate the independent contracts for 18.2–18.4.
 
 Always reject factory reset, credential erase, reboot, arbitrary OTA/GPIO, task
 control, and shell/system commands.
 
-## Acceptance
+## Phase 18.1 — Light control — Complete
 
-- [ ] Every action is validated and owner-routed.
-- [ ] Duplicate/late requests are deterministic.
-- [ ] Physical state matches reported result.
-- [ ] Local control remains functional with MCP disabled.
+- [x] `light.set_state`, `light.get_state`, and `light.get_capabilities` use
+      bounded allowlists and owner-routed state snapshots.
+- [x] Invalid field combinations are rejected deterministically.
+- [x] Target light-control HIL accepted by the user on 2026-09-13.
+- [x] Local light-manager control remains independent of MCP registration.
+
+Phase 18 remains in progress. Phases 18.2–18.4 are not started and require an
+explicit user request.
 
 ---
 

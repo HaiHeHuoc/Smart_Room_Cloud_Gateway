@@ -141,7 +141,7 @@ Sprint 16   COMPLETE / bounded HIL accepted
 Phase 16.1  COMPLETE baseline / streaming HIL accepted / endurance pending
 Sprint 17   COMPLETE / read-only MCP voice HIL accepted
 Sprint 18   IN PROGRESS
-Phase 18.1  IMPLEMENTED / current HEAD rebuild + HIL pending
+Phase 18.1  COMPLETE / BUILD PASS / target HIL accepted by user (2026-09-13)
 Phase 18.2  NOT STARTED
 Phase 18.3  NOT STARTED
 Phase 18.4  NOT STARTED
@@ -215,6 +215,12 @@ For current Phase 18.1 history:
 - `15cd0f06...` changes light, uplink/TLS, and streaming behavior but does not
   carry explicit build/HIL evidence.
 
-Therefore current source HEAD must be rebuilt/revalidated before describing it
-as build/HIL verified. Recommended order is clean build -> target boot/repeated
-PTT -> Phase-18.1 light HIL -> affected streaming regression -> evidence update.
+The current source checkpoint was subsequently rebuilt and Phase-18.1 target
+HIL was accepted by the user on 2026-09-13. The independent PTT/TLS and
+streaming regressions remain deferred and must not be inferred as accepted.
+
+## Phase 18 status reconciliation
+
+The earlier note describing the canonical roadmap as stale is now historical.
+`XIAOZHI_IMPLEMENTATION_ROADMAP.md` records Sprint 18 as in progress and
+Phase 18.1 as complete; Phases 18.2–18.4 remain not started.

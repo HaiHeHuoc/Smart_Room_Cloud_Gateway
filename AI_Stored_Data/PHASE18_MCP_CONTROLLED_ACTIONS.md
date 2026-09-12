@@ -1,8 +1,8 @@
 # Phase 18 — MCP Controlled Actions Scope
 
-Status: **IN PROGRESS — 18.1 IMPLEMENTED; CURRENT HEAD REVALIDATION + HIL PENDING**
+Status: **IN PROGRESS — 18.1 COMPLETE / BUILD PASS / TARGET HIL ACCEPTED**
 
-Updated: 2026-09-12
+Updated: 2026-09-13
 Integration branch: `main_including_Firebase_security`
 Observed remote source HEAD before this synchronization: `15cd0f06d25142a6ed7672bc99dfd4ec396184b0`
 
@@ -145,14 +145,13 @@ Two commits then changed source after that verified checkpoint:
    - also changed voice uplink/TLS-memory and streaming-downlink behavior;
    - commit message contains no explicit build or HIL evidence.
 
-Therefore do **not** claim current HEAD `15cd0f06...` is build-verified merely
-because the earlier `f00e106...` checkpoint passed. Correct state is:
+The current source checkpoint was subsequently rebuilt after those changes and
+the Phase-18.1 target matrix was accepted by Hai. Correct closure state is:
 
 ```text
-18.1 implementation present       CONFIRMED
-last explicit full Phase-18.1 build at f00e106...  PASS
-current HEAD build after 15cd0f06...               PENDING / NOT RECORDED
-current HEAD target HIL                              PENDING
+18.1 implementation present                         CONFIRMED
+current source build after 15cd0f06...              PASS
+current HEAD Phase-18.1 target HIL                  ACCEPTED BY USER (2026-09-13)
 ```
 
 ## Minimum 18.1 HIL / regression matrix
@@ -183,6 +182,16 @@ light.get_capabilities reports current fixed contract
 Because current HEAD also changes the Xiaozhi audio/TLS path, repeat at least a
 small voice regression around the light HIL so a working LED command does not
 hide a PTT/audio regression.
+
+## 18.1 closure evidence
+
+- `ninja -C build -j 1 all` passed on the current source checkpoint after the
+  light semantics, TLS, and delayed-first-PCM changes.
+- Hai confirmed target testing PASS on 2026-09-13 and authorized Phase-18.1
+  closure.
+- This acceptance closes only the bounded light-control slice. It does not
+  accept the deferred PTT/TLS endurance or delayed-first-PCM audio regressions,
+  and it does not start Phase 18.2.
 
 ## 18.2 — Stop audio playback
 

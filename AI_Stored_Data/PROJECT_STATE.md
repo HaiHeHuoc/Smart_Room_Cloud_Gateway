@@ -36,7 +36,7 @@ Sprint 16   COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / BOUNDED HIL ACC
 Phase 16.1  STREAMING DOWNLINK IMPLEMENTED / BUILD VERIFIED / automated HIL PASS / audible recovery accepted / endurance pending
 Sprint 17   MCP READ-ONLY COMPLETE / BUILD VERIFIED / voice HIL accepted by user
 Sprint 18   MCP CONTROLLED ACTIONS IN PROGRESS
-Phase 18.1  LIGHT CONTROL IMPLEMENTED / current HEAD revalidation pending / HIL pending
+Phase 18.1  COMPLETE / BUILD PASS / target HIL accepted by user (2026-09-13)
 Phase 18.2  NOT STARTED
 Phase 18.3  NOT STARTED
 Phase 18.4  NOT STARTED
@@ -61,12 +61,12 @@ e0255881ad61a5bea4c96b49c866f20a0f8b3355
 15cd0f06d25142a6ed7672bc99dfd4ec396184b0
   work for MCP LED control
   Changes Phase-18 light semantics plus voice/audio/TLS behavior.
-  No explicit build/HIL evidence recorded in the commit.
+  Current-source build PASS; Phase-18.1 target HIL accepted by user (2026-09-13).
 ```
 
-The source HEAD `15cd0f06...` is two commits ahead of the last full Phase-18.1
-build checkpoint `f00e106...`. Therefore do not describe current HEAD as fully
-build-verified until it is rebuilt after those source changes.
+The source checkpoint `15cd0f06...` was rebuilt after its source changes.
+Phase-18.1 target HIL was accepted by the user on 2026-09-13. Later metadata
+commits do not modify production source.
 
 AI-only synchronization commits may advance the branch HEAD beyond
 `15cd0f06...`; treat those as metadata/documentation history, not as newer
@@ -233,22 +233,17 @@ step when requested.
 
 ## Current pending validation / technical debt
 
-1. **Current HEAD rebuild:** clean ESP-IDF build after `15cd0f06...` is not
-   explicitly recorded.
-2. **Phase 18.1 HIL:** light color/brightness/off/effects/read-only companions,
-   invalid combinations, rapid updates, effect-only auto-activation, and
-   black-to-white effect fallback remain pending on the current HEAD.
-3. **PTT/TLS regression:** boot plus repeated PTT should confirm PSRAM TLS record
+1. **PTT/TLS regression:** boot plus repeated PTT should confirm PSRAM TLS record
    allocation/headroom behavior after the current external-memory policy.
-4. **Streaming regression:** confirm delayed first audio after TTS_START no longer
+2. **Streaming regression:** confirm delayed first audio after TTS_START no longer
    causes a false prefill timeout, and verify normal playback/recovery remains
    audible.
-5. Phase-16/16.1 endurance and broader full-Gateway integration remain deferred.
-6. Phase-15 visible LCD/text coverage has historical partial gaps; rerun only
+3. Phase-16/16.1 endurance and broader full-Gateway integration remain deferred.
+4. Phase-15 visible LCD/text coverage has historical partial gaps; rerun only
    when relevant to a regression.
-7. Long-duration Firebase/cloud plus Xiaozhi simultaneous-traffic regression
+5. Long-duration Firebase/cloud plus Xiaozhi simultaneous-traffic regression
    remains deferred.
-8. Full post-portability target smoke/regression should be treated separately
+6. Full post-portability target smoke/regression should be treated separately
    from architecture closure.
 
 ## Recommended next action
