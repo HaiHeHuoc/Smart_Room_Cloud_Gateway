@@ -70,6 +70,7 @@
 
 /* Audio manager ------------------------------------------------------------ */
 #include "audio_manager.h"
+#include "voice_assistant.h"
 #if CONFIG_AUDIO_MANAGER_PUBLIC_API_TEST
 #include "audio_api_test_task.h"
 #endif
@@ -1751,20 +1752,9 @@ static esp_err_t app_start_audio_manager_after_network_online(void)
         return audio_ret;
     }
 
-    const esp_err_t audio_gui_ret =
-        audio_manager_register_status_callback(
-            app_audio_status_callback,
-            NULL);
-
-    if (audio_gui_ret != ESP_OK)
-    {
-        APP_LOGW(
-            TAG, FAILED_TO_REGISTER_AUDIO_GUI_8C26893B,
-            "Failed to register audio GUI status callback: %s",
-            esp_err_to_name(audio_gui_ret));
-    }
-
-    audio_ret = audio_manager_start();
+    audio_ret = voice_assistant_start_after_audio_ready(
+        app_audio_status_callback,
+        NULL);
 
     if (audio_ret != ESP_OK)
     {

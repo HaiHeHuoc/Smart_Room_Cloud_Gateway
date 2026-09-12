@@ -36,7 +36,7 @@ static uint32_t next_request_id(atomic_uint_fast32_t *sequence, uint32_t base)
     return base | value;
 }
 
-esp_err_t phase16_xiaozhi_start_recording(void)
+esp_err_t voice_assistant_audio_capture_start(void)
 {
     const uint32_t request_id = next_request_id(
         &s_capture_seq, XIAOZHI_CAPTURE_REQUEST_BASE);
@@ -89,7 +89,7 @@ esp_err_t phase16_xiaozhi_start_recording(void)
     return (ret == ESP_OK) ? ESP_ERR_TIMEOUT : ret;
 }
 
-esp_err_t phase16_xiaozhi_stop_recording(void)
+esp_err_t voice_assistant_audio_capture_stop(void)
 {
     const uint32_t request_id = (uint32_t)atomic_exchange_explicit(
         &s_capture_request_id, 0U, memory_order_acq_rel);
@@ -101,7 +101,7 @@ esp_err_t phase16_xiaozhi_stop_recording(void)
     return (ret == ESP_ERR_NOT_FOUND) ? ESP_ERR_INVALID_STATE : ret;
 }
 
-esp_err_t phase16_xiaozhi_stream_begin(void)
+esp_err_t voice_assistant_audio_stream_begin(void)
 {
     if (atomic_load_explicit(&s_playback_request_id,
                              memory_order_acquire) != 0U) {
@@ -138,7 +138,7 @@ esp_err_t phase16_xiaozhi_stream_begin(void)
     return ESP_OK;
 }
 
-esp_err_t phase16_xiaozhi_stream_write(
+esp_err_t voice_assistant_audio_stream_write(
     const int16_t *samples,
     size_t sample_count)
 {
@@ -154,7 +154,7 @@ esp_err_t phase16_xiaozhi_stream_write(
         sample_count);
 }
 
-esp_err_t phase16_xiaozhi_stream_finish(void)
+esp_err_t voice_assistant_audio_stream_finish(void)
 {
     const uint32_t request_id = (uint32_t)atomic_load_explicit(
         &s_playback_request_id,
@@ -165,7 +165,7 @@ esp_err_t phase16_xiaozhi_stream_finish(void)
     return audio_manager_playback_arbiter_finish_pcm16_stream(request_id);
 }
 
-esp_err_t phase16_xiaozhi_stream_fail(esp_err_t error)
+esp_err_t voice_assistant_audio_stream_fail(esp_err_t error)
 {
     if (error == ESP_OK) {
         error = ESP_FAIL;
@@ -203,7 +203,7 @@ esp_err_t phase16_xiaozhi_stream_fail(esp_err_t error)
     return ESP_OK;
 }
 
-esp_err_t phase16_xiaozhi_stream_get_status(
+esp_err_t voice_assistant_audio_stream_get_status(
     audio_manager_playback_request_status_t *status)
 {
     if (status == NULL) {
@@ -218,7 +218,7 @@ esp_err_t phase16_xiaozhi_stream_get_status(
     return audio_manager_playback_arbiter_get_request_status(request_id, status);
 }
 
-void phase16_xiaozhi_stream_release(void)
+void voice_assistant_audio_stream_release(void)
 {
     (void)atomic_exchange_explicit(
         &s_playback_request_id,

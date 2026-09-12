@@ -1,7 +1,6 @@
 idf_component_register(
     SRCS
         "main.c"
-        "phase14_voice_composition.c"
         "phase16_auto_hil_test.c"
     INCLUDE_DIRS
         "."
@@ -36,15 +35,4 @@ idf_component_register(
         nvs_flash
         esp_netif
         esp_event
-)
-
-# Phase 14 composition is scoped to main.c only: keep audio_manager's public
-# implementation unchanged while routing the application registration/start
-# calls through a wrapper that fans out status and starts the voice stack only
-# after the audio task has reached its normal startup boundary.
-set_property(
-    SOURCE "main.c"
-    APPEND PROPERTY COMPILE_DEFINITIONS
-        audio_manager_register_status_callback=app_phase14_audio_manager_register_status_callback
-        audio_manager_start=app_phase14_audio_manager_start
 )

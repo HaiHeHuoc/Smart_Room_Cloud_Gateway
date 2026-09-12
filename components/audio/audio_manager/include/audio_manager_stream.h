@@ -11,7 +11,7 @@ extern "C"
 {
 #endif
 
-/** Phase-14 voice uplink baseline. */
+/** Voice uplink stream contract. */
 #define AUDIO_MANAGER_STREAM_SAMPLE_RATE_HZ 16000U
 #define AUDIO_MANAGER_STREAM_CHANNELS       1U
 #define AUDIO_MANAGER_STREAM_FRAME_SAMPLES  256U
@@ -46,7 +46,7 @@ typedef void (*audio_manager_stream_frame_callback_t)(
     void *user_context);
 
 /**
- * @brief Register or unregister the single Phase-14 live-frame observer.
+ * @brief Register or unregister the single live-frame observer.
  *
  * Passing NULL unregisters the observer. Registration alone never starts I2S
  * or recording. The audio manager remains the sole microphone/I2S owner.

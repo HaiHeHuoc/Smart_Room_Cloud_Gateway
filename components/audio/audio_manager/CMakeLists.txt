@@ -35,12 +35,3 @@ idf_component_register(
         esp_psram
         sd_card_manager
 )
-
-# Phase 14 live-stream tap: only audio_manager.c redirects the raw-slot
-# conversion symbol. The DSP module keeps the original implementation, while
-# the wrapper copies selected recording samples into the bounded PCM16 stream.
-set_source_files_properties(
-    "audio_manager.c"
-    PROPERTIES COMPILE_DEFINITIONS
-    "audio_dsp_convert_raw_slot_to_pcm24=audio_manager_stream_convert_raw_slot_to_pcm24"
-)

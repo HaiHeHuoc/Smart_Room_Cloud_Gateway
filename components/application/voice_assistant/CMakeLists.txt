@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "voice_assistant.c"
+        "voice_assistant_bootstrap.c"
         "modules/audio/src/voice_assistant_audio_adapter.c"
         "modules/audio/src/voice_assistant_audio_arbitration_bridge.c"
         "modules/ui/src/voice_assistant_ui_model.c"
@@ -27,18 +28,10 @@ idf_component_register(
 
     PRIV_REQUIRES
         app_log
+        common
         esp_audio_codec
         esp_timer
         freertos
         log
         heap
-)
-
-# Phase 16 migration: Xiaozhi uplink is redirected through the capture bridge.
-# Phase 16.1 downlink calls its streaming bridge explicitly so it cannot bypass
-# playback arbitration or take ownership of I2S/DMA.
-set_source_files_properties(
-    "modules/uplink/src/voice_assistant_uplink.c"
-    PROPERTIES COMPILE_DEFINITIONS
-    "audio_manager_start_recording=phase16_xiaozhi_start_recording;audio_manager_stop_recording=phase16_xiaozhi_stop_recording"
 )

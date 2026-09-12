@@ -23,7 +23,7 @@ typedef struct {
     esp_err_t last_error;
 } voice_assistant_uplink_status_t;
 
-/** Initialize the bounded Phase-14 microphone-uplink coordinator. */
+/** Initialize the bounded microphone-uplink coordinator. */
 esp_err_t voice_assistant_uplink_init(void);
 
 /** Start the coordinator task; no microphone capture starts here. */

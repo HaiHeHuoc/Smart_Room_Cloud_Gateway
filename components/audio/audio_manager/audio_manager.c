@@ -14,6 +14,7 @@
 #include "audio_dsp.h"
 #include "audio_manager_pcm_stream.h"
 #include "audio_manager_pcm_stream_core.h"
+#include "audio_manager_stream_internal.h"
 #include "audio_wav.h"
 #include "audio_wav_prefetch.h"
 #include "sd_card_manager.h"
@@ -1438,10 +1439,10 @@ static esp_err_t detect_microphone_slot(
             const size_t base = frame * AUDIO_MANAGER_SLOT_COUNT;
             update_slot_stats(
                 &left,
-                audio_dsp_convert_raw_slot_to_pcm24(s_rx_block[base]));
+                audio_manager_stream_convert_raw_slot_to_pcm24(s_rx_block[base]));
             update_slot_stats(
                 &right,
-                audio_dsp_convert_raw_slot_to_pcm24(s_rx_block[base + 1U]));
+                audio_manager_stream_convert_raw_slot_to_pcm24(s_rx_block[base + 1U]));
         }
     }
 
@@ -1517,7 +1518,7 @@ static esp_err_t record_audio(
             const size_t source_index =
                 (frame * AUDIO_MANAGER_SLOT_COUNT) + selected_slot_index;
             s_runtime.recording_pcm24[captured + frame] =
-                audio_dsp_convert_raw_slot_to_pcm24(s_rx_block[source_index]);
+                audio_manager_stream_convert_raw_slot_to_pcm24(s_rx_block[source_index]);
         }
 
         captured += frames_read;

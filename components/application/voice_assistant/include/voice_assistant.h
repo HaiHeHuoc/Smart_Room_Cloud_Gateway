@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "esp_err.h"
+#include "audio_manager.h"
 
 #ifdef __cplusplus
 extern "C"
@@ -67,6 +68,20 @@ esp_err_t voice_assistant_init(void);
 
 /** Start the single voice-assistant orchestration task and enter IDLE. */
 esp_err_t voice_assistant_start(void);
+
+/**
+ * @brief Start the ready audio manager, its arbiters, and the production voice stack.
+ *
+ * Call only from the application boot/lifecycle task after audio_manager_init().
+ * The callback receives the one borrowed audio-manager status observer; this
+ * function fans it out to the GUI/application callback and voice state model.
+ * It does not call LVGL, and it must not be called from a Wi-Fi, provisioning,
+ * or audio callback. In temporary Xiaozhi validation mode, production voice
+ * startup remains intentionally suppressed after the audio arbiters start.
+ */
+esp_err_t voice_assistant_start_after_audio_ready(
+    audio_manager_status_callback_t application_callback,
+    void *application_callback_context);
 
 /** Begin one logical conversation session asynchronously. */
 esp_err_t voice_assistant_begin_session(void);

@@ -1,4 +1,5 @@
-#include "audio_manager.h"
+#include "voice_assistant.h"
+
 #include "audio_manager_capture_arbiter.h"
 #include "audio_manager_playback_arbiter.h"
 #include "board_config.h"
@@ -8,7 +9,6 @@
 #include "voice_assistant_audio_adapter.h"
 
 #if !CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
-#include "voice_assistant.h"
 #include "voice_assistant_downlink.h"
 #include "voice_assistant_ptt.h"
 #include "voice_assistant_ptt_gpio.h"
@@ -18,9 +18,9 @@
 #endif
 
 _Static_assert(PTT_BUTTON_USE_INTERNAL_PULLDOWN == 1,
-               "Phase-14 PTT GPIO contract requires internal pull-down");
+               "Voice PTT GPIO contract requires internal pull-down");
 
-static const char *const TAG = "PH14_COMPOSE";
+static const char *const TAG = "VOICE_BOOTSTRAP";
 
 static audio_manager_status_callback_t s_app_audio_callback = NULL;
 static void *s_app_audio_callback_context = NULL;
@@ -28,7 +28,7 @@ static void *s_app_audio_callback_context = NULL;
 static bool s_voice_started = false;
 #endif
 
-static void phase14_audio_status_fanout(
+static void voice_assistant_audio_status_fanout(
     const audio_manager_status_t *status,
     void *user_context)
 {
@@ -55,23 +55,11 @@ static void phase14_audio_status_fanout(
 #endif
 }
 
-esp_err_t app_phase14_audio_manager_register_status_callback(
-    audio_manager_status_callback_t callback,
-    void *user_context)
-{
-    s_app_audio_callback = callback;
-    s_app_audio_callback_context = user_context;
-
-    return audio_manager_register_status_callback(
-        phase14_audio_status_fanout,
-        NULL);
-}
-
-static esp_err_t phase14_start_voice_stack(void)
+static esp_err_t voice_assistant_start_stack(void)
 {
 #if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
-    APP_LOGW(TAG, PHASE_PRODUCTION_VOICE_STACK_B75F60FD,
-             "Phase-14 production voice stack suppressed because Phase-12 Xiaozhi validation mode is enabled");
+    APP_LOGW(TAG, VOICE_PRODUCTION_STACK_SUPP_43B9332E,
+             "Production voice stack suppressed because Xiaozhi validation mode is enabled");
     return ESP_OK;
 #else
     if (s_voice_started) {
@@ -160,23 +148,37 @@ static esp_err_t phase14_start_voice_stack(void)
      * connection gate. */
     ret = voice_assistant_begin_session();
     if (ret != ESP_OK) {
-        APP_LOGE(TAG, PHASE_BOOT_XIAOZHI_CONNECTIO_796AACCE,
-                 "Phase-15 boot Xiaozhi connection request failed: %s",
+        APP_LOGE(TAG, VOICE_BOOT_CONNECTION_FAILED_9A77647E,
+                 "Boot Xiaozhi connection request failed: %s",
                  esp_err_to_name(ret));
         return ret;
     }
 
     s_voice_started = true;
-    APP_LOGI(TAG, PHASE_VOICE_STACK_READY_BOOT_4E72B3ED,
-             "Phase-15 voice stack READY; boot Xiaozhi connection queued ui_model=yes gui_adapter=yes ptt_gpio=%d active_level=%u pull=down",
+    APP_LOGI(TAG, VOICE_STACK_READY_AFTER_AUDIO_35809038,
+             "Voice stack READY; boot Xiaozhi connection queued ui_model=yes gui_adapter=yes ptt_gpio=%d active_level=%u pull=down",
              (int)PTT_BUTTON_GPIO,
              (unsigned)PTT_BUTTON_ACTIVE_LEVEL);
     return ESP_OK;
 #endif
 }
 
-esp_err_t app_phase14_audio_manager_start(void)
+esp_err_t voice_assistant_start_after_audio_ready(
+    audio_manager_status_callback_t application_callback,
+    void *application_callback_context)
 {
+    s_app_audio_callback = application_callback;
+    s_app_audio_callback_context = application_callback_context;
+
+    const esp_err_t observer_ret = audio_manager_register_status_callback(
+        voice_assistant_audio_status_fanout,
+        NULL);
+    if (observer_ret != ESP_OK) {
+        APP_LOGW(TAG, AUDIO_STATUS_OBSERVER_UNAVAILABLE_F6599647,
+                 "Audio status observer unavailable: %s",
+                 esp_err_to_name(observer_ret));
+    }
+
     const esp_err_t audio_ret = audio_manager_start();
     if (audio_ret != ESP_OK) {
         return audio_ret;
@@ -187,8 +189,8 @@ esp_err_t app_phase14_audio_manager_start(void)
         arbiter_ret = audio_manager_playback_arbiter_start();
     }
     if (arbiter_ret != ESP_OK) {
-        APP_LOGE(TAG, PHASE_PLAYBACK_ARBITER_START_65C8AF69,
-                 "Phase-16 playback arbiter startup failed after audio READY: %s",
+        APP_LOGE(TAG, PLAYBACK_ARBITER_START_FAILED_2DE47B6D,
+                 "Playback arbiter startup failed after audio READY: %s",
                  esp_err_to_name(arbiter_ret));
         return arbiter_ret;
     }
@@ -198,17 +200,18 @@ esp_err_t app_phase14_audio_manager_start(void)
         arbiter_ret = audio_manager_capture_arbiter_start();
     }
     if (arbiter_ret != ESP_OK) {
-        APP_LOGE(TAG, PHASE_CAPTURE_ARBITER_STARTU_4896D6F4,
-                 "Phase-16 capture arbiter startup failed after audio READY: %s",
+        APP_LOGE(TAG, CAPTURE_ARBITER_START_FAILED_692CEE47,
+                 "Capture arbiter startup failed after audio READY: %s",
                  esp_err_to_name(arbiter_ret));
         return arbiter_ret;
     }
-    APP_LOGI(TAG, PHASE_AUDIO_ARBITERS_READY_P_C8A26903, "Phase-16 audio arbiters READY playback=yes capture=yes");
+    APP_LOGI(TAG, AUDIO_ARBITERS_READY_5E6F3494,
+             "Audio arbiters READY playback=yes capture=yes");
 
-    const esp_err_t voice_ret = phase14_start_voice_stack();
+    const esp_err_t voice_ret = voice_assistant_start_stack();
     if (voice_ret != ESP_OK) {
-        APP_LOGE(TAG, PHASE_VOICE_STACK_STARTUP_FA_E2067A99,
-                 "Phase-15 voice stack startup failed after audio READY: %s",
+        APP_LOGE(TAG, VOICE_STACK_STARTUP_FAILED_2FE6294C,
+                 "Voice stack startup failed after audio READY: %s",
                  esp_err_to_name(voice_ret));
         return voice_ret;
     }

@@ -4,6 +4,7 @@
 
 #include "audio_manager.h"
 #include "audio_manager_stream.h"
+#include "voice_assistant_audio_arbitration_bridge.h"
 #include "voice_assistant_downlink.h"
 #include "voice_assistant_opus.h"
 #include "voice_assistant_ptt.h"
@@ -200,7 +201,7 @@ static esp_err_t uplink_begin_turn(uint32_t generation)
     s_turn_opus_bytes = 0U;
     s_turn_pcm_samples = 0U;
 
-    ret = audio_manager_start_recording();
+    ret = voice_assistant_audio_capture_start();
     if (ret != ESP_OK) {
         portENTER_CRITICAL(&s_lock);
         s_status.turn_active = false;
@@ -247,7 +248,7 @@ static esp_err_t uplink_end_turn(uint32_t generation)
         }
     }
 
-    ret = audio_manager_stop_recording();
+    ret = voice_assistant_audio_capture_stop();
     if ((ret != ESP_OK) && (ret != ESP_ERR_INVALID_STATE) &&
         (first_error == ESP_OK)) {
         first_error = ret;

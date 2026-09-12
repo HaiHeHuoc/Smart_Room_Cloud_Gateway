@@ -182,7 +182,7 @@ static esp_err_t downlink_write_pcm_with_backpressure(
         if (downlink_response_is_tainted(generation)) {
             return ESP_ERR_INVALID_RESPONSE;
         }
-        const esp_err_t result = phase16_xiaozhi_stream_write(
+        const esp_err_t result = voice_assistant_audio_stream_write(
             samples,
             sample_count);
         /* A callback can mark the response tainted while the arbiter write
@@ -243,7 +243,7 @@ static void downlink_check_stream_terminal(void)
     }
 
     audio_manager_playback_request_status_t stream = {0};
-    const esp_err_t status_result = phase16_xiaozhi_stream_get_status(&stream);
+    const esp_err_t status_result = voice_assistant_audio_stream_get_status(&stream);
     if (status_result != ESP_OK) {
         if (status_result != ESP_ERR_TIMEOUT) {
             downlink_abort_response(generation, status_result, false);
@@ -263,7 +263,7 @@ static void downlink_check_stream_terminal(void)
                  (unsigned long long)stream.pcm_samples_played,
                  (unsigned)stream.ingress_queue_high_water,
                  (unsigned)stream.starvation_count);
-        phase16_xiaozhi_stream_release();
+        voice_assistant_audio_stream_release();
         downlink_finish_turn_state();
     } else if ((stream.state == AUDIO_MANAGER_PLAYBACK_REQUEST_CANCELLED) ||
                (stream.state == AUDIO_MANAGER_PLAYBACK_REQUEST_PREEMPTED) ||
@@ -388,7 +388,7 @@ static void downlink_abort_response(
     atomic_store_explicit(
         &s_response_tainted_generation, generation, memory_order_release);
     const esp_err_t stream_fail_ret =
-        phase16_xiaozhi_stream_fail(normalized_error);
+        voice_assistant_audio_stream_fail(normalized_error);
     if ((stream_fail_ret != ESP_OK) &&
         (stream_fail_ret != ESP_ERR_INVALID_STATE)) {
         APP_LOGW(TAG, RESPONSE_CLEANUP_PENDING_GEN_4FCCC6E3,
@@ -582,7 +582,7 @@ static void downlink_task(void *argument)
                 downlink_abort_response(item.generation, reset_ret, false);
                 continue;
             }
-            const esp_err_t stream_ret = phase16_xiaozhi_stream_begin();
+            const esp_err_t stream_ret = voice_assistant_audio_stream_begin();
             if (stream_ret != ESP_OK) {
                 downlink_abort_response(item.generation, stream_ret, false);
                 continue;
@@ -684,7 +684,7 @@ static void downlink_task(void *argument)
                     false);
                 continue;
             }
-            const esp_err_t finish_ret = phase16_xiaozhi_stream_finish();
+            const esp_err_t finish_ret = voice_assistant_audio_stream_finish();
             if (finish_ret != ESP_OK) {
                 downlink_abort_response(item.generation, finish_ret, false);
                 continue;
