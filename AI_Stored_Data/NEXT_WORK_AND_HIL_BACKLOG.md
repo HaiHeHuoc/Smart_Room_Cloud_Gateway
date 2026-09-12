@@ -1,92 +1,157 @@
 # Next Work + Deferred HIL Backlog
 
 Updated: 2026-09-12
-Snapshot source branch: `main_including_Firebase_security` at `a5f8c578dd951818f780ccd4ef553541a0107fb9`
-Purpose: cross-session/Codex routing for **"hiện tại nên làm gì tiếp theo?"** and HIL activation from any clean working branch.
+Active branch: `main_including_Firebase_security`
+Observed production/source HEAD before AI metadata sync: `15cd0f06d25142a6ed7672bc99dfd4ec396184b0`
+
+Purpose: cross-session routing for "hiện tại nên làm gì tiếp theo?" and deferred
+acceptance work. This file is not a substitute for current source, `AGENTS.md`,
+or actual hardware/build evidence.
 
 ## Current software state
 
 ```text
-Phase 12 SW   -> COMPLETE / HIL PASS
-Phase 13 SW   -> COMPLETE / HIL PASS
-Phase 14 SW   -> COMPLETE / BUILD PASS / golden-path HIL PASS / targeted regression partial
-Phase 15 SW   -> COMPLETE / BUILD VERIFIED / HIL ACCEPTED
-Phase 16 SW   -> COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / BOUNDED HIL ACCEPTED
-Phase 16.1 SW -> IMPLEMENTED / BUILD VERIFIED / automated HIL PASS / audible recovery confirmed / endurance pending
-Phase 17      -> COMPLETE / BUILD VERIFIED / read-only MCP voice HIL accepted by user
-Phase 18      -> NOT STARTED
-Phase 19      -> NOT STARTED
+Phase 12     COMPLETE / HIL PASS
+Phase 13     COMPLETE / HIL PASS
+Phase 14     SOFTWARE COMPLETE / BUILD PASS / golden-path HIL PASS / targeted regression partial
+Phase 15     COMPLETE / BUILD VERIFIED / HIL ACCEPTED
+Phase 16     COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / BOUNDED HIL ACCEPTED
+Phase 16.1   IMPLEMENTED / BUILD VERIFIED / automated HIL PASS / audible recovery accepted / endurance pending
+Phase 17     COMPLETE / BUILD VERIFIED / read-only MCP voice HIL accepted
+Phase 18     IN PROGRESS
+Phase 18.1   IMPLEMENTED / current HEAD rebuild + HIL pending
+Phase 18.2   NOT STARTED
+Phase 18.3   NOT STARTED
+Phase 18.4   NOT STARTED
+Phase 19     NOT STARTED
 ```
 
-Phase 17 is complete. The first production read-only MCP vertical slice,
-`smart_room.get_current_temperature_humidity`, was merged from
-`phase/17-xiaozhi-sensor-answer` into `main_including_Firebase_security` by merge
-commit `34a01c8934dd01555f75ecef7925c55aeec3a4df`. The accepted evidence records
-three correct user-confirmed voice-query cases. The second slice,
-`smart_room.get_cloud_sync_status`, reads a bounded composition-owned snapshot
-of public `cloud_manager` status and is build verified on
-`phase/17-cloud-sync-status`; its voice HIL was confirmed by the user. Treat Phase 17
-overall as **COMPLETE**. Additional read-only tools require a new, explicitly
-scoped checkpoint; they are not implied by this closure.
+Phase 18.1 is no longer "not started". See
+`AI_Stored_Data/PHASE18_MCP_CONTROLLED_ACTIONS.md` for the exact current light
+contract and validation matrix.
 
-The `smart_room.get_system_status` slice was implemented on
-`phase/17-system-status`. It aggregates only normalized public snapshots for
-sensor, cloud uploader, time synchronization, SD recovery, and audio; it does
-not implement Wi-Fi or Internet status. Its build and user voice HIL are
-accepted.
+## Immediate next work
 
-Do not start Phase 18 automatically. Keep deferred read-only candidates outside
-this closed checkpoint until Hải explicitly scopes a new follow-up.
+The highest-value next step is **revalidation of the current source HEAD**, not
+starting 18.2.
 
-## Global Codex HIL routing
-
-All Phase 12-16 HIL commands may be entered from the latest clean branch. Codex must inspect `git status`, route to the dedicated test branch, and read the phase HIL plan/runbook before editing, building, flashing, or monitoring.
+Recommended order:
 
 ```text
-RUN PHASE 12 HIL -> test/xiaozhi-p2f-known-audio-e2e
-RUN PHASE 13 HIL -> test/phase13-voice-assistant-hil
-RUN PHASE 14 HIL -> test/phase14-ptt-voice-e2e-hil
-RUN PHASE 15 HIL -> test/phase15-voice-ui-hil
-RUN PHASE 16 HIL -> test/phase16-audio-arbitration-hil
+1. Clean ESP-IDF build on current source HEAD.
+2. Boot target and run repeated PTT smoke/regression.
+3. Verify current TLS-in-PSRAM headroom behavior.
+4. Run Phase-18.1 light HIL matrix.
+5. Exercise delayed-first-PCM / streaming path touched by current HEAD.
+6. Record evidence and reconcile stale canonical roadmap status.
+7. Start 18.2 only when Hải explicitly requests it.
+```
+
+Why: the last explicit full Phase-18.1 build PASS is at `f00e106...`, but
+`15cd0f06...` changes Phase-18.1 light behavior, voice uplink/TLS memory policy,
+and audio streaming prefill behavior after that checkpoint.
+
+## Current-head regression focus
+
+### TLS / PTT
+
+Current source uses dynamic TLS buffers in PSRAM, 1 KiB outbound TLS records,
+and a 20 KiB total/largest-contiguous PSRAM gate before a PTT turn starts.
+Validate:
+
+```text
+boot cleanly
+first PTT
+multiple repeated PTT turns
+no ESP_ERR_NO_MEM at first WebSocket audio write
+expected PSRAM headroom logs
+no new I2S/DMA regression
+```
+
+### Streaming downlink
+
+Current source uses a 0.96-second normal PCM prefill. The 5-second prefill wait
+starts only after the first PCM packet, not at TTS_START. Validate at least one
+reply where server/tool/synthesis delay precedes first audio and confirm there
+is no false prefill timeout.
+
+### Phase 18.1 light
+
+Minimum target checks:
+
+```text
+pink 100%
+green 20%
+brightness 0 / 100
+off
+rapid updates
+solid / blink / breath / pulse / rainbow
+effect-only while off -> turns on
+effect-only with preserved black RGB -> visible white fallback
+off + color -> rejected
+off + brightness -> rejected
+off + effect -> rejected
+light.get_state matches applied logical state
+light.get_capabilities matches current fixed allowlist
+```
+
+Current pulse timing is 1200 ms. Do not use the older 300 ms expectation.
+
+## Global historical HIL routing
+
+Older accepted phases remain regression baselines:
+
+```text
+RUN PHASE 12 HIL   -> test/xiaozhi-p2f-known-audio-e2e
+RUN PHASE 13 HIL   -> test/phase13-voice-assistant-hil
+RUN PHASE 14 HIL   -> test/phase14-ptt-voice-e2e-hil
+RUN PHASE 15 HIL   -> test/phase15-voice-ui-hil
+RUN PHASE 16 HIL   -> test/phase16-audio-arbitration-hil
 RUN PHASE 16.1 HIL -> phase/16.1-streaming-downlink
 ```
 
-Never auto-stash, reset, delete, or test an older phase on an arbitrary production branch. All phases use PASS / FAIL / SKIP evidence discipline; expected logs are contracts, not observed hardware evidence.
+Inspect the actual worktree before routing. Never auto-stash, reset, discard,
+delete, or run an old HIL matrix against an arbitrary production branch.
 
-## Phase acceptance state
-
-### Phase 12
-
-`test/xiaozhi-p2f-known-audio-e2e` is a closed HIL regression baseline. Rerun it only when an explicit regression requires it.
-
-### Phase 13
-
-`test/phase13-voice-assistant-hil` is a closed HIL regression baseline. Rerun it only when an explicit regression requires it.
+## Historical acceptance notes
 
 ### Phase 14
 
-`phase/14-ptt-voice-mvp` and `test/phase14-ptt-voice-e2e-hil` carry the PTT voice baseline. Three GPIO38 turns reached audible Xiaozhi response playback in the recorded golden-path run. The later targeted regression proves boot/reconnect, capture, response wait, busy-response rejection, and playback completion, but the exact image still needs fresh audible confirmation and deferred fault-injection cases remain unexecuted.
+Keep the recorded golden-path PTT/audio response evidence. Deferred
+fault-injection/targeted cases should be rerun only when relevant.
 
 ### Phase 15
 
-Phase 15 is closed. Hardware/manual acceptance was confirmed by the user on 2026-09-06, and the current unattended Xiaozhi UI lifecycle target regression passed all seven cases on `test/xiaozhi-ui-lifecycle-hil` at `fc5a3fa`. Retain `test/phase15-voice-ui-hil` as a regression route when a future UI/text defect requires it; do not list Phase 15 as pending acceptance work.
+Closed by user acceptance. Preserve it as a regression baseline rather than a
+current blocker.
 
 ### Phase 16
 
-`phase/16-audio-arbitration` retains the production arbitration architecture; `test/phase16-audio-arbitration-hil` is its dedicated HIL branch. The combined operator-confirmed PTT/speaker evidence and 2026-09-04 automatic target matrix passed; see `PHASE16_HIL_EVIDENCE.md`. Long-duration/full-Gateway regression remains deferred.
+Bounded target arbitration matrix is accepted. Long-duration/full-Gateway
+regression remains deferred.
 
 ### Phase 16.1
 
-`phase/16.1-streaming-downlink` replaces Xiaozhi's full-response PSRAM/SD/WAV handoff with bounded decoded PCM16 ingress to the manager-owned playback ring. The public foundation callback remains copy-only; the downlink worker is the single decoder/producer and `audio_manager` remains the sole I2S/DMA owner. The automated target matrix and audible recovery are accepted. The remaining Phase-16.1 item is endurance coverage, not first-pass streaming acceptance.
+Automated target streaming matrix and audible recovery are accepted. Endurance
+remains pending; current HEAD additionally needs a focused regression because
+prefill timing semantics changed after the accepted baseline.
 
 ### Phase 17
 
-The accepted read-only MCP slices are the Smart Room temperature/humidity query,
-cloud-sync status, and system-status tools. They read a valid, non-stale copied
-sensor snapshot, normalized `cloud_manager` uploader status, and bounded local
-health states through the composition root; none performs a device-side state
-change. Build and user-confirmed voice HIL are accepted for all three. Further
-read-only capability is deferred and does not start Phase 18 controlled actions.
+Read-only MCP sensor, cloud-sync, and system-status slices are closed and voice
+HIL accepted. Do not add more read-only tools automatically.
+
+## Broader deferred integration work
+
+After current-head revalidation and Phase-18.1 acceptance, keep these visible:
+
+1. Long-duration Firebase/cloud + Xiaozhi simultaneous traffic.
+2. Repeated PTT/endurance and heap/stack/resource trend checks.
+3. Notification/alarm repeated timing and preemption endurance.
+4. Relevant Phase-15 visible UI/text regressions when defects touch that path.
+5. Full post-portability target smoke/regression; architecture itself remains
+   frozen unless a concrete defect is found.
+6. Release/documentation/portfolio closure after feature and acceptance work.
 
 ## Production-vs-test fix policy
 
@@ -96,43 +161,20 @@ Test harness/config/expected-log defect
 
 Production component/architecture defect
 -> fix on the owning production branch first
--> propagate forward to later production branches and their test branches
+-> propagate forward to affected test branches
 -> rebuild and retest the affected acceptance case
 ```
 
-Never merge HIL/test-harness history as production feature history.
+Never merge test-harness history as production feature history.
 
-## Common HIL execution contract
+## Evidence vocabulary
 
-```text
-inspect branch + worktree
--> route to the dedicated test branch
--> read AGENTS.md + HIL plan/runbook
--> clean/reconfigure build
--> flash the connected ESP32-S3
--> monitor from reset
--> run the independent test matrix
--> request only genuine manual physical actions
--> report runtime-backed PASS / FAIL / SKIP
-```
-
-## Recommended next acceptance order
-
-1. Keep Phase 16 and Phase 16.1 as accepted regression baselines; run endurance only when explicitly scheduled.
-2. Keep Phase 17 as a regression baseline. Do not add `network_status`: it
-   cannot answer while Xiaozhi is offline. The deferred candidate
-   `display.get_current_screen` requires explicit new scope.
-3. Keep Phase 18 controlled actions NOT STARTED until explicitly started.
-4. Run full Gateway/Firebase integration regression as appropriate, covering Wi-Fi/provisioning, sensor, Firebase, GUI, SD, audio, Xiaozhi, simultaneous cloud/Xiaozhi traffic, repeated PTT, notification queueing, and critical-alarm preemption.
-5. Preserve Phase 12/13/15 as regression baselines and Phase 14's recorded golden-path PASS; rerun them only for a relevant regression.
-
-## Evidence discipline
-
-- `IMPLEMENTED` — code exists.
+- `IMPLEMENTED` — source exists.
 - `STATIC REVIEW COMPLETE` — source review performed.
-- `BUILD VERIFIED` — a real ESP-IDF build passed.
-- `HIL PASS` — target evidence satisfies the documented contract.
-- `TARGETED HIL PARTIAL` — only the named runtime cases have evidence.
-- `DEFERRED HIL` — acceptance is intentionally not yet run.
+- `BUILD VERIFIED` — an actual relevant ESP-IDF build passed.
+- `HIL PASS` — target evidence satisfies the named contract.
+- `TARGETED HIL PARTIAL` — only named runtime cases have evidence.
+- `PENDING` — no current evidence yet.
 
-`AI_Stored_Data/` is cross-session metadata only and must never become a firmware/build dependency.
+A build PASS on an earlier commit does not automatically verify a later source
+HEAD that changed the affected code.
