@@ -32,6 +32,7 @@ idf_component_register(
         button_manager
         app_reset_coordinator
         audio_manager
+        light_manager
 
     PRIV_REQUIRES
         nvs_flash

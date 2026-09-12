@@ -79,6 +79,9 @@
 #include "phase16_auto_hil_test.h"
 #endif
 
+/* Light manager ------------------------------------------------------------ */
+#include "light_manager.h"
+
 /* Macros ------------------------------------------------------------------- */
 #define PERFORMANCE_MONITOR 1
 
@@ -123,6 +126,15 @@ static const button_manager_config_t BUTTON_MANAGER_CONFIG =
 
     .long_press_ms =
         FACTORY_RESET_BUTTON_LONG_PRESS_MS,
+};
+
+/* Board mapping belongs to board_config.h; product state belongs to light_manager. */
+static const light_manager_config_t LIGHT_MANAGER_CONFIG =
+{
+    .gpio_num = NEOPIXEL_GPIO,
+    .led_count = NEOPIXEL_LED_COUNT,
+    .pixel_format = LIGHT_MANAGER_PIXEL_FORMAT_GRB,
+    .default_brightness_percent = 100U,
 };
 
 /* Coordinator owns provisioning lifecycle; Wi-Fi reconnect remains separate. */
@@ -333,6 +345,28 @@ void app_main(void)
     APP_LOGI(TAG, BOOT_START, "project=%s", APP_PROJECT_NAME);
     APP_LOGI(TAG, VERSION_S_9810027F, "VERSION: %s", APP_PROJECT_VER);
     APP_LOGI(TAG, BUILD_DATE_S_8522DA1C, "BUILD DATE: %s", APP_PROJECT_VER_DATE);
+
+    esp_err_t light_ret = light_manager_init(&LIGHT_MANAGER_CONFIG);
+    if (light_ret != ESP_OK)
+    {
+        APP_LOGE(
+            TAG,
+            "Failed to initialize light manager: %s",
+            esp_err_to_name(light_ret));
+        return;
+    }
+
+#if CONFIG_LIGHT_MANAGER_TEST_LOOP
+    light_ret = light_manager_start_test_loop();
+    if (light_ret != ESP_OK)
+    {
+        APP_LOGE(
+            TAG,
+            "Failed to start light-manager test loop: %s",
+            esp_err_to_name(light_ret));
+        return;
+    }
+#endif
 
     esp_err_t network_ret =
         network_platform_init();

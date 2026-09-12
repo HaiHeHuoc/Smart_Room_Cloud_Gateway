@@ -63,6 +63,7 @@ logger. Early/pre-init logs remain console-only. Hardware acceptance is pending.
 | Component | Owns | Does not own |
 |---|---|---|
 | `wifi_manager` | Station lifecycle, driver serialization, reconnect | Provisioning policy, NVS schema, GUI |
+| `light_manager` | Static product light state and board-injected NeoPixel composition | RMT/LED-strip handles, named-color parsing, MCP, GUI policy |
 | `provisioning_manager` | Temporary BLE provisioning lifecycle and verified credential handoff | Persistent storage, reconnect, GUI |
 | `config_manager` | NVS schema, validation, migration, read/write/erase | Wi-Fi driver or provisioning transport |
 | `app_network_coordinator` | Boot policy, provisioning sessions, persistence/adoption ordering | Driver internals, LVGL rendering |
