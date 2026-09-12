@@ -1,4 +1,4 @@
-#include "xiaozhi_light_set_state_composition.h"
+#include "smart_room_mcp_adapter_internal.h"
 
 #include "light_manager.h"
 #include "xiaozhi_foundation.h"
@@ -152,7 +152,7 @@ static esp_err_t app_xiaozhi_apply_light_set_state(
     return ESP_OK;
 }
 
-esp_err_t app_xiaozhi_light_set_state_register_provider(void)
+esp_err_t smart_room_mcp_light_set_state_register_provider(void)
 {
     return xiaozhi_foundation_register_light_set_state_provider(
         app_xiaozhi_apply_light_set_state,

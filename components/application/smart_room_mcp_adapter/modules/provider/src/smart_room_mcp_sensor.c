@@ -1,4 +1,4 @@
-#include "xiaozhi_sensor_query_composition.h"
+#include "smart_room_mcp_adapter_internal.h"
 
 #include <math.h>
 
@@ -32,7 +32,7 @@ static esp_err_t app_xiaozhi_copy_current_sensor(
     return ESP_OK;
 }
 
-esp_err_t app_xiaozhi_sensor_query_register_provider(void)
+esp_err_t smart_room_mcp_sensor_register_provider(void)
 {
     return xiaozhi_foundation_register_sensor_query_provider(
         app_xiaozhi_copy_current_sensor,

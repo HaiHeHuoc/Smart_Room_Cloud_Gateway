@@ -1,0 +1,24 @@
+idf_component_register(
+    SRCS
+        "smart_room_mcp_adapter.c"
+        "modules/provider/src/smart_room_mcp_sensor.c"
+        "modules/provider/src/smart_room_mcp_cloud_sync.c"
+        "modules/provider/src/smart_room_mcp_system_status.c"
+        "modules/provider/src/smart_room_mcp_light_state.c"
+        "modules/provider/src/smart_room_mcp_light_set_state.c"
+    INCLUDE_DIRS
+        "include"
+    PRIV_INCLUDE_DIRS
+        "modules/provider/include"
+    REQUIRES
+        esp_common
+    PRIV_REQUIRES
+        audio_manager
+        cloud_manager
+        light_manager
+        sd_card_manager
+        sensor_manager
+        time_manager
+        xiaozhi_foundation
+        esp_timer
+)

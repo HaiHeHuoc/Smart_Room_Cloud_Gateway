@@ -1,11 +1,6 @@
 idf_component_register(
     SRCS
         "main.c"
-        "xiaozhi_cloud_sync_composition.c"
-        "xiaozhi_light_state_query_composition.c"
-        "xiaozhi_light_set_state_composition.c"
-        "xiaozhi_sensor_query_composition.c"
-        "xiaozhi_system_status_composition.c"
         "phase14_voice_composition.c"
         "phase16_auto_hil_test.c"
     INCLUDE_DIRS
@@ -30,6 +25,7 @@ idf_component_register(
         provisioning_manager
         app_network_coordinator
         xiaozhi_foundation
+        smart_room_mcp_adapter
         voice_assistant
         button_manager
         app_reset_coordinator

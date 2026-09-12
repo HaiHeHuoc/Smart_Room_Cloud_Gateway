@@ -1,4 +1,4 @@
-#include "xiaozhi_system_status_composition.h"
+#include "smart_room_mcp_adapter_internal.h"
 
 #include <stdio.h>
 
@@ -161,7 +161,7 @@ static esp_err_t app_xiaozhi_copy_system_status(
     return ESP_OK;
 }
 
-esp_err_t app_xiaozhi_system_status_query_register_provider(void)
+esp_err_t smart_room_mcp_system_status_register_provider(void)
 {
     return xiaozhi_foundation_register_system_status_query_provider(
         app_xiaozhi_copy_system_status,

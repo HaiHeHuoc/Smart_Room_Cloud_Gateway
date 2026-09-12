@@ -1,4 +1,4 @@
-#include "xiaozhi_cloud_sync_composition.h"
+#include "smart_room_mcp_adapter_internal.h"
 
 #include <limits.h>
 #include <stdio.h>
@@ -107,7 +107,7 @@ static esp_err_t app_xiaozhi_copy_cloud_sync_status(
     return ESP_OK;
 }
 
-esp_err_t app_xiaozhi_cloud_sync_query_register_provider(void)
+esp_err_t smart_room_mcp_cloud_sync_register_provider(void)
 {
     return xiaozhi_foundation_register_cloud_sync_query_provider(
         app_xiaozhi_copy_cloud_sync_status,
