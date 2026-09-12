@@ -1,38 +1,6 @@
 idf_component_register(
     SRCS
         "main.c"
-    INCLUDE_DIRS
-        "."
     REQUIRES
-        app_log
-        common
-        display_driver
-        ui_manager_lvgl
-        sd_card_manager
-        lvgl_sd_fs
-        lvgl_image_handler
-        performance_monitor
-        time_manager
-        log_manager
-        wifi_manager
-        app_gui
-        sensor_manager
-        cloud_manager
-        firebase_auth
-        config_manager
-        provisioning_manager
-        app_network_coordinator
-        xiaozhi_foundation
-        smart_room_mcp_adapter
-        app_hil_test
-        voice_assistant
-        button_manager
-        app_reset_coordinator
-        audio_manager
-        light_manager
-
-    PRIV_REQUIRES
-        nvs_flash
-        esp_netif
-        esp_event
+        smart_room_app
 )

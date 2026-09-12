@@ -1,0 +1,37 @@
+idf_component_register(
+    SRCS
+        "smart_room_app.c"
+    INCLUDE_DIRS
+        "include"
+    PRIV_REQUIRES
+        app_gui
+        app_hil_test
+        app_log
+        app_network_coordinator
+        app_reset_coordinator
+        audio_manager
+        button_manager
+        cloud_manager
+        common
+        config_manager
+        display_driver
+        esp_event
+        esp_netif
+        firebase_auth
+        freertos
+        light_manager
+        log_manager
+        lvgl_image_handler
+        lvgl_sd_fs
+        nvs_flash
+        performance_monitor
+        provisioning_manager
+        sd_card_manager
+        sensor_manager
+        smart_room_mcp_adapter
+        time_manager
+        ui_manager_lvgl
+        voice_assistant
+        wifi_manager
+        xiaozhi_foundation
+)
