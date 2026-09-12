@@ -65,7 +65,7 @@ ESP_ERROR_CHECK(light_manager_set_state(&magenta));
 - `solid` renders stored RGB at stored brightness. Switching from an effect to
   `solid` stops that effect and restores the logical static output.
 - `blink` uses fixed 500 ms ON / 500 ms OFF timing; `breath` uses a fixed
-  2000 ms period; `pulse` repeats a fixed 300 ms triangular pulse; `rainbow`
+  2000 ms period; `pulse` repeats a fixed 1200 ms triangular pulse; `rainbow`
   uses the lower-layer single-LED rainbow-cycle behavior. No public API accepts
   arbitrary effect timing or raw NeoPixel configuration.
 - `light_manager_off()` preserves RGB, brightness, and effect while darkening

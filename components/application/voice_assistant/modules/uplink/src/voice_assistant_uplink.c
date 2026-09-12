@@ -24,10 +24,11 @@
 #define UPLINK_TASK_PRIORITY         5U
 #define UPLINK_QUEUE_LENGTH          8U
 #define UPLINK_RECONCILE_MS          20U
-/* A first Opus packet causes mbedTLS to allocate its bounded TX record after
- * capture starts. Fail the turn cleanly before touching the transport when
- * its contiguous Internal heap reserve is not available. */
-#define UPLINK_MIN_TLS_HEADROOM_BYTES 6144U
+/* mbedTLS owns dynamic WebSocket records in PSRAM. Reserve enough contiguous
+ * PSRAM for the 16 KiB receive record, the bounded TX record, and allocator
+ * metadata before PTT begins so a low-memory turn is rejected locally rather
+ * than failing a WebSocket write after I2S capture has started. */
+#define UPLINK_MIN_TLS_PSRAM_HEADROOM_BYTES (20U * 1024U)
 
 typedef struct {
     uint32_t generation;
@@ -115,6 +116,31 @@ static bool uplink_ptt_authorizes(uint32_t generation)
            (ptt.session_generation == generation);
 }
 
+static bool uplink_tls_psram_ready(void)
+{
+    const size_t psram_free = heap_caps_get_free_size(
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    const size_t psram_largest = heap_caps_get_largest_free_block(
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+    if ((psram_free < UPLINK_MIN_TLS_PSRAM_HEADROOM_BYTES) ||
+        (psram_largest < UPLINK_MIN_TLS_PSRAM_HEADROOM_BYTES)) {
+        APP_LOGW(TAG, TLS_PSRAM_HEADROOM_REJECTED_C0FF02B3,
+                 "turn rejected before transport: psram_free=%u psram_largest=%u required=%u",
+                 (unsigned)psram_free,
+                 (unsigned)psram_largest,
+                 (unsigned)UPLINK_MIN_TLS_PSRAM_HEADROOM_BYTES);
+        return false;
+    }
+
+    APP_LOGI(TAG, TLS_PSRAM_HEADROOM_READY_C6FB5F7A,
+             "TLS PSRAM ready: free=%u largest=%u required=%u",
+             (unsigned)psram_free,
+             (unsigned)psram_largest,
+             (unsigned)UPLINK_MIN_TLS_PSRAM_HEADROOM_BYTES);
+    return true;
+}
+
 static esp_err_t uplink_begin_turn(uint32_t generation)
 {
     if (generation == 0U) {
@@ -123,6 +149,10 @@ static esp_err_t uplink_begin_turn(uint32_t generation)
 
     if (voice_assistant_downlink_is_busy()) {
         return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!uplink_tls_psram_ready()) {
+        return ESP_ERR_NO_MEM;
     }
 
     esp_err_t ret = voice_assistant_opus_encoder_reset();
@@ -179,23 +209,6 @@ static esp_err_t uplink_begin_turn(uint32_t generation)
         (void)xiaozhi_foundation_audio_uplink_stop(generation);
         (void)xiaozhi_foundation_audio_channel_close(generation);
         return ret;
-    }
-
-    const size_t tls_largest_internal = heap_caps_get_largest_free_block(
-        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (tls_largest_internal < UPLINK_MIN_TLS_HEADROOM_BYTES) {
-        APP_LOGW(TAG, TLS_HEADROOM_REJECTED_AFTER_465B1E3E,
-                 "turn rejected after capture: largest_internal=%u required=%u",
-                 (unsigned)tls_largest_internal,
-                 (unsigned)UPLINK_MIN_TLS_HEADROOM_BYTES);
-        portENTER_CRITICAL(&s_lock);
-        s_status.turn_active = false;
-        portEXIT_CRITICAL(&s_lock);
-        (void)audio_manager_stream_disarm(generation);
-        (void)audio_manager_stop_recording();
-        (void)xiaozhi_foundation_audio_uplink_stop(generation);
-        (void)xiaozhi_foundation_audio_channel_close(generation);
-        return ESP_ERR_NO_MEM;
     }
 
     APP_LOGI(TAG, TURN_START_GENERATION_U_2D36C6A2, "turn START generation=%u", (unsigned)generation);

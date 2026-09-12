@@ -3,6 +3,15 @@
 #include "light_manager.h"
 #include "xiaozhi_foundation.h"
 
+#define APP_XIAOZHI_LIGHT_EFFECT_DEFAULT_RED   255U
+#define APP_XIAOZHI_LIGHT_EFFECT_DEFAULT_GREEN 255U
+#define APP_XIAOZHI_LIGHT_EFFECT_DEFAULT_BLUE  255U
+
+static bool app_xiaozhi_light_color_is_black(const light_manager_state_t *state)
+{
+    return (state->red == 0U) && (state->green == 0U) && (state->blue == 0U);
+}
+
 static xiaozhi_foundation_light_set_state_outcome_t
 app_xiaozhi_light_outcome_from_error(
     esp_err_t error,
@@ -80,6 +89,21 @@ static esp_err_t app_xiaozhi_apply_light_set_state(
     if (request->has_effect &&
         !app_xiaozhi_light_effect_to_manager(request->effect, &requested.effect)) {
         return ESP_ERR_INVALID_ARG;
+    }
+    if (request->has_effect) {
+        /* An effect command is an activation request. The parser rejects an
+         * explicit power=off, so an omitted power value must not preserve an
+         * invisible OFF state. A black boot/custom state is equally invisible,
+         * therefore use the product neutral white fallback only when no color
+         * was requested. */
+        if (!request->has_power) {
+            requested.power_on = true;
+        }
+        if (!request->has_color && app_xiaozhi_light_color_is_black(&requested)) {
+            requested.red = APP_XIAOZHI_LIGHT_EFFECT_DEFAULT_RED;
+            requested.green = APP_XIAOZHI_LIGHT_EFFECT_DEFAULT_GREEN;
+            requested.blue = APP_XIAOZHI_LIGHT_EFFECT_DEFAULT_BLUE;
+        }
     }
 
     ret = light_manager_set_state(&requested);

@@ -55,11 +55,11 @@ The nested allowlist is `power` (`on`/`off`), `color` (`red`, `green`, `blue`,
 `white`, `yellow`, `cyan`, `magenta`/`pink`, `purple`, or `orange`), integer
 `brightness_percent` (`0..100`), and `effect` (`solid`, `blink`, `breath`,
 `pulse`, or `rainbow`). At least one field is required. Omitted fields preserve
-copied logical state; `off` is deliberately incompatible with a color or
-brightness in the same call. Selecting an effect while off stores it without
-lighting the LED; turning power on resumes the stored effect. Results return
-either the copied final RGB, power, brightness, and effect or a bounded error
-code. Phase-18.1 hardware voice HIL is pending.
+copied logical state except an effect request: it automatically turns the light
+on when power is omitted, and uses white when the preserved RGB value is black.
+`off` is deliberately incompatible with a color, brightness, or effect in the
+same call. Results return either the copied final RGB, power, brightness, and
+effect or a bounded error code. Phase-18.1 hardware voice HIL is pending.
 
 `light.get_state` is the read-only companion for questions about the current
 light. It is independently gated by

@@ -17,12 +17,15 @@ CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
 CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y
 CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
 CONFIG_LWIP_SNTP_UPDATE_DELAY=1800000
-# Keep TLS buffers dynamic: retaining the 16 KiB RX record for the long-lived
-# Xiaozhi WebSocket exhausts Internal RAM before the voice/audio stack starts.
-# A 1 KiB TX record limits a PTT-time allocation to about 1.4 KiB (including
-# mbedTLS metadata), rather than the failing 2.4 KiB allocation. Larger writes
-# are split into TLS records by mbedTLS.
-CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC=y
+# Keep TLS buffers dynamic in PSRAM. The Xiaozhi WebSocket's first PTT frame
+# allocates its TLS TX record after I2S capture begins; forcing that allocation
+# into Internal RAM caused repeatable ESP_ERR_NO_MEM failures. A 1 KiB TX record
+# limits the transient PSRAM allocation to about 1.4 KiB, while the 16 KiB RX
+# record no longer competes with DMA, task stacks, or audio control state.
+# Production devices that require physical-memory confidentiality must enable
+# ESP32-S3 Flash Encryption so external RAM used for TLS is protected.
+# CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC is not set
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
 CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=1024
 # Hardware AES allocates transient DMA descriptors for each TLS record. That

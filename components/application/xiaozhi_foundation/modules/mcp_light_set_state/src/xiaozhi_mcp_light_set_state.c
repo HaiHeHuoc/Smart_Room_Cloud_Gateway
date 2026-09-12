@@ -199,7 +199,7 @@ static const char *xiaozhi_mcp_light_parse_request(
         error_code = "invalid_input";
     }
     if ((error_code == NULL) && request->has_power && !request->power_on &&
-        (request->has_color || request->has_brightness)) {
+        (request->has_color || request->has_brightness || request->has_effect)) {
         error_code = "invalid_field_combination";
     }
 
@@ -322,9 +322,13 @@ static esp_err_t xiaozhi_mcp_light_set_state_callback(
     }
 
     APP_LOGI(TAG, LIGHT_SET_STATE_APPLIED_EC4E963A,
-             "Smart Room light MCP applied logical state: power=%s brightness=%u",
+             "Smart Room light MCP applied logical state: power=%s rgb=(%u,%u,%u) brightness=%u effect=%s",
              applied.power_on ? "on" : "off",
-             (unsigned)applied.brightness_percent);
+             (unsigned)applied.red,
+             (unsigned)applied.green,
+             (unsigned)applied.blue,
+             (unsigned)applied.brightness_percent,
+             effect_name);
     esp_err_t ret = esp_mcp_tool_result_set_structured_json(result, json);
     if (ret == ESP_OK) {
         ret = esp_mcp_tool_result_add_text(result, text);
@@ -379,7 +383,7 @@ esp_err_t xiaozhi_mcp_light_set_state_attach(esp_mcp_t *mcp)
     esp_mcp_tool_t *tool = esp_mcp_tool_create_ex(
         "light.set_state",
         "Smart Room: Dieu khien den",
-        "Set the Smart Room NeoPixel logical state. Arguments must be {state:{...}}. Inside state, allow only power ('on' or 'off'), color (red, green, blue, white, yellow, cyan, magenta, pink, purple, or orange), brightness_percent (integer 0..100), and effect (solid, blink, breath, pulse, or rainbow). Provide at least one field. power='off' cannot be combined with color or brightness. Omitted fields preserve their current logical value. This is a controlled device action; report the returned state exactly.",
+        "Set the Smart Room NeoPixel logical state. Arguments must be {state:{...}}. Inside state, allow only power ('on' or 'off'), color (red, green, blue, white, yellow, cyan, magenta, pink, purple, or orange), brightness_percent (integer 0..100), and effect (solid, blink, breath, pulse, or rainbow). Provide at least one field. power='off' cannot be combined with color, brightness, or effect. An effect without power automatically turns the light on; if its preserved color is black, it uses white. Other omitted fields preserve their current logical value. This is a controlled device action; report the returned state exactly.",
         xiaozhi_mcp_light_set_state_callback);
     if (tool == NULL) {
         return ESP_ERR_NO_MEM;

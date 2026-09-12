@@ -57,10 +57,12 @@
 /* 0.96 s is enough to absorb normal packet scheduling jitter while allowing
  * short Xiaozhi replies to start before a delayed TTS_STOP arrives. The
  * larger 7.68 s ingress ring and the post-start starvation recovery remain
- * responsible for longer network gaps. */
+ * responsible for longer network gaps. The bounded prefill deadline begins
+ * only after the first PCM packet; voice_downlink owns the separate server
+ * response-start watchdog. */
 #define AUDIO_MANAGER_PCM_STREAM_PREFILL_SAMPLES \
     (16U * AUDIO_MANAGER_PCM_STREAM_MAX_WRITE_SAMPLES)
-#define AUDIO_MANAGER_PCM_STREAM_INITIAL_WAIT_MS        5000U
+#define AUDIO_MANAGER_PCM_STREAM_PREFILL_WAIT_MS        5000U
 #define AUDIO_MANAGER_PCM_STREAM_INITIAL_WAIT_POLL_MS     20U
 #define AUDIO_MANAGER_PCM_STREAM_STARVATION_WAIT_MS     8000U
 #define AUDIO_MANAGER_PCM_STREAM_SILENCE_BLOCK_MS \
@@ -2207,7 +2209,8 @@ static esp_err_t play_pcm16_stream(
     }
 
     *cancelled = false;
-    uint32_t initial_waited_ms = 0U;
+    bool prefill_started = false;
+    uint32_t prefill_waited_ms = 0U;
     for (;;)
     {
         if (audio_manager_cancel_is_requested())
@@ -2238,17 +2241,32 @@ static esp_err_t play_pcm16_stream(
         {
             return ESP_ERR_INVALID_SIZE;
         }
-        if (initial_waited_ms >= AUDIO_MANAGER_PCM_STREAM_INITIAL_WAIT_MS)
+        if ((status.accepted_samples > 0U) && !prefill_started)
+        {
+            /* TTS_START can precede the first audio packet by several seconds
+             * while the server performs a tool call or synthesizes speech. Do
+             * not spend the bounded prefill allowance before PCM exists. */
+            prefill_started = true;
+            prefill_waited_ms = 0U;
+        }
+        if (prefill_started &&
+            (prefill_waited_ms >= AUDIO_MANAGER_PCM_STREAM_PREFILL_WAIT_MS))
         {
             APP_LOGE(TAG, PCM_STREAM_INITIAL_PREFILL_T_8524E6CE,
-                     "PCM stream initial prefill timed out generation=%u",
-                     (unsigned)generation);
+                     "PCM stream prefill timed out after first PCM generation=%u accepted=%llu queued=%u required=%u",
+                     (unsigned)generation,
+                     (unsigned long long)status.accepted_samples,
+                     (unsigned)status.queued_samples,
+                     (unsigned)AUDIO_MANAGER_PCM_STREAM_PREFILL_SAMPLES);
             return ESP_ERR_TIMEOUT;
         }
         (void)ulTaskNotifyTake(
             pdTRUE,
             pdMS_TO_TICKS(AUDIO_MANAGER_PCM_STREAM_INITIAL_WAIT_POLL_MS));
-        initial_waited_ms += AUDIO_MANAGER_PCM_STREAM_INITIAL_WAIT_POLL_MS;
+        if (prefill_started)
+        {
+            prefill_waited_ms += AUDIO_MANAGER_PCM_STREAM_INITIAL_WAIT_POLL_MS;
+        }
     }
 
     APP_LOGI(TAG, PCM_STREAM_START_GENERATION_55FAC83A,
