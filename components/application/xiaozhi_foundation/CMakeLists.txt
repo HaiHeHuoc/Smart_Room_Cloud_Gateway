@@ -1,6 +1,7 @@
 set(xiaozhi_foundation_sources
     "xiaozhi_foundation.c"
     "modules/mcp_cloud_sync/src/xiaozhi_mcp_cloud_sync.c"
+    "modules/mcp_light_set_state/src/xiaozhi_mcp_light_set_state.c"
     "modules/mcp_sensor_query/src/xiaozhi_mcp_sensor_query.c"
     "modules/mcp_system_status/src/xiaozhi_mcp_system_status.c"
     "modules/session/src/xiaozhi_session.c"
@@ -15,6 +16,7 @@ set(xiaozhi_foundation_private_requires
     esp_timer
     freertos
     log
+    cjson
     esp_xiaozhi
     esp_websocket_client
     mcp-c-sdk)
@@ -36,6 +38,7 @@ idf_component_register(
 
     PRIV_INCLUDE_DIRS
         "modules/mcp_cloud_sync/include"
+        "modules/mcp_light_set_state/include"
         "modules/mcp_sensor_query/include"
         "modules/mcp_system_status/include"
 

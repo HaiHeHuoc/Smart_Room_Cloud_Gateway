@@ -182,4 +182,16 @@ config XIAOZHI_FOUNDATION_SYSTEM_STATUS_QUERY_TOOL
         endpoints, credentials, tokens, files, or configuration, and it does
         not perform configuration, storage, network, audio, or GUI action.
 
+config XIAOZHI_FOUNDATION_LIGHT_SET_STATE_TOOL
+    bool "Enable the Smart Room light set-state MCP tool"
+    depends on !XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+    default y
+    help
+        Register the controlled Smart Room light.set_state MCP tool in the
+        production Xiaozhi WebSocket session. The tool accepts only a bounded
+        state object: allowlisted power, named color, and 0..100 brightness.
+        It validates the complete request before delegating one atomic state
+        request to the composition-owned light-manager adapter. It never
+        accesses GPIO, NeoPixel, RMT, LVGL, cloud, audio, or network APIs.
+
 endmenu

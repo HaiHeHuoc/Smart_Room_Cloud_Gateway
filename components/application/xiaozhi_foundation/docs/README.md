@@ -39,6 +39,26 @@ foundation owns MCP tool attachment/detachment with the Xiaozhi session, so no
 in a normal production session and are unavailable while the Phase-12 validation
 runtime is selected.
 
+## Phase 18.1 Controlled Light MCP Tool
+
+`light.set_state` is independently gated by
+`CONFIG_XIAOZHI_FOUNDATION_LIGHT_SET_STATE_TOOL` (default `y`, unavailable
+while the temporary validation runtime is selected). The MCP-C-SDK exposes one
+required object property, `state`; the foundation validates its bounded nested
+fields before invoking the borrowed composition provider. `main` is the only
+adapter that includes `light_manager.h`; it snapshots the existing manager,
+applies one atomic `light_manager_set_state()` request, and copies the final
+logical state. The foundation never includes board mappings, GPIO, NeoPixel,
+RMT, or LVGL APIs.
+
+The nested allowlist is `power` (`on`/`off`), `color` (`red`, `green`, `blue`,
+`white`, `yellow`, `cyan`, `magenta`/`pink`, `purple`, or `orange`), and integer
+`brightness_percent` (`0..100`). At least one field is required. Omitted fields
+preserve copied logical state; `off` is deliberately incompatible with a color
+or brightness in the same call. Results return either the copied final RGB,
+power, and brightness or a bounded error code. Phase-18.1 hardware voice HIL
+is pending.
+
 ## Temporary Validation Feature Gate
 
 `Component config -> Xiaozhi Phase 12 validation -> Enable temporary Phase 12

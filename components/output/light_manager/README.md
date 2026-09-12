@@ -115,6 +115,6 @@ coverage, not proof of their multi-LED visual pattern.
   singleton-based.
 - RGB and GRB three-channel LEDs are supported; RGBW/GRBW, calibration, gamma
   correction, and named-color parsing are intentionally out of scope.
-- Natural-language color mapping and MCP registration belong to the future
+- Natural-language color mapping and MCP registration belong to the product
   command layer, not this manager.
 - Hardware confirmation still requires the target-board HIL sequence.

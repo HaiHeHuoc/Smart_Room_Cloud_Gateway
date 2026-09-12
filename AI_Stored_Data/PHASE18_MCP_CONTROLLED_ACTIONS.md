@@ -1,6 +1,6 @@
 # Phase 18 — MCP Controlled Actions Scope
 
-Status: **SCOPE FROZEN / NOT STARTED**
+Status: **IN PROGRESS — 18.1 IMPLEMENTED / BUILD VERIFIED / HIL PENDING**
 
 Updated: 2026-09-12
 Integration branch: `main_including_Firebase_security`
@@ -46,6 +46,35 @@ Example user intents:
 
 The MCP callback must not drive GPIO/NeoPixel hardware directly. A project-owned
 light/NeoPixel manager or equivalent owning API must apply the hardware state.
+
+#### 18.1 implementation record
+
+`light.set_state` uses the MCP-C-SDK-required outer shape below. The SDK treats
+every registered property as required, so a single required `state` object
+preserves optional partial-update semantics inside the bounded object.
+
+```json
+{"state":{"power":"on","color":"pink","brightness_percent":100}}
+```
+
+```json
+{"state":{"power":"off"}}
+```
+
+Only `power`, `color`, and `brightness_percent` are accepted in `state`; at
+least one is required. `power` is `on` or `off`; brightness is an integer from
+0 through 100; color is one of `red`, `green`, `blue`, `white`, `yellow`,
+`cyan`, `magenta`, `pink`, `purple`, or `orange`. `pink` and `magenta` both
+map to RGB `(255,0,255)`; `purple` is `(128,0,255)` and `orange` is
+`(255,96,0)`.
+
+`power=off` cannot be combined with color or brightness. When power is omitted,
+color-only and brightness-only calls preserve the current logical power. Omitted
+color or brightness always preserves its current logical value. After all
+validation passes, the composition adapter snapshots `light_manager`, builds
+one `light_manager_state_t`, calls `light_manager_set_state()` once, then copies
+the confirmed logical state for the MCP response. Validation errors create no
+light-manager call. HIL remains pending.
 
 ### 18.2 — Stop audio playback
 

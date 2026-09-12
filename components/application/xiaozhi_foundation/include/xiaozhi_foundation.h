@@ -175,6 +175,55 @@ esp_err_t xiaozhi_foundation_register_system_status_query_provider(
     xiaozhi_foundation_system_status_query_provider_t provider,
     void *user_context);
 
+/* Production Smart Room light-control MCP boundary ----------------------- */
+
+/** A validated, bounded logical light partial-update request. */
+typedef struct {
+    bool has_power;
+    bool power_on;
+    bool has_color;
+    uint8_t red;
+    uint8_t green;
+    uint8_t blue;
+    bool has_brightness;
+    uint8_t brightness_percent;
+} xiaozhi_foundation_light_set_state_request_t;
+
+typedef enum {
+    XIAOZHI_FOUNDATION_LIGHT_SET_STATE_SUCCESS = 0,
+    XIAOZHI_FOUNDATION_LIGHT_SET_STATE_MANAGER_NOT_INITIALIZED,
+    XIAOZHI_FOUNDATION_LIGHT_SET_STATE_SNAPSHOT_FAILED,
+    XIAOZHI_FOUNDATION_LIGHT_SET_STATE_APPLY_FAILED,
+} xiaozhi_foundation_light_set_state_outcome_t;
+
+/** A copied product result returned by the composition-owned light adapter. */
+typedef struct {
+    xiaozhi_foundation_light_set_state_outcome_t outcome;
+    bool power_on;
+    uint8_t red;
+    uint8_t green;
+    uint8_t blue;
+    uint8_t brightness_percent;
+} xiaozhi_foundation_light_set_state_result_t;
+
+/**
+ * @brief Apply one fully validated logical light request in normal task context.
+ *
+ * The provider is borrowed for firmware lifetime and must route only through
+ * the product light owner. It must not call GPIO, NeoPixel, RMT, LVGL, or
+ * provider APIs directly. On a successful manager call, it copies the final
+ * manager state into @p result; failures use a bounded outcome classification.
+ */
+typedef esp_err_t (*xiaozhi_foundation_light_set_state_provider_t)(
+    const xiaozhi_foundation_light_set_state_request_t *request,
+    xiaozhi_foundation_light_set_state_result_t *result,
+    void *user_context);
+
+/** Register the composition-owned controlled light provider before voice start. */
+esp_err_t xiaozhi_foundation_register_light_set_state_provider(
+    xiaozhi_foundation_light_set_state_provider_t provider,
+    void *user_context);
+
 /* Phase 14 production audio boundary -------------------------------------- */
 
 #define XIAOZHI_FOUNDATION_UPLINK_SAMPLE_RATE_HZ 16000U
