@@ -1,4 +1,4 @@
-#include "phase16_auto_hil_test.h"
+#include "app_hil_phase16_auto.h"
 
 #include <inttypes.h>
 #include <stdbool.h>
@@ -1302,7 +1302,7 @@ static void ph16_auto_hil_task(void *argument)
     vTaskDelete(NULL);
 }
 
-esp_err_t app_phase16_auto_hil_test_start(void)
+esp_err_t app_hil_phase16_auto_start(void)
 {
     if (s_task != NULL) {
         return ESP_ERR_INVALID_STATE;
@@ -1322,7 +1322,7 @@ esp_err_t app_phase16_auto_hil_test_start(void)
 
 #else
 
-esp_err_t app_phase16_auto_hil_test_start(void)
+esp_err_t app_hil_phase16_auto_start(void)
 {
     return ESP_ERR_NOT_SUPPORTED;
 }

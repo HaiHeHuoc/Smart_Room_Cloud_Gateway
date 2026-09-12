@@ -71,12 +71,7 @@
 /* Audio manager ------------------------------------------------------------ */
 #include "audio_manager.h"
 #include "voice_assistant.h"
-#if CONFIG_AUDIO_MANAGER_PUBLIC_API_TEST
-#include "audio_api_test_task.h"
-#endif
-#if CONFIG_APP_PHASE16_AUTO_HIL_TEST
-#include "phase16_auto_hil_test.h"
-#endif
+#include "app_hil_test.h"
 
 /* Light manager ------------------------------------------------------------ */
 #include "light_manager.h"
@@ -1770,41 +1765,15 @@ static esp_err_t app_start_audio_manager_after_network_online(void)
         TAG, AUDIO_MANAGER_TASK_STARTED_M_5C489DBF,
         "Audio manager task started; mode is reported by audio_manager");
 
-#if CONFIG_AUDIO_MANAGER_PUBLIC_API_TEST
-    const esp_err_t audio_test_ret =
-        app_audio_api_test_task_start();
-
-    if (audio_test_ret != ESP_OK)
+    const esp_err_t hil_test_ret =
+        app_hil_test_start_after_audio_ready();
+    if (hil_test_ret != ESP_OK)
     {
         APP_LOGW(
-            TAG, FAILED_TO_START_PUBLIC_AUDIO_64885848,
-            "Failed to start public audio API validation task: %s",
-            esp_err_to_name(audio_test_ret));
+            TAG, TARGET_HIL_START_FAILED_A4980A2C,
+            "Enabled target-hardware test coordinator failed to start: %s",
+            esp_err_to_name(hil_test_ret));
     }
-    else
-    {
-        APP_LOGI(
-            TAG, PUBLIC_AUDIO_API_VALIDATION_658B5834,
-            "Public audio API validation task started at priority 6");
-    }
-#endif
-
-#if CONFIG_APP_PHASE16_AUTO_HIL_TEST
-    const esp_err_t phase16_test_ret = app_phase16_auto_hil_test_start();
-    if (phase16_test_ret != ESP_OK)
-    {
-        APP_LOGW(
-            TAG, FAILED_TO_START_PHASE_AUTOMA_8C134F7F,
-            "Failed to start Phase-16 automatic HIL coordinator: %s",
-            esp_err_to_name(phase16_test_ret));
-    }
-    else
-    {
-        APP_LOGI(
-            TAG, PHASE_AUTOMATIC_HIL_COORDINA_4783FC53,
-            "Phase-16 automatic HIL coordinator started (test branch only)");
-    }
-#endif
 
     return ESP_OK;
 }

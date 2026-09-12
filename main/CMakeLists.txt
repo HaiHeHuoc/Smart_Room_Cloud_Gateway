@@ -1,7 +1,6 @@
 idf_component_register(
     SRCS
         "main.c"
-        "phase16_auto_hil_test.c"
     INCLUDE_DIRS
         "."
     REQUIRES
@@ -25,6 +24,7 @@ idf_component_register(
         app_network_coordinator
         xiaozhi_foundation
         smart_room_mcp_adapter
+        app_hil_test
         voice_assistant
         button_manager
         app_reset_coordinator

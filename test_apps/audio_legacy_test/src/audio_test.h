@@ -2,6 +2,7 @@
 
 /**
  * @file audio_test.h
+ * @brief Legacy direct-I2S helper for a separately scoped target test image.
  * @brief Public API for the bounded RX/TX audio coexistence diagnostic.
  *
  * The module owns its I2S channels and PSRAM capture/playback buffers. Call

@@ -7,6 +7,8 @@
 
 #include "audio_test.h"
 
+/* This direct-I2S helper is intentionally excluded from the Gateway build. */
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>

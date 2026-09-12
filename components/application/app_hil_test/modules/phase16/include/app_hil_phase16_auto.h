@@ -19,7 +19,7 @@ extern "C" {
  * @return ESP_ERR_NO_MEM when task creation fails.
  * @return ESP_ERR_NOT_SUPPORTED when the Kconfig gate is disabled.
  */
-esp_err_t app_phase16_auto_hil_test_start(void);
+esp_err_t app_hil_phase16_auto_start(void);
 
 #ifdef __cplusplus
 }
