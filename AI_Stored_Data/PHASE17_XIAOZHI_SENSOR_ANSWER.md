@@ -1,31 +1,32 @@
 # Phase 17 — Xiaozhi Read-Only MCP Tools
 
-Status: **IN PROGRESS**
+Status: **COMPLETE**
 
 - Sensor answer: **IMPLEMENTED / BUILD VERIFIED / HIL ACCEPTED**
 - Cloud-sync status: **IMPLEMENTED / BUILD VERIFIED / HIL ACCEPTED BY USER**
-- System status: **IMPLEMENTED / BUILD VERIFIED / HIL PENDING**
+- System status: **IMPLEMENTED / BUILD VERIFIED / HIL ACCEPTED BY USER**
 
 ## Goal
 
-When a user asks Xiaozhi for the current room temperature or humidity, Xiaozhi
-must be able to retrieve the current Smart Room sensor reading through the
-existing Xiaozhi WebSocket session and answer from that reading.
+When a user asks Xiaozhi for a current room reading, cloud-uploader state, or
+bounded local system health, Xiaozhi retrieves the answer through the existing
+Xiaozhi WebSocket session and answers only from project-owned snapshots.
 
 ## Read-only MCP contract
 
-The device registers one dedicated MCP tool:
+The device registers three dedicated MCP tools:
 
 ```text
 smart_room.get_current_temperature_humidity
+smart_room.get_cloud_sync_status
+smart_room.get_system_status
 ```
 
-The tool description explicitly applies to questions about room temperature,
-humidity, climate, and current Smart Room conditions.  It returns both a
-structured result and a short, unambiguous text result containing
-`temperature_c` and `humidity_percent`.
+The descriptions explicitly route room-temperature/humidity, cloud-sync, and
+local-health questions to their respective tools. Each returns structured JSON
+and a short, bounded text result.
 
-The tool has no input and has no device-side state-changing operation.
+The tools have no input and perform no device-side state-changing operation.
 
 ## Data source and validity
 
@@ -112,13 +113,12 @@ Internet reachability, endpoints, credentials, tokens, files, or configuration.
 Its successful invocation cannot prove Internet reachability because Xiaozhi
 must already have a live session to call it.
 
-### HIL acceptance still required
+### Accepted HIL evidence
 
-1. Flash this branch after the build gate passes.
-2. Ask a natural question such as `Thiết bị đang hoạt động bình thường không?`.
-3. Confirm `Smart Room system-status MCP called; data=available` in serial output.
-4. Confirm the spoken response accurately distinguishes normal `busy` audio
-   activity from an `attention` or `unavailable` component state.
+The user confirmed the system-status voice path on target hardware. Together
+with the accepted sensor and cloud-sync voice paths, this closes the Phase-17
+read-only MCP scope. Detailed serial artifacts and exhaustive fault matrices
+were not captured by this checkpoint.
 
 ## Git safety
 

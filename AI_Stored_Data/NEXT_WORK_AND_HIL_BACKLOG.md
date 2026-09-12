@@ -1,7 +1,7 @@
 # Next Work + Deferred HIL Backlog
 
 Updated: 2026-09-12
-Snapshot source branch: `main_including_Firebase_security` at `34a01c8934dd01555f75ecef7925c55aeec3a4df`
+Snapshot source branch: `main_including_Firebase_security` at `a5f8c578dd951818f780ccd4ef553541a0107fb9`
 Purpose: cross-session/Codex routing for **"hiện tại nên làm gì tiếp theo?"** and HIL activation from any clean working branch.
 
 ## Current software state
@@ -13,12 +13,12 @@ Phase 14 SW   -> COMPLETE / BUILD PASS / golden-path HIL PASS / targeted regress
 Phase 15 SW   -> COMPLETE / BUILD VERIFIED / HIL ACCEPTED
 Phase 16 SW   -> COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / BOUNDED HIL ACCEPTED
 Phase 16.1 SW -> IMPLEMENTED / BUILD VERIFIED / automated HIL PASS / audible recovery confirmed / endurance pending
-Phase 17      -> IN PROGRESS; sensor-answer and cloud-sync accepted / system-status MCP implemented and BUILD VERIFIED, HIL pending
+Phase 17      -> COMPLETE / BUILD VERIFIED / read-only MCP voice HIL accepted by user
 Phase 18      -> NOT STARTED
 Phase 19      -> NOT STARTED
 ```
 
-Phase 17 was explicitly started. The first production read-only MCP vertical slice,
+Phase 17 is complete. The first production read-only MCP vertical slice,
 `smart_room.get_current_temperature_humidity`, was merged from
 `phase/17-xiaozhi-sensor-answer` into `main_including_Firebase_security` by merge
 commit `34a01c8934dd01555f75ecef7925c55aeec3a4df`. The accepted evidence records
@@ -26,16 +26,17 @@ three correct user-confirmed voice-query cases. The second slice,
 `smart_room.get_cloud_sync_status`, reads a bounded composition-owned snapshot
 of public `cloud_manager` status and is build verified on
 `phase/17-cloud-sync-status`; its voice HIL was confirmed by the user. Treat Phase 17
-overall as **IN PROGRESS**, not complete; remaining read-only MCP scope must be
-implemented and accepted separately.
+overall as **COMPLETE**. Additional read-only tools require a new, explicitly
+scoped checkpoint; they are not implied by this closure.
 
-The next slice, `smart_room.get_system_status`, was started on
+The `smart_room.get_system_status` slice was implemented on
 `phase/17-system-status`. It aggregates only normalized public snapshots for
 sensor, cloud uploader, time synchronization, SD recovery, and audio; it does
-not implement Wi-Fi or Internet status. Build is verified; voice HIL remains pending.
+not implement Wi-Fi or Internet status. Its build and user voice HIL are
+accepted.
 
-Do not start Phase 18 automatically. Continue Phase 17 only when Hải explicitly
-requests the next read-only MCP slice.
+Do not start Phase 18 automatically. Keep deferred read-only candidates outside
+this closed checkpoint until Hải explicitly scopes a new follow-up.
 
 ## Global Codex HIL routing
 
@@ -80,7 +81,12 @@ Phase 15 is closed. Hardware/manual acceptance was confirmed by the user on 2026
 
 ### Phase 17
 
-The accepted read-only MCP slices are the Smart Room temperature/humidity query and cloud-sync status tools. They respectively read a valid, non-stale copied sensor snapshot and normalized `cloud_manager` uploader status through the composition root; neither performs a device-side state change. Build and user-confirmed voice HIL are accepted for both slices. The in-progress system-status slice aggregates bounded local health states through the composition root; its build is verified and it still needs voice-HIL acceptance. Remaining Phase-17 work is additional read-only MCP capability and its acceptance, not Phase-18 controlled actions.
+The accepted read-only MCP slices are the Smart Room temperature/humidity query,
+cloud-sync status, and system-status tools. They read a valid, non-stale copied
+sensor snapshot, normalized `cloud_manager` uploader status, and bounded local
+health states through the composition root; none performs a device-side state
+change. Build and user-confirmed voice HIL are accepted for all three. Further
+read-only capability is deferred and does not start Phase 18 controlled actions.
 
 ## Production-vs-test fix policy
 
@@ -113,8 +119,10 @@ inspect branch + worktree
 ## Recommended next acceptance order
 
 1. Keep Phase 16 and Phase 16.1 as accepted regression baselines; run endurance only when explicitly scheduled.
-2. Run voice HIL for the build-verified system-status slice. Do not add `network_status`: it cannot answer while Xiaozhi is offline. The next deferred candidate, if explicitly requested after this acceptance, is `display.get_current_screen`.
-3. Keep Phase 18 controlled actions NOT STARTED until Phase 17 is explicitly closed.
+2. Keep Phase 17 as a regression baseline. Do not add `network_status`: it
+   cannot answer while Xiaozhi is offline. The deferred candidate
+   `display.get_current_screen` requires explicit new scope.
+3. Keep Phase 18 controlled actions NOT STARTED until explicitly started.
 4. Run full Gateway/Firebase integration regression as appropriate, covering Wi-Fi/provisioning, sensor, Firebase, GUI, SD, audio, Xiaozhi, simultaneous cloud/Xiaozhi traffic, repeated PTT, notification queueing, and critical-alarm preemption.
 5. Preserve Phase 12/13/15 as regression baselines and Phase 14's recorded golden-path PASS; rerun them only for a relevant regression.
 

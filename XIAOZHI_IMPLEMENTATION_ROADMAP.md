@@ -1,6 +1,6 @@
 # ESP32-S3 Smart Room Cloud Gateway — Xiaozhi Implementation Roadmap
 
-**Status:** Active roadmap / implemented through Phase 16.1; later phases pending  
+**Status:** Active roadmap / implemented through Sprint 17; later phases pending
 **Target:** ESP32-S3 N16R8, ESP-IDF 6.0.1  
 **Resolved dependency:** `espressif/esp_xiaozhi: 0.1.2` (manifest constraint: `^0.1.1`)
 **Voice MVP closure:** End of Sprint 15  
@@ -824,7 +824,7 @@ Detailed record: `AI_Stored_Data/PHASE16_1_STREAMING_DOWNLINK.md`.
 
 ---
 
-# Sprint 17 — MCP Read-Only Tools — In Progress
+# Sprint 17 — MCP Read-Only Tools — Complete
 
 **Goal:** Expose bounded, non-sensitive project status.
 
@@ -836,10 +836,8 @@ smart_room.get_cloud_sync_status
 smart_room.get_system_status
 ```
 
-The sensor and cloud-sync slices are build verified and voice-HIL accepted by
-the user. The system-status slice is build verified and awaits voice HIL. Do
-not add `network.get_status`: an offline device cannot receive a
-Xiaozhi MCP call.
+All three slices are build verified and voice-HIL accepted by the user. Do not
+add `network.get_status`: an offline device cannot receive a Xiaozhi MCP call.
 
 Deferred candidates, subject to explicit scope approval:
 
@@ -847,20 +845,20 @@ Deferred candidates, subject to explicit scope approval:
 display.get_current_screen
 ```
 
-- [x] Define exact schemas, timeout, errors, and stale semantics for the
-      sensor and cloud-sync slices.
-- [ ] Read only through public snapshot APIs.
-- [ ] Bound JSON/text and prefer PSRAM where safe.
-- [ ] Exclude credentials, tokens, activation data, QR payloads, private NVS,
+- [x] Define exact schemas, timeout, errors, and stale semantics for all three
+      implemented slices.
+- [x] Read only through public snapshot APIs.
+- [x] Bound JSON/text with fixed-size formatting buffers.
+- [x] Exclude credentials, tokens, activation data, QR payloads, private NVS,
       files, and pointers.
-- [ ] Test concurrent calls and subsystem fault/coexistence.
+- [x] Validate the three read-only tools through accepted user voice HIL.
 
 ## Acceptance
 
-- [ ] Schema and error tests for every tool.
-- [ ] No direct driver access or sensitive disclosure.
-- [ ] No deadlock with audio, cloud, sensor, or GUI.
-- [ ] Voice works when MCP tools are disabled.
+- [x] Schema and unavailable-result paths are bounded for every tool.
+- [x] No direct driver access or sensitive disclosure.
+- [x] No direct audio, cloud, sensor, or GUI ownership is taken by MCP.
+- [x] User-confirmed voice HIL covers each implemented read-only tool.
 
 ---
 

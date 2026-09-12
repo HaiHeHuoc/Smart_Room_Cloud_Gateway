@@ -53,10 +53,10 @@ Sprint 14   Software complete / BUILD PASS / golden-path HIL PASS / targeted reg
 Sprint 15   COMPLETE / BUILD VERIFIED / HIL ACCEPTED
 Sprint 16   Audio Arbitration / SOFTWARE COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / BOUNDED HIL ACCEPTED
 Phase 16.1  PCM streaming downlink IMPLEMENTED / BUILD VERIFIED / automated HIL PASS / audible recovery confirmed
-Sprint 17   MCP Read-Only Tools / IN PROGRESS; sensor and cloud-sync accepted; system-status BUILD VERIFIED / HIL pending
+Sprint 17   MCP Read-Only Tools / COMPLETE / BUILD VERIFIED / voice HIL accepted by user
 Sprint 18   MCP Controlled Actions / NOT STARTED
 Sprint 19   Wake Word And Advanced Voice UX / NOT STARTED
-Major feature-coding stage through Phase 16.1 COMPLETE; later feature phases require explicit start
+Read-only MCP through Sprint 17 COMPLETE; later feature phases require explicit start
 ```
 
 Authoritative Phase-16 closure: `AI_Stored_Data/PHASE16_PROGRESS.md`.
@@ -76,7 +76,7 @@ Use this sequence from now on:
 ```text
 Sprint 16   Audio Arbitration & Multi-Client Audio Policy       COMPLETE
 Phase 16.1  Xiaozhi PCM Streaming Downlink                     COMPLETE
-Sprint 17   MCP Read-Only Tools                                IN PROGRESS
+Sprint 17   MCP Read-Only Tools                                COMPLETE
 Sprint 18   MCP Controlled Actions                             NOT STARTED
 Sprint 19   Wake Word And Advanced Voice UX                    NOT STARTED
 ```
@@ -344,4 +344,4 @@ bounded recovery window.
 4. Treat Phase 12 and Phase 13 as closed regression baselines; retain Phase 14's recorded golden-path result and run only relevant regressions.
 5. Complete the post-portability-refactor build/host-test/target-smoke acceptance before reopening architecture work.
 6. Run full Gateway/Firebase + voice integration regression, bug fixing, hardening, performance/resource validation, documentation, and release/portfolio closure.
-7. Do not start Phase 17 or another major feature phase automatically. If Hải explicitly starts Phase 17, its scope is MCP Read-Only Tools.
+7. Do not add further read-only MCP tools or start another major feature phase automatically. Deferred MCP work requires explicit new scope.
