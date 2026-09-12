@@ -45,6 +45,7 @@
 #include "sensor_manager.h"
 #include "xiaozhi_cloud_sync_composition.h"
 #include "xiaozhi_sensor_query_composition.h"
+#include "xiaozhi_system_status_composition.h"
 
 /* cloud_manager ----------------------------------------------------------- */
 #include "cloud_manager.h"
@@ -770,6 +771,17 @@ void app_main(void)
         APP_LOGE(
             TAG, XIAOZHI_CLOUD_SYNC_QUERY_PROVIDER_1C4F20D9,
             "Failed to register Xiaozhi cloud-sync query provider: %s",
+            esp_err_to_name(service_ret));
+        return;
+    }
+
+    service_ret = app_xiaozhi_system_status_query_register_provider();
+
+    if (service_ret != ESP_OK)
+    {
+        APP_LOGE(
+            TAG, XIAOZHI_SYSTEM_STATUS_QUERY_PROVIDER_45B926E1,
+            "Failed to register Xiaozhi system-status query provider: %s",
             esp_err_to_name(service_ret));
         return;
     }

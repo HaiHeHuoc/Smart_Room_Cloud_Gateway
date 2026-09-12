@@ -22,15 +22,21 @@ valid, non-stale copied sensor sample. `smart_room.get_cloud_sync_status`
 receives a copied cloud-uploader snapshot: normalized lifecycle and failure
 class, age of the most recent successful upload, consecutive failure count, and
 retry policy. The cloud tool never exposes Firebase endpoints, HTTP bodies,
-credentials, tokens, identifiers, or configuration; neither tool performs a
-state-changing operation.
+credentials, tokens, identifiers, or configuration. The
+`smart_room.get_system_status` tool receives only normalized local-health
+tokens for sensor, cloud uploader, time synchronization, SD recovery, and
+audio. It never exposes SSID, IP address, Wi-Fi status, Internet reachability,
+files, or configuration. None of these tools performs a state-changing
+operation.
 
-`main` owns both providers and reads only public component snapshots. The
+`main` owns all three providers and reads only public component snapshots. The
 foundation owns MCP tool attachment/detachment with the Xiaozhi session, so no
-`cloud_manager` or `sensor_manager` dependency crosses into this component.
+`cloud_manager`, `sensor_manager`, `time_manager`, `sd_card_manager`, or
+`audio_manager` dependency crosses into this component.
 `CONFIG_XIAOZHI_FOUNDATION_SENSOR_QUERY_TOOL` and
-`CONFIG_XIAOZHI_FOUNDATION_CLOUD_SYNC_QUERY_TOOL` each default to enabled in a
-normal production session and are unavailable while the Phase-12 validation
+`CONFIG_XIAOZHI_FOUNDATION_CLOUD_SYNC_QUERY_TOOL`, and
+`CONFIG_XIAOZHI_FOUNDATION_SYSTEM_STATUS_QUERY_TOOL` each default to enabled
+in a normal production session and are unavailable while the Phase-12 validation
 runtime is selected.
 
 ## Temporary Validation Feature Gate

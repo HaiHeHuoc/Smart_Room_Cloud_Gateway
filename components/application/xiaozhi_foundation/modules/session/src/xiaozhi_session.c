@@ -12,6 +12,7 @@
 
 #include "xiaozhi_mcp_cloud_sync.h"
 #include "xiaozhi_mcp_sensor_query.h"
+#include "xiaozhi_mcp_system_status.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -459,6 +460,7 @@ static esp_err_t xiaozhi_session_cleanup(void)
     }
 
     if (s_mcp != NULL) {
+        xiaozhi_mcp_system_status_detach();
         xiaozhi_mcp_cloud_sync_detach();
         xiaozhi_mcp_sensor_query_detach();
         const esp_err_t ret = esp_mcp_destroy(s_mcp);
@@ -568,6 +570,14 @@ esp_err_t xiaozhi_foundation_session_start(uint32_t client_generation)
     if (ret != ESP_OK) {
         APP_LOGE(TAG, CLOUD_SYNC_MCP_ATTACH_FAILED_58D10FC7,
                  "Smart Room cloud-sync MCP attach failed: %s",
+                 esp_err_to_name(ret));
+        goto fail;
+    }
+
+    ret = xiaozhi_mcp_system_status_attach(s_mcp);
+    if (ret != ESP_OK) {
+        APP_LOGE(TAG, SYSTEM_STATUS_MCP_ATTACH_FAILED_1A7C9E0D,
+                 "Smart Room system-status MCP attach failed: %s",
                  esp_err_to_name(ret));
         goto fail;
     }

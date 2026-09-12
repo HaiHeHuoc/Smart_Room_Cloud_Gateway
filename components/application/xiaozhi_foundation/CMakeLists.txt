@@ -2,6 +2,7 @@ set(xiaozhi_foundation_sources
     "xiaozhi_foundation.c"
     "modules/mcp_cloud_sync/src/xiaozhi_mcp_cloud_sync.c"
     "modules/mcp_sensor_query/src/xiaozhi_mcp_sensor_query.c"
+    "modules/mcp_system_status/src/xiaozhi_mcp_system_status.c"
     "modules/session/src/xiaozhi_session.c"
     "modules/text_bridge/src/xiaozhi_text_bridge.c"
     "modules/websocket/src/xiaozhi_websocket_task_policy.c"
@@ -36,6 +37,7 @@ idf_component_register(
     PRIV_INCLUDE_DIRS
         "modules/mcp_cloud_sync/include"
         "modules/mcp_sensor_query/include"
+        "modules/mcp_system_status/include"
 
     REQUIRES
         esp_common

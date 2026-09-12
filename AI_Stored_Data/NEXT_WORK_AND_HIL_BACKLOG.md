@@ -13,7 +13,7 @@ Phase 14 SW   -> COMPLETE / BUILD PASS / golden-path HIL PASS / targeted regress
 Phase 15 SW   -> COMPLETE / BUILD VERIFIED / HIL ACCEPTED
 Phase 16 SW   -> COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / BOUNDED HIL ACCEPTED
 Phase 16.1 SW -> IMPLEMENTED / BUILD VERIFIED / automated HIL PASS / audible recovery confirmed / endurance pending
-Phase 17      -> IN PROGRESS; sensor-answer and cloud-sync read-only MCP slices accepted by user after BUILD VERIFIED
+Phase 17      -> IN PROGRESS; sensor-answer and cloud-sync accepted / system-status MCP implemented and BUILD VERIFIED, HIL pending
 Phase 18      -> NOT STARTED
 Phase 19      -> NOT STARTED
 ```
@@ -28,6 +28,11 @@ of public `cloud_manager` status and is build verified on
 `phase/17-cloud-sync-status`; its voice HIL was confirmed by the user. Treat Phase 17
 overall as **IN PROGRESS**, not complete; remaining read-only MCP scope must be
 implemented and accepted separately.
+
+The next slice, `smart_room.get_system_status`, was started on
+`phase/17-system-status`. It aggregates only normalized public snapshots for
+sensor, cloud uploader, time synchronization, SD recovery, and audio; it does
+not implement Wi-Fi or Internet status. Build is verified; voice HIL remains pending.
 
 Do not start Phase 18 automatically. Continue Phase 17 only when Hải explicitly
 requests the next read-only MCP slice.
@@ -75,7 +80,7 @@ Phase 15 is closed. Hardware/manual acceptance was confirmed by the user on 2026
 
 ### Phase 17
 
-The accepted read-only MCP slices are the Smart Room temperature/humidity query and cloud-sync status tools. They respectively read a valid, non-stale copied sensor snapshot and normalized `cloud_manager` uploader status through the composition root; neither performs a device-side state change. Build and user-confirmed voice HIL are accepted for both slices. Remaining Phase-17 work is additional read-only MCP capability and its acceptance, not Phase-18 controlled actions.
+The accepted read-only MCP slices are the Smart Room temperature/humidity query and cloud-sync status tools. They respectively read a valid, non-stale copied sensor snapshot and normalized `cloud_manager` uploader status through the composition root; neither performs a device-side state change. Build and user-confirmed voice HIL are accepted for both slices. The in-progress system-status slice aggregates bounded local health states through the composition root; its build is verified and it still needs voice-HIL acceptance. Remaining Phase-17 work is additional read-only MCP capability and its acceptance, not Phase-18 controlled actions.
 
 ## Production-vs-test fix policy
 
@@ -108,7 +113,7 @@ inspect branch + worktree
 ## Recommended next acceptance order
 
 1. Keep Phase 16 and Phase 16.1 as accepted regression baselines; run endurance only when explicitly scheduled.
-2. Keep the sensor and cloud-sync slices as accepted Phase-17 baselines. Do not add `network_status`: it cannot answer while Xiaozhi is offline. A future candidate, if explicitly requested, is a bounded system-status tool backed by existing public snapshots.
+2. Run voice HIL for the build-verified system-status slice. Do not add `network_status`: it cannot answer while Xiaozhi is offline. The next deferred candidate, if explicitly requested after this acceptance, is `display.get_current_screen`.
 3. Keep Phase 18 controlled actions NOT STARTED until Phase 17 is explicitly closed.
 4. Run full Gateway/Firebase integration regression as appropriate, covering Wi-Fi/provisioning, sensor, Firebase, GUI, SD, audio, Xiaozhi, simultaneous cloud/Xiaozhi traffic, repeated PTT, notification queueing, and critical-alarm preemption.
 5. Preserve Phase 12/13/15 as regression baselines and Phase 14's recorded golden-path PASS; rerun them only for a relevant regression.

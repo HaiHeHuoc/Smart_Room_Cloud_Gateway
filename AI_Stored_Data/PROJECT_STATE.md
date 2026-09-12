@@ -53,7 +53,7 @@ Sprint 14   Software complete / BUILD PASS / golden-path HIL PASS / targeted reg
 Sprint 15   COMPLETE / BUILD VERIFIED / HIL ACCEPTED
 Sprint 16   Audio Arbitration / SOFTWARE COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / BOUNDED HIL ACCEPTED
 Phase 16.1  PCM streaming downlink IMPLEMENTED / BUILD VERIFIED / automated HIL PASS / audible recovery confirmed
-Sprint 17   MCP Read-Only Tools / IN PROGRESS; sensor answer and cloud-sync status HIL accepted by user
+Sprint 17   MCP Read-Only Tools / IN PROGRESS; sensor and cloud-sync accepted; system-status BUILD VERIFIED / HIL pending
 Sprint 18   MCP Controlled Actions / NOT STARTED
 Sprint 19   Wake Word And Advanced Voice UX / NOT STARTED
 Major feature-coding stage through Phase 16.1 COMPLETE; later feature phases require explicit start

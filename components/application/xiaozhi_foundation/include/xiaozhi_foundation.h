@@ -137,6 +137,44 @@ esp_err_t xiaozhi_foundation_register_cloud_sync_query_provider(
     xiaozhi_foundation_cloud_sync_query_provider_t provider,
     void *user_context);
 
+/* Production Smart Room system-status MCP boundary ----------------------- */
+
+#define XIAOZHI_FOUNDATION_SYSTEM_STATUS_TOKEN_MAX_BYTES  16U
+
+/** A copied, normalized local-health snapshot for the read-only MCP tool. */
+typedef struct {
+    bool available;
+    char overall_state[XIAOZHI_FOUNDATION_SYSTEM_STATUS_TOKEN_MAX_BYTES];
+    char sensor_state[XIAOZHI_FOUNDATION_SYSTEM_STATUS_TOKEN_MAX_BYTES];
+    char cloud_state[XIAOZHI_FOUNDATION_SYSTEM_STATUS_TOKEN_MAX_BYTES];
+    char time_state[XIAOZHI_FOUNDATION_SYSTEM_STATUS_TOKEN_MAX_BYTES];
+    char storage_state[XIAOZHI_FOUNDATION_SYSTEM_STATUS_TOKEN_MAX_BYTES];
+    char audio_state[XIAOZHI_FOUNDATION_SYSTEM_STATUS_TOKEN_MAX_BYTES];
+} xiaozhi_foundation_system_status_query_snapshot_t;
+
+/**
+ * @brief Copy normalized, non-sensitive local component health states.
+ *
+ * The callback runs in normal task context for a no-argument MCP tool call.
+ * It must not perform I/O, state changes, LVGL calls, or expose Wi-Fi details,
+ * network reachability, endpoints, credentials, tokens, identifiers, logs,
+ * files, or provider handles. The call itself cannot prove Internet
+ * reachability because Xiaozhi must already have a live session to invoke it.
+ */
+typedef esp_err_t (*xiaozhi_foundation_system_status_query_provider_t)(
+    xiaozhi_foundation_system_status_query_snapshot_t *snapshot,
+    void *user_context);
+
+/**
+ * @brief Register the composition-owned system-status snapshot provider.
+ *
+ * Registration must happen before the production voice session starts. The
+ * provider and context remain borrowed for the firmware lifetime.
+ */
+esp_err_t xiaozhi_foundation_register_system_status_query_provider(
+    xiaozhi_foundation_system_status_query_provider_t provider,
+    void *user_context);
+
 /* Phase 14 production audio boundary -------------------------------------- */
 
 #define XIAOZHI_FOUNDATION_UPLINK_SAMPLE_RATE_HZ 16000U

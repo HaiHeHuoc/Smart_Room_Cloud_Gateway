@@ -4,6 +4,7 @@ Status: **IN PROGRESS**
 
 - Sensor answer: **IMPLEMENTED / BUILD VERIFIED / HIL ACCEPTED**
 - Cloud-sync status: **IMPLEMENTED / BUILD VERIFIED / HIL ACCEPTED BY USER**
+- System status: **IMPLEMENTED / BUILD VERIFIED / HIL PENDING**
 
 ## Goal
 
@@ -87,6 +88,37 @@ checkpoint.
 Build success proves registration and linkage only. The subsequent user
 confirmation establishes the voice-path acceptance; detailed runtime artifacts
 were not captured here.
+
+## System-status slice
+
+The device also registers the no-argument, read-only MCP tool:
+
+```text
+smart_room.get_system_status
+```
+
+It answers broad local-health questions such as “Thiết bị đang hoạt động bình
+thường không?” by returning only normalized states for the sensor, cloud
+uploader, SNTP time, SD recovery service, and audio manager. `ready`,
+`synced`, `idle`, and `busy` are non-error states; `busy` is expected during a
+voice interaction. `attention` reports a component with a non-normal state,
+and `unavailable` means its public snapshot could not be read.
+
+`main` reads only public `*_get_status()` APIs and converts their snapshots to
+bounded identifier tokens. The foundation receives those tokens through a
+provider, validates them before JSON formatting, and owns MCP attachment and
+session lifetime. The tool does not expose SSID, IP address, Wi-Fi status,
+Internet reachability, endpoints, credentials, tokens, files, or configuration.
+Its successful invocation cannot prove Internet reachability because Xiaozhi
+must already have a live session to call it.
+
+### HIL acceptance still required
+
+1. Flash this branch after the build gate passes.
+2. Ask a natural question such as `Thiết bị đang hoạt động bình thường không?`.
+3. Confirm `Smart Room system-status MCP called; data=available` in serial output.
+4. Confirm the spoken response accurately distinguishes normal `busy` audio
+   activity from an `attention` or `unavailable` component state.
 
 ## Git safety
 

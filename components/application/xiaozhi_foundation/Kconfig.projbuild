@@ -170,4 +170,16 @@ config XIAOZHI_FOUNDATION_CLOUD_SYNC_QUERY_TOOL
         credentials, tokens, HTTP bodies, or configuration, and it performs
         no configuration, storage, network, audio, or GUI action.
 
+config XIAOZHI_FOUNDATION_SYSTEM_STATUS_QUERY_TOOL
+    bool "Enable the Smart Room system-status MCP tool"
+    depends on !XIAOZHI_FOUNDATION_VALIDATION_ENABLE
+    default y
+    help
+        Register one read-only MCP tool in the production Xiaozhi WebSocket
+        session. The tool exposes only normalized local health states for the
+        sensor, cloud uploader, time synchronization, SD recovery service, and
+        audio manager. It does not expose Wi-Fi details, IP addresses, cloud
+        endpoints, credentials, tokens, files, or configuration, and it does
+        not perform configuration, storage, network, audio, or GUI action.
+
 endmenu

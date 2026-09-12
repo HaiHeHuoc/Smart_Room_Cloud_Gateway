@@ -3,6 +3,7 @@ idf_component_register(
         "main.c"
         "xiaozhi_cloud_sync_composition.c"
         "xiaozhi_sensor_query_composition.c"
+        "xiaozhi_system_status_composition.c"
         "phase14_voice_composition.c"
         "phase16_auto_hil_test.c"
     INCLUDE_DIRS

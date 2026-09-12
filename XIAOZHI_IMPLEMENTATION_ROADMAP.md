@@ -833,16 +833,17 @@ Implemented slices:
 ```text
 smart_room.get_current_temperature_humidity
 smart_room.get_cloud_sync_status
+smart_room.get_system_status
 ```
 
 The sensor and cloud-sync slices are build verified and voice-HIL accepted by
-the user. Do not add `network.get_status`: an offline device cannot receive a
+the user. The system-status slice is build verified and awaits voice HIL. Do
+not add `network.get_status`: an offline device cannot receive a
 Xiaozhi MCP call.
 
 Deferred candidates, subject to explicit scope approval:
 
 ```text
-system.get_status
 display.get_current_screen
 ```
 
