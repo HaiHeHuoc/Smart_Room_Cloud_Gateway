@@ -1,349 +1,269 @@
 # Smart Room Cloud Gateway — AI Project State
 
-Updated from branch: `main_including_Firebase_security`
-Snapshot date: 2026-09-12
-Production/source baseline before the documentation-sync commits: `7a74086b8211aff635a2651cbc54edab014a8920` (`fix security`)
+Updated: 2026-09-12
+Active integration branch: `main_including_Firebase_security`
+Observed production/source HEAD before this AI metadata synchronization: `15cd0f06d25142a6ed7672bc99dfd4ec396184b0`
 
-## Working Constitution
+## Working authority
 
-- `AGENTS.md` is the repository-specific operating guide.
-- Preserve completed roadmap history and phase boundaries.
-- Inspect implementation and documentation before editing.
-- Keep changes evidence-based.
-- Never claim build, HIL, merge, or runtime success without evidence.
-- `AI_Stored_Data/` is cross-session support metadata only and may be deleted; firmware/build code must never depend on it.
-- Do not commit, push, merge, reset, discard, or delete repository work unless the user explicitly authorizes that action. Updates inside `AI_Stored_Data/` are allowed when Hải asks to synchronize this handoff store.
+Use this priority when resuming work:
 
-## Current branch anchor
+1. Current source/build configuration on the active branch.
+2. `AGENTS.md` and current canonical repository documentation.
+3. Explicit recent build/HIL/manual evidence from Hải.
+4. `AI_Stored_Data/` handoff notes.
+5. Conversation memory/assumptions.
 
-The requested integration branch is:
+`AGENTS.md` is the repository/session operating authority. Preserve phase history,
+ownership boundaries, evidence discipline, and the rule that build/HIL success
+must never be claimed without evidence.
 
-```text
-main_including_Firebase_security
-```
+`AI_Stored_Data/` is cross-session support metadata only. Production firmware,
+CMake, Kconfig, tests, and runtime code must never depend on it.
 
-Production/source history relevant to this snapshot:
+This snapshot is based on the remote GitHub branch. A local worktree with
+uncommitted or unpushed changes cannot be observed through this handoff and must
+be inspected separately before implementation work.
 
-```text
-b7ef51a87dcefa330cd0aa42e4d52dafe60f2bba
-  Merge component portability hardening into main_including_Firebase_security
-
-1c26433364dd75fc2b1537c2a50fa35468c07cf1
-  Add firebase key to gitignore
-
-7a74086b8211aff635a2651cbc54edab014a8920
-  fix security
-```
-
-The `fix security` commit replaces several unbounded `strcpy` calls in
-`log_manager` and its host test with bounded `snprintf`. This snapshot records
-the source change only; it does not claim a new firmware build or HIL run for
-that commit.
-
-Documentation-only synchronization commits may advance the branch HEAD beyond
-`7a74086b...`; do not mistake those metadata/documentation commits for a newer
-production validation baseline.
-
-## Current high-level state
+## Current high-level phase state
 
 ```text
-Sprint 12   Software complete / HIL PASS
-Sprint 13   Software complete / HIL PASS
-Sprint 14   Software complete / BUILD PASS / golden-path HIL PASS / targeted regression partial
+Sprint 12   COMPLETE / HIL PASS
+Sprint 13   COMPLETE / HIL PASS
+Sprint 14   SOFTWARE COMPLETE / BUILD PASS / golden-path HIL PASS / targeted regression partial
 Sprint 15   COMPLETE / BUILD VERIFIED / HIL ACCEPTED
-Sprint 16   Audio Arbitration / SOFTWARE COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / BOUNDED HIL ACCEPTED
-Phase 16.1  PCM streaming downlink IMPLEMENTED / BUILD VERIFIED / automated HIL PASS / audible recovery confirmed
-Sprint 17   MCP Read-Only Tools / COMPLETE / BUILD VERIFIED / voice HIL accepted by user
-Sprint 18   MCP Controlled Actions / IN PROGRESS
-Phase 18.1  light.set_state + light.get_state + light.get_capabilities IMPLEMENTED / BUILD VERIFIED / HIL PENDING
-Sprint 19   Wake Word And Advanced Voice UX / NOT STARTED
-Read-only MCP through Sprint 17 COMPLETE; later feature phases require explicit start
+Sprint 16   COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / BOUNDED HIL ACCEPTED
+Phase 16.1  STREAMING DOWNLINK IMPLEMENTED / BUILD VERIFIED / automated HIL PASS / audible recovery accepted / endurance pending
+Sprint 17   MCP READ-ONLY COMPLETE / BUILD VERIFIED / voice HIL accepted by user
+Sprint 18   MCP CONTROLLED ACTIONS IN PROGRESS
+Phase 18.1  LIGHT CONTROL IMPLEMENTED / current HEAD revalidation pending / HIL pending
+Phase 18.2  NOT STARTED
+Phase 18.3  NOT STARTED
+Phase 18.4  NOT STARTED
+Sprint 19   NOT STARTED
 ```
 
-Authoritative Phase-16 closure: `AI_Stored_Data/PHASE16_PROGRESS.md`.
-Phase-16 HIL plan: `AI_Stored_Data/PHASE16_HIL_TEST_PLAN.md`.
-Phase-16 HIL evidence: `AI_Stored_Data/PHASE16_HIL_EVIDENCE.md`.
-Phase-16.1 streaming record: `AI_Stored_Data/PHASE16_1_STREAMING_DOWNLINK.md`.
-Canonical detailed Version-2 phase numbering: `XIAOZHI_IMPLEMENTATION_ROADMAP.md`.
+Detailed Phase-18 record: `AI_Stored_Data/PHASE18_MCP_CONTROLLED_ACTIONS.md`.
 
-## Roadmap numbering reconciliation
+## Current branch/source anchor
 
-The previous roadmap draft used Sprint 16 for MCP read-only. That numbering is
-superseded because Sprint 16 and Phase 16.1 now have completed, accepted
-implementation history that must not be renumbered.
-
-Use this sequence from now on:
+Relevant recent source history:
 
 ```text
-Sprint 16   Audio Arbitration & Multi-Client Audio Policy       COMPLETE
-Phase 16.1  Xiaozhi PCM Streaming Downlink                     COMPLETE
-Sprint 17   MCP Read-Only Tools                                COMPLETE
-Sprint 18   MCP Controlled Actions                             IN PROGRESS
-Phase 18.1  light.set_state + light.get_state + capabilities   IMPLEMENTED / BUILD VERIFIED / HIL PENDING
-Sprint 19   Wake Word And Advanced Voice UX                    NOT STARTED
+f00e106150ddf2a48034a1ed9b6c6520aff20fc5
+  feat(light): add bounded effects and capabilities [18.1]
+  Explicit evidence: full ESP-IDF build PASS; target HIL pending.
+
+e0255881ad61a5bea4c96b49c866f20a0f8b3355
+  fix(tls): reduce PTT-time WebSocket allocation
+  Explicit evidence: clean ESP-IDF build PASS; target boot/repeated PTT pending.
+
+15cd0f06d25142a6ed7672bc99dfd4ec396184b0
+  work for MCP LED control
+  Changes Phase-18 light semantics plus voice/audio/TLS behavior.
+  No explicit build/HIL evidence recorded in the commit.
 ```
 
-Interpretation rule:
+The source HEAD `15cd0f06...` is two commits ahead of the last full Phase-18.1
+build checkpoint `f00e106...`. Therefore do not describe current HEAD as fully
+build-verified until it is rebuilt after those source changes.
 
-- "read-only MCP" = **Sprint/Phase 17**;
-- "controlled MCP actions" = **Sprint/Phase 18**;
-- "wake word / advanced voice UX" = **Sprint/Phase 19**;
-- never reuse Phase 16 for MCP work;
-- never rewrite Phase-16/16.1 closure evidence merely to match an older draft.
+AI-only synchronization commits may advance the branch HEAD beyond
+`15cd0f06...`; treat those as metadata/documentation history, not as newer
+production validation baselines.
 
-`XIAOZHI_IMPLEMENTATION_ROADMAP.md` and `docs/KNOWN_LIMITATIONS.md` were
-reconciled to this numbering on 2026-09-09. If an older historical roadmap
-snapshot still shows the old 16/17/18 mapping, this reconciliation supersedes
-that numbering only; preserve the historical implementation content.
+## Recent source changes after the last Phase-18.1 build checkpoint
 
-## Component portability hardening integration
-
-The portability-hardening implementation is no longer an unmerged side branch.
-It was integrated into `main_including_Firebase_security` by merge commit:
+Comparison `f00e106... -> 15cd0f06...` contains two commits and modifies:
 
 ```text
-b7ef51a87dcefa330cd0aa42e4d52dafe60f2bba
+components/application/voice_assistant/modules/uplink/src/voice_assistant_uplink.c
+components/application/xiaozhi_foundation/docs/README.md
+components/application/xiaozhi_foundation/modules/mcp_light_set_state/src/xiaozhi_mcp_light_set_state.c
+components/audio/audio_manager/audio_manager.c
+components/output/light_manager/README.md
+components/output/light_manager/light_manager.c
+components/system/common/include/app_common.h
+main/xiaozhi_light_set_state_composition.c
+sdkconfig.defaults
 ```
 
-Current status:
+### TLS / PTT memory policy at current source HEAD
+
+Current `sdkconfig.defaults` uses dynamic mbedTLS buffers in PSRAM:
 
 ```text
-Architecture direction                 DONE / FROZEN
-Agreed refactor implementation         DONE / FROZEN
-Private-module/dependency documentation DONE / FROZEN
-Merge into main_including_Firebase_security COMPLETE
-Full post-refactor automated acceptance PENDING unless newer evidence is recorded
-Target-board portability smoke acceptance PENDING unless newer evidence is recorded
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=1024
+CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC is not set
+CONFIG_MBEDTLS_HARDWARE_AES is not set
 ```
 
-Do not start another portability or component-genericization wave merely to
-improve an abstract portability score. If validation finds a concrete regression,
-identify the failing component/path and apply the smallest safe correction.
+The code now checks both total and largest contiguous PSRAM before starting a
+PTT turn and requires at least 20 KiB. A low-memory turn is rejected before
+transport/capture rather than waiting for a WebSocket write failure after I2S
+capture starts.
 
-Important integrated outcomes include:
+This intentionally differs from older notes that treated library-owned TLS
+records as Internal-RAM-only. Current source is authoritative. The source
+comment also notes that a production product requiring physical-memory
+confidentiality must pair TLS-in-PSRAM with the appropriate ESP32-S3 flash/
+external-memory protection strategy; do not infer that such protection is
+currently enabled without configuration evidence.
 
-- domain-grouped ESP-IDF component layout retained;
-- large tightly coupled implementations organized as parent-owned private
-  `modules/` rather than many artificial child components;
-- dependency direction hardened toward `application -> service -> driver/framework`;
-- public CMake dependency surfaces separated from implementation-only dependencies;
-- `sensor_DHT22` receives GPIO through runtime configuration;
-- SD path-size ownership moved into `sd_card_manager` API ownership;
-- selected external-RAM task-stack handling uses explicit ESP-IDF support;
-- Firebase development configuration is sourced through project Kconfig/menuconfig
-  rather than hard-coded application constants;
-- product/application components remain intentionally product-specific rather
-  than being generalized without a real reuse requirement.
+### Streaming-downlink prefill behavior at current source HEAD
 
-Detailed historical record: `AI_Stored_Data/COMPONENT_PORTABILITY_HARDENING.md`.
+The PCM stream still uses a 7.68-second bounded PSRAM ingress ring, but the
+normal prefill target is currently 0.96 seconds, not the older 1.44-second value
+recorded in historical notes.
 
-## HIL routing
+The 5-second bounded prefill timeout now begins only after the first PCM packet
+has actually arrived. `TTS_START` may precede the first audio packet while the
+server performs tool work or synthesis; that pre-audio delay is no longer
+charged against the PCM prefill allowance. Post-start starvation recovery
+remains separately bounded.
+
+Any future documentation mentioning 1.44-second prefill should be checked
+against current source before reuse.
+
+## Phase 18.1 current behavior
+
+Implemented MCP surface:
 
 ```text
-RUN PHASE 12 HIL -> test/xiaozhi-p2f-known-audio-e2e
-RUN PHASE 13 HIL -> test/phase13-voice-assistant-hil
-RUN PHASE 14 HIL -> test/phase14-ptt-voice-e2e-hil
-RUN PHASE 15 HIL -> test/phase15-voice-ui-hil
-RUN PHASE 16 HIL -> test/phase16-audio-arbitration-hil
-RUN PHASE 16.1 HIL -> phase/16.1-streaming-downlink
+light.set_state
+light.get_state
+light.get_capabilities
 ```
 
-Inspect the worktree and route to the dedicated historical test branch before an
-older-phase HIL run. Never silently use arbitrary latest production source for
-historical acceptance.
+Allowed controlled fields:
 
-## Established system ownership
+```text
+power: on/off
+color: red, green, blue, white, yellow, cyan, magenta, pink, purple, orange
+brightness_percent: integer 0..100
+effect: solid, blink, breath, pulse, rainbow
+```
+
+Important current semantics:
+
+- `power=off` cannot be combined with color, brightness, or effect.
+- Color-only/brightness-only preserve current logical power.
+- Effect without explicit power activates the light.
+- Effect without explicit color uses white if the preserved RGB is black.
+- `light_manager` remains the hardware owner; MCP never drives GPIO/RMT/
+  NeoPixel directly.
+- Current fixed effect timings are blink 500/500 ms, breath 2000 ms, pulse
+  1200 ms, rainbow 10 ms step.
+
+The earlier 300 ms pulse value and the older "effect-only preserves OFF" rule
+are stale and must not be reused.
+
+## Established ownership boundaries
+
+Preserve these unless an explicitly approved phase changes them:
 
 - `main`: application composition root.
 - `config_manager`: persistent application configuration owner.
-- `wifi_manager`: Wi-Fi Station connection and reconnect owner.
+- `wifi_manager`: Wi-Fi Station connection/reconnect owner.
 - `provisioning_manager`: temporary BLE provisioning transport owner.
-- `app_network_coordinator`: application-level network orchestration owner.
-- `audio_manager`: sole microphone, speaker, I2S, DMA, PCM-buffer, and playback/capture resource owner.
-- `xiaozhi_foundation`: sole direct managed `esp_xiaozhi` provider boundary; provider handles/credentials must not escape.
-- `voice_assistant`: long-lived product voice session/recovery orchestration.
-- `voice_assistant_ptt`: PTT authorization policy.
-- `voice_assistant_ui_model` plus adapter: copied lifecycle, text, and capture-presentation path.
-- `app_log`: reusable logging frontend.
-- `log_manager`: optional persistent logging backend/storage policy.
-- `app_gui`: GUI screens, copied models, and UI queues.
-- `ui_manager_lvgl`: LVGL runtime and synchronization owner.
+- `app_network_coordinator`: application network orchestration owner.
+- `audio_manager`: sole microphone/speaker I2S, DMA, PCM-buffer, and
+  playback/capture resource owner.
+- `xiaozhi_foundation`: sole direct managed `esp_xiaozhi`/MCP provider boundary;
+  provider handles and credentials do not escape.
+- `voice_assistant`: product voice-session and recovery orchestration.
+- `app_gui`: GUI screens/models/UI queues.
+- `ui_manager_lvgl`: LVGL runtime/synchronization owner.
 - `sd_card_manager`: SD lifecycle/lease owner.
-- GPIO9: factory reset only.
-- GPIO38: PTT input, internal pull-down, active-high.
-- GPIO48: NeoPixel reservation; never use it as PTT.
+- `light_manager`: product light state/effect owner; lower NeoPixel driver stays
+  below this boundary.
+- `components/system/common/include/board_config.h`: physical board mapping source
+  of truth.
 
-`components/system/common/include/board_config.h` remains the current hardware
-mapping source of truth.
-
-## Component organization contract
-
-Top-level domain folders are organizational containers. Their direct children
-are ESP-IDF components. A large component may contain private `modules/<name>/`
-subsystems owned by the parent component.
-
-Rules to preserve:
-
-1. Parent CMake owns private-module sources and private include paths.
-2. Private modules do not become standalone ESP-IDF components by default.
-3. Other components must not include another component's private `modules/`
-   headers.
-4. Promote a private module only when it gains a real independent reuse or
-   lifecycle requirement.
-5. Lower-level reusable components must not depend on application coordinators or
-   `app_gui`.
-6. A dependency exposed by a public header belongs in public CMake dependency
-   visibility; implementation-only dependencies remain private.
-
-## Phase 14/15 voice path and Phase 16.1 downlink
+GPIO ownership retained from prior accepted project state:
 
 ```text
-PTT
--> Xiaozhi READY
--> INMP441 / audio_manager capture
--> copied PCM16 uplink
--> Xiaozhi response
--> copied bounded downlink queue
--> Opus decode worker
--> audio_manager-owned PSRAM PCM16 ring
--> manager-owned streaming playback
--> MAX98357
+GPIO9   factory reset only
+GPIO38  PTT input, active high, internal pull-down
+GPIO48  NeoPixel reservation; never use as PTT
 ```
 
-Phase 14 retains the production Xiaozhi session through unexpected disconnects,
-protects response ownership by session generation, rejects PTT while a response
-is awaiting/collecting/finalizing/playing, and bounds response wait to 15 seconds
-inactivity / 600 seconds total.
+## Component portability hardening
 
-Phase 16.1 replaces response aggregation plus SD/WAV handoff with a 7.68-second
-bounded PCM16 ring and a 1.44-second streaming prefill. The downlink worker
-decodes and copies complete frames while `audio_manager` remains the only
-I2S/DMA owner. A post-start dry ingress supplies explicit silence for up to
-eight seconds so transient jitter does not replay the prior DMA block. The
-automated target matrix passed and audible recovery was confirmed; endurance
-remains pending.
+The portability-hardening initiative was already merged into
+`main_including_Firebase_security` by merge commit
+`b7ef51a87dcefa330cd0aa42e4d52dafe60f2bba` and its agreed architecture scope
+is frozen.
 
-Phase 15 adds copied lifecycle plus USER/ASSISTANT text presentation through the
-UI task. The UI reports `RECORDING` only when actual microphone capture is
-active, renders a live `RECORD` duration during capture, and freezes the duration
-afterward. Exact CONNECTING/THINKING/RECOVERING labels remain intentionally
-coalesced by the reused legacy GUI surface. Phase-15 HIL acceptance was
-confirmed by the user on 2026-09-06; the unattended target lifecycle regression
-passed 7/7 at `fc5a3fa`. That suite verifies state/queue/timer routing, while
-physical LCD/audio/GPIO and real semantic-text observations remain
-operator-confirmed evidence.
+Preserve:
 
-## Phase 16 — audio arbitration architecture
+- dependency direction `application -> service -> driver/framework`;
+- domain directories as organizational containers;
+- parent-owned private `modules/<name>/` for tightly coupled subsystems;
+- no cross-component inclusion of another component's private-module headers;
+- runtime hardware configuration where previously introduced;
+- product-specific application components remain product-specific unless a real
+  reuse/lifecycle requirement justifies promotion/generalization.
 
-Logical audio clients request resources through project-owned metadata:
+Do not start another generic portability wave without a concrete validated
+regression.
+
+## Security/configuration invariants
+
+- Firebase development values come from local generated configuration; never
+  store real credentials in tracked source or `AI_Stored_Data/`.
+- Never store Wi-Fi passwords, PoP values, private keys, service-account JSON,
+  access tokens, activation secrets, or private transport payloads here.
+- `.FireBaseKey` remains ignored by repository history.
+- `log_manager` had earlier unbounded-copy cleanup; do not infer current build/
+  HIL evidence from that historical source change.
+
+## Documentation discrepancy
+
+Current source and `AI_Stored_Data` show Sprint 18 in progress with Phase 18.1
+implemented. At this synchronization point, `XIAOZHI_IMPLEMENTATION_ROADMAP.md`
+still contains an older top-level status saying implementation is through Sprint
+17 and a "Sprint 18 — Not Started" section.
+
+Do not silently choose the stale roadmap status over current source. Preserve
+this discrepancy and update the canonical roadmap in a dedicated documentation
+step when requested.
+
+## Current pending validation / technical debt
+
+1. **Current HEAD rebuild:** clean ESP-IDF build after `15cd0f06...` is not
+   explicitly recorded.
+2. **Phase 18.1 HIL:** light color/brightness/off/effects/read-only companions,
+   invalid combinations, rapid updates, effect-only auto-activation, and
+   black-to-white effect fallback remain pending on the current HEAD.
+3. **PTT/TLS regression:** boot plus repeated PTT should confirm PSRAM TLS record
+   allocation/headroom behavior after the current external-memory policy.
+4. **Streaming regression:** confirm delayed first audio after TTS_START no longer
+   causes a false prefill timeout, and verify normal playback/recovery remains
+   audible.
+5. Phase-16/16.1 endurance and broader full-Gateway integration remain deferred.
+6. Phase-15 visible LCD/text coverage has historical partial gaps; rerun only
+   when relevant to a regression.
+7. Long-duration Firebase/cloud plus Xiaozhi simultaneous-traffic regression
+   remains deferred.
+8. Full post-portability target smoke/regression should be treated separately
+   from architecture closure.
+
+## Recommended next action
+
+Do not start Phase 18.2 automatically. Recommended order from current source:
 
 ```text
-audio_manager_request_t
-├── request_id
-├── client
-├── resource = CAPTURE / PLAYBACK
-├── priority
-├── busy_policy = REJECT / QUEUE / PREEMPT_LOWER_PRIORITY
-└── interruptible
+clean build current HEAD
+-> target boot + repeated PTT smoke
+-> Phase-18.1 light HIL matrix
+-> verify delayed-TTS/streaming behavior affected by 15cd0f06...
+-> record evidence
+-> reconcile canonical roadmap/docs
+-> then consider 18.2 only if Hải explicitly starts it
 ```
 
-Known clients include SYSTEM, XIAOZHI, NOTIFICATION, ALARM, RECORDER, UI, and
-TEST. No client receives an I2S handle, DMA buffer, raw source handle, or direct
-hardware ownership.
-
-### Playback
-
-```text
-client
--> playback arbiter
--> public audio_manager playback control
--> manager task
--> sole I2S TX
-```
-
-One current and one pending playback request are bounded. WAV requests retain
-their SD-prefetch path; one PCM16 stream request owns a separate bounded PSRAM
-ingress session. ACTIVE requires real PLAYBACK evidence, not command acceptance.
-A known interruptible lower-priority playback may be cooperatively stopped
-through `audio_manager_stop_playback()`.
-
-### Capture
-
-```text
-client
--> capture arbiter
--> audio_manager_start_recording()
--> manager task
--> sole I2S RX
-```
-
-One current and one pending request are bounded. ACTIVE requires real RECORDING
-evidence. PROCESSING is allowed to finish naturally before pending promotion.
-Cooperative stop uses `audio_manager_stop_recording()`.
-
-### Deterministic policy
-
-```text
-no known owner -> GRANT
-REJECT -> REJECT
-QUEUE -> WAIT
-PREEMPT_LOWER_PRIORITY -> PREEMPT only when incoming priority is strictly higher and current owner is interruptible
-same/lower priority -> never preempt
-```
-
-Unknown legacy/external manager activity is never preempted because trusted
-client metadata is absent. Capture and playback arbiters are separate but share
-the one `audio_manager` operation state; manager serialization remains the final
-hardware gate. Global cross-resource fairness is intentionally not claimed.
-
-### Xiaozhi, notification, and alarm policy
-
-```text
-XIAOZHI      priority=70  CAPTURE=REJECT  PLAYBACK=QUEUE  interruptible=true
-NOTIFICATION priority=50  PLAYBACK=QUEUE  interruptible=true
-ALARM        priority=100 PLAYBACK=PREEMPT_LOWER_PRIORITY interruptible=false
-```
-
-Phase 16.1's Xiaozhi downlink reserves the bounded stream through the playback
-arbiter at TTS_START. It begins I2S only after a 1.44-second PCM prefill or a
-short-response EOS, then drains asynchronously after TTS_STOP. A full ingress
-ring retains and retries the same decoded packet through a finite backpressure
-window rather than dropping it. The arbiter retains terminal state per request
-so cancellation, alarm preemption, and stream failures cannot be misreported as
-normal completion. A temporary empty ingress writes explicit silence rather
-than allowing I2S/DMA to repeat its preceding block, with an eight-second
-bounded recovery window.
-
-## Security/configuration notes
-
-- Real Firebase development values belong in local generated configuration, not
-  tracked source/documentation.
-- `.FireBaseKey` is ignored by the repository as of commit
-  `1c26433364dd75fc2b1537c2a50fa35468c07cf1`.
-- Never place Firebase passwords/tokens, Wi-Fi credentials, PoP values, private
-  keys, service-account JSON, or local secret payloads in `AI_Stored_Data/`.
-- A source-level safety cleanup in `7a74086b...` replaced several remaining
-  unbounded `strcpy` calls in `log_manager`; validation of that exact commit must
-  be reported separately when actually performed.
-
-## Known pending acceptance / technical debt
-
-1. Phase-16 bounded target HIL is accepted; endurance and broader full-integration regression remain deferred.
-2. Phase-15 visible LCD/text HIL remains partial: `RECORDING` timer, USER/ASSISTANT text, latest-turn behavior, recovery presentation, truncation, and UI-resource evidence need target confirmation.
-3. Phase-14 fault-injection cases remain deferred; the exact regression image still needs fresh audible speaker confirmation.
-4. Phase-16.1 automated target matrix and audible recovery are accepted. Endurance coverage remains pending.
-5. Long-duration Firebase/cloud plus Xiaozhi simultaneous-traffic regression remains deferred.
-6. Playback/capture arbiters have no dedicated stop/deinit lifecycle API yet; recorded-audio playback is not migrated to arbitration.
-7. Cross-resource global audio fairness is not guaranteed by the separate arbiters.
-8. Notification/alarm priority/preemption passed the bounded target matrix; repeated timing/endurance coverage remains deferred.
-9. Full post-portability-refactor automated and target-board smoke acceptance remains pending unless newer explicit evidence supersedes this snapshot.
-
-## Next-work guidance
-
-1. Treat `main_including_Firebase_security` as the current integrated baseline for new work unless Hải explicitly chooses another branch.
-2. Retain historical HIL branches as regression baselines rather than rewriting their acceptance history.
-3. Finish the still-pending Phase-15 visible UI/text acceptance when relevant.
-4. Treat Phase 12 and Phase 13 as closed regression baselines; retain Phase 14's recorded golden-path result and run only relevant regressions.
-5. Complete the post-portability-refactor build/host-test/target-smoke acceptance before reopening architecture work.
-6. Run full Gateway/Firebase + voice integration regression, bug fixing, hardening, performance/resource validation, documentation, and release/portfolio closure.
-7. Do not add further read-only MCP tools or start another major feature phase automatically. Deferred MCP work requires explicit new scope.
+Historical HIL branches remain regression baselines and should not be rewritten
+merely to reflect newer production implementation.
