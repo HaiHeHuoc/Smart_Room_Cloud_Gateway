@@ -21,17 +21,17 @@ idf_component_register(
     REQUIRES
         esp_common
         esp_driver_gpio
-        xiaozhi_foundation
         audio_manager
-        app_gui
-        app_network_coordinator
 
     PRIV_REQUIRES
         app_log
+        app_gui
+        app_network_coordinator
         common
         esp_audio_codec
         esp_timer
         freertos
         log
         heap
+        xiaozhi_foundation
 )
