@@ -87,6 +87,28 @@ The lower NeoPixel library also serializes its own state and owns its optional
 effect worker. `light_manager` does not expose effects because the Phase-18
 product contract is static light control only.
 
+## Target test loop
+
+`CONFIG_LIGHT_MANAGER_TEST_LOOP` defaults to `n`. When explicitly enabled in
+`menuconfig`, `main` starts the infinite `light_test` task immediately after a
+successful `light_manager_init()`. It writes `LIGHT_TEST` serial markers and
+waits `CONFIG_LIGHT_MANAGER_TEST_STEP_DELAY_MS` (default: 8000 ms) after every
+operation.
+
+One loop exercises all static manager APIs (`set_state`, `get_state`, color,
+brightness 0/20/100, OFF, and ON state restoration) and all whole-strip
+NeoPixel effects: blink, fade-in/out, fade, transition, rainbow, rainbow
+cycle, breath, pulse, chase, color wipe, theater chase, gradient, and rainbow
+gradient. It also pause/resumes and stops the blink effect. Effect calls remain
+private to the manager test implementation; `main` never accesses `neopixel`
+directly.
+
+The test loop is intentionally non-terminating. While it is enabled and
+running, `light_manager_deinit()` returns `ESP_ERR_INVALID_STATE`; flash a
+normal configuration with the option disabled before production use. With the
+current one-LED board, spatial effects such as chase/gradient are API/lifecycle
+coverage, not proof of their multi-LED visual pattern.
+
 ## Known limitations
 
 - One singleton strip is supported because the reused `neopixel` component is

@@ -1,0 +1,25 @@
+menu "Light manager"
+
+    config LIGHT_MANAGER_TEST_LOOP
+        bool "Run infinite NeoPixel light-manager API/effect test loop"
+        default n
+        help
+            Starts a target-hardware-only task immediately after successful
+            light_manager initialization. The task loops forever through the
+            static light-manager APIs and every whole-strip NeoPixel effect,
+            logging each action and waiting eight seconds between actions.
+
+            This is validation infrastructure, not product behavior. Keep it
+            disabled in normal firmware. It does not add MCP, GUI, cloud, or
+            named-color behavior.
+
+    config LIGHT_MANAGER_TEST_STEP_DELAY_MS
+        int "Light-manager test step delay (milliseconds)"
+        range 1000 60000
+        default 8000
+        depends on LIGHT_MANAGER_TEST_LOOP
+        help
+            Delay after every test action. The default is eight seconds so a
+            single onboard NeoPixel can be observed between serial log steps.
+
+endmenu

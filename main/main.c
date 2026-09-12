@@ -356,6 +356,18 @@ void app_main(void)
         return;
     }
 
+#if CONFIG_LIGHT_MANAGER_TEST_LOOP
+    light_ret = light_manager_start_test_loop();
+    if (light_ret != ESP_OK)
+    {
+        APP_LOGE(
+            TAG,
+            "Failed to start light-manager test loop: %s",
+            esp_err_to_name(light_ret));
+        return;
+    }
+#endif
+
     esp_err_t network_ret =
         network_platform_init();
 

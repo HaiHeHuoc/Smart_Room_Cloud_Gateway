@@ -106,6 +106,20 @@ esp_err_t light_manager_off(void);
  */
 esp_err_t light_manager_get_state(light_manager_state_t *state);
 
+/**
+ * @brief Start the Kconfig-gated infinite target-hardware test loop.
+ *
+ * When @c CONFIG_LIGHT_MANAGER_TEST_LOOP is enabled, the task exercises the
+ * static manager APIs and all whole-strip NeoPixel effects, waits the
+ * configured interval after every action, and logs each result. It is for
+ * explicit hardware validation only, not production behavior.
+ *
+ * @return ESP_OK when the task is created, ESP_ERR_INVALID_STATE before init
+ *         or when already started, ESP_ERR_NOT_SUPPORTED when disabled in
+ *         Kconfig, or ESP_ERR_NO_MEM if the task cannot be created.
+ */
+esp_err_t light_manager_start_test_loop(void);
+
 #ifdef __cplusplus
 }
 #endif
