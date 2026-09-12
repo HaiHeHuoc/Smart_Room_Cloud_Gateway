@@ -15,6 +15,7 @@ set(EXTRA_COMPONENT_DIRS
     "${CMAKE_CURRENT_LIST_DIR}/components/system"
     "${CMAKE_CURRENT_LIST_DIR}/components/ui"
     "${CMAKE_CURRENT_LIST_DIR}/components/input"
+    "${CMAKE_CURRENT_LIST_DIR}/components/output"
 )
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)

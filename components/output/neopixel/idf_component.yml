@@ -1,0 +1,11 @@
+version: "1.0.0"
+description: "Reusable ESP-IDF WS2812/NeoPixel RGB component with non-blocking whole-strip and independent per-pixel effects."
+tags:
+  - led
+  - neopixel
+  - ws2812
+  - rmt
+
+dependencies:
+  idf: ">=6.0"
+  espressif/led_strip: "^3.0.3"

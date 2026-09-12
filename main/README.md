@@ -3,7 +3,7 @@
 ## Purpose
 
 `main/main.c` is the firmware composition root. It initializes platform,
-display, storage, GUI, input, Wi-Fi, sensor, Firebase Authentication, and cloud
+light, display, storage, GUI, input, Wi-Fi, sensor, Firebase Authentication, and cloud
 components in dependency order. It maps manager-owned snapshots into copied GUI
 and cloud data without calling LVGL or HTTPS from producer callbacks.
 
@@ -108,6 +108,8 @@ mechanism.
 ## Ownership Rules
 
 - `main` composes services but does not own reusable domain logic.
+- `main` passes the board NeoPixel mapping from `board_config.h` to
+  `light_manager`; it does not own GPIO/RMT or product light state.
 - `app_network_coordinator` owns boot/config-driven network policy.
 - `wifi_manager` owns Station connection, reconnect, and driver persistence.
 - `provisioning_manager` owns temporary BLE transport and credential handoff.

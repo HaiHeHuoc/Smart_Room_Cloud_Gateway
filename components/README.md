@@ -28,6 +28,9 @@ components/
 |   `-- waveshare__esp_lcd_st7735/
 |-- input/
 |   `-- button_manager/
+|-- output/
+|   |-- light_manager/
+|   `-- neopixel/
 |-- sensing/
 |   |-- sensor_manager/
 |   `-- sensor_DHT22/
@@ -107,6 +110,7 @@ graph made of many tiny components.
 | Connectivity | `provisioning_manager`, `wifi_manager` | BLE provisioning and Wi-Fi Station lifecycle |
 | Display | `display_driver`, `waveshare__esp_lcd_st7735` | Current board LCD integration and ST7735 panel implementation |
 | Input | `button_manager` | Debounced button input and event publication |
+| Output | `light_manager`, `neopixel` | Product static-light state and reusable WS2812/RMT driver behavior |
 | Sensing | `sensor_manager`, `sensor_DHT22` | Sampling/staleness policy and DHT22 acquisition |
 | Storage | `config_manager`, `sd_card_manager` | Persistent application configuration and managed SD/VFS lifecycle |
 | System | `app_log`, `common`, `log_manager`, `performance_monitor`, `time_manager` | Logging frontend/backend, project board/config glue, diagnostics, and system time |

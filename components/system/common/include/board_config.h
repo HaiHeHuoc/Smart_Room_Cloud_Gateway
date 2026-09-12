@@ -141,6 +141,9 @@
  * at the physical switch. The internal pull-down is only a supplementary
  * boot/default bias; it is not a reliable release path for a long/noisy wire.
  */
+#define NEOPIXEL_GPIO                           GPIO_NUM_48
+#define NEOPIXEL_LED_COUNT                      1U
+
 #define PTT_BUTTON_GPIO                         GPIO_NUM_38
 #define PTT_BUTTON_ACTIVE_LEVEL                 1
 #define PTT_BUTTON_USE_INTERNAL_PULLDOWN        1
