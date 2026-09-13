@@ -15,12 +15,12 @@ Target HIL:         PENDING
 base branch:            main_including_Firebase_security
 base commit:            f2597fd8fc60be54a66dc75dc6a7f718b9901c88
 implementation branch:  phase/18.2.1-playback-control-core
-implementation commit:  pending at the time this record was introduced
+implementation commit:  c7044f1c26b3d203aa022fac8ec785969a8ecc63
 ```
 
-The implementation commit is recorded by the follow-up documentation commit
-after the code checkpoint exists. This branch must not be merged until Prompt
-2 review and later target acceptance are explicitly handled.
+This record was finalized in a follow-up documentation commit after the code
+checkpoint existed. This branch must not be merged until Prompt 2 review and
+later target acceptance are explicitly handled.
 
 ## Implemented owner capability
 
