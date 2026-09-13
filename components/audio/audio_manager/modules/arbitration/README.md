@@ -8,5 +8,8 @@ busy-policy decisions.
   arbitration headers exposed from `audio_manager/include/`.
 - **Lifecycle:** owned by the parent audio manager; this directory does not
   register an ESP-IDF component or create an independent service lifecycle.
+- **Suspension:** an arbiter-owned WAV remains current while the manager
+  snapshot is `PAUSED`; the bounded pending request is not promoted until the
+  current request stops, completes, or fails.
 - **Promotion rule:** split into a standalone component only if arbitration is
   reused independently from `audio_manager` in another product.

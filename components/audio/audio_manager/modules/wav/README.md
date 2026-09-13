@@ -8,5 +8,8 @@ playback support.
   parent component and host tests.
 - **Lifecycle:** SD leases and playback ownership remain controlled by the
   parent audio manager and `sd_card_manager` contracts.
+- **Controlled resume:** pause retains only copied identity/metadata and a
+  committed offset. Reader, `FILE *`, lease, queues, and PSRAM blocks are
+  destroyed; resume fresh-opens, verifies metadata, and seeks before PLAYING.
 - **Promotion rule:** promote only if WAV parsing/playback becomes a separately
   reusable service with a stable standalone API.

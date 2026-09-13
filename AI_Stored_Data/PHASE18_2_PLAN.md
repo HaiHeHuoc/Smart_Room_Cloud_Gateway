@@ -1,6 +1,6 @@
 # Phase 18.2 — Audio Controlled Actions Plan
 
-Status: **PLANNING / Q&A IN PROGRESS — SCOPE NUMBERING LOCKED**
+Status: **18.2.1 IN PROGRESS / PROMPT 2 SOFTWARE CORE IMPLEMENTED — SCOPE NUMBERING LOCKED**
 
 Updated: 2026-09-13
 Integration branch: `main_including_Firebase_security`
@@ -16,7 +16,7 @@ Current Phase-18 execution state remains:
 
 ```text
 18.1    NeoPixel MCP control                                  COMPLETE
-18.2.1  Audio Playback Control + PTT Suspension/Auto-Resume   PLANNING
+18.2.1  Audio Playback Control + PTT Suspension/Auto-Resume   IN PROGRESS
 18.2.2  audio.play_recorded / bounded playback variant        PLANNING
 18.3    Existing previously planned scope                     NOT STARTED / UNCHANGED
 18.4    Existing previously planned scope                     NOT STARTED / UNCHANGED
@@ -318,8 +318,8 @@ and this 18.2.1/18.2.2 split unless Hải explicitly changes the plan.
 This file records planning decisions only:
 
 ```text
-18.2.1 implementation   NOT STARTED
-18.2.1 build            NOT RUN / NOT CLAIMED
+18.2.1 Prompt 2 core    IMPLEMENTED / BUILD VERIFIED
+18.2.1 Prompt 3         NOT STARTED
 18.2.1 HIL              NOT RUN / NOT CLAIMED
 18.2.2 implementation   NOT STARTED
 18.2.2 build            NOT RUN / NOT CLAIMED

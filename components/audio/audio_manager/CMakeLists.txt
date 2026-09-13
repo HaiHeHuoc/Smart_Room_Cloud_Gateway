@@ -6,6 +6,7 @@ idf_component_register(
         "modules/arbitration/src/audio_manager_playback_arbiter.c"
         "modules/arbitration/src/audio_manager_capture_arbiter.c"
         "modules/playback/src/audio_manager_named_playback.c"
+        "modules/playback/src/audio_manager_playback_control_policy.c"
         "modules/stream/src/audio_manager_pcm_stream_core.c"
         "modules/stream/src/audio_manager_stream.c"
         "modules/stream/src/audio_manager_stream_tap.c"
@@ -17,6 +18,7 @@ idf_component_register(
         "include"
     PRIV_INCLUDE_DIRS
         "modules/dsp/include"
+        "modules/playback/include"
         "modules/stream/include"
         "modules/wav/include"
     REQUIRES

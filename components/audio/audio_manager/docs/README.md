@@ -29,6 +29,22 @@ IDLE -> audio_manager_stop() -> INITIALIZED
 INITIALIZED -> audio_manager_deinit() -> UNINITIALIZED
 ```
 
+The separate playback-control snapshot preserves logical ownership while a
+local source has released TX resources:
+
+```text
+IDLE -> STARTING -> PLAYING -> PAUSING -> PAUSED
+                         ^                    |
+                         +---- RESUMING <-----+
+PLAYING/PAUSED -> STOPPING -> IDLE
+PLAYING/PAUSED -> restart same source at frame zero -> STARTING/RESUMING
+source failure -> ERROR -> IDLE
+```
+
+The lifecycle status remains `PLAYBACK` while the control snapshot is
+`PAUSED`. This keeps capture and pending playback arbitration out of the
+manager-owned slot even though `playback_i2s_active` is false.
+
 `audio_manager_state_to_string()` provides stable text for logs and the
 application GUI mapping. `RECORDING` begins as soon as the manager enables RX,
 so it includes microphone startup discard and slot detection as well as the
@@ -44,8 +60,20 @@ configured retained recording (five seconds by default).
   continuous test coordinator by itself.
 - `audio_manager_play_wav()` validates and copies one `/sdcard/...` path into
   bounded command storage; it never opens the file or waits for playback.
-- `audio_manager_stop_playback()` requests cancellation of the pending/active
-  WAV operation without touching its file, buffer, TX channel, or source.
+- `audio_manager_stop_playback()` requests cancellation of pending/active
+  recorded, WAV, or live-stream playback from the owner; repeated STOP after
+  cleanup reaches `IDLE` is idempotent.
+- `audio_manager_pause_playback(reason)` accepts a cooperative USER/PTT pause
+  only for retained recording or WAV. `PAUSED` is visible only after safe
+  owner cleanup.
+- `audio_manager_resume_playback(generation)` resumes the retained local
+  source; zero selects the current generation, while non-zero rejects stale
+  auto-resume requests.
+- `audio_manager_restart_playback()` restarts that same local source at frame
+  zero; it never selects a path or restarts the manager/device.
+- `audio_manager_get_playback_status()` copies state, bounded source kind,
+  resumability, generation, committed/total mono frames, pause reason, and the
+  last control result. It exposes no path, pointer, or driver handle.
 - `audio_manager_stop()` requests cooperative shutdown and waits up to five
   seconds; success returns the lifecycle to `INITIALIZED`.
 - `audio_manager_get_status()` copies the latest manager state and diagnostics under a bounded mutex wait.
@@ -107,6 +135,20 @@ media. Manager shutdown waits five seconds, returns `ESP_ERR_TIMEOUT` if the
 task is still cleaning up, leaves shutdown requested, and never force-deletes
 the resource-owning task. A later `audio_manager_stop()` may observe completion.
 
+Pause/restart use the same cooperative boundary. Recorded PCM and WAV commit
+position after each complete 256-frame TX block (16 ms at 16 kHz); the copied
+cursor is submitted-to-I2S, not a sample-perfect audible position. Repeated
+pause is idempotent. Resume from IDLE/PLAYING is invalid. Live PCM16/Xiaozhi is
+bounded and non-seekable, so pause/resume/restart return
+`ESP_ERR_NOT_SUPPORTED`; STOP still uses its existing abort path.
+
+While WAV is PAUSED, only bounded copied path/metadata/generation/offset remain.
+TX is stopped, the reader is joined, FILE and SD lease are released, and the
+PSRAM slots/queues/events are freed. Resume fresh-opens, rejects changed
+metadata, validates/seeks the offset, and only then returns to PLAYING. A
+retained recording keeps its already-owned PCM24 history and committed sample
+index; no second recording buffer is allocated.
+
 ## GUI Integration Contract
 
 The manager does not depend on `app_gui` or LVGL. `smart_room_app` registers
@@ -145,6 +187,9 @@ Suggested GUI meanings:
 
 The current dashboard renders these concise labels: `Audio: --`, `Audio: Ready`,
 `Audio: Idle`, `Audio: REC`, `Audio: DSP`, `Audio: PLAY`, and `Audio: ERR`.
+During controlled pause this legacy view still shows `Audio: PLAY` because it
+represents logical manager ownership. Prompt 3 may consume the dedicated
+playback snapshot without calling LVGL from audio context.
 
 ## Phase 11.4 Bounded SD/WAV Playback
 
@@ -437,6 +482,9 @@ audio_manager_start()
   geometry are unchanged. There is no whole-WAV allocation or second
   I2S-owning task; cache blocks are allocated once per WAV and reused until
   that source ends.
+- Paused WAV: no reader stack, FILE, SD lease, prefetch queues/events, raw
+  buffer, or PSRAM cache remains allocated. Only fixed-size resume metadata is
+  retained inside `audio_manager`.
 
 ## Current Limitations
 
@@ -454,5 +502,11 @@ audio_manager_start()
 - Automatic in-operation SD recovery is intentionally bounded to one fresh-file
   resume and a five-second READY wait. Persistent media errors, a damaged file,
   sector, or slower remount fail the current playback.
+- Controlled WAV resume fails deterministically when SD is unavailable, the
+  file cannot reopen, metadata changed, or the committed offset is invalid; it
+  does not keep a stale FILE or wait indefinitely for media.
+- Host tests cover transition policy and WAV seek/bounds/lease contracts. They
+  do not prove FreeRTOS timing, audible continuity, SD hot-removal, I2S output,
+  or repeated target resource stability.
 - End-to-end WAV sound quality, SD latency under Gateway load, and microphone
   regression remain target-hardware validation work for Phase 11.4.4.

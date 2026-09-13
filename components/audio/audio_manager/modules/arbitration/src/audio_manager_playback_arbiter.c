@@ -84,6 +84,8 @@ static audio_manager_playback_arbiter_state_t visible_state_locked(void)
         case AUDIO_MANAGER_PLAYBACK_REQUEST_ACTIVE:
         case AUDIO_MANAGER_PLAYBACK_REQUEST_DRAINING:
             return AUDIO_MANAGER_PLAYBACK_ARBITER_ACTIVE;
+        case AUDIO_MANAGER_PLAYBACK_REQUEST_PAUSED:
+            return AUDIO_MANAGER_PLAYBACK_ARBITER_PAUSED;
         default:
             return AUDIO_MANAGER_PLAYBACK_ARBITER_IDLE;
     }
@@ -343,6 +345,20 @@ static void playback_arbiter_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(PLAYBACK_ARBITER_POLL_MS));
             continue;
         }
+        audio_manager_playback_status_t playback = {0};
+        const esp_err_t playback_status_ret =
+            audio_manager_get_playback_status(&playback);
+        if (playback_status_ret != ESP_OK) {
+            if (take_lock()) {
+                sync_status_locked(
+                    AUDIO_MANAGER_PLAYBACK_ARBITER_ERROR,
+                    playback_status_ret);
+                ++s_status.failed_count;
+                xSemaphoreGive(s_lock);
+            }
+            vTaskDelay(pdMS_TO_TICKS(PLAYBACK_ARBITER_POLL_MS));
+            continue;
+        }
 
         bool do_abort = false;
         bool do_stop = false;
@@ -401,10 +417,28 @@ static void playback_arbiter_task(void *arg)
                     }
                 } else if (s_current.start_submitted) {
                     if (manager.state == AUDIO_MANAGER_STATE_PLAYBACK) {
-                        s_current.stream.state =
-                            s_current.stream_finish_requested
-                                ? AUDIO_MANAGER_PLAYBACK_REQUEST_DRAINING
-                                : AUDIO_MANAGER_PLAYBACK_REQUEST_ACTIVE;
+                        if ((s_current.source == PLAYBACK_SOURCE_WAV) &&
+                            (playback.source ==
+                             AUDIO_MANAGER_PLAYBACK_SOURCE_WAV) &&
+                            (playback.state ==
+                             AUDIO_MANAGER_PLAYBACK_CONTROL_PAUSED)) {
+                            s_current.stream.state =
+                                AUDIO_MANAGER_PLAYBACK_REQUEST_PAUSED;
+                        } else if ((s_current.source == PLAYBACK_SOURCE_WAV) &&
+                                   (playback.source ==
+                                    AUDIO_MANAGER_PLAYBACK_SOURCE_WAV) &&
+                                   ((playback.state ==
+                                     AUDIO_MANAGER_PLAYBACK_CONTROL_STARTING) ||
+                                    (playback.state ==
+                                     AUDIO_MANAGER_PLAYBACK_CONTROL_RESUMING))) {
+                            s_current.stream.state =
+                                AUDIO_MANAGER_PLAYBACK_REQUEST_STARTING;
+                        } else {
+                            s_current.stream.state =
+                                s_current.stream_finish_requested
+                                    ? AUDIO_MANAGER_PLAYBACK_REQUEST_DRAINING
+                                    : AUDIO_MANAGER_PLAYBACK_REQUEST_ACTIVE;
+                        }
                     } else if (s_current.source == PLAYBACK_SOURCE_PCM16_STREAM) {
                         /* IDLE is legitimate while the manager waits for the
                          * first bounded prefill; only a confirmed closed ring
@@ -870,6 +904,7 @@ const char *audio_manager_playback_arbiter_state_to_string(
         case AUDIO_MANAGER_PLAYBACK_ARBITER_IDLE: return "IDLE";
         case AUDIO_MANAGER_PLAYBACK_ARBITER_STARTING: return "STARTING";
         case AUDIO_MANAGER_PLAYBACK_ARBITER_ACTIVE: return "ACTIVE";
+        case AUDIO_MANAGER_PLAYBACK_ARBITER_PAUSED: return "PAUSED";
         case AUDIO_MANAGER_PLAYBACK_ARBITER_PREEMPTING: return "PREEMPTING";
         case AUDIO_MANAGER_PLAYBACK_ARBITER_ERROR: return "ERROR";
         default: return "UNKNOWN";
