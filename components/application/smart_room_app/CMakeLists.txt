@@ -24,7 +24,6 @@ idf_component_register(
         lvgl_image_handler
         lvgl_sd_fs
         nvs_flash
-        performance_monitor
         provisioning_manager
         sd_card_manager
         sensor_manager

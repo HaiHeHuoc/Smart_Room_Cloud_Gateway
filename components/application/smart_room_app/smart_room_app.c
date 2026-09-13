@@ -27,9 +27,6 @@
 /* LVGL SD Management ------------------------------------------------------- */
 #include "lvgl_sd_fs.h"
 
-/* Performance monitor ----------------------------------------------------- */
-#include "performance_monitor.h"
-
 /* Time manager ------------------------------------------------------------ */
 #include "time_manager.h"
 #include "log_manager.h"
@@ -75,9 +72,6 @@
 
 /* Light manager ------------------------------------------------------------ */
 #include "light_manager.h"
-
-/* Macros ------------------------------------------------------------------- */
-#define PERFORMANCE_MONITOR 0
 
 #if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
 #define APP_XIAOZHI_VALIDATION_QUIESCENCE_MS \
@@ -535,19 +529,6 @@ void smart_room_app_start(void)
                 esp_err_to_name(sd_start_ret));
         }
     }
-
-#if PERFORMANCE_MONITOR
-    esp_err_t monitor_ret =
-        performance_monitor_start();
-
-    if (monitor_ret != ESP_OK)
-    {
-        APP_LOGE(
-            TAG, FAILED_TO_START_PERFORMANCE_9007906C,
-            "Failed to start performance monitor: %s",
-            esp_err_to_name(monitor_ret));
-    }
-#endif
 
     /*
      * Phase 7.2 reset-input path.

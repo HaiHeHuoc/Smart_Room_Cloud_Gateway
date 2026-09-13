@@ -1,7 +1,0 @@
--mlongcalls
--fno-builtin-memcpy
--fno-builtin-memset
--fno-builtin-bzero
--mdisable-hardware-atomics
-"-specs=D:/01_Hai_Project/01_Smart_Room_Cloud_Gateway/Smart_Room_Cloud_Gateway/build-phase16-hil/specs/picolibc.specs"
--fno-rtti

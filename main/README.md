@@ -48,17 +48,16 @@ does no work unless a test Kconfig gate is enabled.
    `Starting...` BOOT screen.
 6. Start the background SD recovery task. A missing card is non-fatal; retry
    continues while the rest of the application starts.
-7. Optionally start `performance_monitor`.
-8. Initialize/start the reset coordinator and button manager.
-9. Initialize `wifi_manager` and its status callback.
-10. Initialize the application network coordinator.
-11. Initialize `firebase_auth` and `cloud_manager`; create the telemetry queue
-    without starting TLS.
-12. Initialize/start `sensor_manager`.
-13. Schedule the one-shot network coordinator.
-14. During lifecycle polling, start `cloud_manager` only after stored-Wi-Fi
-    startup or successful provisioning cleanup and Station adoption.
-15. In the same lifecycle polling, initialize `audio_manager`, register its
+7. Initialize/start the reset coordinator and button manager.
+8. Initialize `wifi_manager` and its status callback.
+9. Initialize the application network coordinator.
+10. Initialize `firebase_auth` and `cloud_manager`; create the telemetry queue
+   without starting TLS.
+11. Initialize/start `sensor_manager`.
+12. Schedule the one-shot network coordinator.
+13. During lifecycle polling, start `cloud_manager` only after stored-Wi-Fi
+   startup or successful provisioning cleanup and Station adoption.
+14. In the same lifecycle polling, initialize `audio_manager`, register its
     copied GUI status adapter, and start its private I2S-owning task only after
     the coordinator reaches `ONLINE`. This reserves audio I2S/DMA/task
     allocation until Wi-Fi has a valid IPv4 address and any BLE provisioning

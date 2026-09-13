@@ -1,9 +1,0 @@
-Command: cmake -G Ninja -B D:\01_Hai_Project\01_Smart_Room_Cloud_Gateway\Smart_Room_Cloud_Gateway\build-phase16-hil -DPYTHON_DEPS_CHECKED=1 -DPYTHON=C:\Users\tranl\.espressif\python_env\idf6.0_py3.14_env\Scripts\python.exe -DESP_PLATFORM=1 -DSDKCONFIG_DEFAULTS=sdkconfig.defaults;test_apps/sdkconfig.phase16_hil.defaults -DCCACHE_ENABLE=True D:\01_Hai_Project\01_Smart_Room_Cloud_Gateway\Smart_Room_Cloud_Gateway
-Configuration Report               
-+---------------------------------+
-|  Parser Version: 1              |
-|  Verbosity: default             |
-|  Defaults policy: sdkconfig     |
-|  Status: Finished successfully  |
-|                                 |
-+---------------------------------+

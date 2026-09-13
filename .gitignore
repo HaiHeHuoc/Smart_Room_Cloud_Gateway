@@ -28,6 +28,7 @@ credentials/
 # Build artifacts and directories
 **/build/
 build/
+/build-phase16-hil/
 *.o
 *.a
 *.out
