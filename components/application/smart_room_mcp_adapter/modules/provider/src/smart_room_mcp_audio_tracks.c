@@ -31,19 +31,59 @@ static bool is_track_char(unsigned char value)
     return isalnum(value) || (value == '_') || (value == '-');
 }
 
+static bool is_display_name_byte_safe(unsigned char value)
+{
+    /* JSON quotes/backslashes and controls are never retained. UTF-8 bytes
+     * are preserved verbatim as a display-only name; playback still uses the
+     * independently generated ASCII logical ID. */
+    return ((value >= 0x20U) && (value != '"') && (value != '\\'));
+}
+
+static bool extension_is_wav(const char *filename, size_t length)
+{
+    return (length >= 4U) &&
+        (tolower((unsigned char)filename[length - 4U]) == '.') &&
+        (tolower((unsigned char)filename[length - 3U]) == 'w') &&
+        (tolower((unsigned char)filename[length - 2U]) == 'a') &&
+        (tolower((unsigned char)filename[length - 1U]) == 'v');
+}
+
+static uint32_t filename_hash(const char *filename, size_t length)
+{
+    uint32_t value = 2166136261UL;
+    for (size_t i = 0U; i < length; ++i) {
+        value ^= (uint8_t)filename[i];
+        value *= 16777619UL;
+    }
+    return value;
+}
+
 static bool make_entry(const char *filename, smart_room_catalog_entry_t *entry)
 {
     if ((filename == NULL) || (entry == NULL)) return false;
     const size_t length = strnlen(filename, SMART_ROOM_AUDIO_FILENAME_MAX_BYTES);
     if ((length < 6U) || (length >= SMART_ROOM_AUDIO_FILENAME_MAX_BYTES) ||
-        (strcmp(filename + length - 4U, ".wav") != 0)) return false;
+        !extension_is_wav(filename, length)) return false;
     const size_t stem_length = length - 4U;
-    if (stem_length >= XIAOZHI_FOUNDATION_AUDIO_TRACK_ID_MAX_BYTES) return false;
+    if (stem_length >= XIAOZHI_FOUNDATION_AUDIO_TRACK_NAME_MAX_BYTES) return false;
+    bool stem_is_token = true;
     for (size_t i = 0U; i < stem_length; ++i) {
-        if (!is_track_char((unsigned char)filename[i])) return false;
+        const unsigned char byte = (unsigned char)filename[i];
+        if (!is_display_name_byte_safe(byte) || (byte == '/') || (byte == '\\') ||
+            (byte == '.')) return false;
+        if (!is_track_char(byte)) stem_is_token = false;
     }
     *entry = (smart_room_catalog_entry_t){0};
-    memcpy(entry->public_track.id, filename, stem_length);
+    if (stem_is_token) {
+        memcpy(entry->public_track.id, filename, stem_length);
+    } else {
+        const int id_length = snprintf(entry->public_track.id,
+                                       sizeof(entry->public_track.id),
+                                       "track_%08lx",
+                                       (unsigned long)filename_hash(filename, length));
+        if ((id_length < 0) || ((size_t)id_length >= sizeof(entry->public_track.id)))
+            return false;
+    }
     memcpy(entry->public_track.name, filename, stem_length);
     memcpy(entry->filename, filename, length + 1U);
     return true;

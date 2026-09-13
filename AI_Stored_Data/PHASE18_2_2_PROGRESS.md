@@ -27,10 +27,12 @@ FILE, SD lease, I2S, DMA, or PCM data across the MCP/provider boundary.
   are in progress; it never mounts, unmounts, or initializes SD itself.
 - Maximum: 12 tracks; track ID/name: 47 bytes plus terminator; filename: 51
   bytes plus terminator.
-- Eligible filename is exactly ASCII `[A-Za-z0-9_-]+.wav`; the stem is the
-  deterministic logical ID/name. Directory separators, dot components,
-  unknown/overlong IDs, duplicate IDs, non-WAV files, directories and arbitrary
-  paths are rejected/ignored.
+- Eligible file is a direct bounded `.wav` entry with no separators, dot
+  components, control bytes, JSON quote, or backslash. An ASCII token stem
+  remains its deterministic ID; a safe display stem containing spaces or UTF-8
+  receives a deterministic `track_<hash>` ID while retaining its readable
+  `name`. Unknown/overlong IDs, duplicate IDs, non-WAV files, directories and
+  arbitrary paths are rejected/ignored.
 - Entries are retained in lexical deterministic order. If more valid files
   exist, the lexical first bounded set is exposed with `truncated=true`.
 - Final WAV validation remains the existing `audio_manager` parser.

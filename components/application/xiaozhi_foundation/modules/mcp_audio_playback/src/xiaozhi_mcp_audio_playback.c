@@ -284,6 +284,18 @@ static bool audio_track_token_is_safe(const char *value, size_t max_bytes)
     return true;
 }
 
+static bool audio_track_display_name_is_safe(const char *value, size_t max_bytes)
+{
+    if (value == NULL) return false;
+    const size_t length = strnlen(value, max_bytes);
+    if ((length == 0U) || (length >= max_bytes)) return false;
+    for (size_t i = 0U; i < length; ++i) {
+        const unsigned char c = (unsigned char)value[i];
+        if ((c < 0x20U) || (c == '"') || (c == '\\')) return false;
+    }
+    return true;
+}
+
 static esp_err_t audio_list_tracks_callback(
     const esp_mcp_property_list_t *properties,
     esp_mcp_tool_result_t *result)
@@ -305,11 +317,15 @@ static esp_err_t audio_list_tracks_callback(
     for (uint8_t i = 0U; i < tracks.track_count; ++i) {
         if (!audio_track_token_is_safe(tracks.tracks[i].id,
                                        XIAOZHI_FOUNDATION_AUDIO_TRACK_ID_MAX_BYTES) ||
-            !audio_track_token_is_safe(tracks.tracks[i].name,
-                                       XIAOZHI_FOUNDATION_AUDIO_TRACK_NAME_MAX_BYTES)) {
+            !audio_track_display_name_is_safe(tracks.tracks[i].name,
+                                              XIAOZHI_FOUNDATION_AUDIO_TRACK_NAME_MAX_BYTES)) {
             return audio_set_error(result, "catalog_unavailable");
         }
     }
+    APP_LOGI(TAG, AUDIO_TRACK_CATALOG_LISTED_U_TR_03D873D1,
+             "audio catalog listed tracks=%u truncated=%s",
+             (unsigned)tracks.track_count,
+             tracks.truncated ? "yes" : "no");
     char json[1536] = {0};
     size_t used = 0U;
     int written = snprintf(json, sizeof(json),
@@ -593,6 +609,6 @@ esp_err_t xiaozhi_mcp_audio_playback_attach(esp_mcp_t *mcp)
     s_attached = true;
     portEXIT_CRITICAL(&s_lock);
     APP_LOGI(TAG, AUDIO_PLAYBACK_TOOLS_REGISTER_77CBFDF3,
-             "audio.control_playback and audio.get_playback_state registered");
+             "audio.control_playback, audio.get_playback_state, audio.list_tracks, audio.play_track, and audio.play_recorded registered");
     return ESP_OK;
 }
