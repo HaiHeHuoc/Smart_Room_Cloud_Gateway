@@ -14,6 +14,7 @@ typedef enum {
     VOICE_ASSISTANT_PTT_UNINITIALIZED = 0,
     VOICE_ASSISTANT_PTT_IDLE,
     VOICE_ASSISTANT_PTT_ARMING_SESSION,
+    VOICE_ASSISTANT_PTT_SUSPENDING_PLAYBACK,
     VOICE_ASSISTANT_PTT_AUTHORIZED,
     VOICE_ASSISTANT_PTT_RELEASED,
     VOICE_ASSISTANT_PTT_CANCEL_PENDING,
@@ -47,9 +48,10 @@ esp_err_t voice_assistant_ptt_start(void);
  * it is already CONNECTING, the press is armed and waits for that same READY
  * evidence. From ERROR, one continuously held press is retained through
  * bounded recovery and starts a fresh session after IDLE. Capture authorization
- * becomes true only after real READY evidence exists. A press while a prior
- * turn is awaiting, receiving, finalizing, or playing its server response is
- * ignored and never reported as capture-authorized.
+ * becomes true only after real READY evidence exists. A press during an old
+ * Xiaozhi response requests its bounded downlink-owned cancellation and keeps
+ * the same physical press. Resumable local playback must first reach a safe,
+ * resource-released PAUSED state; a fast release never authorizes capture.
  */
 esp_err_t voice_assistant_ptt_press(void);
 

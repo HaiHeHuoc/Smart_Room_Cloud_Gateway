@@ -43,8 +43,16 @@ static TaskHandle_t s_task = NULL;
 static TaskHandle_t s_start_waiter = NULL;
 static playback_slot_t s_current = {0};
 static playback_slot_t s_pending = {0};
+/* One arbiter-owned paused WAV may yield logical current ownership while its
+ * resources are fully released for a PTT turn. This includes a prior USER
+ * pause: Xiaozhi TTS still needs the speaker, but the retained pause reason
+ * prevents a normal question from auto-resuming user-paused audio. Only the
+ * Xiaozhi PCM stream may occupy current during this bounded suspension; the
+ * WAV slot is restored before ordinary pending work is promoted. */
+static playback_slot_t s_ptt_suspended = {0};
 static bool s_current_valid = false;
 static bool s_pending_valid = false;
+static bool s_ptt_suspended_valid = false;
 static audio_manager_playback_request_status_t
     s_terminal_history[PLAYBACK_ARBITER_TERMINAL_HISTORY_LENGTH] = {0};
 static size_t s_terminal_next = 0U;
@@ -157,6 +165,16 @@ static void promote_pending_locked(void)
     }
 }
 
+static void restore_ptt_suspended_locked(void)
+{
+    if (!s_current_valid && s_ptt_suspended_valid) {
+        s_current = s_ptt_suspended;
+        s_current_valid = true;
+        clear_slot(&s_ptt_suspended);
+        s_ptt_suspended_valid = false;
+    }
+}
+
 static void finish_current_locked(esp_err_t manager_result)
 {
     if (!s_current_valid) {
@@ -191,6 +209,7 @@ static void finish_current_locked(esp_err_t manager_result)
     store_terminal_locked(&s_current, terminal_state, terminal_result);
     clear_slot(&s_current);
     s_current_valid = false;
+    restore_ptt_suspended_locked();
     /* Pending promotion is intentionally deferred to the arbiter task. A
      * terminal PCM request may still need abort/close work after this lock is
      * released, so exposing the next owner here would reopen a prepare race. */
@@ -416,29 +435,33 @@ static void playback_arbiter_task(void *arg)
                         finish_current_locked(ESP_OK);
                     }
                 } else if (s_current.start_submitted) {
-                    if (manager.state == AUDIO_MANAGER_STATE_PLAYBACK) {
-                        if ((s_current.source == PLAYBACK_SOURCE_WAV) &&
-                            (playback.source ==
-                             AUDIO_MANAGER_PLAYBACK_SOURCE_WAV) &&
-                            (playback.state ==
-                             AUDIO_MANAGER_PLAYBACK_CONTROL_PAUSED)) {
-                            s_current.stream.state =
-                                AUDIO_MANAGER_PLAYBACK_REQUEST_PAUSED;
-                        } else if ((s_current.source == PLAYBACK_SOURCE_WAV) &&
-                                   (playback.source ==
-                                    AUDIO_MANAGER_PLAYBACK_SOURCE_WAV) &&
-                                   ((playback.state ==
-                                     AUDIO_MANAGER_PLAYBACK_CONTROL_STARTING) ||
-                                    (playback.state ==
-                                     AUDIO_MANAGER_PLAYBACK_CONTROL_RESUMING))) {
-                            s_current.stream.state =
-                                AUDIO_MANAGER_PLAYBACK_REQUEST_STARTING;
-                        } else {
-                            s_current.stream.state =
-                                s_current.stream_finish_requested
-                                    ? AUDIO_MANAGER_PLAYBACK_REQUEST_DRAINING
-                                    : AUDIO_MANAGER_PLAYBACK_REQUEST_ACTIVE;
-                        }
+                    /* A retained WAV intentionally releases the manager
+                     * operation slot and I2S while PAUSED. Keep its arbiter
+                     * request alive even though the manager lifecycle is
+                     * IDLE. Likewise, RESUMING is a queued handoff and must
+                     * not be mistaken for natural completion before the
+                     * manager task consumes the command. */
+                    if ((s_current.source == PLAYBACK_SOURCE_WAV) &&
+                        (playback.source ==
+                         AUDIO_MANAGER_PLAYBACK_SOURCE_WAV) &&
+                        (playback.state ==
+                         AUDIO_MANAGER_PLAYBACK_CONTROL_PAUSED)) {
+                        s_current.stream.state =
+                            AUDIO_MANAGER_PLAYBACK_REQUEST_PAUSED;
+                    } else if ((s_current.source == PLAYBACK_SOURCE_WAV) &&
+                               (playback.source ==
+                                AUDIO_MANAGER_PLAYBACK_SOURCE_WAV) &&
+                               ((playback.state ==
+                                 AUDIO_MANAGER_PLAYBACK_CONTROL_STARTING) ||
+                                (playback.state ==
+                                 AUDIO_MANAGER_PLAYBACK_CONTROL_RESUMING))) {
+                        s_current.stream.state =
+                            AUDIO_MANAGER_PLAYBACK_REQUEST_STARTING;
+                    } else if (manager.state == AUDIO_MANAGER_STATE_PLAYBACK) {
+                        s_current.stream.state =
+                            s_current.stream_finish_requested
+                                ? AUDIO_MANAGER_PLAYBACK_REQUEST_DRAINING
+                                : AUDIO_MANAGER_PLAYBACK_REQUEST_ACTIVE;
                     } else if (s_current.source == PLAYBACK_SOURCE_PCM16_STREAM) {
                         /* IDLE is legitimate while the manager waits for the
                          * first bounded prefill; only a confirmed closed ring
@@ -552,6 +575,12 @@ esp_err_t audio_manager_playback_arbiter_init(void)
     }
 
     memset(&s_status, 0, sizeof(s_status));
+    clear_slot(&s_current);
+    clear_slot(&s_pending);
+    clear_slot(&s_ptt_suspended);
+    s_current_valid = false;
+    s_pending_valid = false;
+    s_ptt_suspended_valid = false;
     memset(s_terminal_history, 0, sizeof(s_terminal_history));
     s_terminal_next = 0U;
     s_status.state = AUDIO_MANAGER_PLAYBACK_ARBITER_IDLE;
@@ -650,6 +679,13 @@ esp_err_t audio_manager_playback_arbiter_submit_pcm16_stream(
         },
     };
 
+    audio_manager_playback_status_t playback = {0};
+    const esp_err_t playback_status_result =
+        audio_manager_get_playback_status(&playback);
+    if (playback_status_result != ESP_OK) {
+        return playback_status_result;
+    }
+
     if (!take_lock()) {
         return ESP_ERR_TIMEOUT;
     }
@@ -670,7 +706,30 @@ esp_err_t audio_manager_playback_arbiter_submit_pcm16_stream(
         return prepare_result;
     }
 
-    const esp_err_t submit_result = submit_slot_locked(&incoming);
+    esp_err_t submit_result = ESP_OK;
+    const bool ptt_yield = s_current_valid &&
+        !s_ptt_suspended_valid &&
+        (s_current.source == PLAYBACK_SOURCE_WAV) &&
+        s_current.start_submitted &&
+        (playback.state == AUDIO_MANAGER_PLAYBACK_CONTROL_PAUSED) &&
+        (playback.source == AUDIO_MANAGER_PLAYBACK_SOURCE_WAV) &&
+        ((playback.pause_reason == AUDIO_MANAGER_PLAYBACK_PAUSE_PTT) ||
+         (playback.pause_reason == AUDIO_MANAGER_PLAYBACK_PAUSE_USER));
+    if (ptt_yield) {
+        s_ptt_suspended = s_current;
+        s_ptt_suspended_valid = true;
+        s_current = incoming;
+        s_current_valid = true;
+        ++s_status.accepted_count;
+        sync_status_locked(visible_state_locked(), ESP_OK);
+        APP_LOGI(TAG, PAUSED_WAV_YIELDED_TO_XIAOZHI__D884E77C,
+                 "paused WAV request=%u reason=%d yielded to Xiaozhi stream=%u",
+                 (unsigned)s_ptt_suspended.request.request_id,
+                 (int)playback.pause_reason,
+                 (unsigned)incoming.request.request_id);
+    } else {
+        submit_result = submit_slot_locked(&incoming);
+    }
     if (submit_result != ESP_OK) {
         (void)audio_manager_pcm_stream_abort(request->request_id);
     }

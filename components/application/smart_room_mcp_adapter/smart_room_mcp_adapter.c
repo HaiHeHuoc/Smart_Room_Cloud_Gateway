@@ -24,5 +24,10 @@ esp_err_t smart_room_mcp_adapter_register_providers(void)
         return ret;
     }
 
+    ret = smart_room_mcp_audio_playback_register_providers();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
     return smart_room_mcp_system_status_register_provider();
 }

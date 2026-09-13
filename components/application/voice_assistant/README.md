@@ -167,7 +167,30 @@ unchanged; it does not invent another button edge.
 For a non-empty turn, uplink reserves a downlink-owned response wait before it
 sends stop-listening. The wait serializes PTT until TTS starts, an error arrives,
 or its finite timeout aborts the channel; it also covers finalization and
-playback, so an ignored busy press is never reported as capture-authorized.
+playback. A new GPIO38 press during that response no longer starts overlapping
+capture: the downlink owner first taints old PCM, cooperatively terminates its
+arbiter stream, closes the audio channel, clears response state, and only then
+allows the same retained physical press to continue.
+
+## Phase 18.2.1 playback/PTT policy
+
+GPIO38 interruption is local product policy, never an MCP round trip. For a
+playing resumable WAV or retained recording, the PTT task requests
+`pause_reason=PTT`, waits at most 2.5 seconds for copied `PAUSED`, manager
+`IDLE`, and released speaker/I2S ownership, then authorizes the same press.
+A release queued during this suspension cancels the unstarted turn and applies
+the generation-guarded automatic resume; microphone capture cannot begin late.
+
+The bounded per-turn record distinguishes a prior `USER` pause from temporary
+PTT suspension. Only the temporary case auto-resumes after a terminal response.
+An `audio.control_playback` action in the active turn replaces that automatic
+decision; the last accepted `pause`, `resume`, `stop`, or `restart` action is
+applied once after Xiaozhi TTS ends, avoiding local audio/TTS overlap. Old PTT
+or response generations cannot consume a newer transaction.
+
+The public `voice_assistant_playback_control.h` facade owns only policy and
+copied state. `audio_manager` remains sole hardware/source owner, while
+downlink remains sole logical owner of Xiaozhi response cancellation.
 
 ## Audio contract
 

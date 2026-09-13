@@ -39,9 +39,10 @@ typedef enum
 
     /**
      * A manager-owned recorded, WAV, or live PCM16 operation owns playback.
-     * During controlled local-source PAUSED, this logical state remains set
-     * while playback_i2s_active is false; inspect playback-control status for
-     * the physical control state.
+     * A controlled local-source PAUSED releases the manager operation slot and
+     * reports lifecycle IDLE while its copied playback-control status remains
+     * PAUSED. This permits PTT capture/TTS to use I2S without retaining FILE,
+     * SD-reader, I2S, or DMA ownership for the local source.
      */
     AUDIO_MANAGER_STATE_PLAYBACK,
 
@@ -431,6 +432,17 @@ esp_err_t audio_manager_resume_playback(uint32_t expected_generation);
  * Task context only.
  */
 esp_err_t audio_manager_restart_playback(void);
+
+/**
+ * Restart the retained local source only when its generation still matches.
+ *
+ * This is the stale-event-safe form used by deferred voice/PTT policy. A zero
+ * generation has the same current-source semantics as
+ * audio_manager_restart_playback(). The request is asynchronous; observe the
+ * copied playback status for physical PLAYING evidence.
+ */
+esp_err_t audio_manager_restart_playback_at_generation(
+    uint32_t expected_generation);
 
 /**
  * @brief Copy the current playback-control snapshot without exposing handles.

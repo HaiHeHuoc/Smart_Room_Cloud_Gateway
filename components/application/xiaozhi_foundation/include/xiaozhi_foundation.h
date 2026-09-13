@@ -248,6 +248,87 @@ esp_err_t xiaozhi_foundation_register_light_state_query_provider(
     xiaozhi_foundation_light_state_query_provider_t provider,
     void *user_context);
 
+/* Phase 18.2.1 bounded audio playback MCP boundary ----------------------- */
+
+typedef enum {
+    XIAOZHI_FOUNDATION_AUDIO_ACTION_PAUSE = 0,
+    XIAOZHI_FOUNDATION_AUDIO_ACTION_RESUME,
+    XIAOZHI_FOUNDATION_AUDIO_ACTION_STOP,
+    XIAOZHI_FOUNDATION_AUDIO_ACTION_RESTART,
+} xiaozhi_foundation_audio_action_t;
+
+typedef enum {
+    XIAOZHI_FOUNDATION_AUDIO_STATE_IDLE = 0,
+    XIAOZHI_FOUNDATION_AUDIO_STATE_STARTING,
+    XIAOZHI_FOUNDATION_AUDIO_STATE_PLAYING,
+    XIAOZHI_FOUNDATION_AUDIO_STATE_PAUSING,
+    XIAOZHI_FOUNDATION_AUDIO_STATE_PAUSED,
+    XIAOZHI_FOUNDATION_AUDIO_STATE_RESUMING,
+    XIAOZHI_FOUNDATION_AUDIO_STATE_STOPPING,
+    XIAOZHI_FOUNDATION_AUDIO_STATE_ERROR,
+} xiaozhi_foundation_audio_state_t;
+
+typedef enum {
+    XIAOZHI_FOUNDATION_AUDIO_SOURCE_NONE = 0,
+    XIAOZHI_FOUNDATION_AUDIO_SOURCE_RECORDED,
+    XIAOZHI_FOUNDATION_AUDIO_SOURCE_WAV,
+    XIAOZHI_FOUNDATION_AUDIO_SOURCE_LIVE_PCM,
+} xiaozhi_foundation_audio_source_t;
+
+typedef enum {
+    XIAOZHI_FOUNDATION_AUDIO_PAUSE_NONE = 0,
+    XIAOZHI_FOUNDATION_AUDIO_PAUSE_USER,
+    XIAOZHI_FOUNDATION_AUDIO_PAUSE_PTT_TEMPORARY,
+} xiaozhi_foundation_audio_pause_reason_t;
+
+typedef enum {
+    XIAOZHI_FOUNDATION_AUDIO_OUTCOME_SUCCESS = 0,
+    XIAOZHI_FOUNDATION_AUDIO_OUTCOME_NO_CURRENT_SOURCE,
+    XIAOZHI_FOUNDATION_AUDIO_OUTCOME_INVALID_STATE,
+    XIAOZHI_FOUNDATION_AUDIO_OUTCOME_NON_RESUMABLE_SOURCE,
+    XIAOZHI_FOUNDATION_AUDIO_OUTCOME_STALE_GENERATION,
+    XIAOZHI_FOUNDATION_AUDIO_OUTCOME_CONTROL_FAILED,
+} xiaozhi_foundation_audio_outcome_t;
+
+/** Safe copied playback state; it contains no path, handle, pointer or PCM. */
+typedef struct {
+    bool available;
+    xiaozhi_foundation_audio_state_t state;
+    xiaozhi_foundation_audio_source_t source_type;
+    xiaozhi_foundation_audio_pause_reason_t pause_reason;
+    bool resumable;
+    uint32_t generation;
+    uint64_t position_frames;
+    uint64_t total_frames;
+    uint32_t position_granularity_frames;
+} xiaozhi_foundation_audio_playback_snapshot_t;
+
+typedef struct {
+    xiaozhi_foundation_audio_outcome_t outcome;
+    bool accepted;
+    bool physically_applied;
+    xiaozhi_foundation_audio_playback_snapshot_t playback;
+} xiaozhi_foundation_audio_control_result_t;
+
+typedef esp_err_t (*xiaozhi_foundation_audio_control_provider_t)(
+    xiaozhi_foundation_audio_action_t action,
+    xiaozhi_foundation_audio_control_result_t *result,
+    void *user_context);
+
+typedef esp_err_t (*xiaozhi_foundation_audio_state_provider_t)(
+    xiaozhi_foundation_audio_playback_snapshot_t *snapshot,
+    void *user_context);
+
+/** Register the bounded control provider before production voice starts. */
+esp_err_t xiaozhi_foundation_register_audio_control_provider(
+    xiaozhi_foundation_audio_control_provider_t provider,
+    void *user_context);
+
+/** Register the side-effect-free copied playback-state provider. */
+esp_err_t xiaozhi_foundation_register_audio_state_provider(
+    xiaozhi_foundation_audio_state_provider_t provider,
+    void *user_context);
+
 /* Phase 14 production audio boundary -------------------------------------- */
 
 #define XIAOZHI_FOUNDATION_UPLINK_SAMPLE_RATE_HZ 16000U

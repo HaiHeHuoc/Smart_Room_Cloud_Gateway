@@ -24,6 +24,8 @@ smart_room.get_system_status
 light.set_state
 light.get_state
 light.get_capabilities
+audio.control_playback
+audio.get_playback_state
 ```
 
 Tool definition, schema parsing, MCP engine/session lifecycle, and managed
@@ -51,6 +53,10 @@ runtime tool call
   `audio_manager`, and `light_manager` where required by the current provider.
 - Light providers invoke only the public `light_manager` logical-state API;
   they never access GPIO, RMT, NeoPixel handles, or board mapping.
+- Audio providers translate only bounded action/status enums. Control is
+  delegated to `voice_assistant` turn policy and then the public
+  `audio_manager` control surface; the adapter never touches I2S, DMA, FILE,
+  SD leases, source paths, or PCM buffers.
 - `xiaozhi_foundation` remains the sole direct `esp_xiaozhi`/MCP engine and
   session owner. It attaches tools after MCP engine creation and detaches them
   before engine destruction.
@@ -72,7 +78,10 @@ light.set_state
 ```
 
 `light.get_state` and `light.get_capabilities` are read-only companions.
-Phase 18.1 is complete and accepted; Phase 18.2-18.4 remain not started.
+Phase 18.1 is complete and accepted. Phase 18.2.1 Prompt 3 now adds control of
+an already-existing resumable source plus a read-only copied playback snapshot;
+it does not select tracks or expose an arbitrary path. Phase 18.2.2, 18.3, and
+18.4 remain unchanged.
 
 The application-structure cleanup only consolidated existing provider logic. It
 added no new MCP tool, transport/protocol behavior, hardware ownership, or

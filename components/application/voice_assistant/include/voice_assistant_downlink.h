@@ -21,6 +21,8 @@ typedef struct {
     bool finalizing;
     bool playback_requested;
     uint32_t session_generation;
+    /** Physical PTT transaction owning this response; zero when inactive. */
+    uint32_t ptt_generation;
     /** Encoded Opus bytes copied from complete response packet callbacks. */
     uint64_t response_bytes_received;
     /** Decoded PCM16 bytes accepted into the bounded manager-owned stream. */
@@ -49,7 +51,9 @@ esp_err_t voice_assistant_downlink_start(void);
  * bounded response timeout aborts the channel. Thread-safe; it does not call
  * Xiaozhi or I2S.
  */
-esp_err_t voice_assistant_downlink_begin_response_wait(uint32_t session_generation);
+esp_err_t voice_assistant_downlink_begin_response_wait(
+    uint32_t session_generation,
+    uint32_t ptt_generation);
 
 /**
  * @brief Cancel a response wait whose stop-listening request failed.
@@ -73,6 +77,16 @@ esp_err_t voice_assistant_downlink_get_status(
  * function only reads copied project state; it never touches Xiaozhi or I2S.
  */
 bool voice_assistant_downlink_is_busy(void);
+
+/**
+ * Interrupt the current Xiaozhi response from task context.
+ *
+ * The request is queued to the downlink owner, which taints/rejects stale PCM,
+ * terminates the arbiter stream, closes the audio channel and clears response
+ * state. This call waits only for a finite terminal acknowledgement and never
+ * exposes provider/transport handles.
+ */
+esp_err_t voice_assistant_downlink_interrupt_active_response(void);
 
 #ifdef __cplusplus
 }

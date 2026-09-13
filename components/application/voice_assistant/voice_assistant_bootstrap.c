@@ -7,6 +7,7 @@
 #include "app_log.h"
 #include "voice_assistant_audio_adapter.h"
 #include "voice_assistant_downlink.h"
+#include "voice_assistant_playback_control.h"
 #include "voice_assistant_ptt.h"
 #include "voice_assistant_ptt_gpio.h"
 #include "voice_assistant_ui_gui_adapter.h"
@@ -79,6 +80,11 @@ static esp_err_t voice_assistant_start_stack(void)
     }
 
     ret = voice_assistant_ui_gui_adapter_start();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    ret = voice_assistant_playback_control_init();
     if (ret != ESP_OK) {
         return ret;
     }

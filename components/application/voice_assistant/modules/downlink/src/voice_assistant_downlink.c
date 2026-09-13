@@ -5,6 +5,7 @@
 
 #include "voice_assistant_audio_arbitration_bridge.h"
 #include "voice_assistant_opus.h"
+#include "voice_assistant_playback_control.h"
 #include "xiaozhi_foundation.h"
 
 #include "esp_heap_caps.h"
@@ -50,9 +51,13 @@
  * by this component. */
 #define DOWNLINK_STREAM_BACKPRESSURE_RETRY_MS    20U
 #define DOWNLINK_STREAM_BACKPRESSURE_TIMEOUT_MS  5000U
+#define DOWNLINK_INTERRUPT_QUEUE_TIMEOUT_MS       500U
+#define DOWNLINK_INTERRUPT_TERMINAL_TIMEOUT_MS   2500U
+#define DOWNLINK_INTERRUPT_POLL_MS                 20U
 
 typedef struct {
     xiaozhi_foundation_response_event_kind_t kind;
+    bool local_cancel;
     uint32_t generation;
     size_t data_len;
     esp_err_t error;
@@ -145,6 +150,7 @@ static void downlink_finish_turn_state(void)
     s_status.collecting = false;
     s_status.finalizing = false;
     s_status.playback_requested = false;
+    s_status.ptt_generation = 0U;
     s_status.response_bytes_buffered = 0U;
     portEXIT_CRITICAL(&s_lock);
 }
@@ -164,7 +170,8 @@ static bool downlink_generation_is_current(uint32_t generation)
 static void downlink_abort_response(
     uint32_t generation,
     esp_err_t error,
-    bool timeout);
+    bool timeout,
+    bool interrupted);
 
 /* The PCM stream core uses all-or-nothing writes. Retrying the same decoded
  * packet is therefore safe: a timeout never transfers a partial packet. This
@@ -246,12 +253,16 @@ static void downlink_check_stream_terminal(void)
     const esp_err_t status_result = voice_assistant_audio_stream_get_status(&stream);
     if (status_result != ESP_OK) {
         if (status_result != ESP_ERR_TIMEOUT) {
-            downlink_abort_response(generation, status_result, false);
+            downlink_abort_response(generation, status_result, false, false);
         }
         return;
     }
 
     if (stream.state == AUDIO_MANAGER_PLAYBACK_REQUEST_COMPLETED) {
+        uint32_t ptt_generation = 0U;
+        portENTER_CRITICAL(&s_lock);
+        ptt_generation = s_status.ptt_generation;
+        portEXIT_CRITICAL(&s_lock);
         portENTER_CRITICAL(&s_lock);
         ++s_status.responses_completed;
         s_status.last_error = ESP_OK;
@@ -265,6 +276,17 @@ static void downlink_check_stream_terminal(void)
                  (unsigned)stream.starvation_count);
         voice_assistant_audio_stream_release();
         downlink_finish_turn_state();
+        if (ptt_generation != 0U) {
+            const esp_err_t policy_ret =
+                voice_assistant_playback_finish_turn(ptt_generation);
+            if ((policy_ret != ESP_OK) &&
+                (policy_ret != ESP_ERR_INVALID_STATE)) {
+                APP_LOGW(TAG, PLAYBACK_POLICY_COMPLETE_FAI_180230AA,
+                         "playback policy completion failed ptt_generation=%u error=%s",
+                         (unsigned)ptt_generation,
+                         esp_err_to_name(policy_ret));
+            }
+        }
     } else if ((stream.state == AUDIO_MANAGER_PLAYBACK_REQUEST_CANCELLED) ||
                (stream.state == AUDIO_MANAGER_PLAYBACK_REQUEST_PREEMPTED) ||
                (stream.state == AUDIO_MANAGER_PLAYBACK_REQUEST_FAILED)) {
@@ -276,7 +298,7 @@ static void downlink_check_stream_terminal(void)
                  (unsigned)generation,
                  (int)stream.state,
                  esp_err_to_name(error));
-        downlink_abort_response(generation, error, false);
+        downlink_abort_response(generation, error, false, false);
     }
 }
 
@@ -303,6 +325,7 @@ static void downlink_response_callback(
     }
 
     if (event->kind != XIAOZHI_FOUNDATION_RESPONSE_AUDIO) {
+        s_callback_item.local_cancel = false;
         s_callback_item.kind = event->kind;
         s_callback_item.generation = event->client_generation;
         s_callback_item.data_len = 0U;
@@ -333,6 +356,13 @@ static void downlink_response_callback(
         atomic_flag_clear_explicit(&s_callback_busy, memory_order_release);
         return;
     }
+    if (downlink_response_is_tainted(event->client_generation)) {
+        portENTER_CRITICAL(&s_lock);
+        ++s_status.chunks_dropped_stale;
+        portEXIT_CRITICAL(&s_lock);
+        atomic_flag_clear_explicit(&s_callback_busy, memory_order_release);
+        return;
+    }
 
     /* A WebSocket binary message is one complete Opus packet. Never split an
      * oversized packet because doing so would destroy the decoder boundary. */
@@ -353,6 +383,7 @@ static void downlink_response_callback(
     }
 
     s_callback_item.kind = XIAOZHI_FOUNDATION_RESPONSE_AUDIO;
+    s_callback_item.local_cancel = false;
     s_callback_item.generation = event->client_generation;
     s_callback_item.data_len = event->data_len;
     s_callback_item.error = ESP_OK;
@@ -378,17 +409,23 @@ static void downlink_response_callback(
 static void downlink_abort_response(
     uint32_t generation,
     esp_err_t error,
-    bool timeout)
+    bool timeout,
+    bool interrupted)
 {
     const esp_err_t normalized_error =
         (error == ESP_OK) ? ESP_FAIL : error;
+    uint32_t ptt_generation = 0U;
+    portENTER_CRITICAL(&s_lock);
+    ptt_generation = s_status.ptt_generation;
+    portEXIT_CRITICAL(&s_lock);
     /* Once a response is aborting, reject any queued audio until the arbiter
      * has accepted the terminal intent. This prevents stale PCM from being
      * appended if the first bounded cleanup attempt meets lock contention. */
     atomic_store_explicit(
         &s_response_tainted_generation, generation, memory_order_release);
-    const esp_err_t stream_fail_ret =
-        voice_assistant_audio_stream_fail(normalized_error);
+    const esp_err_t stream_fail_ret = interrupted
+        ? voice_assistant_audio_stream_cancel()
+        : voice_assistant_audio_stream_fail(normalized_error);
     if ((stream_fail_ret != ESP_OK) &&
         (stream_fail_ret != ESP_ERR_INVALID_STATE)) {
         APP_LOGW(TAG, RESPONSE_CLEANUP_PENDING_GEN_4FCCC6E3,
@@ -403,15 +440,35 @@ static void downlink_abort_response(
         ++s_status.response_timeouts;
         portEXIT_CRITICAL(&s_lock);
     }
-    downlink_set_error(normalized_error);
-    APP_LOGE(TAG, RESPONSE_ABORT_GENERATION_U_83BD6F50,
-             "response ABORT generation=%u timeout=%s error=%s",
-             (unsigned)generation,
-             timeout ? "yes" : "no",
-             esp_err_to_name(normalized_error));
+    if (interrupted) {
+        portENTER_CRITICAL(&s_lock);
+        s_status.last_error = ESP_OK;
+        portEXIT_CRITICAL(&s_lock);
+        APP_LOGI(TAG, RESPONSE_CANCEL_GENERATION_U_5956B59E,
+                 "response CANCEL generation=%u reason=GPIO38_PTT",
+                 (unsigned)generation);
+    } else {
+        downlink_set_error(normalized_error);
+        APP_LOGE(TAG, RESPONSE_ABORT_GENERATION_U_83BD6F50,
+                 "response ABORT generation=%u timeout=%s error=%s",
+                 (unsigned)generation,
+                 timeout ? "yes" : "no",
+                 esp_err_to_name(normalized_error));
+    }
     downlink_finish_turn_state();
     if (s_queue != NULL) {
         (void)xQueueReset(s_queue);
+    }
+    if (ptt_generation != 0U) {
+        const esp_err_t policy_ret =
+            voice_assistant_playback_finish_turn(ptt_generation);
+        if ((policy_ret != ESP_OK) &&
+            (policy_ret != ESP_ERR_INVALID_STATE)) {
+            APP_LOGW(TAG, PLAYBACK_POLICY_ABORT_FINAL_F_111A6E2A,
+                     "playback policy abort finalization failed ptt_generation=%u error=%s",
+                     (unsigned)ptt_generation,
+                     esp_err_to_name(policy_ret));
+        }
     }
 }
 
@@ -443,7 +500,7 @@ static void downlink_check_timeout(void)
                  (unsigned)generation,
                  awaiting_response ? "yes" : "no",
                  (unsigned)pdTICKS_TO_MS(now - response_started_at));
-        downlink_abort_response(generation, ESP_ERR_TIMEOUT, true);
+        downlink_abort_response(generation, ESP_ERR_TIMEOUT, true, false);
     } else if (finalizing) {
         /* TTS_STOP starts a PCM drain. Do not fall through to the short
          * server-inactivity watchdog: playback can legitimately outlive the
@@ -454,7 +511,7 @@ static void downlink_check_timeout(void)
                      "PCM stream drain timeout generation=%u elapsed_ms=%u",
                      (unsigned)generation,
                      (unsigned)pdTICKS_TO_MS(now - last_activity));
-            downlink_abort_response(generation, ESP_ERR_TIMEOUT, true);
+            downlink_abort_response(generation, ESP_ERR_TIMEOUT, true, false);
         }
     } else if (awaiting_response) {
         if ((now - last_activity) >=
@@ -471,7 +528,7 @@ static void downlink_check_timeout(void)
                      uplink.listening ? "yes" : "no",
                      esp_err_to_name(uplink.last_error),
                      esp_err_to_name(uplink_status_ret));
-            downlink_abort_response(generation, ESP_ERR_TIMEOUT, true);
+            downlink_abort_response(generation, ESP_ERR_TIMEOUT, true, false);
         }
     } else if (collecting &&
                ((now - last_activity) >=
@@ -480,7 +537,7 @@ static void downlink_check_timeout(void)
                  "response audio inactivity timeout generation=%u waited_ms=%u",
                  (unsigned)generation,
                  (unsigned)pdTICKS_TO_MS(now - last_activity));
-        downlink_abort_response(generation, ESP_ERR_TIMEOUT, true);
+        downlink_abort_response(generation, ESP_ERR_TIMEOUT, true, false);
     }
 }
 
@@ -510,6 +567,25 @@ static void downlink_task(void *argument)
             continue;
         }
 
+        if (item.local_cancel) {
+            bool owns_response = false;
+            portENTER_CRITICAL(&s_lock);
+            owns_response = (s_status.awaiting_response ||
+                             s_status.collecting ||
+                             s_status.finalizing ||
+                             s_status.playback_requested) &&
+                            (s_status.session_generation == item.generation);
+            portEXIT_CRITICAL(&s_lock);
+            if (owns_response) {
+                downlink_abort_response(
+                    item.generation,
+                    ESP_ERR_INVALID_STATE,
+                    false,
+                    true);
+            }
+            continue;
+        }
+
         /* A transport-loss error is emitted after foundation has already
          * changed its session state to CONNECTING. It belongs to the in-flight
          * response even though downlink_generation_is_current() is therefore
@@ -530,7 +606,8 @@ static void downlink_task(void *argument)
                          "response error generation=%u error=%s; aborting collection",
                          (unsigned)item.generation,
                          esp_err_to_name(error));
-                downlink_abort_response(item.generation, error, false);
+                downlink_abort_response(
+                    item.generation, error, false, false);
             } else {
                 portENTER_CRITICAL(&s_lock);
                 ++s_status.chunks_dropped_stale;
@@ -579,12 +656,14 @@ static void downlink_task(void *argument)
                 &s_response_tainted_generation, 0U, memory_order_release);
             const esp_err_t reset_ret = voice_assistant_opus_decoder_reset();
             if (reset_ret != ESP_OK) {
-                downlink_abort_response(item.generation, reset_ret, false);
+                downlink_abort_response(
+                    item.generation, reset_ret, false, false);
                 continue;
             }
             const esp_err_t stream_ret = voice_assistant_audio_stream_begin();
             if (stream_ret != ESP_OK) {
-                downlink_abort_response(item.generation, stream_ret, false);
+                downlink_abort_response(
+                    item.generation, stream_ret, false, false);
                 continue;
             }
             APP_LOGI(TAG, RESPONSE_START_GENERATION_U_BDA6975A,
@@ -618,7 +697,8 @@ static void downlink_task(void *argument)
                          (unsigned)item.generation,
                          (unsigned)item.data_len,
                          esp_err_to_name(decode_ret));
-                downlink_abort_response(item.generation, decode_ret, false);
+                downlink_abort_response(
+                    item.generation, decode_ret, false, false);
                 continue;
             }
             const size_t decoded_bytes = decoded_samples * sizeof(int16_t);
@@ -644,7 +724,8 @@ static void downlink_task(void *argument)
                          (unsigned)item.generation,
                          (unsigned)decoded_samples,
                          esp_err_to_name(stream_ret));
-                downlink_abort_response(item.generation, stream_ret, false);
+                downlink_abort_response(
+                    item.generation, stream_ret, false, false);
                 continue;
             }
             portENTER_CRITICAL(&s_lock);
@@ -681,18 +762,21 @@ static void downlink_task(void *argument)
                 downlink_abort_response(
                     item.generation,
                     tainted ? ESP_ERR_INVALID_RESPONSE : ESP_ERR_INVALID_SIZE,
+                    false,
                     false);
                 continue;
             }
             const esp_err_t finish_ret = voice_assistant_audio_stream_finish();
             if (finish_ret != ESP_OK) {
-                downlink_abort_response(item.generation, finish_ret, false);
+                downlink_abort_response(
+                    item.generation, finish_ret, false, false);
                 continue;
             }
             const esp_err_t close_ret =
                 xiaozhi_foundation_audio_channel_close(item.generation);
             if ((close_ret != ESP_OK) && (close_ret != ESP_ERR_INVALID_STATE)) {
-                downlink_abort_response(item.generation, close_ret, false);
+                downlink_abort_response(
+                    item.generation, close_ret, false, false);
                 continue;
             }
             APP_LOGI(TAG, RESPONSE_DRAINING_GENERATION_53FE4A86,
@@ -783,9 +867,11 @@ esp_err_t voice_assistant_downlink_start(void)
     return ESP_OK;
 }
 
-esp_err_t voice_assistant_downlink_begin_response_wait(uint32_t session_generation)
+esp_err_t voice_assistant_downlink_begin_response_wait(
+    uint32_t session_generation,
+    uint32_t ptt_generation)
 {
-    if (session_generation == 0U) {
+    if ((session_generation == 0U) || (ptt_generation == 0U)) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -801,6 +887,7 @@ esp_err_t voice_assistant_downlink_begin_response_wait(uint32_t session_generati
         s_last_response_activity = started_at;
         s_status.awaiting_response = true;
         s_status.session_generation = session_generation;
+        s_status.ptt_generation = ptt_generation;
         s_status.last_error = ESP_OK;
     }
     portEXIT_CRITICAL(&s_lock);
@@ -826,6 +913,7 @@ esp_err_t voice_assistant_downlink_cancel_response_wait(
         s_response_started_at = 0U;
         s_last_response_activity = 0U;
         s_status.awaiting_response = false;
+        s_status.ptt_generation = 0U;
         s_status.last_error = (error == ESP_OK) ? ESP_FAIL : error;
         cancelled = true;
     }
@@ -862,4 +950,64 @@ bool voice_assistant_downlink_is_busy(void)
            s_status.finalizing || s_status.playback_requested;
     portEXIT_CRITICAL(&s_lock);
     return busy;
+}
+
+esp_err_t voice_assistant_downlink_interrupt_active_response(void)
+{
+    if ((s_queue == NULL) || (s_task == NULL)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    uint32_t generation = 0U;
+    bool busy = false;
+    portENTER_CRITICAL(&s_lock);
+    busy = s_status.awaiting_response || s_status.collecting ||
+           s_status.finalizing || s_status.playback_requested;
+    generation = s_status.session_generation;
+    portEXIT_CRITICAL(&s_lock);
+    if (!busy || (generation == 0U)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    atomic_store_explicit(
+        &s_response_tainted_generation, generation, memory_order_release);
+    bool queued = false;
+    uint32_t waited_ms = 0U;
+    while (waited_ms <= DOWNLINK_INTERRUPT_QUEUE_TIMEOUT_MS) {
+        if (!atomic_flag_test_and_set_explicit(
+                &s_callback_busy,
+                memory_order_acquire)) {
+            s_callback_item.kind = XIAOZHI_FOUNDATION_RESPONSE_ERROR;
+            s_callback_item.local_cancel = true;
+            s_callback_item.generation = generation;
+            s_callback_item.data_len = 0U;
+            s_callback_item.error = ESP_ERR_INVALID_STATE;
+            queued = (xQueueSendToFront(s_queue, &s_callback_item, 0U) ==
+                      pdTRUE);
+            atomic_flag_clear_explicit(
+                &s_callback_busy, memory_order_release);
+            if (queued) {
+                break;
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(DOWNLINK_INTERRUPT_POLL_MS));
+        waited_ms += DOWNLINK_INTERRUPT_POLL_MS;
+    }
+    if (!queued) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    waited_ms = 0U;
+    while (voice_assistant_downlink_is_busy()) {
+        if (waited_ms >= DOWNLINK_INTERRUPT_TERMINAL_TIMEOUT_MS) {
+            return ESP_ERR_TIMEOUT;
+        }
+        vTaskDelay(pdMS_TO_TICKS(DOWNLINK_INTERRUPT_POLL_MS));
+        waited_ms += DOWNLINK_INTERRUPT_POLL_MS;
+    }
+    APP_LOGI(TAG, RESPONSE_INTERRUPTED_FOR_PTT_G_33B4BE14,
+             "response interrupted for PTT generation=%u waited_ms=%u",
+             (unsigned)generation,
+             (unsigned)waited_ms);
+    return ESP_OK;
 }

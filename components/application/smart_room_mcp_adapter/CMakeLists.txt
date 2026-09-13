@@ -6,6 +6,7 @@ idf_component_register(
         "modules/provider/src/smart_room_mcp_system_status.c"
         "modules/provider/src/smart_room_mcp_light_state.c"
         "modules/provider/src/smart_room_mcp_light_set_state.c"
+        "modules/provider/src/smart_room_mcp_audio_playback.c"
     INCLUDE_DIRS
         "include"
     PRIV_INCLUDE_DIRS
@@ -19,6 +20,7 @@ idf_component_register(
         sd_card_manager
         sensor_manager
         time_manager
+        voice_assistant
         xiaozhi_foundation
         esp_timer
 )

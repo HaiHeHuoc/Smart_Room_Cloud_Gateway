@@ -70,7 +70,8 @@ configured retained recording (five seconds by default).
   source; zero selects the current generation, while non-zero rejects stale
   auto-resume requests.
 - `audio_manager_restart_playback()` restarts that same local source at frame
-  zero; it never selects a path or restarts the manager/device.
+  zero; `audio_manager_restart_playback_at_generation()` is the stale-safe
+  deferred form. Neither selects a path or restarts the manager/device.
 - `audio_manager_get_playback_status()` copies state, bounded source kind,
   resumability, generation, committed/total mono frames, pause reason, and the
   last control result. It exposes no path, pointer, or driver handle.
@@ -142,7 +143,9 @@ pause is idempotent. Resume from IDLE/PLAYING is invalid. Live PCM16/Xiaozhi is
 bounded and non-seekable, so pause/resume/restart return
 `ESP_ERR_NOT_SUPPORTED`; STOP still uses its existing abort path.
 
-While WAV is PAUSED, only bounded copied path/metadata/generation/offset remain.
+While WAV is PAUSED, the manager lifecycle and operation slot are `IDLE`, so
+capture or bounded Xiaozhi PCM can safely acquire the hardware. Only bounded
+copied path/metadata/generation/offset remain.
 TX is stopped, the reader is joined, FILE and SD lease are released, and the
 PSRAM slots/queues/events are freed. Resume fresh-opens, rejects changed
 metadata, validates/seeks the offset, and only then returns to PLAYING. A
@@ -187,9 +190,10 @@ Suggested GUI meanings:
 
 The current dashboard renders these concise labels: `Audio: --`, `Audio: Ready`,
 `Audio: Idle`, `Audio: REC`, `Audio: DSP`, `Audio: PLAY`, and `Audio: ERR`.
-During controlled pause this legacy view still shows `Audio: PLAY` because it
-represents logical manager ownership. Prompt 3 may consume the dedicated
-playback snapshot without calling LVGL from audio context.
+During controlled pause this legacy lifecycle view shows `Audio: Idle` because
+the physical operation slot and I2S resources have been released. The dedicated
+playback snapshot remains `PAUSED` and is the authoritative logical source state;
+no LVGL call is made from audio or voice context.
 
 ## Phase 11.4 Bounded SD/WAV Playback
 

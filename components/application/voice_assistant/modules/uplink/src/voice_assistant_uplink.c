@@ -7,6 +7,7 @@
 #include "voice_assistant_audio_arbitration_bridge.h"
 #include "voice_assistant_downlink.h"
 #include "voice_assistant_opus.h"
+#include "voice_assistant_playback_control.h"
 #include "voice_assistant_ptt.h"
 #include "xiaozhi_foundation.h"
 
@@ -55,6 +56,7 @@ static uint8_t s_opus_packet[VOICE_ASSISTANT_OPUS_MAX_PACKET_BYTES] = {0};
 static uint32_t s_turn_packets = 0U;
 static uint32_t s_turn_opus_bytes = 0U;
 static uint32_t s_turn_pcm_samples = 0U;
+static uint32_t s_turn_ptt_generation = 0U;
 
 static void uplink_set_error(esp_err_t error)
 {
@@ -152,6 +154,15 @@ static esp_err_t uplink_begin_turn(uint32_t generation)
         return ESP_ERR_INVALID_STATE;
     }
 
+    voice_assistant_ptt_status_t ptt = {0};
+    if ((voice_assistant_ptt_get_status(&ptt) != ESP_OK) ||
+        (ptt.state != VOICE_ASSISTANT_PTT_AUTHORIZED) ||
+        !ptt.capture_authorized ||
+        (ptt.session_generation != generation) ||
+        (ptt.ptt_generation == 0U)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     if (!uplink_tls_psram_ready()) {
         return ESP_ERR_NO_MEM;
     }
@@ -191,6 +202,14 @@ static esp_err_t uplink_begin_turn(uint32_t generation)
         return ret;
     }
 
+    ret = voice_assistant_playback_mark_turn_started(ptt.ptt_generation);
+    if (ret != ESP_OK) {
+        (void)audio_manager_stream_disarm(generation);
+        (void)xiaozhi_foundation_audio_uplink_stop(generation);
+        (void)xiaozhi_foundation_audio_channel_close(generation);
+        return ret;
+    }
+
     portENTER_CRITICAL(&s_lock);
     s_status.turn_active = true;
     s_status.session_generation = generation;
@@ -200,6 +219,7 @@ static esp_err_t uplink_begin_turn(uint32_t generation)
     s_turn_packets = 0U;
     s_turn_opus_bytes = 0U;
     s_turn_pcm_samples = 0U;
+    s_turn_ptt_generation = ptt.ptt_generation;
 
     ret = voice_assistant_audio_capture_start();
     if (ret != ESP_OK) {
@@ -209,6 +229,8 @@ static esp_err_t uplink_begin_turn(uint32_t generation)
         (void)audio_manager_stream_disarm(generation);
         (void)xiaozhi_foundation_audio_uplink_stop(generation);
         (void)xiaozhi_foundation_audio_channel_close(generation);
+        (void)voice_assistant_playback_finish_turn(ptt.ptt_generation);
+        s_turn_ptt_generation = 0U;
         return ret;
     }
 
@@ -218,6 +240,7 @@ static esp_err_t uplink_begin_turn(uint32_t generation)
 
 static esp_err_t uplink_end_turn(uint32_t generation)
 {
+    const uint32_t ptt_generation = s_turn_ptt_generation;
     portENTER_CRITICAL(&s_lock);
     s_status.turn_active = false;
     portEXIT_CRITICAL(&s_lock);
@@ -235,7 +258,9 @@ static esp_err_t uplink_end_turn(uint32_t generation)
      * authorized while the prior turn had sent audio but had not yet received
      * TTS_START. */
     if (s_turn_packets > 0U) {
-        ret = voice_assistant_downlink_begin_response_wait(generation);
+        ret = voice_assistant_downlink_begin_response_wait(
+            generation,
+            ptt_generation);
         if (ret == ESP_OK) {
             response_wait_started = true;
         } else {
@@ -281,6 +306,12 @@ static esp_err_t uplink_end_turn(uint32_t generation)
             first_error = ret;
         }
     }
+
+
+    if (!response_wait_started || close_after_stop) {
+        (void)voice_assistant_playback_finish_turn(ptt_generation);
+    }
+    s_turn_ptt_generation = 0U;
 
     (void)xQueueReset(s_queue);
     s_pcm_frame_samples = 0U;
