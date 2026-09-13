@@ -4,18 +4,15 @@ Status: **IN PROGRESS — 18.1 COMPLETE / BUILD PASS / TARGET HIL ACCEPTED**
 
 Updated: 2026-09-13
 Integration branch: `main_including_Firebase_security`
-Observed remote source HEAD before this synchronization: `15cd0f06d25142a6ed7672bc99dfd4ec396184b0`
+Current production/source baseline before documentation-only synchronization: `0a8c83f7776d8259f22208a66f7fc4bd52156aff`
 
 ## Goal
 
-Phase 18 introduces a small, allowlisted set of MCP actions that can create real
-device-side side effects through existing project ownership boundaries. MCP is
-an orchestration/interface layer only; it must not directly own GPIO/RMT,
+Phase 18 adds a small, allowlisted set of MCP actions that can create real
+device-side side effects through existing ownership boundaries. MCP is an
+orchestration/interface layer only; it must not directly own GPIO/RMT,
 NeoPixel, I2S, DMA, Wi-Fi, Firebase transport, LVGL, filesystems, or unrelated
 lower-level resources.
-
-This file records the approved Phase-18 scope plus the implementation truth that
-future sessions need to resume safely.
 
 ## Approved scope
 
@@ -28,13 +25,13 @@ Phase 18 contains exactly four controlled-action slices:
 18.4  cloud.push_latest
 ```
 
-Do not add a fifth controlled action merely to increase feature count.
+`light.get_state` and `light.get_capabilities` are read-only companions to 18.1,
+not extra controlled-action slices. Do not add a fifth action merely to increase
+feature count.
 
-## 18.1 — NeoPixel light control
+# Phase 18.1 — NeoPixel light control — COMPLETE
 
-### Current implementation
-
-Implemented tools:
+## Accepted MCP surface
 
 ```text
 light.set_state
@@ -42,11 +39,7 @@ light.get_state
 light.get_capabilities
 ```
 
-`light.get_state` and `light.get_capabilities` are read-only companions to the
-approved controlled action; they do not create additional Phase-18 controlled
-actions.
-
-The MCP-C-SDK-facing controlled request uses one required outer object:
+`light.set_state` accepts one required outer `state` object, for example:
 
 ```json
 {"state":{"power":"on","color":"pink","brightness_percent":100}}
@@ -62,105 +55,90 @@ brightness_percent  integer 0..100
 effect              solid | blink | breath | pulse | rainbow
 ```
 
-At least one field is required. Unsupported fields or values are rejected
-before the project-owned light provider is called.
+At least one field is required. Unsupported fields/values and invalid field
+combinations are rejected before the application provider calls the owning
+manager.
 
-### Current partial-update semantics at HEAD
-
-Source at `15cd0f06...` defines these semantics:
+## Accepted partial-update semantics
 
 - `power="off"` cannot be combined with color, brightness, or effect.
-- Color-only and brightness-only requests preserve the current logical power.
-- An effect request with no explicit power is an activation request and turns
-  the logical light ON.
-- If an effect is requested without an explicit color while the preserved RGB
-  value is black, the composition adapter substitutes white `(255,255,255)` so
-  the effect is visible.
-- Other omitted fields preserve their current logical value.
-- The composition adapter snapshots `light_manager`, builds one
-  `light_manager_state_t`, performs one `light_manager_set_state()` operation,
-  then copies the resulting logical state for the MCP response.
-- Validation failures must produce no light-manager side effect.
+- color-only and brightness-only requests preserve current logical power.
+- an effect request with no explicit power activates the light.
+- if an effect is requested without explicit color while preserved RGB is
+  black, the application adapter substitutes white `(255,255,255)` so the
+  effect is visible.
+- other omitted fields preserve their logical values.
+- the provider snapshots `light_manager`, builds one requested logical state,
+  applies it through `light_manager_set_state()`, then copies the applied
+  logical state for the MCP result.
+- validation failure produces no `light_manager` side effect.
 
-### Manager-owned fixed effects
-
-Current product timing is owned by `light_manager`:
+## Manager-owned fixed effects
 
 ```text
 solid    static RGB at stored brightness
 blink    500 ms ON / 500 ms OFF
 breath   2000 ms period
-pulse    1200 ms triangular pulse, repeated
+pulse    1200 ms triangular repeated pulse
 rainbow  lower-layer single-LED rainbow cycle, 10 ms step
 ```
 
-These timing values are implementation-owned product behavior. MCP does not
-accept arbitrary timing or raw NeoPixel/RMT configuration.
+MCP does not accept arbitrary timing or raw NeoPixel/RMT configuration.
 
-Turning the light OFF darkens the LED while retaining copied logical RGB,
-brightness, and effect. Subsequent valid activation uses the retained state
-subject to the effect-only activation/default-white rule above.
-
-### Ownership path
+## Current ownership path after application-structure cleanup
 
 ```text
 User intent
--> Xiaozhi MCP light.set_state
--> bounded schema/allowlist validation
--> xiaozhi_foundation provider boundary
--> main-owned light composition adapter
+-> Xiaozhi backend
+-> xiaozhi_foundation MCP tool / schema validation
+-> smart_room_mcp_adapter provider
 -> light_manager
 -> NeoPixel component / hardware
+-> copied logical result
+-> MCP response
 ```
 
-MCP must not include or call NeoPixel/RMT/GPIO APIs directly.
+`smart_room_mcp_adapter` replaces the old loose `main/xiaozhi_*_composition.*`
+layout. It does not own the MCP engine/session or the light hardware. Managed
+Xiaozhi handles remain inside `xiaozhi_foundation`; product light state/effects
+remain inside `light_manager`.
 
-### Read-only companions
+## Read-only companions
 
 `light.get_state` returns copied logical power, RGB, brightness, effect, and a
-bounded color name. Valid RGB values outside the Phase-18.1 named palette are
+bounded color name. RGB values outside the named Phase-18.1 palette may be
 reported as `custom` with exact components.
 
-`light.get_capabilities` is static/read-only and reports only the implemented
-product contract: power, color, brightness, effect, ten named colors, five
-fixed effects, and brightness range `0..100`. It has no hardware provider and
-must not expose board/GPIO/RMT/task details.
+`light.get_capabilities` reports only the fixed product contract: power, color,
+brightness, effect, ten named colors, five fixed effects, and brightness range
+`0..100`. It exposes no board/GPIO/RMT/task details.
 
-## 18.1 validation history and current truth
+## Acceptance evidence
 
-Commit `f00e106150ddf2a48034a1ed9b6c6520aff20fc5` added the fixed effects and
-capability query and explicitly recorded a full ESP-IDF build PASS. Target HIL
-was still pending.
-
-Two commits then changed source after that verified checkpoint:
-
-1. `e0255881ad61a5bea4c96b49c866f20a0f8b3355`
-   - reduced dynamic TLS outbound record size from 2 KiB to 1 KiB;
-   - explicitly recorded a clean ESP-IDF build PASS;
-   - target boot and repeated-PTT validation remained pending.
-
-2. `15cd0f06d25142a6ed7672bc99dfd4ec396184b0`
-   - changed Phase-18.1 effect request semantics and logging;
-   - changed pulse duration from 300 ms to 1200 ms;
-   - also changed voice uplink/TLS-memory and streaming-downlink behavior;
-   - commit message contains no explicit build or HIL evidence.
-
-The current source checkpoint was subsequently rebuilt after those changes and
-the Phase-18.1 target matrix was accepted by Hai. Correct closure state is:
+Historical implementation checkpoints:
 
 ```text
-18.1 implementation present                         CONFIRMED
-current source build after 15cd0f06...              PASS
-current HEAD Phase-18.1 target HIL                  ACCEPTED BY USER (2026-09-13)
+f00e106...  fixed effects/capabilities; full ESP-IDF build PASS; HIL pending then
+e0255881... TLS outbound-record reduction; clean build PASS; target regression pending then
+15cd0f06... final Phase-18.1 semantics plus voice/TLS/streaming changes
 ```
 
-## Minimum 18.1 HIL / regression matrix
-
-Validate current HEAD before closing 18.1:
+Subsequent evidence recorded on 2026-09-13:
 
 ```text
-pink, brightness 100%
-green, brightness 20%
+Phase-18.1 implementation                CONFIRMED
+relevant current-source build            PASS
+Firebase boot                            PASS — user confirmed
+repeated PTT/TLS smoke                   PASS — user confirmed
+Phase-18.1 light HIL matrix              PASS — user confirmed
+Phase-18.1 closure                       ACCEPTED BY USER
+```
+
+Accepted light matrix includes:
+
+```text
+pink 100%
+green 20%
 brightness 0%
 brightness 100%
 off
@@ -168,32 +146,27 @@ rapid color/brightness updates
 solid
 blink
 breath
-pulse (current 1200 ms product timing)
+pulse (1200 ms product timing)
 rainbow
-effect-only request while light is OFF -> activates light
-effect-only request from black RGB -> visible white fallback
+effect-only while OFF -> activates light
+effect-only with preserved black RGB -> visible white fallback
 power=off + color -> rejected
 power=off + brightness -> rejected
 power=off + effect -> rejected
-light.get_state reflects applied logical state
-light.get_capabilities reports current fixed contract
+light.get_state matches applied logical state
+light.get_capabilities matches the fixed contract
 ```
 
-Because current HEAD also changes the Xiaozhi audio/TLS path, repeat at least a
-small voice regression around the light HIL so a working LED command does not
-hide a PTT/audio regression.
+The later source-structure cleanup at `0a8c83f...` was intended to preserve
+behavior and recorded a normal ESP-IDF build PASS. No new target HIL was run
+specifically after the structural move. Do not relabel the earlier accepted HIL
+as a post-cleanup hardware run; Phase 18.1 nevertheless remains closed unless a
+concrete regression is found.
 
-## 18.1 closure evidence
+The delayed-first-PCM streaming regression and long-duration PTT/resource
+endurance are separate deferred work and do not reopen Phase 18.1.
 
-- `ninja -C build -j 1 all` passed on the current source checkpoint after the
-  light semantics, TLS, and delayed-first-PCM changes.
-- Hai confirmed target testing PASS on 2026-09-13 and authorized Phase-18.1
-  closure.
-- This acceptance closes only the bounded light-control slice. It does not
-  accept the deferred PTT/TLS endurance or delayed-first-PCM audio regressions,
-  and it does not start Phase 18.2.
-
-## 18.2 — Stop audio playback
+# Phase 18.2 — Stop audio playback
 
 Preferred product action:
 
@@ -207,7 +180,7 @@ Route through project-owned audio control and keep `audio_manager` as sole
 I2S/playback owner. Report deterministic not-playing/busy/error/success results;
 MCP must never touch I2S or DMA directly.
 
-## 18.3 — Allowlisted audio playback
+# Phase 18.3 — Allowlisted audio playback
 
 Preferred initial action:
 
@@ -221,7 +194,7 @@ A bounded notification-playback variant may be chosen if it better matches the
 existing architecture. MCP must not accept arbitrary filesystem paths or raw
 audio sources. Existing Phase-16 arbitration remains authoritative.
 
-## 18.4 — Push latest cloud telemetry
+# Phase 18.4 — Push latest cloud telemetry
 
 Preferred product action:
 
@@ -251,8 +224,6 @@ Phase 18 does not include:
 - arbitrary reboot;
 - arbitrary OTA/update commands.
 
-A later phase or explicit roadmap decision is required for those capabilities.
-
 ## Architecture contract
 
 Every controlled action follows:
@@ -260,7 +231,7 @@ Every controlled action follows:
 ```text
 User intent
 -> Xiaozhi / MCP tool
--> schema + allowlist validation
+-> bounded schema + allowlist validation
 -> project-owned provider/action boundary
 -> owning manager/service
 -> real operation
@@ -282,24 +253,10 @@ Preserve these rules:
    pointers escape their owners.
 9. Phase-16 audio arbitration remains authoritative for audio ownership.
 
-## Documentation discrepancy to preserve until fixed
-
-At the time of this synchronization, current source and this handoff record
-show Phase 18 in progress with 18.1 implemented, while
-`XIAOZHI_IMPLEMENTATION_ROADMAP.md` still contains an older "Sprint 18 — Not
-Started" status. Do not silently treat that stale status as current source
-truth. Update the canonical roadmap in a dedicated documentation step when the
-user requests/accepts that cleanup.
-
 ## Next action
 
-Do not start 18.2 automatically. First revalidate current HEAD:
+Phase 18.1 is already closed. Do not rerun its acceptance as a prerequisite for
+normal continuation unless a regression is suspected.
 
-```text
-clean ESP-IDF build
--> target boot / repeated PTT regression
--> Phase-18.1 light HIL matrix
--> update evidence
-```
-
-Only after that should Phase 18.1 be described as verified on the current HEAD.
+Do not start Phase 18.2 automatically. Start it only when Hải explicitly
+requests it.
