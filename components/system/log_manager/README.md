@@ -247,16 +247,15 @@ not prevented by this component.
 
 ```powershell
 idf.py build
-& components/system/log_manager/test/host/run_tests.ps1
 idf.py -p <PORT> flash monitor
 ```
 
-Host tests compile the actual buffer and writer source with `-Wall -Wextra
--Werror`, real temporary host files and pthread RTOS/device shims. Test data
-stays under `build/host_log_manager_tests/<unique-run>/sd`; real SD content is
-never touched. Tests use smaller capacities/intervals and inject device failures.
-They also compile/run the disabled configuration. Host shims do not prove
-FreeRTOS priority behavior, FAT/SPI timing or ESP32-S3 memory placement.
+The standalone host regression suite was retired during pre-base cleanup. Its
+historical evidence compiled the actual buffer and writer source with
+`-Wall -Wextra -Werror`, temporary host files, and pthread RTOS/device shims.
+It used smaller capacities/intervals, injected device failures, and exercised
+the disabled configuration. This historical host evidence does not prove
+FreeRTOS priority behavior, FAT/SPI timing, or ESP32-S3 memory placement.
 
 | Required check | Software evidence | Target hardware |
 |---|---|---|

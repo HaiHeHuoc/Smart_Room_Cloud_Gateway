@@ -78,8 +78,8 @@ generic portability initiative. It keeps the dependency direction unchanged:
 - a thin `main` entrypoint delegates product composition to `smart_room_app`;
 - `smart_room_mcp_adapter/modules/provider` groups the existing Smart Room
   provider bridges without moving domain or managed-MCP ownership;
-- `app_hil_test/modules/phase16` groups the default-off target-HIL coordinator
-  while normal production builds retain only its small facade;
+- The former Phase-16 target-HIL coordinator was retired during pre-base
+  cleanup; normal production builds have no target-HIL facade;
 - `voice_assistant` implementation-only application dependencies are private
   in CMake because its public headers do not expose their types.
 
@@ -344,11 +344,11 @@ With ESP-IDF 6.0.1:
 ```powershell
 idf.py fullclean
 idf.py build
-
-& components/audio/audio_manager/test/host/run_tests.ps1
-& components/cloud/cloud_manager/test/host/run_tests.ps1
-& components/system/log_manager/test/host/run_tests.ps1
 ```
+
+The three standalone host regression suites were retired during pre-base
+cleanup; their earlier results remain historical evidence and are not current
+acceptance commands.
 
 Then flash the existing Smart Room hardware image and perform a bounded smoke
 check of at least:

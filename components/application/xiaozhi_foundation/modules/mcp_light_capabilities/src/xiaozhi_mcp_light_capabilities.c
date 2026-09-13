@@ -9,7 +9,6 @@
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static bool s_attached = false;
 
-#if CONFIG_XIAOZHI_FOUNDATION_LIGHT_CAPABILITIES_TOOL
 static const char *const TAG = "XZ_LIGHT_CAPS";
 
 static esp_err_t xiaozhi_mcp_light_capabilities_callback(
@@ -41,8 +40,6 @@ static esp_err_t xiaozhi_mcp_light_capabilities_callback(
     }
     return ret;
 }
-#endif
-
 void xiaozhi_mcp_light_capabilities_detach(void)
 {
     portENTER_CRITICAL(&s_lock);
@@ -56,9 +53,6 @@ esp_err_t xiaozhi_mcp_light_capabilities_attach(esp_mcp_t *mcp)
         return ESP_ERR_INVALID_ARG;
     }
 
-#if !CONFIG_XIAOZHI_FOUNDATION_LIGHT_CAPABILITIES_TOOL
-    return ESP_OK;
-#else
     portENTER_CRITICAL(&s_lock);
     const bool already_attached = s_attached;
     portEXIT_CRITICAL(&s_lock);
@@ -100,5 +94,4 @@ esp_err_t xiaozhi_mcp_light_capabilities_attach(esp_mcp_t *mcp)
     APP_LOGI(TAG, LIGHT_CAPABILITIES_TOOL_REGISTERED_0371D0C6,
              "Smart Room light.get_capabilities MCP tool registered");
     return ESP_OK;
-#endif
 }

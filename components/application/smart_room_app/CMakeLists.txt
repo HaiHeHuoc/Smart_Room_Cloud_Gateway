@@ -5,7 +5,6 @@ idf_component_register(
         "include"
     PRIV_REQUIRES
         app_gui
-        app_hil_test
         app_log
         app_network_coordinator
         app_reset_coordinator

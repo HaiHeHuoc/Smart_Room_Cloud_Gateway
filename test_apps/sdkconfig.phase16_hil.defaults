@@ -1,2 +1,0 @@
-# Explicit target-HIL profile; never use as a production firmware default.
-CONFIG_APP_PHASE16_AUTO_HIL_TEST=y

@@ -37,5 +37,7 @@ cross-component callback routing.
 `xiaozhi_foundation`, `light_manager`, `cloud_manager`, or any driver. It is a
 product-specific composition component, not a generic service facade.
 
-Target-HIL gates are delegated to `app_hil_test`; normal builds execute no HIL
-test workload. Phase 18.2 remains not started.
+The Phase-16 target-HIL coordinator was retired during pre-base cleanup. The
+optional audio public-API stress task, when explicitly enabled in the audio
+manager menu, starts directly from this composition root. Phase 18.2 remains
+not started.

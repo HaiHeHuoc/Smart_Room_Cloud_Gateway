@@ -39,9 +39,9 @@ separate reviewed merge is authorized.
 - `smart_room_mcp_adapter` consolidates the existing sensor, cloud-sync,
   system-status, light-state, and light-set-state provider bridges. The
   `xiaozhi_foundation` MCP engine/session lifecycle remains unchanged.
-- `app_hil_test` holds the default-off public-audio and Phase-16 target-HIL
-  coordinator facades. The retired direct-I2S `audio_test` source is outside
-  the production application under `test_apps/audio_legacy_test`.
+- The Phase-16 target-HIL coordinator was retired during pre-base cleanup.
+  The retired direct-I2S `audio_test` source remains outside the production
+  application under `test_apps/audio_legacy_test`.
 - This refactor adds no MCP tool, light/audio behavior, protocol, credential,
   board mapping, or Phase-18.2 work. Phase 18.2 remains **NOT STARTED**.
 
@@ -193,7 +193,6 @@ Preserve these unless an explicitly approved phase changes them:
   routing.
 - `smart_room_mcp_adapter`: application-owned MCP provider adaptation through
   public service APIs only.
-- `app_hil_test`: default-off target-HIL coordinator facade through public APIs.
 - `config_manager`: persistent application configuration owner.
 - `wifi_manager`: Wi-Fi Station connection/reconnect owner.
 - `provisioning_manager`: temporary BLE provisioning transport owner.

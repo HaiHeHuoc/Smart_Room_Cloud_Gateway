@@ -5,17 +5,13 @@
 #include "board_config.h"
 #include "esp_log.h"
 #include "app_log.h"
-#include "sdkconfig.h"
 #include "voice_assistant_audio_adapter.h"
-
-#if !CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
 #include "voice_assistant_downlink.h"
 #include "voice_assistant_ptt.h"
 #include "voice_assistant_ptt_gpio.h"
 #include "voice_assistant_ui_gui_adapter.h"
 #include "voice_assistant_ui_model.h"
 #include "voice_assistant_uplink.h"
-#endif
 
 _Static_assert(PTT_BUTTON_USE_INTERNAL_PULLDOWN == 1,
                "Voice PTT GPIO contract requires internal pull-down");
@@ -24,9 +20,7 @@ static const char *const TAG = "VOICE_BOOTSTRAP";
 
 static audio_manager_status_callback_t s_app_audio_callback = NULL;
 static void *s_app_audio_callback_context = NULL;
-#if !CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
 static bool s_voice_started = false;
-#endif
 
 static void voice_assistant_audio_status_fanout(
     const audio_manager_status_t *status,
@@ -42,7 +36,6 @@ static void voice_assistant_audio_status_fanout(
         s_app_audio_callback(status, s_app_audio_callback_context);
     }
 
-#if !CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
     const esp_err_t voice_ret =
         voice_assistant_audio_adapter_post(status);
     if ((voice_ret != ESP_OK) &&
@@ -52,16 +45,10 @@ static void voice_assistant_audio_status_fanout(
                  "voice audio-status fanout dropped: %s",
                  esp_err_to_name(voice_ret));
     }
-#endif
 }
 
 static esp_err_t voice_assistant_start_stack(void)
 {
-#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
-    APP_LOGW(TAG, VOICE_PRODUCTION_STACK_SUPP_43B9332E,
-             "Production voice stack suppressed because Xiaozhi validation mode is enabled");
-    return ESP_OK;
-#else
     if (s_voice_started) {
         return ESP_OK;
     }
@@ -160,7 +147,6 @@ static esp_err_t voice_assistant_start_stack(void)
              (int)PTT_BUTTON_GPIO,
              (unsigned)PTT_BUTTON_ACTIVE_LEVEL);
     return ESP_OK;
-#endif
 }
 
 esp_err_t voice_assistant_start_after_audio_ready(

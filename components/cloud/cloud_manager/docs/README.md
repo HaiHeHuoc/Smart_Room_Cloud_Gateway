@@ -223,12 +223,13 @@ being retried. A successful request clears only the snapshot actually uploaded.
 - Network edges invalidate earlier TLS sessions.
 - The component is one-shot and has no stop/deinit API.
 
-## Serializer Verification
+## Historical Serializer Verification
 
-`test/host/run_tests.ps1` compiles the production bounded formatter with GCC
-and verifies synchronized and unsynchronized JSON fixtures plus a
-maximum-numeric-value buffer-fit case. The test deliberately does not contact
-Firebase or require an ESP32 target.
+The standalone host serializer regression suite was retired during pre-base
+cleanup. Its historical coverage compiled the production bounded formatter with
+GCC and verified synchronized and unsynchronized JSON fixtures plus a
+maximum-numeric-value buffer-fit case; it did not contact Firebase or require
+an ESP32 target.
 
 ## Firebase Setup And Security
 

@@ -2,7 +2,7 @@
 
 /**
  * @file xiaozhi_foundation.h
- * @brief Project-owned Xiaozhi boundary for service, session, audio, and validation use.
+ * @brief Project-owned Xiaozhi boundary for production session, audio, and MCP use.
  *
  * Public structures contain copied scalar/project-owned state only. Xiaozhi
  * handles, transport endpoints, credentials, tokens, and callback-lifetime
@@ -19,23 +19,6 @@
 extern "C"
 {
 #endif
-
-/** Caller-owned scalar snapshot of non-sensitive Xiaozhi service state. */
-typedef struct {
-    bool service_reachable;
-    bool websocket_available;
-    bool activation_code_available;
-    bool activation_challenge_available;
-    int activation_timeout_ms;
-    bool server_time_available;
-    bool new_firmware_available;
-} xiaozhi_foundation_info_t;
-
-/** Project transport selection. MQTT is intentionally unsupported. */
-typedef enum {
-    XIAOZHI_FOUNDATION_TRANSPORT_AUTO = 0,
-    XIAOZHI_FOUNDATION_TRANSPORT_WEBSOCKET,
-} xiaozhi_foundation_transport_t;
 
 /* Phase 13 production session boundary ------------------------------------ */
 
@@ -362,44 +345,6 @@ typedef void (*xiaozhi_foundation_text_callback_t)(
 /** Register/remove the single production semantic-text observer. */
 esp_err_t xiaozhi_foundation_text_register_callback(
     xiaozhi_foundation_text_callback_t callback,
-    void *user_context);
-
-/* Temporary Phase 12 validation UI status -------------------------------- */
-
-#define XIAOZHI_FOUNDATION_UI_TEXT_BUFFER_SIZE 192U
-
-typedef enum {
-    XIAOZHI_FOUNDATION_UI_DISCONNECTED = 0,
-    XIAOZHI_FOUNDATION_UI_READY,
-    XIAOZHI_FOUNDATION_UI_LISTENING,
-    XIAOZHI_FOUNDATION_UI_PROCESSING,
-    XIAOZHI_FOUNDATION_UI_RESPONDING,
-    XIAOZHI_FOUNDATION_UI_ERROR,
-} xiaozhi_foundation_ui_state_t;
-
-typedef struct {
-    xiaozhi_foundation_ui_state_t state;
-    int64_t listening_started_at_us;
-    int64_t listening_stopped_at_us;
-    esp_err_t last_error;
-    bool user_text_truncated;
-    char user_text[XIAOZHI_FOUNDATION_UI_TEXT_BUFFER_SIZE];
-    bool assistant_text_truncated;
-    char assistant_text[XIAOZHI_FOUNDATION_UI_TEXT_BUFFER_SIZE];
-} xiaozhi_foundation_ui_status_t;
-
-typedef void (*xiaozhi_foundation_ui_status_callback_t)(
-    const xiaozhi_foundation_ui_status_t *status,
-    void *user_context);
-
-/* Existing Phase 12 service/validation API -------------------------------- */
-
-esp_err_t xiaozhi_foundation_probe(xiaozhi_foundation_info_t *out_info);
-esp_err_t xiaozhi_foundation_request_probe(void);
-esp_err_t xiaozhi_foundation_request_transport_validation(
-    xiaozhi_foundation_transport_t transport);
-esp_err_t xiaozhi_foundation_register_ui_status_callback(
-    xiaozhi_foundation_ui_status_callback_t callback,
     void *user_context);
 
 #ifdef __cplusplus

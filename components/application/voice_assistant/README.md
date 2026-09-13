@@ -241,21 +241,14 @@ esp_err_t voice_assistant_audio_adapter_post(
     const audio_manager_status_t *status);
 ```
 
-## Production vs Phase-12 validation
+## Production voice startup
 
-The repository retains the Phase-12 validation composition and assets for HIL.
-The Phase-13 production branch explicitly defaults:
+Phase-12 validation composition and assets were retired during pre-base
+cleanup. Normal firmware always starts the production voice stack after audio
+and arbitration are ready.
 
-```text
-CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE=n
-```
-
-so normal Phase-13 firmware does not automatically run the temporary validator.
-Dedicated HIL/test branches may opt in explicitly.
-
-Phase 13 deliberately did not auto-call `voice_assistant_begin_session()` at
-boot. The current production composition queues the connection after `ONLINE`,
-but a conversation remains user-authorized: Sprint 14 owns the GPIO38 PTT
+The current production composition queues the Xiaozhi connection after audio
+startup. A conversation remains user-authorized: Sprint 14 owns the GPIO38 PTT
 trigger, mic uplink and response-audio lifecycle.
 
 ## Security boundary

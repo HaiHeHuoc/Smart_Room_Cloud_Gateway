@@ -11,7 +11,6 @@ independent ESP-IDF components.
 ```text
 components/
 |-- application/
-|   |-- app_hil_test/
 |   |-- app_network_coordinator/
 |   |-- app_reset_coordinator/
 |   |-- smart_room_app/
@@ -87,8 +86,7 @@ Current examples include:
 - `cloud_manager/modules/telemetry_json`;
 - `voice_assistant/modules/{audio,ui,ptt,codec,uplink,downlink}`;
 - `smart_room_mcp_adapter/modules/provider`;
-- `app_hil_test/modules/phase16` (compiled only by its test Kconfig gate);
-- `xiaozhi_foundation/modules/{session,text_bridge,websocket,fixture}`;
+- `xiaozhi_foundation/modules/{session,text_bridge,websocket}`;
 - UI-private allocator, GIF, and theme modules.
 
 Private-module rules:
@@ -109,7 +107,7 @@ graph made of many tiny components.
 
 | Domain | Components | Primary responsibility |
 |---|---|---|
-| Application | `smart_room_app`, `smart_room_mcp_adapter`, `app_hil_test`, `app_network_coordinator`, `app_reset_coordinator`, `voice_assistant`, `xiaozhi_foundation` | Product composition, bounded MCP-domain adaptation, default-off target-HIL coordination, reset/network policy, voice conversation lifecycle, and the project-owned Xiaozhi provider boundary |
+| Application | `smart_room_app`, `smart_room_mcp_adapter`, `app_network_coordinator`, `app_reset_coordinator`, `voice_assistant`, `xiaozhi_foundation` | Product composition, bounded MCP-domain adaptation, reset/network policy, voice conversation lifecycle, and the project-owned Xiaozhi provider boundary |
 | Audio | `audio_manager` | I2S microphone/speaker ownership, audio arbitration, streaming, DSP/WAV processing, and copied diagnostics |
 | Cloud | `cloud_manager`, `firebase_auth` | Firebase telemetry policy and authentication/token lifecycle |
 | Connectivity | `provisioning_manager`, `wifi_manager` | BLE provisioning and Wi-Fi Station lifecycle |
@@ -146,7 +144,7 @@ owned by the correct layer.
 
 ### Product/application component
 
-Examples: `smart_room_app`, `smart_room_mcp_adapter`, `app_hil_test`,
+Examples: `smart_room_app`, `smart_room_mcp_adapter`,
 `app_gui`, `app_network_coordinator`, `app_reset_coordinator`,
 `voice_assistant`, and the application telemetry policy in `cloud_manager`.
 
@@ -196,7 +194,6 @@ objective of this repository.
 - Application composition: [`main/README.md`](../main/README.md)
 - Product composition: [`application/smart_room_app/README.md`](application/smart_room_app/README.md)
 - Smart Room MCP adapter: [`application/smart_room_mcp_adapter/README.md`](application/smart_room_mcp_adapter/README.md)
-- Target-HIL coordinators: [`application/app_hil_test/README.md`](application/app_hil_test/README.md)
 - System architecture: [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)
 - Build and hardware setup: [`docs/SETUP.md`](../docs/SETUP.md)
 - Xiaozhi boundary:

@@ -14,7 +14,6 @@ static xiaozhi_foundation_sensor_query_provider_t s_provider = NULL;
 static void *s_provider_context = NULL;
 static bool s_attached = false;
 
-#if CONFIG_XIAOZHI_FOUNDATION_SENSOR_QUERY_TOOL
 static const char *const TAG = "XZ_SENSOR_MCP";
 
 static esp_err_t xiaozhi_mcp_sensor_query_callback(
@@ -79,8 +78,6 @@ static esp_err_t xiaozhi_mcp_sensor_query_callback(
     }
     return ret;
 }
-#endif
-
 esp_err_t xiaozhi_foundation_register_sensor_query_provider(
     xiaozhi_foundation_sensor_query_provider_t provider,
     void *user_context)
@@ -113,9 +110,6 @@ esp_err_t xiaozhi_mcp_sensor_query_attach(esp_mcp_t *mcp)
         return ESP_ERR_INVALID_ARG;
     }
 
-#if !CONFIG_XIAOZHI_FOUNDATION_SENSOR_QUERY_TOOL
-    return ESP_OK;
-#else
     portENTER_CRITICAL(&s_lock);
     const bool provider_registered = (s_provider != NULL);
     const bool already_attached = s_attached;
@@ -158,5 +152,4 @@ esp_err_t xiaozhi_mcp_sensor_query_attach(esp_mcp_t *mcp)
     APP_LOGI(TAG, SENSOR_QUERY_TOOL_REGISTERED_2E0AFB88,
              "Smart Room temperature/humidity MCP tool registered");
     return ESP_OK;
-#endif
 }

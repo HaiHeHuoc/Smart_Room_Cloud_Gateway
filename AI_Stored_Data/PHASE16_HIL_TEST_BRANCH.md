@@ -1,4 +1,8 @@
-# Phase 16 Audio Arbitration HIL Test Branch
+# Archived: Phase 16 Audio Arbitration HIL Test Branch
+
+> Historical acceptance record only. The Phase-16 HIL coordinator, its
+> Menuconfig settings, and reproducibility profiles were removed during
+> pre-base cleanup; do not use this document as a current build procedure.
 
 Updated: 2026-09-05
 Test branch: `test/phase16-audio-arbitration-hil`

@@ -521,18 +521,13 @@ BLE cleanup, and connection adoption, the coordinator posts `SUCCESS`, waits
 ESP_ERROR_CHECK(ui_manager_lvgl_init(&display_handle));
 ESP_ERROR_CHECK(app_gui_init());
 ESP_ERROR_CHECK(app_gui_start_ui_task());
-#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
-/* Register the temporary Xiaozhi observer; failure is logged but non-fatal. */
-xiaozhi_foundation_register_ui_status_callback(...);
-#endif
 ESP_ERROR_CHECK(app_network_coordinator_init(&network_config));
 ESP_ERROR_CHECK(app_network_coordinator_start());
 ```
 
 `main` does not create an initial screen directly. The coordinator requests the
-initial screen only after resolving the final configuration state. With the
-temporary Phase 12 validation gate at its default `n`, the observer is not
-registered and an `ONLINE` transition does not request `APP_GUI_SCREEN_XIAOZHI`.
+initial screen only after resolving the final configuration state. The
+production voice UI owns its own session-driven `APP_GUI_SCREEN_XIAOZHI` route.
 
 ## Phase 6.4.1 Historical Checkpoint
 

@@ -53,21 +53,9 @@ components/storage/config_manager/
     `-- README.md
 ```
 
-The destructive component test application is independent of the production
-component:
-
-```text
-Test/config_manager/
-|-- CMakeLists.txt
-|-- README.md
-|-- .gitignore
-|-- sdkconfig.defaults
-`-- main/
-    |-- CMakeLists.txt
-    `-- test_config_manager.c
-```
-
-No production fault-injection API is exposed.
+The standalone destructive component test application was independent of the
+production component and was retired during pre-base cleanup. No production
+fault-injection API is exposed.
 
 ## Initialization
 
@@ -395,33 +383,13 @@ esp_err_t err = config_manager_clear_wifi();
 err = config_manager_factory_reset();
 ```
 
-## Test Application
+## Historical Test Application
 
-The isolated destructive test firmware is located at:
-
-```text
-Test/config_manager/
-```
-
-It tests initialization, validation, missing and corrupt NVS keys, schema
-migration, interrupted Wi-Fi publication, device identity, custom data,
-clear/reset scope, repeated operations, and concurrency.
-
-```powershell
-cd Test/config_manager
-idf.py set-target esp32s3
-idf.py build
-idf.py -p <PORT> flash monitor
-```
-
-The test image erases default NVS at boot. Do not flash it to a device whose
-stored configuration must be preserved.
-
-Expected current Unity summary after the added interrupted-write test:
-
-```text
-38 Tests 0 Failures 0 Ignored
-```
+The standalone destructive configuration-manager test application was retired
+during pre-base cleanup. Its historical 38-case scope covered initialization,
+validation, missing and corrupt NVS keys, schema migration, interrupted Wi-Fi
+publication, device identity, custom data, clear/reset scope, repeated
+operations, and concurrency. The retired test image erased default NVS at boot.
 
 ## Verification Status
 
@@ -436,18 +404,16 @@ Completed before this cleanup:
 Completed by this cleanup:
 
 - Production firmware compile/link with ESP-IDF v6.0.1.
-- Renamed 38-case `Test/config_manager` firmware compile/link.
+- Historical 38-case standalone test-application firmware compile/link.
 
 Still required:
 
-- Run the updated 38-test suite on ESP32-S3 hardware.
 - Verify Wi-Fi configuration persists across reboot.
 - Verify device identity persists across reboot.
 - Exercise production boot with `VALID`, `MIGRATION_REQUIRED`, `INCOMPLETE`,
   `INVALID_DATA`, and `UNSUPPORTED_VERSION`.
 
-The destructive test app erases default NVS at boot, so it cannot by itself
-prove reboot persistence.
+The retired destructive test app could not by itself prove reboot persistence.
 
 ## Known Limitations
 

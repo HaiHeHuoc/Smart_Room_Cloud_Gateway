@@ -68,8 +68,9 @@ calls. Busy audio requests are rejected rather than accumulated as a playlist.
 ## Public-API Hardware Stress Coordinator
 
 Enable `CONFIG_AUDIO_MANAGER_PUBLIC_API_TEST` only for a target-hardware
-validation run. It causes `app_hil_test` to call `app_audio_api_test_task_start()`,
-which starts the test-only, priority-6 coordinator implemented in
+validation run. The application composition root calls
+`app_audio_api_test_task_start()`, which starts the test-only, priority-6
+coordinator implemented in
 `audio_api_test_task.c` after the application network coordinator reaches
 `ONLINE`. It calls only public `audio_manager` APIs and polls copied status; it
 does not own I2S, PCM buffers, WAV files, or SD leases.
@@ -295,15 +296,9 @@ lengths without requiring a mounted SD card.
 | Stereo, 44.1-kHz, 8/24/32-bit, float, ADPCM | Deterministic unsupported-format error |
 | Declared data/chunk length beyond file bounds | Deterministic invalid-size error |
 
-The native host harness calls the real `audio_wav_parse_file()` implementation
-with temporary normal files, so it requires neither an SD card nor I2S:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass `
-  -File components\audio\audio_manager\test\host\run_tests.ps1
-```
-
-It covers canonical, `JUNK`, `LIST`, unknown, odd-padded, data-before-format,
+The standalone native host WAV harness was retired during pre-base cleanup.
+Its historical coverage used temporary normal files (no SD card or I2S) and
+covered canonical, `JUNK`, `LIST`, unknown, odd-padded, data-before-format,
 and large WAV fixtures plus random/truncated containers, missing chunks, zero
 data, oversized chunks, unsupported channels/rates/widths/float, invalid
 alignment/rate, truncated payloads, and aligned/EOF/invalid resume offsets.
@@ -312,12 +307,12 @@ Validation evidence is deliberately separated:
 
 | Check | Current result | What it proves |
 | --- | --- | --- |
-| Native WAV suite | Parser 32/32 plus stream-contract/fixed-scale test passed | Parser, open/error SD-lease fixture behavior, resume-seek bounds, and fixed full-scale PCM16 endpoint/sample mapping; it does not execute the FreeRTOS prefetch worker |
+| Historical native WAV suite | Parser 32/32 plus stream-contract/fixed-scale test passed before retirement | Parser, open/error SD-lease fixture behavior, resume-seek bounds, and fixed full-scale PCM16 endpoint/sample mapping; it did not execute the FreeRTOS prefetch worker |
 | ESP-IDF 6.0.1 firmware build | Passed | Firmware compiles and links the fixed full-scale WAV mapping with the production lifecycle APIs |
 | Target WAV playback | Pending | Real SD latency, PSRAM cache handoff, I2S TX, MAX98357A sound, EOF, cancellation, and cleanup |
 | Golden MIC regression | Pending | Real INMP441 record, DSP, and recorded playback after the lifecycle refactor |
 
-The host suite does not emulate FreeRTOS queues/tasks, PSRAM cache handoff,
+The retired host suite did not emulate FreeRTOS queues/tasks, PSRAM cache handoff,
 I2S TX, MAX98357A, target SD latency, audible continuity, or hardware
 cancellation. A firmware build also does not prove any of those runtime
 behaviors.

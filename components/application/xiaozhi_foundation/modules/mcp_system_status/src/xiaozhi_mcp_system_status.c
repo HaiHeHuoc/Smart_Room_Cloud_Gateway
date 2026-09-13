@@ -13,7 +13,6 @@ static xiaozhi_foundation_system_status_query_provider_t s_provider = NULL;
 static void *s_provider_context = NULL;
 static bool s_attached = false;
 
-#if CONFIG_XIAOZHI_FOUNDATION_SYSTEM_STATUS_QUERY_TOOL
 static const char *const TAG = "XZ_SYSTEM_MCP";
 
 /** Only composition-owned normalized identifier tokens may enter JSON text. */
@@ -125,8 +124,6 @@ static esp_err_t xiaozhi_mcp_system_status_callback(
     }
     return ret;
 }
-#endif
-
 esp_err_t xiaozhi_foundation_register_system_status_query_provider(
     xiaozhi_foundation_system_status_query_provider_t provider,
     void *user_context)
@@ -159,9 +156,6 @@ esp_err_t xiaozhi_mcp_system_status_attach(esp_mcp_t *mcp)
         return ESP_ERR_INVALID_ARG;
     }
 
-#if !CONFIG_XIAOZHI_FOUNDATION_SYSTEM_STATUS_QUERY_TOOL
-    return ESP_OK;
-#else
     portENTER_CRITICAL(&s_lock);
     const bool provider_registered = (s_provider != NULL);
     const bool already_attached = s_attached;
@@ -204,5 +198,4 @@ esp_err_t xiaozhi_mcp_system_status_attach(esp_mcp_t *mcp)
     APP_LOGI(TAG, SYSTEM_STATUS_QUERY_TOOL_REGISTERED_932A4D7C,
              "Smart Room system-status MCP tool registered");
     return ESP_OK;
-#endif
 }

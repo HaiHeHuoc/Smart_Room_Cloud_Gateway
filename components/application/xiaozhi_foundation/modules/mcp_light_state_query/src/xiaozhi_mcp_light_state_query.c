@@ -13,7 +13,6 @@ static xiaozhi_foundation_light_state_query_provider_t s_provider = NULL;
 static void *s_provider_context = NULL;
 static bool s_attached = false;
 
-#if CONFIG_XIAOZHI_FOUNDATION_LIGHT_STATE_QUERY_TOOL
 static const char *const TAG = "XZ_LIGHT_QUERY";
 
 static const char *xiaozhi_mcp_light_state_color_name(
@@ -136,8 +135,6 @@ static esp_err_t xiaozhi_mcp_light_state_query_callback(
     }
     return ret;
 }
-#endif
-
 esp_err_t xiaozhi_foundation_register_light_state_query_provider(
     xiaozhi_foundation_light_state_query_provider_t provider,
     void *user_context)
@@ -170,9 +167,6 @@ esp_err_t xiaozhi_mcp_light_state_query_attach(esp_mcp_t *mcp)
         return ESP_ERR_INVALID_ARG;
     }
 
-#if !CONFIG_XIAOZHI_FOUNDATION_LIGHT_STATE_QUERY_TOOL
-    return ESP_OK;
-#else
     portENTER_CRITICAL(&s_lock);
     const bool provider_registered = (s_provider != NULL);
     const bool already_attached = s_attached;
@@ -215,5 +209,4 @@ esp_err_t xiaozhi_mcp_light_state_query_attach(esp_mcp_t *mcp)
     APP_LOGI(TAG, LIGHT_STATE_QUERY_TOOL_REGISTERED_9F9E3A8D,
              "Smart Room light.get_state MCP tool registered");
     return ESP_OK;
-#endif
 }

@@ -26,7 +26,6 @@ main/
 components/application/
   smart_room_app/                product composition, startup and adapters
   smart_room_mcp_adapter/        domain snapshot providers for Xiaozhi MCP
-  app_hil_test/                  default-off target-HIL coordinator facade
 test_apps/
   audio_legacy_test/             retired direct-I2S test source; not a product app
 ```
@@ -34,8 +33,8 @@ test_apps/
 `smart_room_app` registers all local service callbacks before starting network
 boot and registers MCP providers before a production voice session can start.
 `xiaozhi_foundation` remains the sole managed Xiaozhi/MCP engine and session
-lifecycle boundary. The small `app_hil_test` facade is always present, but it
-does no work unless a test Kconfig gate is enabled.
+lifecycle boundary. Production MCP tools are registered unconditionally when
+that session starts.
 
 ## Startup Order
 

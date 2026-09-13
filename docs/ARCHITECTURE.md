@@ -73,7 +73,6 @@ logger. Early/pre-init logs remain console-only. Hardware acceptance is pending.
 | `main/main.c` | ESP-IDF entry into product composition | Product callbacks, policy, manager lifecycle, or hardware resources |
 | `smart_room_app` | Startup ordering, product policy, copied cross-component callback routing | Manager/driver implementation, LVGL, I2S, MCP engine/session |
 | `smart_room_mcp_adapter` | Registration and public-snapshot implementation of Smart Room MCP providers | MCP engine/session, domain manager ownership, drivers, GPIO, RMT, I2S, LVGL |
-| `app_hil_test` | Default-off target-HIL orchestration through public APIs | I2S, DMA, GPIO/PTT, SD handles, raw audio buffers |
 | `wifi_manager` | Station lifecycle, driver serialization, reconnect | Provisioning policy, NVS schema, GUI |
 | `light_manager` | Static product light state and board-injected NeoPixel composition | RMT/LED-strip handles, named-color parsing, MCP, GUI policy |
 | `provisioning_manager` | Temporary BLE provisioning lifecycle and verified credential handoff | Persistent storage, reconnect, GUI |

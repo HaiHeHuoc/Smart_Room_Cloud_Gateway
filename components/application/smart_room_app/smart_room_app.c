@@ -54,11 +54,6 @@
 /* app network coordinator ------------------------------------------------- */
 #include "app_network_coordinator.h"
 
-/* Xiaozhi validation foundation ------------------------------------------- */
-#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
-#include "xiaozhi_foundation.h"
-#endif
-
 /* app reset coordinator --------------------------------------------------- */
 #include "app_reset_coordinator.h"
 
@@ -67,22 +62,11 @@
 
 /* Audio manager ------------------------------------------------------------ */
 #include "audio_manager.h"
+#include "audio_api_test_task.h"
 #include "voice_assistant.h"
-#include "app_hil_test.h"
 
 /* Light manager ------------------------------------------------------------ */
 #include "light_manager.h"
-
-#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
-#define APP_XIAOZHI_VALIDATION_QUIESCENCE_MS \
-    5000U
-
-#define APP_XIAOZHI_VALIDATION_READY_TIMEOUT_MS \
-    60000U
-
-#define APP_XIAOZHI_VALIDATION_READY_POLL_MS \
-    250U
-#endif
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "MAIN_APP";
@@ -236,17 +220,6 @@ static void app_cloud_status_callback(
     const cloud_manager_status_t *status,
     void *user_context);
 
-#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
-/** @brief Map a foundation validation state to its GUI equivalent. */
-static ui_xiaozhi_state_t app_map_xiaozhi_state(
-    xiaozhi_foundation_ui_state_t state);
-
-/** @brief Copy a foundation snapshot to the GUI queue without calling LVGL. */
-static void app_xiaozhi_ui_status_callback(
-    const xiaozhi_foundation_ui_status_t *status,
-    void *user_context);
-#endif
-
 /**
  * @brief Convert one Wi-Fi manager snapshot into a coordinator runtime event.
  *
@@ -294,20 +267,6 @@ static bool app_network_state_allows_audio_start(
  *         manager initialization or startup error.
  */
 static esp_err_t app_start_audio_manager_after_network_online(void);
-
-#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
-/** @brief Check whether the cloud task has left startup/network work. */
-static bool app_cloud_state_allows_xiaozhi_validation(
-    cloud_manager_state_t state);
-
-/**
- * @brief Start validation after application-owned managers and UI are stable.
- *
- * Runs only from app_main task context. It observes public component snapshots
- * and never takes ownership of audio, cloud, Wi-Fi, or LVGL lifecycles.
- */
-static esp_err_t app_request_xiaozhi_validation_after_steady_state(void);
-#endif
 
 /* Application -------------------------------------------------------------- */
 static void app_log_time_changed(const time_manager_status_t *status, void *context)
@@ -476,26 +435,6 @@ void smart_room_app_start(void)
 
         return;
     }
-
-#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
-    /*
-     * The foundation borrows this callback for application lifetime. It only
-     * copies bounded status into app_gui; it cannot route screens or access
-     * LVGL from Xiaozhi worker/event-loop context.
-     */
-    const esp_err_t xiaozhi_ui_ret =
-        xiaozhi_foundation_register_ui_status_callback(
-            app_xiaozhi_ui_status_callback,
-            NULL);
-
-    if (xiaozhi_ui_ret != ESP_OK)
-    {
-        APP_LOGW(
-            TAG, XIAOZHI_VALIDATION_UI_OBSERV_F4AC6A37,
-            "Xiaozhi validation UI observer unavailable: %s",
-            esp_err_to_name(xiaozhi_ui_ret));
-    }
-#endif
 
     APP_LOGI(TAG, DISPLAY_READY, "initialized=1");
 
@@ -796,10 +735,6 @@ void smart_room_app_start(void)
     bool cloud_started = false;
     bool audio_start_attempted = false;
     bool network_failure_screen_requested = false;
-#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
-    bool audio_started = false;
-    bool xiaozhi_validation_attempted = false;
-#endif
 
     while (1)
     {
@@ -873,10 +808,6 @@ void smart_room_app_start(void)
 
                 if (audio_ret == ESP_OK)
                 {
-#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
-                    audio_started = true;
-#endif
-
                     APP_LOGI(
                         TAG, AUDIO_MANAGER_STARTED_AFTER_5EA81CA8,
                         "Audio manager started after network handoff: state=%s",
@@ -922,26 +853,6 @@ void smart_room_app_start(void)
                 }
             }
         }
-
-#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
-        if (!xiaozhi_validation_attempted &&
-            cloud_started &&
-            audio_started)
-        {
-            xiaozhi_validation_attempted = true;
-
-            const esp_err_t xiaozhi_ret =
-                app_request_xiaozhi_validation_after_steady_state();
-
-            if (xiaozhi_ret != ESP_OK)
-            {
-                APP_LOGE(
-                    TAG, XIAOZHI_STEADY_STATE_VALIDAT_13DB41B2,
-                    "Xiaozhi steady-state validation was not started: %s",
-                    esp_err_to_name(xiaozhi_ret));
-            }
-        }
-#endif
 
         vTaskDelay(
             pdMS_TO_TICKS(
@@ -1505,96 +1416,6 @@ static ui_cloud_state_t app_map_cloud_state(
     }
 }
 
-#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
-static ui_xiaozhi_state_t app_map_xiaozhi_state(
-    xiaozhi_foundation_ui_state_t state)
-{
-    switch (state)
-    {
-        case XIAOZHI_FOUNDATION_UI_READY:
-            return UI_XIAOZHI_STATE_READY;
-
-        case XIAOZHI_FOUNDATION_UI_LISTENING:
-            return UI_XIAOZHI_STATE_LISTENING;
-
-        case XIAOZHI_FOUNDATION_UI_PROCESSING:
-            return UI_XIAOZHI_STATE_PROCESSING;
-
-        case XIAOZHI_FOUNDATION_UI_RESPONDING:
-            return UI_XIAOZHI_STATE_RESPONDING;
-
-        case XIAOZHI_FOUNDATION_UI_ERROR:
-            return UI_XIAOZHI_STATE_ERROR;
-
-        case XIAOZHI_FOUNDATION_UI_DISCONNECTED:
-        default:
-            return UI_XIAOZHI_STATE_DISCONNECTED;
-    }
-}
-
-static void app_xiaozhi_ui_status_callback(
-    const xiaozhi_foundation_ui_status_t *status,
-    void *user_context)
-{
-    (void)user_context;
-
-    if (status == NULL)
-    {
-        return;
-    }
-
-    const ui_xiaozhi_state_t ui_state =
-        app_map_xiaozhi_state(status->state);
-    ui_xiaozhi_status_t ui_status =
-    {
-        .state = ui_state,
-        .listening_started_at_us = status->listening_started_at_us,
-        .listening_stopped_at_us = status->listening_stopped_at_us,
-        .last_error =
-            (ui_state == UI_XIAOZHI_STATE_ERROR)
-                ? ((status->last_error == ESP_OK)
-                    ? ESP_FAIL
-                    : status->last_error)
-                : ESP_OK,
-        .user_text_truncated = status->user_text_truncated,
-        .assistant_text_truncated = status->assistant_text_truncated,
-    };
-
-    const size_t user_length = strnlen(
-        status->user_text,
-        sizeof(status->user_text));
-    const size_t assistant_length = strnlen(
-        status->assistant_text,
-        sizeof(status->assistant_text));
-
-    memcpy(ui_status.user_text, status->user_text, user_length);
-    memcpy(
-        ui_status.assistant_text,
-        status->assistant_text,
-        assistant_length);
-    ui_status.user_text[user_length] = '\0';
-    ui_status.assistant_text[assistant_length] = '\0';
-    ui_status.user_text_truncated =
-        ui_status.user_text_truncated ||
-        (user_length == sizeof(status->user_text));
-    ui_status.assistant_text_truncated =
-        ui_status.assistant_text_truncated ||
-        (assistant_length == sizeof(status->assistant_text));
-
-    const esp_err_t ret = app_gui_post_xiaozhi_status(&ui_status);
-
-    if (ret != ESP_OK)
-    {
-        APP_LOGD(
-            TAG, XIAOZHI_GUI_UPDATE_DROPPED_S_6979FE06,
-            "Xiaozhi GUI update dropped: state=%d, error=%s, post=%s",
-            (int)ui_state,
-            esp_err_to_name(ui_status.last_error),
-            esp_err_to_name(ret));
-    }
-}
-#endif
-
 static void app_cloud_status_callback(
     const cloud_manager_status_t *status,
     void *user_context)
@@ -1746,137 +1567,19 @@ static esp_err_t app_start_audio_manager_after_network_online(void)
         TAG, AUDIO_MANAGER_TASK_STARTED_M_5C489DBF,
         "Audio manager task started; mode is reported by audio_manager");
 
-    const esp_err_t hil_test_ret =
-        app_hil_test_start_after_audio_ready();
-    if (hil_test_ret != ESP_OK)
+#if CONFIG_AUDIO_MANAGER_PUBLIC_API_TEST
+    const esp_err_t audio_test_ret = app_audio_api_test_task_start();
+    if (audio_test_ret != ESP_OK)
     {
         APP_LOGW(
-            TAG, TARGET_HIL_START_FAILED_A4980A2C,
-            "Enabled target-hardware test coordinator failed to start: %s",
-            esp_err_to_name(hil_test_ret));
+            TAG, AUDIO_PUBLIC_TEST_START_FAILED_9B9F0B94,
+            "Enabled audio public-API test coordinator failed to start: %s",
+            esp_err_to_name(audio_test_ret));
     }
+#endif
 
     return ESP_OK;
 }
-
-#if CONFIG_XIAOZHI_FOUNDATION_VALIDATION_ENABLE
-static bool app_cloud_state_allows_xiaozhi_validation(
-    cloud_manager_state_t state)
-{
-    switch (state)
-    {
-        case CLOUD_MANAGER_STATE_WAITING_FOR_DATA:
-        case CLOUD_MANAGER_STATE_ONLINE:
-        case CLOUD_MANAGER_STATE_RETRY_WAIT:
-        case CLOUD_MANAGER_STATE_AUTH_ERROR:
-        case CLOUD_MANAGER_STATE_ERROR:
-            return true;
-
-        case CLOUD_MANAGER_STATE_UNINITIALIZED:
-        case CLOUD_MANAGER_STATE_INITIALIZED:
-        case CLOUD_MANAGER_STATE_WAITING_FOR_NETWORK:
-        case CLOUD_MANAGER_STATE_UPLOADING:
-        default:
-            return false;
-    }
-}
-
-static esp_err_t app_request_xiaozhi_validation_after_steady_state(void)
-{
-    esp_err_t ret =
-        app_gui_request_screen(
-            APP_GUI_SCREEN_XIAOZHI);
-
-    if (ret != ESP_OK)
-    {
-        APP_LOGW(
-            TAG, FAILED_TO_QUEUE_XIAOZHI_VALI_2DE027D9,
-            "Failed to queue Xiaozhi validation screen: %s",
-            esp_err_to_name(ret));
-        return ret;
-    }
-
-    const TickType_t wait_started_at =
-        xTaskGetTickCount();
-    TickType_t quiescence_started_at = 0U;
-    bool quiescence_active = false;
-
-    APP_LOGI(
-        TAG, WAITING_FOR_XIAOZHI_VALIDATI_A963361E,
-        "Waiting for Xiaozhi validation steady state: timeout_ms=%lu "
-        "quiescence_ms=%lu",
-        (unsigned long)APP_XIAOZHI_VALIDATION_READY_TIMEOUT_MS,
-        (unsigned long)APP_XIAOZHI_VALIDATION_QUIESCENCE_MS);
-
-    while ((xTaskGetTickCount() - wait_started_at) <
-           pdMS_TO_TICKS(APP_XIAOZHI_VALIDATION_READY_TIMEOUT_MS))
-    {
-        app_network_coordinator_state_t network_state =
-            APP_NETWORK_COORDINATOR_STATE_UNINITIALIZED;
-        audio_manager_status_t audio_status = {0};
-        cloud_manager_status_t cloud_status = {0};
-        app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
-
-        const bool snapshots_valid =
-            (app_network_coordinator_get_state(&network_state) == ESP_OK) &&
-            (audio_manager_get_status(&audio_status) == ESP_OK) &&
-            (cloud_manager_get_status(&cloud_status) == ESP_OK) &&
-            (app_gui_get_screen_id(&screen_id) == ESP_OK);
-        const bool prerequisites_ready =
-            snapshots_valid &&
-            (network_state == APP_NETWORK_COORDINATOR_STATE_ONLINE) &&
-            (audio_status.state == AUDIO_MANAGER_STATE_IDLE) &&
-            !audio_status.capture_i2s_active &&
-            !audio_status.playback_i2s_active &&
-            app_cloud_state_allows_xiaozhi_validation(
-                cloud_status.state) &&
-            (screen_id == APP_GUI_SCREEN_XIAOZHI);
-        const TickType_t now = xTaskGetTickCount();
-
-        if (!prerequisites_ready)
-        {
-            quiescence_active = false;
-        }
-        else if (!quiescence_active)
-        {
-            quiescence_active = true;
-            quiescence_started_at = now;
-        }
-        else if ((now - quiescence_started_at) >=
-                 pdMS_TO_TICKS(APP_XIAOZHI_VALIDATION_QUIESCENCE_MS))
-        {
-            APP_LOGI(
-                TAG, XIAOZHI_STEADY_STATE_READY_N_6E6327FF,
-                "XIAOZHI_STEADY_STATE ready network=ONLINE audio=IDLE "
-                "cloud_state=%d screen=XIAOZHI quiescence_ms=%lu",
-                (int)cloud_status.state,
-                (unsigned long)APP_XIAOZHI_VALIDATION_QUIESCENCE_MS);
-
-            ret =
-                xiaozhi_foundation_request_transport_validation(
-                    XIAOZHI_FOUNDATION_TRANSPORT_AUTO);
-
-            if (ret == ESP_OK)
-            {
-                APP_LOGI(
-                    TAG, XIAOZHI_VALIDATION_REQUESTED_EDE32DE0,
-                    "Xiaozhi validation requested from steady-state composition layer");
-            }
-
-            return ret;
-        }
-
-        vTaskDelay(
-            pdMS_TO_TICKS(
-                APP_XIAOZHI_VALIDATION_READY_POLL_MS));
-    }
-
-    APP_LOGE(
-        TAG, XIAOZHI_STEADY_STATE_TIMEOUT_DA8CB854,
-        "XIAOZHI_STEADY_STATE timeout; validation baseline not captured");
-    return ESP_ERR_TIMEOUT;
-}
-#endif
 
 static void app_button_event_callback(
     const button_manager_event_data_t *event_data,

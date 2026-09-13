@@ -529,7 +529,8 @@ config_version
 ### Verification Status
 
 - Production firmware compile/link after hardening: passed with ESP-IDF v6.0.1.
-- Renamed 38-case `Test/config_manager` firmware compile/link: passed.
+- Historical 38-case standalone config-manager test-app compile/link: passed;
+  the test app was retired during pre-base cleanup.
 - Historical 14-case Phase 5.3B hardware suite: passed.
 - Previous 37-case expanded hardware suite: passed.
 - Updated 38-case runtime, reboot persistence, and production boot-state
