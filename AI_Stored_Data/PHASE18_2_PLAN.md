@@ -1,16 +1,15 @@
 # Phase 18.2 — Audio Controlled Actions Plan
 
-Status: **18.2.1 IN PROGRESS / PROMPT 2 SOFTWARE CORE IMPLEMENTED — SCOPE NUMBERING LOCKED**
+Status: **18.2.1 PROMPT 3 SOFTWARE IMPLEMENTED / TARGET HIL PENDING — SCOPE NUMBERING LOCKED**
 
 Updated: 2026-09-13
 Integration branch: `main_including_Firebase_security`
 
 ## Purpose
 
-This file is the durable anti-drift plan for Phase 18.2. It records the
-numbering and design direction agreed during Q&A before implementation starts.
-It does not claim that Phase 18.2 source has been implemented, built, or HIL
-validated.
+This file is the durable anti-drift plan for Phase 18.2. It records the locked
+numbering, accepted design direction, and objective software status. Target HIL
+remains separate and is not claimed by a successful build or host test.
 
 Current Phase-18 execution state remains:
 
@@ -319,7 +318,7 @@ This file records planning decisions only:
 
 ```text
 18.2.1 Prompt 2 core    IMPLEMENTED / BUILD VERIFIED
-18.2.1 Prompt 3         NOT STARTED
+18.2.1 Prompt 3         SOFTWARE IMPLEMENTED / BUILD + HOST TESTS PASS
 18.2.1 HIL              NOT RUN / NOT CLAIMED
 18.2.2 implementation   NOT STARTED
 18.2.2 build            NOT RUN / NOT CLAIMED

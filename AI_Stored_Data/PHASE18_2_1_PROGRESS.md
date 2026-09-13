@@ -3,10 +3,10 @@
 Updated: 2026-09-13
 
 ```text
-Phase status:       IN PROGRESS
+Phase status:       IN PROGRESS / SOFTWARE IMPLEMENTED
 Prompt 2 core:      SOFTWARE IMPLEMENTED / BUILD VERIFIED
-Prompt 3 MCP/PTT:   NOT STARTED
-Target HIL:         PENDING
+Prompt 3 MCP/PTT:   SOFTWARE IMPLEMENTED / BUILD + HOST TESTS VERIFIED
+Target HIL:         PENDING / NOT CLAIMED
 ```
 
 ## Git checkpoint
@@ -16,11 +16,59 @@ base branch:            main_including_Firebase_security
 base commit:            f2597fd8fc60be54a66dc75dc6a7f718b9901c88
 implementation branch:  phase/18.2.1-playback-control-core
 implementation commit:  c7044f1c26b3d203aa022fac8ec785969a8ecc63
+Prompt-2 final HEAD:     69e5da649e0a25801df752a5e8a1ebc25e3520c6
+Prompt-3 branch:         phase/18.2.1-mcp-ptt-integration
+Prompt-3 implementation: e1b841bde21ae5c379c68a51ae5cf82f0c9cd932
 ```
 
-This record was finalized in a follow-up documentation commit after the code
-checkpoint existed. This branch must not be merged until Prompt 2 review and
-later target acceptance are explicitly handled.
+This branch must not be merged until Prompt 3 review and target acceptance are
+explicitly handled.
+
+## Prompt 3 integration
+
+Production MCP now exposes exactly:
+
+```text
+audio.control_playback { action: pause | resume | stop | restart }
+audio.get_playback_state {}
+```
+
+The SDK-generated input schema makes `action` required and rejects additional
+properties. The control result reports `success`, `accepted`,
+`physically_applied`, deterministic `error_code`, and a bounded copied playback
+snapshot. The state tool is annotated read-only and exposes only state, source
+type, pause reason, resumability, generation, committed/total frame position,
+and position granularity. Neither tool exposes a path, FILE, handle, pointer,
+raw PCM, I2S, DMA, or SD ownership object.
+
+The ownership flow is:
+
+```text
+xiaozhi_foundation schema/tool
+-> smart_room_mcp_adapter enum adaptation
+-> voice_assistant per-turn policy
+-> audio_manager public control API
+-> sole source/I2S/DMA owner
+```
+
+GPIO38 uses the same project-owned control seam locally. Playing resumable
+audio is paused with `PTT`, and the PTT task waits finitely for logical PAUSED,
+manager IDLE, and inactive playback I2S before authorizing the same held press.
+A release queued during the wait revokes the unstarted turn and restores the
+source. A prior USER pause is preserved and is never auto-resumed by an
+unrelated question.
+
+After downlink reaches terminal playback, timeout, or cooperative abort, the
+generation-bound transaction applies exactly one final action. No explicit MCP
+action means temporary PTT audio auto-resumes. The last accepted explicit
+pause/resume/stop/restart action replaces auto-resume and is applied after TTS,
+so local audio does not overlap the spoken acknowledgement.
+
+A GPIO38 press during Xiaozhi speech transfers any still-valid local suspended
+context to the new PTT generation, then asks the downlink owner to taint old
+PCM, terminate the arbiter stream, close/reset the audio channel, clear queued
+response state, and only then continue the retained press. Old TTS is never
+resumed.
 
 ## Implemented owner capability
 
@@ -114,6 +162,21 @@ Result: PASS.
 These tests do not emulate FreeRTOS tasks, I2S, PSRAM, real SD latency, or
 audible output.
 
+Prompt 3 commands:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File components\application\voice_assistant\test\host\run_tests.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File components\application\xiaozhi_foundation\test\host\run_tests.ps1
+```
+
+Result: PASS.
+
+- PTT suspension needed/not-needed, USER pause preservation, temporary
+  auto-resume, all four explicit overrides, last-command-wins, fast release,
+  stale terminal rejection, and TTS-generation transfer: PASS;
+- exact MCP action allowlist, invalid/missing/case-mismatched actions, read-only
+  state annotation, and provider-boundary static guard: PASS.
+
 ### ESP-IDF build
 
 ESP-IDF 6.0.1:
@@ -123,8 +186,8 @@ idf.py reconfigure
 ninja -C build -j 1 all
 ```
 
-Result: PASS. Firmware size `0x268ff0`; `0x197010` bytes (40%) remain in the
-4 MiB app partition.
+Prompt 3 final result: PASS. Firmware size `0x26c110`; `0x193ef0` bytes (39%)
+remain in the 4 MiB app partition.
 
 ### Target HIL
 
@@ -166,18 +229,34 @@ count, pause/resume latency, and monotonic heap/resource-loss trend.
   only arbiter-submitted WAV has a Phase-16 logical arbiter request. No new
   recorded-playback start surface was added because that belongs to 18.2.2.
 
-## Next work
+## Prompt 3 target HIL matrix
 
-Phase 18.2.1 Prompt 3 only, after Prompt 2 review/HIL direction:
+1. WAV playing -> GPIO38 hold -> ask temperature -> hear TTS -> resume near the
+   retained committed position.
+2. Temporary suspension plus STOP -> remain IDLE after acknowledgement.
+3. Temporary suspension plus PAUSE -> remain PAUSED with USER reason.
+4. USER-paused source plus RESUME -> resume only after TTS completes.
+5. Playing source plus RESTART -> same source starts at frame zero after TTS.
+6. Fast GPIO38 tap during suspension -> no late microphone start; source
+   recovers.
+7. GPIO38 during Xiaozhi TTS -> old TTS terminates, same press starts a new turn,
+   and old speech never resumes.
+8. Repeat 20-50 suspend/voice/resume cycles, rapid GPIO38, network failure, and
+   SD-unavailable-before-resume; verify a subsequent clean turn/playback.
+
+Capture equivalent-checkpoint Internal/DMA/PSRAM free/min/largest, audio/PTT/
+uplink/downlink/reader stack HWM, CPU, pause/authorization/resume latency, and SD
+lease/resource trend. No target values are claimed yet.
+
+## Remaining work
+
+Run the Prompt 2 + Prompt 3 target HIL matrix and record audible, GPIO38,
+resource, and failure-recovery evidence. Until then:
 
 ```text
-audio.control_playback MCP
-audio.get_playback_state MCP
-GPIO38 local suspension
-same retained physical press into PTT
-fast-release capture revocation/immediate local resume
-post-turn generation-guarded auto-resume
-explicit audio-command override
+PHASE 18.2.1 READY TO CLOSE: NO
+READY TO PLAN PHASE 18.2.2: NO
 ```
 
-Do not start Prompt 3 automatically. Phase 18.2.1 remains IN PROGRESS.
+Do not start Phase 18.2.2 automatically. Phase 18.2.1 remains IN PROGRESS until
+target acceptance is recorded.
