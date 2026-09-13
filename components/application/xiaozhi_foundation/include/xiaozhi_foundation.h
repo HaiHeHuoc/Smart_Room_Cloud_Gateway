@@ -329,6 +329,65 @@ esp_err_t xiaozhi_foundation_register_audio_state_provider(
     xiaozhi_foundation_audio_state_provider_t provider,
     void *user_context);
 
+/* Phase 18.2.2 bounded SD catalog MCP boundary -------------------------- */
+
+#define XIAOZHI_FOUNDATION_AUDIO_TRACK_MAX_COUNT 12U
+#define XIAOZHI_FOUNDATION_AUDIO_TRACK_ID_MAX_BYTES 48U
+#define XIAOZHI_FOUNDATION_AUDIO_TRACK_NAME_MAX_BYTES 48U
+
+typedef struct {
+    char id[XIAOZHI_FOUNDATION_AUDIO_TRACK_ID_MAX_BYTES];
+    char name[XIAOZHI_FOUNDATION_AUDIO_TRACK_NAME_MAX_BYTES];
+} xiaozhi_foundation_audio_track_t;
+
+typedef struct {
+    bool available;
+    bool truncated;
+    uint8_t track_count;
+    xiaozhi_foundation_audio_track_t tracks[
+        XIAOZHI_FOUNDATION_AUDIO_TRACK_MAX_COUNT];
+} xiaozhi_foundation_audio_track_list_t;
+
+typedef enum {
+    XIAOZHI_FOUNDATION_AUDIO_TRACK_SUCCESS = 0,
+    XIAOZHI_FOUNDATION_AUDIO_TRACK_INVALID_REQUEST,
+    XIAOZHI_FOUNDATION_AUDIO_TRACK_NOT_FOUND,
+    XIAOZHI_FOUNDATION_AUDIO_TRACK_STORAGE_UNAVAILABLE,
+    XIAOZHI_FOUNDATION_AUDIO_TRACK_CATALOG_UNAVAILABLE,
+    XIAOZHI_FOUNDATION_AUDIO_TRACK_PLAYBACK_REJECTED,
+    XIAOZHI_FOUNDATION_AUDIO_TRACK_RECORDED_AUDIO_NOT_AVAILABLE,
+    XIAOZHI_FOUNDATION_AUDIO_TRACK_INTERNAL_ERROR,
+} xiaozhi_foundation_audio_track_outcome_t;
+
+typedef struct {
+    xiaozhi_foundation_audio_track_outcome_t outcome;
+    bool accepted;
+    bool scheduled;
+} xiaozhi_foundation_audio_track_play_result_t;
+
+typedef esp_err_t (*xiaozhi_foundation_audio_track_list_provider_t)(
+    xiaozhi_foundation_audio_track_list_t *tracks,
+    void *user_context);
+
+typedef esp_err_t (*xiaozhi_foundation_audio_track_play_provider_t)(
+    const char *track_id,
+    xiaozhi_foundation_audio_track_play_result_t *result,
+    void *user_context);
+typedef esp_err_t (*xiaozhi_foundation_audio_recorded_play_provider_t)(
+    xiaozhi_foundation_audio_track_play_result_t *result,
+    void *user_context);
+
+/** Register catalog providers before production voice starts. */
+esp_err_t xiaozhi_foundation_register_audio_track_list_provider(
+    xiaozhi_foundation_audio_track_list_provider_t provider,
+    void *user_context);
+esp_err_t xiaozhi_foundation_register_audio_track_play_provider(
+    xiaozhi_foundation_audio_track_play_provider_t provider,
+    void *user_context);
+esp_err_t xiaozhi_foundation_register_audio_recorded_play_provider(
+    xiaozhi_foundation_audio_recorded_play_provider_t provider,
+    void *user_context);
+
 /* Phase 14 production audio boundary -------------------------------------- */
 
 #define XIAOZHI_FOUNDATION_UPLINK_SAMPLE_RATE_HZ 16000U

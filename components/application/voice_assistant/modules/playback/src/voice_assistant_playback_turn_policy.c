@@ -59,7 +59,9 @@ bool voice_playback_turn_policy_set_override(
     if ((policy == NULL) || !policy->active ||
         !policy->has_local_source ||
         (action < VOICE_PLAYBACK_TURN_ACTION_PAUSE) ||
-        (action > VOICE_PLAYBACK_TURN_ACTION_RESTART)) {
+        (action > VOICE_PLAYBACK_TURN_ACTION_PLAY_RECORDED) ||
+        (!policy->has_local_source &&
+         (action != VOICE_PLAYBACK_TURN_ACTION_PLAY_RECORDED))) {
         return false;
     }
     policy->explicit_override = true;

@@ -26,6 +26,9 @@ light.get_state
 light.get_capabilities
 audio.control_playback
 audio.get_playback_state
+audio.list_tracks
+audio.play_track
+audio.play_recorded
 ```
 
 Tool definition, schema parsing, MCP engine/session lifecycle, and managed
@@ -56,7 +59,15 @@ runtime tool call
 - Audio providers translate only bounded action/status enums. Control is
   delegated to `voice_assistant` turn policy and then the public
   `audio_manager` control surface; the adapter never touches I2S, DMA, FILE,
-  SD leases, source paths, or PCM buffers.
+  SD leases, source paths, or PCM buffers. Phase 18.2.2 catalog providers
+  acquire one short SD lease only to scan `/sdcard/audio/`, retain no file or
+  directory handle, expose only bounded logical IDs, and construct the WAV
+  path internally after an exact catalog lookup. They never accept a path from
+  MCP. The on-demand scan is non-recursive, sorts deterministic ASCII IDs,
+  accepts only `<id>.wav` where `id` is `[A-Za-z0-9_-]+`, and returns at most
+  12 tracks. `audio.play_track` queues the trusted resolved source through the
+  existing playback arbiter; temporary PTT playback receives STOP as the
+  turn override, so an old source cannot auto-resume over the requested track.
 - `xiaozhi_foundation` remains the sole direct `esp_xiaozhi`/MCP engine and
   session owner. It attaches tools after MCP engine creation and detaches them
   before engine destruction.

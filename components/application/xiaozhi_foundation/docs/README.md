@@ -77,6 +77,17 @@ Xiaozhi backend
 `light_manager` remains the light-state/effect owner. MCP never drives GPIO/RMT
 or the NeoPixel component directly.
 
+## Phase 18.2.2 Bounded Audio Selection
+
+`audio.list_tracks` and `audio.play_track` are provider-bound tools, not a
+filesystem API. The MCP layer accepts only an exact bounded logical `track_id`
+and validates it again before calling the project adapter. The adapter owns the
+short-lived, non-recursive `/sdcard/audio/` scan and path construction after an
+exact match; it never passes a model-supplied path to an audio API. Playback
+still flows through `voice_assistant` policy, the existing arbiter and
+`audio_manager`, which remains the sole I2S/DMA owner. `audio.play_recorded`
+uses only an existing retained processed recording and cannot trigger capture.
+
 ## Retired Validation Infrastructure
 
 The Phase-12 temporary validation runtime, P2-F fixture paths,

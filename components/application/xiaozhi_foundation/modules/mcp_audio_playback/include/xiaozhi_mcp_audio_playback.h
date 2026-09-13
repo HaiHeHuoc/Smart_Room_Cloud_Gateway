@@ -6,7 +6,7 @@
 extern "C" {
 #endif
 
-/** Attach audio.control_playback and audio.get_playback_state. */
+/** Attach bounded audio playback state/control and catalog tools. */
 esp_err_t xiaozhi_mcp_audio_playback_attach(esp_mcp_t *mcp);
 
 /** Reset attachment state before the owning MCP engine is destroyed. */

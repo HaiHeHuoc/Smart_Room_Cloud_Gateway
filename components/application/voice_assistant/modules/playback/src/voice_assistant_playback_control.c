@@ -3,6 +3,8 @@
 #include "voice_assistant_playback_turn_policy.h"
 
 #include "app_log.h"
+#include "audio_manager_named_playback.h"
+#include "audio_manager_playback_arbiter.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -14,6 +16,7 @@ static const char *const TAG = "VOICE_PB_POLICY";
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static bool s_initialized = false;
 static voice_playback_turn_policy_t s_turn = {0};
+static uint32_t s_catalog_request_id = 0x18220000U;
 
 static bool playback_source_is_local(audio_manager_playback_source_t source)
 {
@@ -71,9 +74,10 @@ static esp_err_t playback_apply_action(
     if (status_ret != ESP_OK) {
         return status_ret;
     }
-    if ((expected_generation == 0U) ||
+    if ((action != VOICE_PLAYBACK_TURN_ACTION_PLAY_RECORDED) &&
+        ((expected_generation == 0U) ||
         (status.generation != expected_generation) ||
-        !playback_source_is_local(status.source) || !status.resumable) {
+        !playback_source_is_local(status.source) || !status.resumable)) {
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -89,6 +93,26 @@ static esp_err_t playback_apply_action(
         case VOICE_PLAYBACK_TURN_ACTION_RESTART:
             return audio_manager_restart_playback_at_generation(
                 expected_generation);
+        case VOICE_PLAYBACK_TURN_ACTION_PLAY_RECORDED: {
+            if (playback_source_is_local(status.source) &&
+                (status.state != AUDIO_MANAGER_PLAYBACK_CONTROL_IDLE)) {
+                const esp_err_t stop_ret = audio_manager_stop_playback();
+                if ((stop_ret != ESP_OK) && (stop_ret != ESP_ERR_INVALID_STATE)) return stop_ret;
+            }
+            for (uint32_t waited = 0U; waited <= VOICE_PLAYBACK_PAUSE_WAIT_MS;
+                 waited += VOICE_PLAYBACK_POLL_MS) {
+                audio_manager_status_t manager = {0};
+                audio_manager_playback_arbiter_status_t arbiter = {0};
+                if ((audio_manager_get_status(&manager) == ESP_OK) &&
+                    (audio_manager_playback_arbiter_get_status(&arbiter) == ESP_OK) &&
+                    (manager.state == AUDIO_MANAGER_STATE_IDLE) &&
+                    !arbiter.current_valid && !arbiter.pending_valid) {
+                    return audio_manager_play_recorded();
+                }
+                vTaskDelay(pdMS_TO_TICKS(VOICE_PLAYBACK_POLL_MS));
+            }
+            return ESP_ERR_TIMEOUT;
+        }
         default:
             return ESP_ERR_INVALID_ARG;
     }
@@ -382,4 +406,56 @@ esp_err_t voice_assistant_playback_get_status(
     audio_manager_playback_status_t *status)
 {
     return audio_manager_get_playback_status(status);
+}
+
+esp_err_t voice_assistant_playback_start_catalog_wav(const char *resolved_path)
+{
+    if ((resolved_path == NULL) || (resolved_path[0] == '\0')) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    bool active_turn = false;
+    bool has_local_source = false;
+    portENTER_CRITICAL(&s_lock);
+    active_turn = s_initialized && s_turn.active;
+    has_local_source = active_turn && s_turn.has_local_source;
+    if (has_local_source) {
+        /* STOP wins over the PTT auto-resume at terminal handling. The new
+         * WAV is queued behind Xiaozhi, then promoted after this old owner is
+         * cooperatively released. */
+        (void)voice_playback_turn_policy_set_override(
+            &s_turn, VOICE_PLAYBACK_TURN_ACTION_STOP);
+    }
+    uint32_t request_id = ++s_catalog_request_id;
+    if (request_id == 0U) {
+        request_id = ++s_catalog_request_id;
+    }
+    portEXIT_CRITICAL(&s_lock);
+
+    if (!active_turn) {
+        audio_manager_playback_status_t playback = {0};
+        if (audio_manager_get_playback_status(&playback) == ESP_OK &&
+            playback_source_is_local(playback.source) &&
+            (playback.state != AUDIO_MANAGER_PLAYBACK_CONTROL_IDLE)) {
+            const esp_err_t stop_ret = audio_manager_stop_playback();
+            if ((stop_ret != ESP_OK) && (stop_ret != ESP_ERR_INVALID_STATE)) {
+                return stop_ret;
+            }
+        }
+    }
+    return audio_manager_play_catalog_wav(request_id, resolved_path);
+}
+
+esp_err_t voice_assistant_playback_start_recorded(void)
+{
+    bool active_turn = false;
+    portENTER_CRITICAL(&s_lock);
+    active_turn = s_initialized && s_turn.active;
+    if (active_turn) {
+        (void)voice_playback_turn_policy_set_override(
+            &s_turn, VOICE_PLAYBACK_TURN_ACTION_PLAY_RECORDED);
+    }
+    portEXIT_CRITICAL(&s_lock);
+    if (active_turn) return ESP_OK;
+    return audio_manager_play_recorded();
 }

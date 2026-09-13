@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "app_log.h"
 #include "esp_mcp_property.h"
@@ -16,6 +17,12 @@ static xiaozhi_foundation_audio_control_provider_t s_control_provider = NULL;
 static void *s_control_context = NULL;
 static xiaozhi_foundation_audio_state_provider_t s_state_provider = NULL;
 static void *s_state_context = NULL;
+static xiaozhi_foundation_audio_track_list_provider_t s_track_list_provider = NULL;
+static void *s_track_list_context = NULL;
+static xiaozhi_foundation_audio_track_play_provider_t s_track_play_provider = NULL;
+static void *s_track_play_context = NULL;
+static xiaozhi_foundation_audio_recorded_play_provider_t s_recorded_play_provider = NULL;
+static void *s_recorded_play_context = NULL;
 static bool s_attached = false;
 
 static const char *audio_state_name(xiaozhi_foundation_audio_state_t state)
@@ -248,6 +255,135 @@ static esp_err_t audio_state_callback(
     return ret;
 }
 
+static const char *audio_track_error(
+    xiaozhi_foundation_audio_track_outcome_t outcome)
+{
+    switch (outcome) {
+        case XIAOZHI_FOUNDATION_AUDIO_TRACK_INVALID_REQUEST: return "invalid_request";
+        case XIAOZHI_FOUNDATION_AUDIO_TRACK_NOT_FOUND: return "track_not_found";
+        case XIAOZHI_FOUNDATION_AUDIO_TRACK_STORAGE_UNAVAILABLE: return "storage_unavailable";
+        case XIAOZHI_FOUNDATION_AUDIO_TRACK_CATALOG_UNAVAILABLE: return "catalog_unavailable";
+        case XIAOZHI_FOUNDATION_AUDIO_TRACK_PLAYBACK_REJECTED: return "playback_rejected";
+        case XIAOZHI_FOUNDATION_AUDIO_TRACK_RECORDED_AUDIO_NOT_AVAILABLE: return "recorded_audio_not_available";
+        case XIAOZHI_FOUNDATION_AUDIO_TRACK_INTERNAL_ERROR:
+        case XIAOZHI_FOUNDATION_AUDIO_TRACK_SUCCESS:
+        default: return "internal_error";
+    }
+}
+
+static bool audio_track_token_is_safe(const char *value, size_t max_bytes)
+{
+    if (value == NULL) return false;
+    const size_t length = strnlen(value, max_bytes);
+    if ((length == 0U) || (length >= max_bytes)) return false;
+    for (size_t i = 0U; i < length; ++i) {
+        const char c = value[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || (c == '_') || (c == '-'))) return false;
+    }
+    return true;
+}
+
+static esp_err_t audio_list_tracks_callback(
+    const esp_mcp_property_list_t *properties,
+    esp_mcp_tool_result_t *result)
+{
+    (void)properties;
+    if (result == NULL) return ESP_ERR_INVALID_ARG;
+    xiaozhi_foundation_audio_track_list_provider_t provider = NULL;
+    void *context = NULL;
+    portENTER_CRITICAL(&s_lock);
+    provider = s_track_list_provider;
+    context = s_track_list_context;
+    portEXIT_CRITICAL(&s_lock);
+    xiaozhi_foundation_audio_track_list_t tracks = {0};
+    if ((provider == NULL) || (provider(&tracks, context) != ESP_OK) ||
+        !tracks.available ||
+        (tracks.track_count > XIAOZHI_FOUNDATION_AUDIO_TRACK_MAX_COUNT)) {
+        return audio_set_error(result, "catalog_unavailable");
+    }
+    for (uint8_t i = 0U; i < tracks.track_count; ++i) {
+        if (!audio_track_token_is_safe(tracks.tracks[i].id,
+                                       XIAOZHI_FOUNDATION_AUDIO_TRACK_ID_MAX_BYTES) ||
+            !audio_track_token_is_safe(tracks.tracks[i].name,
+                                       XIAOZHI_FOUNDATION_AUDIO_TRACK_NAME_MAX_BYTES)) {
+            return audio_set_error(result, "catalog_unavailable");
+        }
+    }
+    char json[1536] = {0};
+    size_t used = 0U;
+    int written = snprintf(json, sizeof(json),
+                           "{\"catalog_available\":true,\"truncated\":%s,\"tracks\":[",
+                           tracks.truncated ? "true" : "false");
+    if ((written < 0) || ((size_t)written >= sizeof(json))) return ESP_ERR_INVALID_SIZE;
+    used = (size_t)written;
+    for (uint8_t i = 0U; i < tracks.track_count; ++i) {
+        written = snprintf(json + used, sizeof(json) - used,
+                           "%s{\"id\":\"%s\",\"name\":\"%s\"}",
+                           (i == 0U) ? "" : ",", tracks.tracks[i].id,
+                           tracks.tracks[i].name);
+        if ((written < 0) || ((size_t)written >= (sizeof(json) - used))) return ESP_ERR_INVALID_SIZE;
+        used += (size_t)written;
+    }
+    written = snprintf(json + used, sizeof(json) - used, "]}");
+    if ((written < 0) || ((size_t)written >= (sizeof(json) - used))) return ESP_ERR_INVALID_SIZE;
+    char text[192] = {0};
+    written = snprintf(text, sizeof(text),
+                       "SMART_ROOM_AUDIO_TRACKS: %u bounded logical tracks are available. Use only an exact returned id with audio.play_track.",
+                       (unsigned)tracks.track_count);
+    if ((written < 0) || ((size_t)written >= sizeof(text))) return ESP_ERR_INVALID_SIZE;
+    esp_err_t ret = esp_mcp_tool_result_set_structured_json(result, json);
+    if (ret == ESP_OK) ret = esp_mcp_tool_result_add_text(result, text);
+    return ret;
+}
+
+static esp_err_t audio_play_track_callback(
+    const esp_mcp_property_list_t *properties,
+    esp_mcp_tool_result_t *result)
+{
+    if (result == NULL) return ESP_ERR_INVALID_ARG;
+    const char *id = (properties == NULL) ? NULL :
+        esp_mcp_property_list_get_property_string(properties, "track_id");
+    if (!audio_track_token_is_safe(id, XIAOZHI_FOUNDATION_AUDIO_TRACK_ID_MAX_BYTES))
+        return audio_set_error(result, "invalid_request");
+    xiaozhi_foundation_audio_track_play_provider_t provider = NULL;
+    void *context = NULL;
+    portENTER_CRITICAL(&s_lock);
+    provider = s_track_play_provider;
+    context = s_track_play_context;
+    portEXIT_CRITICAL(&s_lock);
+    xiaozhi_foundation_audio_track_play_result_t play = {0};
+    const esp_err_t ret = (provider == NULL) ? ESP_ERR_INVALID_STATE :
+        provider(id, &play, context);
+    if ((ret != ESP_OK) || (play.outcome != XIAOZHI_FOUNDATION_AUDIO_TRACK_SUCCESS)) {
+        return audio_set_error(result, (ret == ESP_OK) ? audio_track_error(play.outcome) : "internal_error");
+    }
+    return esp_mcp_tool_result_set_structured_json(
+        result, "{\"success\":true,\"accepted\":true,\"scheduled\":true,\"error_code\":null}");
+}
+
+static esp_err_t audio_play_recorded_callback(
+    const esp_mcp_property_list_t *properties,
+    esp_mcp_tool_result_t *result)
+{
+    (void)properties;
+    if (result == NULL) return ESP_ERR_INVALID_ARG;
+    xiaozhi_foundation_audio_recorded_play_provider_t provider = NULL;
+    void *context = NULL;
+    portENTER_CRITICAL(&s_lock);
+    provider = s_recorded_play_provider;
+    context = s_recorded_play_context;
+    portEXIT_CRITICAL(&s_lock);
+    xiaozhi_foundation_audio_track_play_result_t play = {0};
+    const esp_err_t ret = (provider == NULL) ? ESP_ERR_INVALID_STATE :
+        provider(&play, context);
+    if ((ret != ESP_OK) || (play.outcome != XIAOZHI_FOUNDATION_AUDIO_TRACK_SUCCESS)) {
+        return audio_set_error(result, (ret == ESP_OK) ? audio_track_error(play.outcome) : "internal_error");
+    }
+    return esp_mcp_tool_result_set_structured_json(
+        result, "{\"success\":true,\"accepted\":true,\"scheduled\":true,\"error_code\":null}");
+}
+
 esp_err_t xiaozhi_foundation_register_audio_control_provider(
     xiaozhi_foundation_audio_control_provider_t provider,
     void *user_context)
@@ -284,6 +420,42 @@ esp_err_t xiaozhi_foundation_register_audio_state_provider(
     return ESP_OK;
 }
 
+esp_err_t xiaozhi_foundation_register_audio_track_list_provider(
+    xiaozhi_foundation_audio_track_list_provider_t provider, void *user_context)
+{
+    if (provider == NULL) return ESP_ERR_INVALID_ARG;
+    portENTER_CRITICAL(&s_lock);
+    if (s_attached) { portEXIT_CRITICAL(&s_lock); return ESP_ERR_INVALID_STATE; }
+    s_track_list_provider = provider;
+    s_track_list_context = user_context;
+    portEXIT_CRITICAL(&s_lock);
+    return ESP_OK;
+}
+
+esp_err_t xiaozhi_foundation_register_audio_track_play_provider(
+    xiaozhi_foundation_audio_track_play_provider_t provider, void *user_context)
+{
+    if (provider == NULL) return ESP_ERR_INVALID_ARG;
+    portENTER_CRITICAL(&s_lock);
+    if (s_attached) { portEXIT_CRITICAL(&s_lock); return ESP_ERR_INVALID_STATE; }
+    s_track_play_provider = provider;
+    s_track_play_context = user_context;
+    portEXIT_CRITICAL(&s_lock);
+    return ESP_OK;
+}
+
+esp_err_t xiaozhi_foundation_register_audio_recorded_play_provider(
+    xiaozhi_foundation_audio_recorded_play_provider_t provider, void *user_context)
+{
+    if (provider == NULL) return ESP_ERR_INVALID_ARG;
+    portENTER_CRITICAL(&s_lock);
+    if (s_attached) { portEXIT_CRITICAL(&s_lock); return ESP_ERR_INVALID_STATE; }
+    s_recorded_play_provider = provider;
+    s_recorded_play_context = user_context;
+    portEXIT_CRITICAL(&s_lock);
+    return ESP_OK;
+}
+
 void xiaozhi_mcp_audio_playback_detach(void)
 {
     portENTER_CRITICAL(&s_lock);
@@ -298,7 +470,10 @@ esp_err_t xiaozhi_mcp_audio_playback_attach(esp_mcp_t *mcp)
     }
     portENTER_CRITICAL(&s_lock);
     const bool ready = (s_control_provider != NULL) &&
-                       (s_state_provider != NULL) && !s_attached;
+                       (s_state_provider != NULL) &&
+                       (s_track_list_provider != NULL) &&
+                       (s_track_play_provider != NULL) &&
+                       (s_recorded_play_provider != NULL) && !s_attached;
     portEXIT_CRITICAL(&s_lock);
     if (!ready) {
         return ESP_ERR_INVALID_STATE;
@@ -343,6 +518,49 @@ esp_err_t xiaozhi_mcp_audio_playback_attach(esp_mcp_t *mcp)
         (void)esp_mcp_tool_destroy(control);
         return ret;
     }
+
+    esp_mcp_tool_t *list_tracks = esp_mcp_tool_create_ex(
+        "audio.list_tracks", "Smart Room: Danh sach bai hat",
+        "List the bounded logical audio tracks directly available in the Smart Room SD audio catalog. This is read-only. Use the returned exact id for audio.play_track; never invent a path or id.",
+        audio_list_tracks_callback);
+    if (list_tracks == NULL) return ESP_ERR_NO_MEM;
+    ret = esp_mcp_tool_set_output_schema_json(list_tracks,
+        "{\"type\":\"object\",\"properties\":{\"catalog_available\":{\"type\":\"boolean\"},\"truncated\":{\"type\":\"boolean\"},\"tracks\":{\"type\":\"array\"}},\"required\":[\"catalog_available\",\"truncated\",\"tracks\"]}");
+    if (ret == ESP_OK) ret = esp_mcp_tool_set_annotations_json(list_tracks,
+        "{\"readOnlyHint\":true,\"destructiveHint\":false,\"idempotentHint\":true,\"openWorldHint\":false}");
+    if (ret == ESP_OK) ret = esp_mcp_tool_set_task_support(list_tracks, "optional");
+    if (ret == ESP_OK) ret = esp_mcp_add_tool(mcp, list_tracks);
+    if (ret != ESP_OK) { (void)esp_mcp_tool_destroy(list_tracks); return ret; }
+
+    esp_mcp_tool_t *play_track = esp_mcp_tool_create_ex(
+        "audio.play_track", "Smart Room: Phat bai hat",
+        "Play one track selected from audio.list_tracks. track_id must be exactly one returned logical id. The device resolves it internally and never accepts a filesystem path.",
+        audio_play_track_callback);
+    if (play_track == NULL) return ESP_ERR_NO_MEM;
+    esp_mcp_property_t *track_id = esp_mcp_property_create("track_id", ESP_MCP_PROPERTY_TYPE_STRING);
+    if (track_id == NULL) { (void)esp_mcp_tool_destroy(play_track); return ESP_ERR_NO_MEM; }
+    ret = esp_mcp_tool_add_property(play_track, track_id);
+    const bool id_added = (ret == ESP_OK);
+    if (ret == ESP_OK) ret = esp_mcp_tool_set_output_schema_json(play_track,
+        "{\"type\":\"object\",\"properties\":{\"success\":{\"type\":\"boolean\"},\"accepted\":{\"type\":\"boolean\"},\"scheduled\":{\"type\":\"boolean\"},\"error_code\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"success\",\"accepted\",\"scheduled\"]}");
+    if (ret == ESP_OK) ret = esp_mcp_tool_set_annotations_json(play_track,
+        "{\"readOnlyHint\":false,\"destructiveHint\":false,\"idempotentHint\":false,\"openWorldHint\":false}");
+    if (ret == ESP_OK) ret = esp_mcp_tool_set_task_support(play_track, "optional");
+    if (ret == ESP_OK) ret = esp_mcp_add_tool(mcp, play_track);
+    if (ret != ESP_OK) { if (!id_added) (void)esp_mcp_property_destroy(track_id); (void)esp_mcp_tool_destroy(play_track); return ret; }
+
+    esp_mcp_tool_t *play_recorded = esp_mcp_tool_create_ex(
+        "audio.play_recorded", "Smart Room: Phat ban ghi am gan nhat",
+        "Play the retained processed recording if one exists. This does not create a recording or expose audio buffers. The request is ordered after the current Xiaozhi response.",
+        audio_play_recorded_callback);
+    if (play_recorded == NULL) return ESP_ERR_NO_MEM;
+    ret = esp_mcp_tool_set_output_schema_json(play_recorded,
+        "{\"type\":\"object\",\"properties\":{\"success\":{\"type\":\"boolean\"},\"accepted\":{\"type\":\"boolean\"},\"scheduled\":{\"type\":\"boolean\"},\"error_code\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"success\",\"accepted\",\"scheduled\"]}");
+    if (ret == ESP_OK) ret = esp_mcp_tool_set_annotations_json(play_recorded,
+        "{\"readOnlyHint\":false,\"destructiveHint\":false,\"idempotentHint\":false,\"openWorldHint\":false}");
+    if (ret == ESP_OK) ret = esp_mcp_tool_set_task_support(play_recorded, "optional");
+    if (ret == ESP_OK) ret = esp_mcp_add_tool(mcp, play_recorded);
+    if (ret != ESP_OK) { (void)esp_mcp_tool_destroy(play_recorded); return ret; }
 
     esp_mcp_tool_t *state = esp_mcp_tool_create_ex(
         "audio.get_playback_state",

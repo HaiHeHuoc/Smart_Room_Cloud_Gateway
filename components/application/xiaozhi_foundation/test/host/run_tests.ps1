@@ -25,6 +25,11 @@ $toolSource = Get-Content `
 if ($toolSource -notmatch '"audio\.get_playback_state"') {
     throw 'Read-only playback-state MCP tool name is missing'
 }
+if (($toolSource -notmatch '"audio\.list_tracks"') -or
+    ($toolSource -notmatch '"audio\.play_track"') -or
+    ($toolSource -notmatch '"audio\.play_recorded"')) {
+    throw 'Phase 18.2.2 audio MCP tool registration is incomplete'
+}
 if ($toolSource -notmatch '\\"readOnlyHint\\":true') {
     throw 'Playback-state MCP readOnlyHint is not true'
 }
@@ -32,3 +37,4 @@ if ($toolSource -match 'audio_manager_|i2s_|FILE\s*\*') {
     throw 'Xiaozhi MCP module bypasses the project-owned provider boundary'
 }
 Write-Output 'MCP read-only state boundary: PASS'
+Write-Output 'MCP bounded track-tool boundary: PASS'

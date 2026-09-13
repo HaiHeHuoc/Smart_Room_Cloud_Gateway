@@ -68,6 +68,18 @@ esp_err_t voice_assistant_playback_control(
 esp_err_t voice_assistant_playback_get_status(
     audio_manager_playback_status_t *status);
 
+/**
+ * Queue a project-owned catalog WAV. During a PTT turn any temporarily
+ * suspended source is explicitly stopped, so its auto-resume cannot race the
+ * newly selected track. The path is copied by audio_manager and must already
+ * be resolved from a bounded catalog; it is not model input.
+ */
+esp_err_t voice_assistant_playback_start_catalog_wav(
+    const char *resolved_path);
+
+/** Start retained processed recording after the active TTS turn if needed. */
+esp_err_t voice_assistant_playback_start_recorded(void);
+
 #ifdef __cplusplus
 }
 #endif

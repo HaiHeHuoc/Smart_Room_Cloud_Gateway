@@ -16,7 +16,7 @@ Current Phase-18 execution state remains:
 ```text
 18.1    NeoPixel MCP control                                  COMPLETE
 18.2.1  Audio Playback Control + PTT Suspension/Auto-Resume   IN PROGRESS
-18.2.2  audio.play_recorded / bounded playback variant        PLANNING
+18.2.2  Bounded Playback Start + Voice SD Audio Selection     SOFTWARE IMPLEMENTED / HIL PENDING
 18.3    Existing previously planned scope                     NOT STARTED / UNCHANGED
 18.4    Existing previously planned scope                     NOT STARTED / UNCHANGED
 ```
@@ -320,7 +320,7 @@ This file records planning decisions only:
 18.2.1 Prompt 2 core    IMPLEMENTED / BUILD VERIFIED
 18.2.1 Prompt 3         SOFTWARE IMPLEMENTED / BUILD + HOST TESTS PASS
 18.2.1 HIL              NOT RUN / NOT CLAIMED
-18.2.2 implementation   NOT STARTED
-18.2.2 build            NOT RUN / NOT CLAIMED
+18.2.2 implementation   SOFTWARE IMPLEMENTED
+18.2.2 build            BUILD + HOST TESTS VERIFIED
 18.2.2 HIL              NOT RUN / NOT CLAIMED
 ```

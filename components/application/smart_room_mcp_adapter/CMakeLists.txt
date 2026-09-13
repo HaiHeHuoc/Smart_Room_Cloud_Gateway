@@ -7,6 +7,7 @@ idf_component_register(
         "modules/provider/src/smart_room_mcp_light_state.c"
         "modules/provider/src/smart_room_mcp_light_set_state.c"
         "modules/provider/src/smart_room_mcp_audio_playback.c"
+        "modules/provider/src/smart_room_mcp_audio_tracks.c"
     INCLUDE_DIRS
         "include"
     PRIV_INCLUDE_DIRS

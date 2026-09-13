@@ -44,3 +44,11 @@ esp_err_t audio_manager_play_critical_alarm_wav(
         AUDIO_MANAGER_CLIENT_ALARM,
         path);
 }
+
+esp_err_t audio_manager_play_catalog_wav(
+    uint32_t request_id,
+    const char *path)
+{
+    /* UI is the existing queueable, interruptible local-media client class. */
+    return submit_named_wav(request_id, AUDIO_MANAGER_CLIENT_UI, path);
+}
