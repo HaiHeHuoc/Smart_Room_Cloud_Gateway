@@ -123,14 +123,14 @@
 #define FACTORY_RESET_BUTTON_LONG_PRESS_MS      5000U
 
 /* =========================================================================
- * Phase 14 Push-To-Talk input
+ * Push-To-Talk input
  * =========================================================================
  * Dedicated PTT button assignment for the current board.
  *
  * Wiring:
  *     GPIO38 ---- push button ---- 3V3
  *
- * The input is intended to use the ESP32-S3 internal pull-down, therefore:
+ * The input uses an active-high contract with an ESP32-S3 internal pull-down:
  *     released -> LOW
  *     pressed  -> HIGH
  *
