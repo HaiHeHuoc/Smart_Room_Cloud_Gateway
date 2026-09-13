@@ -30,6 +30,9 @@ if (($toolSource -notmatch '"audio\.list_tracks"') -or
     ($toolSource -notmatch '"audio\.play_recorded"')) {
     throw 'Phase 18.2.2 audio MCP tool registration is incomplete'
 }
+if ($toolSource -notmatch 'first_track_is_first_in_lexical_order') {
+    throw 'Catalog text result does not identify deterministic first-track ordering'
+}
 if ($toolSource -notmatch '\\"readOnlyHint\\":true') {
     throw 'Playback-state MCP readOnlyHint is not true'
 }

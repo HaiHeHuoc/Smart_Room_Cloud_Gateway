@@ -19,6 +19,9 @@ audio.play_recorded {}                       -> retained processed recording, if
 
 `audio.list_tracks` is read-only. All other actions carry no filesystem path,
 FILE, SD lease, I2S, DMA, or PCM data across the MCP/provider boundary.
+Its text result also enumerates each visible `name` and exact `id`, marking the
+lexically first entry, so callers that consume tool text rather than structured
+JSON can still answer catalog and “first song” questions correctly.
 
 ## Catalog and safety policy
 

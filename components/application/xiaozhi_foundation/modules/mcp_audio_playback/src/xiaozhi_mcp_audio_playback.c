@@ -343,14 +343,31 @@ static esp_err_t audio_list_tracks_callback(
     }
     written = snprintf(json + used, sizeof(json) - used, "]}");
     if ((written < 0) || ((size_t)written >= (sizeof(json) - used))) return ESP_ERR_INVALID_SIZE;
-    char text[192] = {0};
-    written = snprintf(text, sizeof(text),
-                       "SMART_ROOM_AUDIO_TRACKS: %u bounded logical tracks are available. Use only an exact returned id with audio.play_track.",
-                       (unsigned)tracks.track_count);
-    if ((written < 0) || ((size_t)written >= sizeof(text))) return ESP_ERR_INVALID_SIZE;
     esp_err_t ret = esp_mcp_tool_result_set_structured_json(result, json);
-    if (ret == ESP_OK) ret = esp_mcp_tool_result_add_text(result, text);
-    return ret;
+    if (ret != ESP_OK) return ret;
+
+    /* Some provider/LLM paths preferentially consume text rather than the
+     * structured object. Reuse the same bounded buffer after its JSON has
+     * been copied into the result, so every visible name and exact logical ID
+     * remains available without adding a second large callback-stack buffer. */
+    written = snprintf(json, sizeof(json),
+                       "SMART_ROOM_AUDIO_TRACKS: count=%u; first_track_is_first_in_lexical_order; tracks=",
+                       (unsigned)tracks.track_count);
+    if ((written < 0) || ((size_t)written >= sizeof(json))) return ESP_ERR_INVALID_SIZE;
+    used = (size_t)written;
+    for (uint8_t i = 0U; i < tracks.track_count; ++i) {
+        written = snprintf(json + used, sizeof(json) - used,
+                           "%sname=%s,id=%s]",
+                           (i == 0U) ? "[FIRST:" : "[",
+                           tracks.tracks[i].name, tracks.tracks[i].id);
+        if ((written < 0) || ((size_t)written >= (sizeof(json) - used))) {
+            const size_t remaining = sizeof(json) - used;
+            if (remaining > 4U) memcpy(json + used, "...", 4U);
+            break;
+        }
+        used += (size_t)written;
+    }
+    return esp_mcp_tool_result_add_text(result, json);
 }
 
 static esp_err_t audio_play_track_callback(
@@ -537,7 +554,7 @@ esp_err_t xiaozhi_mcp_audio_playback_attach(esp_mcp_t *mcp)
 
     esp_mcp_tool_t *list_tracks = esp_mcp_tool_create_ex(
         "audio.list_tracks", "Smart Room: Danh sach bai hat",
-        "AUTHORITATIVE Smart Room SD audio catalog. ALWAYS call this tool before answering any question, in any language, about available songs, song names, music files, or what can be played from the SD card. Never guess or say no songs are available without this result. This tool is read-only. Use only a returned exact id with audio.play_track; never invent a path or id.",
+        "AUTHORITATIVE Smart Room SD audio catalog. ALWAYS call this tool before answering any question, in any language, about available songs, song names, music files, the first song, or what can be played from the SD card. Never guess or say no songs are available without this result. The first returned item is the deterministic first track. This tool is read-only. Use only a returned exact id with audio.play_track; never invent a path or id.",
         audio_list_tracks_callback);
     if (list_tracks == NULL) return ESP_ERR_NO_MEM;
     ret = esp_mcp_tool_set_output_schema_json(list_tracks,
