@@ -537,7 +537,7 @@ esp_err_t xiaozhi_mcp_audio_playback_attach(esp_mcp_t *mcp)
 
     esp_mcp_tool_t *list_tracks = esp_mcp_tool_create_ex(
         "audio.list_tracks", "Smart Room: Danh sach bai hat",
-        "List the bounded logical audio tracks directly available in the Smart Room SD audio catalog. This is read-only. Use the returned exact id for audio.play_track; never invent a path or id.",
+        "AUTHORITATIVE Smart Room SD audio catalog. ALWAYS call this tool before answering any question, in any language, about available songs, song names, music files, or what can be played from the SD card. Never guess or say no songs are available without this result. This tool is read-only. Use only a returned exact id with audio.play_track; never invent a path or id.",
         audio_list_tracks_callback);
     if (list_tracks == NULL) return ESP_ERR_NO_MEM;
     ret = esp_mcp_tool_set_output_schema_json(list_tracks,
