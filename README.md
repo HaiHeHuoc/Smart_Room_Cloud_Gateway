@@ -1,14 +1,14 @@
 # ESP32-S3 Smart Room Cloud Gateway
 
-An ESP-IDF smart-room gateway for the ESP32-S3 N16R8 with a local LVGL
-dashboard, BLE Wi-Fi provisioning, DHT22 monitoring, authenticated Firebase
-Realtime Database telemetry, persistent configuration, automatic recovery, and
-runtime resource diagnostics.
+An ESP-IDF smart-room gateway for the ESP32-S3 N16R8 with an LVGL dashboard,
+BLE Wi-Fi provisioning, DHT22 monitoring, authenticated Firebase telemetry,
+local audio/voice, Xiaozhi integration, bounded MCP tools, persistent
+configuration, recovery services, and runtime diagnostics.
 
 ```text
-Release: v1.0.0
-Status: Hardware accepted / Version 1 complete
-SD recovery extension: target-hardware acceptance pending
+Version 1: v1.0.0 / hardware accepted baseline
+Version 2: active development through Sprint 18
+Current Phase 18 state: 18.1 complete; 18.2-18.4 not started
 Target: ESP32-S3 N16R8
 Framework: ESP-IDF 6.0.1 + FreeRTOS
 ```
@@ -17,7 +17,7 @@ Framework: ESP-IDF 6.0.1 + FreeRTOS
 
 [![Watch the ESP32-S3 Smart Room Cloud Gateway demo](docs/media/screen-dashboard.jpg)](https://youtube.com/shorts/9C5_hecEgXA?feature=share)
 
-> Select the dashboard image to watch the target-hardware demo.
+> Select the dashboard image to watch the Version-1 target-hardware demo.
 
 | Prototype | BLE provisioning |
 |---|---|
@@ -30,84 +30,96 @@ Framework: ESP-IDF 6.0.1 + FreeRTOS
 See the [media index](docs/media/README.md) for the evidence list and public
 sanitization rules.
 
-## Version 1 Capabilities
+## Current Product Capabilities
 
-- ST7735 128x160 SPI display with LVGL 9.
-- DHT22 temperature and humidity sampling with stale/error handling.
-- BLE Security 1 Wi-Fi provisioning with an LCD QR code.
-- NVS-backed configuration validation, persistence, migration, and reset.
-- Wi-Fi Station reconnect with exponential backoff.
-- Firebase Email/Password authentication and ID-token refresh.
-- Authenticated latest-value telemetry upload over HTTPS REST.
-- Bounded cloud retry with network-edge and token-generation invalidation.
-- GPIO9 five-second factory reset and reboot-to-provisioning recovery.
-- CPU, Internal RAM, PSRAM, DMA-capable heap, task, and stack diagnostics.
-- Explicit PSRAM placement for selected task stacks and bulk buffers.
+Version 1 established the local gateway baseline:
 
-## System Overview
+- ST7735 128x160 SPI display with LVGL 9;
+- DHT22 temperature/humidity sampling with stale/error handling;
+- BLE Security 1 Wi-Fi provisioning and NVS-backed configuration;
+- Wi-Fi Station reconnect and bounded network coordination;
+- Firebase Email/Password authentication and authenticated RTDB telemetry;
+- GPIO9 five-second factory reset and reboot-to-provisioning recovery;
+- SD/FAT VFS integration, logging/recovery services, and runtime diagnostics.
 
-```mermaid
-flowchart LR
-    Phone[Provisioning client]
-    Firebase[Firebase Realtime Database]
-    DHT[DHT22]
-    Button[GPIO9 reset button]
-    LCD[ST7735 + microSD]
+Version 2 adds the current audio/voice/Xiaozhi path:
 
-    subgraph Device[ESP32-S3 N16R8]
-        Coordinator[Network coordinator]
-        Provisioning[BLE provisioning]
-        WiFi[Wi-Fi manager]
-        Config[NVS config manager]
-        Sensor[Sensor manager]
-        Auth[Firebase auth]
-        Cloud[Cloud manager]
-        GUI[App GUI / LVGL]
-        Reset[Reset coordinator]
-    end
+- production `audio_manager` ownership of microphone/speaker I2S, DMA, PCM,
+  recording and playback;
+- project-owned `voice_assistant` orchestration over `xiaozhi_foundation`;
+- Xiaozhi WebSocket voice transport and streaming downlink;
+- MCP read-only Smart Room tools;
+- Phase-18.1 bounded NeoPixel light control through `light.set_state`, with
+  `light.get_state` and `light.get_capabilities` companions.
 
-    Phone <-->|BLE Security 1| Provisioning
-    Provisioning --> Coordinator
-    Coordinator --> Config
-    Coordinator --> WiFi
-    DHT --> Sensor
-    Sensor --> GUI
-    Sensor --> Cloud
-    WiFi --> GUI
-    WiFi --> Cloud
-    Auth --> Cloud
-    Cloud <-->|HTTPS REST| Firebase
-    GUI --> LCD
-    Button --> Reset
-    Reset --> Config
+Phase 18.2-18.4 remain not started until explicitly requested.
+
+## Current Application Structure
+
+```text
+main/main.c
+    -> smart_room_app
+        -> product startup/order/policy/callback routing
+        -> smart_room_mcp_adapter
+            -> Smart Room provider adaptation
+            -> xiaozhi_foundation
+                -> managed Xiaozhi / MCP engine and session
 ```
+
+The source is organized by ownership rather than by historical phase number.
+`main/main.c` is intentionally only the ESP-IDF entrypoint. Product composition
+lives in `smart_room_app`; MCP-domain provider bridges live in
+`smart_room_mcp_adapter`; the managed Xiaozhi/MCP lifecycle remains inside
+`xiaozhi_foundation`.
+
+See [Architecture](docs/ARCHITECTURE.md) and
+[Component organization](components/README.md) for the detailed dependency and
+ownership model.
 
 ### Ownership Boundaries
 
 | Component | Responsibility |
 |---|---|
+| `smart_room_app` | Product startup order, product policy, copied callback routing |
+| `smart_room_mcp_adapter` | Smart Room public-service to MCP-provider adaptation |
+| `xiaozhi_foundation` | Direct managed Xiaozhi/MCP engine and session boundary |
+| `voice_assistant` | Product voice-session and recovery orchestration |
+| `audio_manager` | Microphone/speaker I2S, DMA, PCM, recording/playback ownership |
 | `wifi_manager` | Wi-Fi Station lifecycle and reconnect |
 | `provisioning_manager` | Temporary BLE provisioning transport |
 | `config_manager` | Persistent application configuration |
 | `sensor_manager` | DHT22 sampling and sensor state |
-| `firebase_auth` | Sign-in, token cache, refresh, UID validation |
+| `firebase_auth` | Sign-in/token cache/refresh lifecycle |
 | `cloud_manager` | Latest-value telemetry and retry policy |
+| `light_manager` | Product light state and effects; NeoPixel remains below it |
 | `app_gui` / `ui_manager_lvgl` | Screens, copied UI models, LVGL ownership |
+| `sd_card_manager` | SD/FAT VFS lifecycle, recovery and leases |
 | `button_manager` | Debounced input event publication |
 | `app_reset_coordinator` | Ordered factory-reset transaction |
 
-Callbacks copy data and return quickly. Network, sensor, button, provisioning,
-and cloud callbacks never call LVGL directly.
+Dependency direction remains:
+
+```text
+application -> service -> driver/framework
+```
+
+Callbacks copy bounded data and return quickly. No arbitrary producer callback
+may directly own LVGL, I2S, Wi-Fi lifecycle, persistent reset, or unrelated
+hardware resources.
 
 ## Hardware
 
 | Device | Purpose |
 |---|---|
 | ESP32-S3 N16R8 | Main controller, 16 MB flash, 8 MiB Octal PSRAM |
-| ST7735 128x160 TFT | LVGL dashboard and provisioning QR |
-| Integrated microSD slot/card | FAT filesystem and LVGL assets |
+| ST7735 128x160 TFT | LVGL dashboard and provisioning UI |
+| Integrated microSD slot/card | FAT filesystem, assets, WAV/log storage |
 | DHT22 | Temperature and humidity |
-| Active-low push button | Five-second factory reset |
+| GPIO9 active-high push button | Five-second factory reset |
+| GPIO38 active-high push button | Push-To-Talk input |
+| INMP441 | I2S microphone |
+| MAX98357A | I2S speaker amplifier/output |
+| GPIO48 NeoPixel | Product light/status output |
 
 ### GPIO Map
 
@@ -125,6 +137,12 @@ and cloud callbacks never call LVGL directly.
 | SD CS | 8 |
 | DHT22 data | 4 |
 | Factory-reset button | 9 |
+| PTT button | 38 |
+| NeoPixel | 48 |
+| Audio BCLK | 47 |
+| Audio WS/LRCLK | 21 |
+| INMP441 DIN | 2 |
+| MAX98357A DOUT | 7 |
 
 Always confirm the source of truth in
 [`board_config.h`](components/system/common/include/board_config.h) before
@@ -132,49 +150,43 @@ rewiring hardware.
 
 ## Runtime Flow
 
-```text
-first boot / no valid Wi-Fi configuration
-    -> display BLE provisioning QR
-    -> receive credentials securely over BLE
-    -> verify Wi-Fi and IPv4
-    -> persist and read back configuration
-    -> stop BLE and adopt the Station connection
-    -> show dashboard
-    -> authenticate and upload telemetry
-```
-
-Recovery behavior:
+Base gateway startup:
 
 ```text
-Wi-Fi or Internet unavailable
-    -> Wi-Fi reconnect or Cloud Wait/Retry
-    -> network restored
-    -> stale HTTP/TLS client discarded
-    -> newest telemetry uploaded
-    -> Cloud Online
+boot
+-> smart_room_app composition
+-> local display/storage/config/input services
+-> Wi-Fi/provisioning coordination
+-> sensor/cloud services
+-> audio/voice startup after network handoff
 ```
 
-Factory reset:
+Voice/MCP path:
 
 ```text
-hold GPIO9 for five seconds
-    -> quiesce network/provisioning work
-    -> clear driver and application Wi-Fi persistence
-    -> verify NOT_CONFIGURED
-    -> present reset result
-    -> reboot into BLE provisioning
+PTT / microphone
+-> audio_manager
+-> voice_assistant
+-> xiaozhi_foundation / Xiaozhi WebSocket session
+-> backend ASR/LLM
+-> optional MCP tool call
+-> smart_room_mcp_adapter provider
+-> owning manager/service
+-> result returned through Xiaozhi
 ```
+
+Phase-18.1 light control never drives GPIO/RMT directly from MCP;
+`light_manager` remains the product owner.
 
 ## Quick Start
 
 ### Requirements
 
-- ESP-IDF 6.0.1.
-- ESP32-S3 N16R8 and the hardware listed above.
-- FAT-formatted microSD card for SD-backed assets/WAV playback; boot and core
-  services continue while the card is unavailable.
-- Firebase project with Email/Password Authentication and Realtime Database.
-- Espressif-compatible BLE Security 1 provisioning client.
+- ESP-IDF 6.0.1;
+- ESP32-S3 N16R8 and the required peripherals;
+- FAT-formatted microSD card when SD-backed assets/WAV/logging are needed;
+- Firebase project with Email/Password Authentication and Realtime Database;
+- Xiaozhi backend/activation configuration for the current voice path.
 
 ### Configure And Build
 
@@ -198,98 +210,84 @@ Complete guides:
 
 - [Hardware, build, flash, and first-boot setup](docs/SETUP.md)
 - [Firebase Authentication and Security setup](components/cloud/firebase_auth/docs/FIREBASE_SETUP_AND_SECURITY.md)
+- [Xiaozhi roadmap](XIAOZHI_IMPLEMENTATION_ROADMAP.md)
 
-## Firebase Security Model
+## Security Model
 
-Version 1 uses a dedicated Email/Password device account. `firebase_auth`
-obtains and refreshes an ID token; `cloud_manager` authenticates Realtime
-Database REST requests with that token. Database authorization must be enforced
-with restrictive rules based on `auth.uid`.
-
-Development values are entered through local `menuconfig` and generated into
-`sdkconfig`, which is ignored by Git. They are still compiled into the firmware
-image. This is appropriate for the documented portfolio/development release,
-not a production secret-storage architecture.
+Development Firebase values are entered through local `menuconfig` and generated
+into Git-ignored `sdkconfig`. They are still compiled into development firmware
+and are not a production secret-storage mechanism.
 
 Never commit or publish:
 
-- Firebase passwords, ID tokens, or refresh tokens;
-- service-account JSON files or private keys;
+- Firebase passwords, tokens, or private service-account material;
 - Wi-Fi credentials or provisioning secrets;
+- activation/session secrets or private transport payloads;
 - `sdkconfig` containing real local values;
 - firmware binaries built with real credentials.
 
-See [SECURITY.md](SECURITY.md) for the repository security policy and public
-release checklist.
+See [SECURITY.md](SECURITY.md).
 
-## Runtime Snapshot
+## Memory / Voice Notes
 
-Representative accepted report after PSRAM optimization:
+Current voice configuration uses dynamic mbedTLS buffers in PSRAM and a 1 KiB
+outbound TLS record. PTT performs a 20 KiB total/largest-contiguous PSRAM
+headroom gate before starting the turn.
 
-| Metric | Observation |
-|---|---:|
-| CPU used | 3.2% |
-| Internal RAM free | 203,951 B |
-| Internal RAM minimum | 160,427 B |
-| Largest Internal block | 88,064 B |
-| PSRAM free | 8,163,340 B |
-| DMA-capable RAM free | 196,163 B |
-| Tasks | 17 |
+Current streaming-downlink behavior uses a bounded 7.68-second PSRAM ingress
+ring and 0.96-second normal prefill. The five-second prefill deadline starts
+after the first PCM packet rather than at `TTS_START`.
 
-These are workload snapshots, not fixed guarantees. Internal and DMA-capable
-heap capabilities overlap and must not be added.
+These are current implementation facts, not generic ESP-IDF requirements.
 
 ## Repository Layout
 
 ```text
-main/                     application composition and project Kconfig
-components/application/  network and reset coordinators
+main/                     thin ESP-IDF entrypoint and project-level config
+components/application/  product composition, MCP adapter, coordinators, voice/Xiaozhi
+components/audio/        audio manager and private audio modules
 components/cloud/        Firebase authentication and telemetry
 components/connectivity/ Wi-Fi and BLE provisioning
-components/display/      ST7735 integration
-components/input/        button handling
+components/display/      ST7735/display integration
+components/input/        button input
+components/output/       light manager and NeoPixel driver
 components/sensing/      DHT22 and sensor manager
 components/storage/      NVS configuration and SD card
-components/system/       shared configuration and diagnostics
-components/ui/           LVGL runtime, screens, filesystem, and images
-docs/                    architecture, setup, demo, limitations, and media
-Test/                    host and component test utilities
+components/system/       shared board/config/logging/time/diagnostics
+components/ui/           LVGL runtime, screens, filesystem and image handling
+docs/                    architecture, setup, demo, limitations and media
+AI_Stored_Data/          AI handoff/support metadata; never a runtime dependency
 ```
 
 ## Documentation
 
-- [Version 1 release record](VERSION_1_RELEASE.md)
 - [Architecture](docs/ARCHITECTURE.md)
-- [Centralized application logging and validation](components/system/log_manager/README.md)
+- [Component organization](components/README.md)
+- [Application composition](main/README.md)
+- [Version 1 release record](VERSION_1_RELEASE.md)
 - [Setup and build](docs/SETUP.md)
 - [Firebase setup and security](components/cloud/firebase_auth/docs/FIREBASE_SETUP_AND_SECURITY.md)
-- [Hardware demo](docs/DEMO.md)
-- [Media index](docs/media/README.md)
+- [Xiaozhi foundation](components/application/xiaozhi_foundation/docs/README.md)
+- [Voice assistant](components/application/voice_assistant/README.md)
+- [Audio manager](components/audio/audio_manager/docs/README.md)
 - [Known limitations and future work](docs/KNOWN_LIMITATIONS.md)
-- [Historical implementation roadmap](ESP32S3_Smart_Room_Cloud_Gateway_Roadmap.md)
-- [Version 2 Xiaozhi roadmap](XIAOZHI_IMPLEMENTATION_ROADMAP.md)
-- [Xiaozhi WebSocket transport ADR](docs/ADR_XIAOZHI_WEBSOCKET_TRANSPORT.md)
-- [Xiaozhi Phase 12 hardware acceptance data](docs/XIAOZHI_HARDWARE_ACCEPTANCE.md)
+- [Historical Version-1 roadmap](ESP32S3_Smart_Room_Cloud_Gateway_Roadmap.md)
+- [Version-2 Xiaozhi roadmap](XIAOZHI_IMPLEMENTATION_ROADMAP.md)
 
-## Known Product Boundaries
+## Current Roadmap Status
 
-- Telemetry keeps only the newest pending value; there is no offline history.
-- Device credentials are compiled into development firmware.
-- No secure-boot, flash-encryption, OTA, or hardware-backed identity policy is
-  included in Version 1.
-- Provisioning uses a development Proof of Possession rather than a
-  manufacturing-time per-device secret.
-- SD recovery handles managed VFS I/O failures, but the board has no physical
-  card-detect/power-control GPIO and the firmware has no coordinated runtime
-  shutdown API.
+```text
+Sprint 17   COMPLETE / read-only MCP voice HIL accepted
+Sprint 18   IN PROGRESS
+Phase 18.1  COMPLETE / build PASS / target HIL accepted by Hải on 2026-09-13
+Phase 18.2  NOT STARTED
+Phase 18.3  NOT STARTED
+Phase 18.4  NOT STARTED
+Sprint 19   NOT STARTED
+```
 
-See [Known limitations and future work](docs/KNOWN_LIMITATIONS.md) for details.
-
-## Version 2 Direction
-
-Version 2 begins with audio hardware validation, followed by a project-owned
-`audio_manager`, an isolated `voice_assistant` adapter, and staged
-`esp_xiaozhi` integration. It must preserve all Version 1 ownership boundaries.
+Historical phase documents remain historical evidence; current source and
+current canonical project state take precedence when older status text differs.
 
 ## License
 
