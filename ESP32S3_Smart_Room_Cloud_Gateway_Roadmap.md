@@ -953,7 +953,7 @@ Status: Waiting for Wi-Fi config
 - [x] Publish one copied `PRESSED`, `RELEASED`, and one-shot `LONG_PRESS` event
       from the button task without blocking or calling LVGL.
 - [x] Integrate non-fatal button startup and diagnostic event handling in
-      `main` without taking over storage, Wi-Fi, provisioning, or GUI ownership.
+  `main` without taking over storage, Wi-Fi, provisioning, or GUI ownership.
 - [x] Document lifecycle, callback context, timing, ownership, and deferred work.
 
 Phase 7.1 was manually/hardware accepted by the user on 2026-08-01. This
@@ -2120,3 +2120,56 @@ Next action: Capture photos/screenshots/video and add final media links
 Main risk: Publishing credentials, provisioning material, tokens, private URLs, or personal information
 Recommended discipline: Use only real sanitized evidence; do not fabricate hardware results
 ```
+
+---
+
+## 20. Current Roadmap Reconciliation — 2026-09-13
+
+The sections above are preserved as historical project planning/tracking and may
+contain the sprint numbering/status that was true when they were written. They
+must not be used to renumber completed/current work.
+
+For current execution, `XIAOZHI_IMPLEMENTATION_ROADMAP.md`, `AGENTS.md`, and the
+current `AI_Stored_Data/` state/decision files supersede the old proposed-voice
+numbering/tracking rows above.
+
+Sprint 0-18 history is not rewritten by this reconciliation. In particular,
+current Sprint 18 remains **MCP Controlled Actions**, with its existing Phase
+18.x numbering/scope and evidence preserved.
+
+Approved future roadmap:
+
+```text
+Sprint 18  MCP Controlled Actions                              IN PROGRESS
+Sprint 19  Local Web Control V1: SD Card File Manager          PLANNED / NOT STARTED
+Sprint 20  Local Web Control V2: Playback + Volume             PLANNED / NOT STARTED
+Sprint 21  Local Web Control V3: Lights                        PLANNED / NOT STARTED
+Sprint 22  Local Web Control V4: Dashboard + System Status     PLANNED / NOT STARTED
+Sprint 23  Local Web Control V5: Scenes + Logs + Diagnostics   PLANNED / NOT STARTED
+Sprint 24  Wake Word + Advanced Voice UX                       PLANNED / NOT STARTED
+```
+
+Local Web direction is **SD-card-first**. The Web UI and LCD remain frontends
+using existing manager/service ownership boundaries. The Web UI is used after
+the device is already networked and must not configure/control Wi-Fi,
+provisioning, credentials, reconnect, or Wi-Fi lifecycle.
+
+Advanced OTA/factory-management capabilities remain outside Sprints 19-23.
+Do not add OTA install/update, factory reset, credential erase, reboot,
+arbitrary NVS/GPIO/task/shell/system control under the Local Web roadmap without
+separate explicit approval.
+
+The former Wake Word / Advanced Voice UX future plan is deferred to Sprint 24
+and retains this order:
+
+```text
+24.1  feasibility / ESP-SR-WakeNet dependency and resource audit
+24.2  continuous local capture + WakeNet/wake word + VAD
+24.3  advanced conversation / richer voice UX
+24.4  endurance + HIL / privacy, false-wake, resource and coexistence closure
+```
+
+Detailed Local Web scope and anti-drift rules live in
+`AI_Stored_Data/LOCAL_WEB_DASHBOARD_PLAN.md`. No Sprint 19-24 implementation,
+build, HIL, endurance, or security evidence is claimed by this documentation
+reconciliation.

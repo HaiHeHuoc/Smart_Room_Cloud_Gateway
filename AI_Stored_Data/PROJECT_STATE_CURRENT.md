@@ -50,18 +50,50 @@ Sprint 15   COMPLETE / BUILD VERIFIED / HIL ACCEPTED
 Sprint 16   COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / BOUNDED HIL ACCEPTED
 Phase 16.1  COMPLETE BASELINE / streaming HIL accepted / endurance pending
 Sprint 17   COMPLETE / read-only MCP voice HIL accepted
-Sprint 18   IN PROGRESS
+Sprint 18   MCP CONTROLLED ACTIONS / IN PROGRESS
 Phase 18.1  COMPLETE / build PASS / target HIL accepted by Hải on 2026-09-13
 Phase 18.2  NOT STARTED
 Phase 18.3  NOT STARTED
 Phase 18.4  NOT STARTED
-Sprint 19   NOT STARTED
+Sprint 19   Local Web Control V1: SD Card File Manager / PLANNED / NOT STARTED
+Sprint 20   Local Web Control V2: Playback + Volume / PLANNED / NOT STARTED
+Sprint 21   Local Web Control V3: Lights / PLANNED / NOT STARTED
+Sprint 22   Local Web Control V4: Dashboard + System Status / PLANNED / NOT STARTED
+Sprint 23   Local Web Control V5: Scenes + Logs + Diagnostics / PLANNED / NOT STARTED
+Sprint 24   Wake Word + Advanced Voice UX / PLANNED / NOT STARTED
 ```
 
 Phase 18.1 remains closed after the source-structure cleanup because the cleanup
 was intended to preserve behavior. No new target HIL was run specifically after
 the structural move; prior Phase-18.1 HIL acceptance and the cleanup build
 record are separate evidence.
+
+## Approved post-Sprint-18 roadmap
+
+The 2026-09-13 approved roadmap preserves all Sprint 0-18 history and all current
+Phase 18.x numbering/scope. Only future work after Sprint 18 is allocated as
+follows:
+
+```text
+19  Local Web Control V1: SD Card File Manager
+20  Local Web Control V2: Playback + Volume
+21  Local Web Control V3: Lights
+22  Local Web Control V4: Dashboard + System Status
+23  Local Web Control V5: Scenes + Logs + Diagnostics
+24  Wake Word + Advanced Voice UX
+```
+
+The web roadmap is **SD-card-first**. The local Web UI is for an already-networked
+device; it must not add Wi-Fi configuration or Wi-Fi lifecycle control. Web and
+LCD remain sibling frontends over existing manager/service ownership boundaries.
+Advanced OTA/factory-management flows remain outside the current scope.
+
+The former Sprint 19 Wake Word plan is deferred to Sprint 24 without changing
+its required sequence: feasibility/resource audit -> continuous local capture +
+WakeNet/VAD -> advanced conversation -> endurance/HIL closure.
+
+Durable web scope and anti-drift rules are recorded in
+`AI_Stored_Data/LOCAL_WEB_DASHBOARD_PLAN.md`.
 
 ## Phase 18.1 accepted contract
 
@@ -146,8 +178,8 @@ These do not reopen Phase 18.1:
 5. bounded post-structure-cleanup target smoke if desired before a release
    checkpoint.
 
-Do not start Phase 18.2 automatically. Start it only when Hải explicitly
-requests it.
+Do not start Phase 18.2 or any Sprint 19-24 implementation automatically. Start
+new implementation only when Hải explicitly requests the relevant phase/sprint.
 
 ## Security invariants
 

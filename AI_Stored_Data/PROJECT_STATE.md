@@ -77,12 +77,43 @@ Phase 18.1  COMPLETE / BUILD PASS / target HIL accepted by Hải on 2026-09-13
 Phase 18.2  NOT STARTED
 Phase 18.3  NOT STARTED
 Phase 18.4  NOT STARTED
-Sprint 19   NOT STARTED
+Sprint 19   Local Web Control V1: SD Card File Manager / PLANNED / NOT STARTED
+Sprint 20   Local Web Control V2: Playback + Volume / PLANNED / NOT STARTED
+Sprint 21   Local Web Control V3: Lights / PLANNED / NOT STARTED
+Sprint 22   Local Web Control V4: Dashboard + System Status / PLANNED / NOT STARTED
+Sprint 23   Local Web Control V5: Scenes + Logs + Diagnostics / PLANNED / NOT STARTED
+Sprint 24   Wake Word + Advanced Voice UX / PLANNED / NOT STARTED
 ```
 
 Phase 18.1 remains closed after the behavior-preserving source-structure cleanup.
 A post-cleanup target HIL run has not been recorded; do not relabel the earlier
 accepted HIL as a post-cleanup hardware run.
+
+## Approved roadmap after Sprint 18
+
+The 2026-09-13 roadmap decision leaves Sprint 0-18 history and the existing
+Sprint-18 Phase 18.x scope unchanged. Future allocation is:
+
+```text
+Sprint 19  Local Web Control V1: SD Card File Manager
+Sprint 20  Local Web Control V2: Playback + Volume
+Sprint 21  Local Web Control V3: Lights
+Sprint 22  Local Web Control V4: Dashboard + System Status
+Sprint 23  Local Web Control V5: Scenes + Logs + Diagnostics
+Sprint 24  Wake Word + Advanced Voice UX
+```
+
+The Local Web roadmap is SD-card-first. It runs as a frontend over existing
+manager/service boundaries and is not a Wi-Fi provisioning/configuration/control
+surface. The LCD remains a sibling frontend rather than a subordinate web
+implementation. Advanced OTA and factory-management features remain outside the
+current scope.
+
+The former Sprint 19 Wake Word plan is deferred to Sprint 24 while preserving
+its sequence: feasibility/resource audit -> continuous local capture plus
+WakeNet/VAD -> advanced conversation -> endurance/HIL closure.
+
+Use `AI_Stored_Data/LOCAL_WEB_DASHBOARD_PLAN.md` as the durable detailed web plan.
 
 ## Phase 18.1 current contract
 
@@ -210,8 +241,9 @@ These items do not reopen Phase 18.1:
 ## Recommended next action
 
 Do not start Phase 18.2 automatically. Phase 18.2 starts only when Hải
-explicitly requests it. For the current review session, source-structure and
-documentation consistency work may continue without changing roadmap scope.
+explicitly requests it. Sprints 19-24 are approved roadmap entries but remain
+PLANNED / NOT STARTED until explicitly started. Documentation consistency work
+may continue without changing firmware scope.
 
 ## Security invariants
 

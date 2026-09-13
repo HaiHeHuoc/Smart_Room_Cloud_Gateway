@@ -1,22 +1,25 @@
 # ESP32-S3 Smart Room Cloud Gateway — Xiaozhi Implementation Roadmap
 
-**Status:** Active roadmap / implemented through Sprint 17; later phases pending
+**Status:** Active roadmap / implemented through Sprint 17; Sprint 18 in progress; Sprints 19-24 planned  
 **Target:** ESP32-S3 N16R8, ESP-IDF 6.0.1  
 **Resolved dependency:** `espressif/esp_xiaozhi: 0.1.2` (manifest constraint: `^0.1.1`)
 **Voice MVP closure:** End of Sprint 15  
-**Advanced voice closure:** End of Sprint 19
+**Advanced voice closure:** End of Sprint 24
 
 > This roadmap extends the existing project roadmap. It does not replace,
 > reorder, skip, or silently close Sprints 0-9. Pending acceptance work in the
 > original roadmap remains visible and higher priority unless explicitly
 > deferred.
 >
-> **Numbering reconciliation (2026-09-09):** completed implementation history is
+> **Numbering reconciliation (2026-09-13):** completed implementation history is
 > preserved. Sprint 16 is the accepted Audio Arbitration & Multi-Client Audio
 > Policy work, with Phase 16.1 as the Xiaozhi PCM streaming-downlink extension.
-> The previously unimplemented MCP/wake-word roadmap items are shifted forward:
-> Sprint 17 = MCP read-only, Sprint 18 = controlled MCP actions, Sprint 19 =
-> wake word and advanced voice UX. Do not reuse Sprint 16 for MCP work.
+> Sprint 17 remains MCP read-only and Sprint 18 remains MCP controlled actions
+> with all current Phase 18.x numbering/scope unchanged. The approved future
+> roadmap is Sprint 19-23 Local Web Control V1-V5, followed by Sprint 24 Wake
+> Word + Advanced Voice UX. The former Sprint 19 wake-word plan is deferred to
+> Sprint 24 without changing its required content/order. Do not reuse or
+> renumber Sprint 0-18 history.
 
 ---
 
@@ -34,8 +37,18 @@ Sprints 0-9 and pending acceptance
     -> Phase 16.1 Xiaozhi PCM streaming downlink
     -> Sprint 17 MCP read-only tools
     -> Sprint 18 MCP controlled actions
-    -> Sprint 19 wake word and advanced voice UX
+    -> Sprint 19 Local Web Control V1: SD Card File Manager
+    -> Sprint 20 Local Web Control V2: Playback + Volume
+    -> Sprint 21 Local Web Control V3: Lights
+    -> Sprint 22 Local Web Control V4: Dashboard + System Status
+    -> Sprint 23 Local Web Control V5: Scenes + Logs + Diagnostics
+    -> Sprint 24 wake word and advanced voice UX
 ```
+
+Sprints 19-23 are local-web frontend phases over existing project-owned
+managers/services. They do not configure/control Wi-Fi and do not transfer
+domain ownership away from existing managers. Detailed scope is in
+`AI_Stored_Data/LOCAL_WEB_DASHBOARD_PLAN.md`.
 
 ## 2. Ownership
 
@@ -58,9 +71,10 @@ handles/types. Provider handles, enums, callback-lifetime payloads, credentials,
 and transport objects must not leak into unrelated public component APIs.
 `voice_assistant` consumes only the project-owned foundation boundary.
 
-No Xiaozhi, audio, network, or MCP callback may directly call LVGL, change
-Wi-Fi lifecycle, start/stop provisioning, erase/write application NVS, reboot,
-execute OTA, or control arbitrary hardware drivers.
+No Xiaozhi, audio, network, MCP, Web, or LCD callback may directly take over
+LVGL, Wi-Fi lifecycle, provisioning, application NVS reset, reboot, OTA, or
+arbitrary hardware-driver ownership. Web and LCD remain frontends over
+project-owned managers/services.
 
 ---
 
@@ -910,25 +924,108 @@ explicit user request.
 
 ---
 
-# Sprint 19 — Wake Word And Advanced Voice UX — Not Started
+# Sprint 19 — Local Web Control V1: SD Card File Manager — Planned / Not Started
+
+**Goal:** Deliver the SD-card-first local Web Control foundation with a
+responsive PC/mobile file manager while preserving `sd_card_manager` ownership.
+
+Planned scope includes browse/list, upload/drag-drop, download, delete, rename,
+create/remove folder, SD usage/free-space reporting, bounded progress/error
+reporting, WebSocket/event synchronization where justified, and one LCD Web
+Remote screen with a Storage sub-view.
+
+The Web UI is used after the device is already networked. It must not configure
+or control Wi-Fi, provisioning, credentials, reconnect, or network lifecycle.
+It must not expose filesystem paths outside the approved SD root.
+
+Detailed scope and anti-drift rules:
+`AI_Stored_Data/LOCAL_WEB_DASHBOARD_PLAN.md`.
+
+---
+
+# Sprint 20 — Local Web Control V2: Playback + Volume — Planned / Not Started
+
+**Goal:** Add SD-backed playback and volume control through existing audio owner
+APIs without creating a second I2S/playback owner.
+
+- [ ] Select supported SD audio from the storage frontend.
+- [ ] Route playback/stop and supported controls through `audio_manager`.
+- [ ] Route bounded volume state/control through the existing owner contract.
+- [ ] Show copied playback state/error/result on Web/LCD frontend surfaces.
+- [ ] Do not access I2S/DMA or create a duplicate playback state machine in the
+      web layer.
+
+Detailed scope: `AI_Stored_Data/LOCAL_WEB_DASHBOARD_PLAN.md`.
+
+---
+
+# Sprint 21 — Local Web Control V3: Lights — Planned / Not Started
+
+**Goal:** Expose the approved local light contract through a Web frontend while
+keeping `light_manager` as the product state/effect/hardware owner.
+
+- [ ] Support bounded on/off, color, brightness, and supported effects.
+- [ ] Show copied state/capabilities and deterministic validation feedback.
+- [ ] Reuse manager semantics rather than create Web-specific light state.
+- [ ] Do not own NeoPixel/RMT/GPIO from HTTP/WebSocket callbacks.
+
+Detailed scope: `AI_Stored_Data/LOCAL_WEB_DASHBOARD_PLAN.md`.
+
+---
+
+# Sprint 22 — Local Web Control V4: Dashboard + System Status — Planned / Not Started
+
+**Goal:** Add a consolidated read-mostly dashboard using safe project-owned
+snapshots.
+
+- [ ] Display approved sensor/storage/audio/light/cloud/system status facts.
+- [ ] Connectivity may be displayed as read-only status only.
+- [ ] No Wi-Fi configuration/control, provisioning, credential, reconnect, or
+      lifecycle operations from Web UI.
+- [ ] Rate-limit/coalesce updates and do not bypass managers for diagnostics.
+
+Detailed scope: `AI_Stored_Data/LOCAL_WEB_DASHBOARD_PLAN.md`.
+
+---
+
+# Sprint 23 — Local Web Control V5: Scenes + Logs + Diagnostics — Planned / Not Started
+
+**Goal:** Complete the planned local Web surface with bounded manager-based
+orchestration and sanitized support diagnostics.
+
+- [ ] Scenes use approved manager/service APIs only.
+- [ ] Logs/diagnostics are bounded and sanitized; do not expose credentials,
+      tokens, PoP, activation/session secrets, private payloads, or unrestricted
+      filesystem/NVS content.
+- [ ] Keep OTA install/update, factory reset/credential erase, reboot, arbitrary
+      GPIO/task/shell/system control outside this scope.
+
+Detailed scope: `AI_Stored_Data/LOCAL_WEB_DASHBOARD_PLAN.md`.
+
+---
+
+# Sprint 24 — Wake Word + Advanced Voice UX — Planned / Not Started
 
 **Goal:** Evaluate and optionally add local wake word, VAD, privacy UX, and
-advanced conversation after PTT is stable.
+advanced conversation after PTT, MCP, and the planned local-control roadmap are
+stable.
 
-## Phase 19.1 — ESP-SR/WakeNet Feasibility
+This is the former Sprint 19 plan, deferred without dropping its content.
+
+## Phase 24.1 — ESP-SR/WakeNet Feasibility
 
 - [ ] Select and pin exact ESP-SR/WakeNet model/dependencies.
 - [ ] Measure flash, PSRAM, internal/DMA, CPU, stacks, and continuous I2S.
 - [ ] Validate coexistence with LCD, SD, Wi-Fi, cloud, and Xiaozhi.
 
-## Phase 19.2 — Continuous Capture, Wake Word, And VAD
+## Phase 24.2 — Continuous Capture, Wake Word, And VAD
 
 - [ ] Continuous local capture without continuous network transmission.
 - [ ] Project-owned wake/VAD state flow.
 - [ ] Visible microphone/listening and local mute indicators.
 - [ ] Define false accept/reject, timeout, and re-arm.
 
-## Phase 19.3 — Advanced Conversation
+## Phase 24.3 — Advanced Conversation
 
 Optional measured features:
 
@@ -939,7 +1036,7 @@ Optional measured features:
 Do not add hidden always-on transmission, unbounded history, full duplex before
 half-duplex closure, AEC before measurement, or unversioned models.
 
-## Acceptance
+## Phase 24.4 — Endurance + HIL Closure
 
 - [ ] At least 1,000 wake cycles.
 - [ ] Eight-hour local always-on endurance.
@@ -949,26 +1046,29 @@ half-duplex closure, AEC before measurement, or unversioned models.
 - [ ] Reset/provisioning/critical recovery always preempt voice.
 - [ ] No watchdog, leak trend, or uncontrolled audio failure.
 
+No Sprint 24 implementation or HIL evidence is claimed by this roadmap move.
+
 ---
 
 # Cross-Sprint Validation
 
-Each Sprint 10-19 closure records:
+Each Sprint 10-24 closure records, as applicable to that sprint:
 
 - exact firmware revision and dependency lock;
-- board, microphone, amplifier, speaker, power, and GPIO map;
+- board, microphone, amplifier, speaker, power, and GPIO map where relevant;
 - internal/DMA/PSRAM current, minimum, and largest values;
 - CPU and task high-water marks;
 - task/queue/handler/socket/decoder counts where observable;
-- Wi-Fi loss/recovery and reset/provisioning preemption;
-- audio overflow/underrun;
+- Wi-Fi loss/recovery and reset/provisioning preemption where relevant;
+- audio overflow/underrun where relevant;
 - sensitive-log review;
 - hardware evidence and unresolved limitations.
 
-Integrated fault cases include Wi-Fi loss during all voice states, Internet or
-server outage, activation/auth rejection, transport reconnect, cloud overlap,
-queue full/overflow, rapid PTT, cancel/abort, missing/corrupt GIF, SD unmount,
-reset/provisioning preemption, 100-turn endurance, and Sprint 19 eight-hour
+Integrated fault cases include Wi-Fi loss during applicable voice states,
+Internet or server outage, activation/auth rejection, transport reconnect,
+cloud overlap, queue full/overflow, rapid PTT, cancel/abort, missing/corrupt GIF,
+SD unmount, reset/provisioning preemption, 100-turn endurance, Local Web
+storage/control error paths when those sprints start, and Sprint 24 eight-hour
 endurance when enabled.
 
 # Final Definition Of Done
@@ -976,6 +1076,8 @@ endurance when enabled.
 The extension is complete only when dependencies build reproducibly; audio and
 Xiaozhi lifecycles are independently accepted; ownership boundaries remain
 intact; PTT and limited multi-turn are stable; transcript and animations are
-queue-driven and hardware-accepted; MCP is bounded and allowlisted; wake word
-passes its separate gate; feature-off preserves Sprints 0-9 behavior; and no
-unfinished earlier phase is silently marked complete.
+queue-driven and hardware-accepted; MCP is bounded and allowlisted; planned
+Local Web features are implemented/validated without taking manager ownership or
+adding Wi-Fi configuration/control; wake word passes its separate Sprint 24
+gate; feature-off preserves earlier accepted behavior; and no unfinished earlier
+phase is silently marked complete.

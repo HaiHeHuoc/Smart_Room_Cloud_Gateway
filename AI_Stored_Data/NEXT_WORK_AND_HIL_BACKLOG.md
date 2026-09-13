@@ -17,12 +17,17 @@ Phase 15     COMPLETE / BUILD VERIFIED / HIL ACCEPTED
 Phase 16     COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / BOUNDED HIL ACCEPTED
 Phase 16.1   COMPLETE BASELINE / streaming HIL accepted / endurance pending
 Phase 17     COMPLETE / read-only MCP voice HIL accepted
-Phase 18     IN PROGRESS
+Phase 18     MCP CONTROLLED ACTIONS / IN PROGRESS
 Phase 18.1   COMPLETE / build PASS / target HIL accepted by Hải on 2026-09-13
 Phase 18.2   NOT STARTED
 Phase 18.3   NOT STARTED
 Phase 18.4   NOT STARTED
-Phase 19     NOT STARTED
+Sprint 19    Local Web Control V1: SD Card File Manager / PLANNED / NOT STARTED
+Sprint 20    Local Web Control V2: Playback + Volume / PLANNED / NOT STARTED
+Sprint 21    Local Web Control V3: Lights / PLANNED / NOT STARTED
+Sprint 22    Local Web Control V4: Dashboard + System Status / PLANNED / NOT STARTED
+Sprint 23    Local Web Control V5: Scenes + Logs + Diagnostics / PLANNED / NOT STARTED
+Sprint 24    Wake Word + Advanced Voice UX / PLANNED / NOT STARTED
 ```
 
 The application-structure cleanup is integrated. `main/main.c` is now a thin
@@ -30,6 +35,10 @@ entrypoint; `smart_room_app` owns product composition and
 `smart_room_mcp_adapter` owns Smart Room MCP-provider adaptation. The cleanup
 recorded a normal ESP-IDF build PASS but no new target HIL specific to the
 structural move.
+
+The post-Sprint-18 roadmap is approved but not started. Local Web work is
+SD-card-first and is detailed in `AI_Stored_Data/LOCAL_WEB_DASHBOARD_PLAN.md`.
+The former Sprint 19 Wake Word plan is deferred to Sprint 24.
 
 ## Immediate next work
 
@@ -44,7 +53,30 @@ Current deferred validation, in priority order when relevant:
 3. Phase-16/16.1 endurance and resource-trend work
 4. long-duration Firebase/cloud + Xiaozhi simultaneous-traffic regression
 5. start Phase 18.2 only when Hải explicitly requests it
+6. do not start Sprint 19-24 implementation until Hải explicitly requests it
 ```
+
+## Future roadmap routing
+
+When the current Phase 18 work is complete and Hải explicitly starts the next
+roadmap item, route future sessions as follows:
+
+```text
+Sprint 19 -> Local Web Control V1: SD Card File Manager
+Sprint 20 -> Local Web Control V2: Playback + Volume
+Sprint 21 -> Local Web Control V3: Lights
+Sprint 22 -> Local Web Control V4: Dashboard + System Status
+Sprint 23 -> Local Web Control V5: Scenes + Logs + Diagnostics
+Sprint 24 -> Wake Word + Advanced Voice UX
+```
+
+Do not reintroduce Wake Word as Sprint 19. The Sprint 24 voice sequence remains:
+feasibility/resource audit -> continuous local capture + WakeNet/VAD -> advanced
+conversation -> endurance/HIL.
+
+Web/LCD must remain frontends over existing manager/service ownership. Web UI
+must not configure/control Wi-Fi. Advanced OTA/factory-management flows remain
+outside the approved Local Web scope.
 
 ## PTT / TLS — accepted smoke, endurance still deferred
 

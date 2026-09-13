@@ -112,7 +112,7 @@ opening a second speculative portability wave.
 Date: 2026-09-09
 
 Completed implementation history must not be renumbered. The canonical Version-2
-sequence is:
+sequence at the time of this decision was:
 
 ```text
 Sprint 16   Audio Arbitration & Multi-Client Audio Policy
@@ -122,19 +122,22 @@ Sprint 18   MCP Controlled Actions
 Sprint 19   Wake Word And Advanced Voice UX
 ```
 
-Consequences:
+Consequences at that time:
 
 - "read-only MCP" means Sprint/Phase 17;
 - Phase/Sprint 18 is reserved for allowlisted MCP side effects;
-- Phase/Sprint 19 is wake-word/advanced-voice work;
+- Phase/Sprint 19 was reserved for wake-word/advanced-voice work;
 - never reuse Phase 16 for MCP or rewrite Phase-16/16.1 acceptance history.
+
+The post-Sprint-18 allocation in this historical decision is superseded by the
+2026-09-13 future-roadmap decision below. Sprint 0-18 history is unchanged.
 
 ## STATUS OVERRIDE — Current roadmap execution state
 
 Date: 2026-09-12
-Supersedes only older **status values**, not the numbering decision above.
+Supersedes only older **status values**, not completed phase history.
 
-Current source/evidence state is:
+Current source/evidence state before the 2026-09-13 future-roadmap expansion is:
 
 ```text
 Sprint 16   COMPLETE / bounded HIL accepted
@@ -145,16 +148,10 @@ Phase 18.1  COMPLETE / BUILD PASS / target HIL accepted by user (2026-09-13)
 Phase 18.2  NOT STARTED
 Phase 18.3  NOT STARTED
 Phase 18.4  NOT STARTED
-Sprint 19   NOT STARTED
 ```
 
 Older entries saying Sprint 17 or Sprint 18 are `NOT STARTED` are historical and
 must not override this status.
-
-At this synchronization point, `XIAOZHI_IMPLEMENTATION_ROADMAP.md` still has an
-older top-level "Sprint 18 — Not Started" status. Treat that as a documented
-canonical-doc discrepancy to reconcile, not as evidence that implemented source
-should be ignored.
 
 ## DECISION — Phase 18 scope remains bounded
 
@@ -224,3 +221,43 @@ streaming regressions remain deferred and must not be inferred as accepted.
 The earlier note describing the canonical roadmap as stale is now historical.
 `XIAOZHI_IMPLEMENTATION_ROADMAP.md` records Sprint 18 as in progress and
 Phase 18.1 as complete; Phases 18.2–18.4 remain not started.
+
+## DECISION — Approved post-Sprint-18 roadmap and Local Web scope
+
+Date: 2026-09-13
+
+This decision supersedes only the **future allocation after Sprint 18** from the
+2026-09-09 voice-roadmap numbering decision. It does not renumber or rewrite any
+Sprint 0-18 implementation history or current Phase 18.x scope.
+
+Approved sequence:
+
+```text
+Sprint 18  MCP Controlled Actions                              IN PROGRESS
+Sprint 19  Local Web Control V1: SD Card File Manager          PLANNED / NOT STARTED
+Sprint 20  Local Web Control V2: Playback + Volume             PLANNED / NOT STARTED
+Sprint 21  Local Web Control V3: Lights                        PLANNED / NOT STARTED
+Sprint 22  Local Web Control V4: Dashboard + System Status     PLANNED / NOT STARTED
+Sprint 23  Local Web Control V5: Scenes + Logs + Diagnostics   PLANNED / NOT STARTED
+Sprint 24  Wake Word + Advanced Voice UX                       PLANNED / NOT STARTED
+```
+
+Durable constraints:
+
+- the Local Web roadmap is **SD-card-first**;
+- Web UI is used after the device is networked and must not configure/control
+  Wi-Fi, provisioning, credentials, reconnect, or Wi-Fi lifecycle;
+- Web and LCD are sibling frontends and must use existing project-owned
+  manager/service APIs instead of taking driver/framework ownership;
+- advanced OTA/factory management, credential erase, reboot, arbitrary NVS,
+  arbitrary GPIO/task/shell/system control remain outside Sprints 19-23;
+- the former Sprint 19 Wake Word plan moves to Sprint 24 with its required order
+  preserved: feasibility/resource audit -> continuous capture + WakeNet/VAD ->
+  advanced conversation -> endurance/HIL;
+- Sprint 19-24 remain planning only until Hải explicitly starts a sprint;
+- do not infer implementation, build, HIL, endurance, or security evidence from
+  this roadmap decision.
+
+`AI_Stored_Data/LOCAL_WEB_DASHBOARD_PLAN.md` is the durable detailed Web scope
+for future sessions and must be consulted before Local Web work to prevent
+drift.

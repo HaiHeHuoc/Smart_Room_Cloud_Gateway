@@ -91,10 +91,15 @@ Current major state:
 ```text
 Phase 16 / 16.1  accepted baseline; endurance/integration follow-up remains
 Phase 17         COMPLETE / read-only MCP voice HIL accepted
-Phase 18         IN PROGRESS
+Phase 18         MCP Controlled Actions / IN PROGRESS
 Phase 18.1       COMPLETE / build PASS / target HIL accepted by Hải (2026-09-13)
 Phase 18.2-18.4  NOT STARTED
-Phase 19         NOT STARTED
+Sprint 19        Local Web V1: SD Card File Manager / PLANNED / NOT STARTED
+Sprint 20        Local Web V2: Playback + Volume / PLANNED / NOT STARTED
+Sprint 21        Local Web V3: Lights / PLANNED / NOT STARTED
+Sprint 22        Local Web V4: Dashboard + System Status / PLANNED / NOT STARTED
+Sprint 23        Local Web V5: Scenes + Logs + Diagnostics / PLANNED / NOT STARTED
+Sprint 24        Wake Word + Advanced Voice UX / PLANNED / NOT STARTED
 ```
 
 Current application structure:
@@ -113,6 +118,12 @@ engine/session boundary.
 
 The application-structure cleanup is integrated on the active branch, not an
 unmerged refactor. See `APPLICATION_STRUCTURE_CLEANUP.md`.
+
+The approved future Local Web roadmap is SD-card-first. Web/LCD remain frontends
+over existing manager/service boundaries; Web UI does not configure/control
+Wi-Fi; advanced OTA/factory-management remains out of the current scope. The
+former Sprint 19 Wake Word plan is deferred to Sprint 24. See
+`LOCAL_WEB_DASHBOARD_PLAN.md`.
 
 ## Current validation facts
 
@@ -149,14 +160,16 @@ remain deferred and do not reopen Phase 18.1.
 
 ### Current state / decisions
 
-- `PROJECT_STATE.md` — current integrated snapshot, ownership, accepted state,
-  deferred validation, and next-action guardrails.
+- `PROJECT_STATE.md` — primary current integrated snapshot, ownership, accepted
+  state, deferred validation, approved future roadmap, and next-action guardrails.
 - `PROJECT_STATE_CURRENT.md` — synchronization companion created during the
-  2026-09-13 documentation reconciliation; `PROJECT_STATE.md` remains the
-  primary current handoff.
+  2026-09-13 documentation reconciliation.
 - `DECISIONS.md` — durable project decisions and historical status overrides.
 - `NEXT_WORK_AND_HIL_BACKLOG.md` — current deferred validation and next-work
   routing.
+- `LOCAL_WEB_DASHBOARD_PLAN.md` — durable approved Sprint 19-23 Local Web scope,
+  Sprint 24 Wake Word deferral, SD-card-first ordering, and frontend/ownership
+  anti-drift rules.
 - `APPLICATION_STRUCTURE_CLEANUP.md` — integrated thin-main / application
   composition cleanup record.
 - `COMPONENT_PORTABILITY_HARDENING.md` — earlier portability-hardening history
@@ -173,6 +186,8 @@ remain deferred and do not reopen Phase 18.1.
 - `PHASE17_XIAOZHI_SENSOR_ANSWER.md`
 - `PHASE18_MCP_CONTROLLED_ACTIONS.md` — current approved Phase-18 scope,
   finalized Phase-18.1 contract/acceptance, and 18.2-18.4 NOT STARTED state.
+- `PHASE18_2_PLAN.md` — detailed approved Phase-18.2 planning record; preserve
+  its numbering/scope independently from future Sprint 19-24 allocation.
 
 ### Earlier phase records
 
@@ -193,7 +208,8 @@ remain deferred and do not reopen Phase 18.1.
 
 Historical files may intentionally contain the terminology and pending state
 that was true at the time they were written. Do not rewrite history merely to
-match today's source. Use `PROJECT_STATE.md` for current truth.
+match today's source. Use `PROJECT_STATE.md` for current truth and
+`LOCAL_WEB_DASHBOARD_PLAN.md` for the approved future Local Web scope.
 
 This directory remains support metadata only and is intentionally safe to
 delete without changing firmware behavior.
