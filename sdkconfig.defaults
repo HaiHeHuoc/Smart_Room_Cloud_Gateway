@@ -47,4 +47,7 @@ CONFIG_LV_FONT_SOURCE_HAN_SANS_SC_14_CJK=y
 # app_main() owns the startup sequence and remains alive for deferred service
 # activation. The ESP-IDF default 3584-byte stack overflowed on target.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+# `sys_evt` delivers Wi-Fi/IP callbacks and starts the ONLINE handoff. The
+# default 2304-byte event-task stack overflowed on that path on ESP32-S3.
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
 CONFIG_LV_USE_QRCODE=y
