@@ -28,18 +28,17 @@ The directory may be deleted at any time. Therefore:
 - production firmware must never depend on it;
 - CMake/Kconfig/build logic must never require it;
 - runtime code must never read it;
-- canonical implementation truth must remain in source and project docs.
+- canonical implementation truth must remain in source and current project docs.
 
 ## Source-of-truth priority
 
 When information conflicts, use:
 
 1. Current source code and build configuration on the active branch.
-2. Current canonical repository docs (`AGENTS.md`, roadmaps, component docs,
-   ADRs).
+2. `AGENTS.md` and current canonical repository documentation.
 3. Explicit recent build/HIL/manual evidence from Hải.
-4. `AI_Stored_Data` handoff notes.
-5. Conversation memory or assumptions.
+4. Current handoff state in `AI_Stored_Data/`.
+5. Historical records, conversation memory, or assumptions.
 
 Do not silently resolve a conflict. Record the discrepancy and verify it.
 
@@ -53,9 +52,9 @@ Before significant implementation/review work:
 4. Read `PROJECT_STATE.md` and the phase-specific handoff file.
 5. Inspect the real worktree before modifying production code.
 
-After a meaningful decision, acceptance result, phase transition, merge, or
-architecture/behavior change, update the relevant file here when it materially
-helps future sessions.
+After a meaningful decision, acceptance result, phase transition, integration,
+or architecture/behavior change, update the relevant handoff file when it
+materially helps future sessions.
 
 Use these evidence labels consistently:
 
@@ -65,13 +64,13 @@ Use these evidence labels consistently:
 - `DECISION` — an agreed engineering choice.
 - `ASSUMPTION` — temporary and not established fact.
 
-Never store credentials, Wi-Fi passwords, PoP values, activation secrets,
-transport tokens, private keys, service-account JSON, personal secrets, or
-private payloads here.
+Never store credentials, Wi-Fi passwords, PoP values, activation/session
+secrets, transport tokens, private keys, service-account JSON, personal
+secrets, or private payloads here.
 
 ## Current synchronization snapshot
 
-Latest handoff synchronization: **2026-09-12**.
+Latest handoff synchronization: **2026-09-13**.
 
 Active integration branch:
 
@@ -79,56 +78,101 @@ Active integration branch:
 main_including_Firebase_security
 ```
 
-Observed production/source HEAD before the 2026-09-12 AI metadata synchronization:
+Current production/source baseline before the documentation-only synchronization
+that followed it:
 
 ```text
-15cd0f06d25142a6ed7672bc99dfd4ec396184b0
+0a8c83f7776d8259f22208a66f7fc4bd52156aff
+Cleanup code structure
 ```
 
 Current major state:
 
 ```text
-Phase 16 / 16.1  accepted baseline, endurance/integration follow-up remains
-Phase 17         COMPLETE, read-only MCP voice HIL accepted
+Phase 16 / 16.1  accepted baseline; endurance/integration follow-up remains
+Phase 17         COMPLETE / read-only MCP voice HIL accepted
 Phase 18         IN PROGRESS
-Phase 18.1       COMPLETE; current-source build PASS; target HIL accepted by user
+Phase 18.1       COMPLETE / build PASS / target HIL accepted by Hải (2026-09-13)
 Phase 18.2-18.4  NOT STARTED
 Phase 19         NOT STARTED
 ```
 
-Important current-source updates verified during the Phase-18.1 closure
-include dynamic TLS buffers in PSRAM, a 20 KiB PSRAM pre-PTT headroom gate,
-0.96-second streaming prefill with the timeout starting after first PCM, and
-updated Phase-18.1 effect semantics. Read `PROJECT_STATE.md` before relying on
-older phase notes.
+Current application structure:
 
-A canonical documentation discrepancy is currently recorded: source and this
-handoff show Phase 18 in progress, while `XIAOZHI_IMPLEMENTATION_ROADMAP.md`
-still contains an older "Sprint 18 — Not Started" status. Do not silently use
-that stale status as current implementation truth.
+```text
+main/main.c
+    -> smart_room_app
+        -> smart_room_mcp_adapter
+            -> xiaozhi_foundation
+```
+
+`main` is now a thin entrypoint. `smart_room_app` owns product composition and
+application policy. `smart_room_mcp_adapter` owns Smart Room provider
+adaptation. `xiaozhi_foundation` remains the sole managed Xiaozhi/MCP
+engine/session boundary.
+
+The application-structure cleanup is integrated on the active branch, not an
+unmerged refactor. See `APPLICATION_STRUCTURE_CLEANUP.md`.
+
+## Current validation facts
+
+Phase-18.1 acceptance includes explicit user confirmation of:
+
+```text
+Firebase boot             PASS
+relevant source build     PASS
+repeated PTT/TLS smoke    PASS
+Phase-18.1 light HIL      PASS
+```
+
+Do not reinterpret this as a target run performed by an AI agent.
+
+The later application-structure cleanup recorded a normal ESP-IDF build PASS but
+no new target HIL specific to the structural move. Earlier Phase-18.1 acceptance
+and the cleanup build remain separate evidence.
+
+Current implementation facts that supersede older notes include:
+
+- dynamic mbedTLS buffers in PSRAM;
+- 1 KiB outbound TLS record;
+- 20 KiB total/largest-contiguous PSRAM gate before PTT;
+- 7.68-second streaming ingress ring;
+- 0.96-second normal streaming prefill;
+- prefill timeout begins after first PCM, not at `TTS_START`;
+- Phase-18.1 effect-only activation and visible-white fallback semantics;
+- pulse effect timing is 1200 ms, not the earlier 300 ms value.
+
+A delayed-first-PCM streaming regression and longer endurance/resource checks
+remain deferred and do not reopen Phase 18.1.
 
 ## File index
 
-### Core handoff state
+### Current state / decisions
 
-- `PROJECT_STATE.md` — current integrated snapshot, branch/source anchor,
-  ownership, recent code changes, pending validation, and next action.
-- `DECISIONS.md` — durable project decisions and superseding constraints.
-- `NEXT_WORK_AND_HIL_BACKLOG.md` — current validation priority plus historical
-  HIL routing/deferred work.
-- `COMPONENT_PORTABILITY_HARDENING.md` — merged portability-hardening record and
-  frozen architecture conclusions.
+- `PROJECT_STATE.md` — current integrated snapshot, ownership, accepted state,
+  deferred validation, and next-action guardrails.
+- `PROJECT_STATE_CURRENT.md` — synchronization companion created during the
+  2026-09-13 documentation reconciliation; `PROJECT_STATE.md` remains the
+  primary current handoff.
+- `DECISIONS.md` — durable project decisions and historical status overrides.
+- `NEXT_WORK_AND_HIL_BACKLOG.md` — current deferred validation and next-work
+  routing.
+- `APPLICATION_STRUCTURE_CLEANUP.md` — integrated thin-main / application
+  composition cleanup record.
+- `COMPONENT_PORTABILITY_HARDENING.md` — earlier portability-hardening history
+  and frozen architecture conclusions. Newer current-state files supersede any
+  pre-integration wording inside its historical sections.
 
-### Current Xiaozhi phases
+### Current Xiaozhi / voice phases
 
-- `PHASE16_PROGRESS.md` — Phase-16 arbitration closure.
+- `PHASE16_PROGRESS.md` — Phase-16 arbitration history/closure.
 - `PHASE16_HIL_TEST_PLAN.md`
 - `PHASE16_HIL_EVIDENCE.md`
 - `PHASE16_HIL_TEST_BRANCH.md`
 - `PHASE16_1_STREAMING_DOWNLINK.md`
 - `PHASE17_XIAOZHI_SENSOR_ANSWER.md`
-- `PHASE18_MCP_CONTROLLED_ACTIONS.md` — approved Phase-18 scope, exact current
-  Phase-18.1 behavior, validation history, and next HIL/rebuild requirements.
+- `PHASE18_MCP_CONTROLLED_ACTIONS.md` — current approved Phase-18 scope,
+  finalized Phase-18.1 contract/acceptance, and 18.2-18.4 NOT STARTED state.
 
 ### Earlier phase records
 
@@ -146,6 +190,10 @@ that stale status as current implementation truth.
 - `BOOT_STARTING_DEBUG.md`
 - `P2F_KNOWN_AUDIO_HIL.md`
 - `CODEX_HIL_INDEX.md`
+
+Historical files may intentionally contain the terminology and pending state
+that was true at the time they were written. Do not rewrite history merely to
+match today's source. Use `PROJECT_STATE.md` for current truth.
 
 This directory remains support metadata only and is intentionally safe to
 delete without changing firmware behavior.
