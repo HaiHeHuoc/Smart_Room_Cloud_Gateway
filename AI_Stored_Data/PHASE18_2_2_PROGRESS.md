@@ -12,7 +12,7 @@ Media root: /sdcard/audio/
 ## MCP surface
 
 ```text
-audio.list_tracks {}                         -> bounded `{id,name}` list
+audio.list_tracks {}                         -> bounded `{id,name,size_bytes}` list
 audio.play_track { track_id: exact-id }      -> accepted/scheduled or bounded error
 audio.play_recorded {}                       -> retained processed recording, if available
 ```
@@ -22,6 +22,8 @@ FILE, SD lease, I2S, DMA, or PCM data across the MCP/provider boundary.
 Its text result also enumerates each visible `name` and exact `id`, marking the
 lexically first entry, so callers that consume tool text rather than structured
 JSON can still answer catalog and “first song” questions correctly.
+Each item also includes `size_bytes`, copied from `stat()` during the bounded
+scan; it is file metadata only, not a handle or an inferred playback duration.
 
 ## Catalog and safety policy
 

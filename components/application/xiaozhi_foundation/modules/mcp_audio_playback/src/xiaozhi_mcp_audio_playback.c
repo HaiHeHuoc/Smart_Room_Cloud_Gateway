@@ -6,12 +6,14 @@
 #include <string.h>
 
 #include "app_log.h"
+#include "esp_heap_caps.h"
 #include "esp_mcp_property.h"
 #include "esp_mcp_tool.h"
 #include "freertos/FreeRTOS.h"
 #include "xiaozhi_foundation.h"
 
 static const char *const TAG = "XZ_AUDIO_MCP";
+#define AUDIO_CATALOG_RESULT_MAX_BYTES 2048U
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static xiaozhi_foundation_audio_control_provider_t s_control_provider = NULL;
 static void *s_control_context = NULL;
@@ -326,48 +328,75 @@ static esp_err_t audio_list_tracks_callback(
              "audio catalog listed tracks=%u truncated=%s",
              (unsigned)tracks.track_count,
              tracks.truncated ? "yes" : "no");
-    char json[1536] = {0};
+    char *json = heap_caps_calloc(1U, AUDIO_CATALOG_RESULT_MAX_BYTES,
+                                  MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
+    if (json == NULL) {
+        /* Catalog queries must still work on an unexpected PSRAM pressure
+         * path; the allocation remains bounded and is immediately released. */
+        json = heap_caps_calloc(1U, AUDIO_CATALOG_RESULT_MAX_BYTES,
+                                MALLOC_CAP_8BIT);
+    }
+    if (json == NULL) return audio_set_error(result, "internal_error");
     size_t used = 0U;
-    int written = snprintf(json, sizeof(json),
+    int written = snprintf(json, AUDIO_CATALOG_RESULT_MAX_BYTES,
                            "{\"catalog_available\":true,\"truncated\":%s,\"tracks\":[",
                            tracks.truncated ? "true" : "false");
-    if ((written < 0) || ((size_t)written >= sizeof(json))) return ESP_ERR_INVALID_SIZE;
+    if ((written < 0) || ((size_t)written >= AUDIO_CATALOG_RESULT_MAX_BYTES)) {
+        heap_caps_free(json);
+        return ESP_ERR_INVALID_SIZE;
+    }
     used = (size_t)written;
     for (uint8_t i = 0U; i < tracks.track_count; ++i) {
-        written = snprintf(json + used, sizeof(json) - used,
-                           "%s{\"id\":\"%s\",\"name\":\"%s\"}",
+        written = snprintf(json + used, AUDIO_CATALOG_RESULT_MAX_BYTES - used,
+                           "%s{\"id\":\"%s\",\"name\":\"%s\",\"size_bytes\":%llu}",
                            (i == 0U) ? "" : ",", tracks.tracks[i].id,
-                           tracks.tracks[i].name);
-        if ((written < 0) || ((size_t)written >= (sizeof(json) - used))) return ESP_ERR_INVALID_SIZE;
+                           tracks.tracks[i].name,
+                           (unsigned long long)tracks.tracks[i].size_bytes);
+        if ((written < 0) || ((size_t)written >= (AUDIO_CATALOG_RESULT_MAX_BYTES - used))) {
+            heap_caps_free(json);
+            return ESP_ERR_INVALID_SIZE;
+        }
         used += (size_t)written;
     }
-    written = snprintf(json + used, sizeof(json) - used, "]}");
-    if ((written < 0) || ((size_t)written >= (sizeof(json) - used))) return ESP_ERR_INVALID_SIZE;
+    written = snprintf(json + used, AUDIO_CATALOG_RESULT_MAX_BYTES - used, "]}");
+    if ((written < 0) || ((size_t)written >= (AUDIO_CATALOG_RESULT_MAX_BYTES - used))) {
+        heap_caps_free(json);
+        return ESP_ERR_INVALID_SIZE;
+    }
     esp_err_t ret = esp_mcp_tool_result_set_structured_json(result, json);
-    if (ret != ESP_OK) return ret;
+    if (ret != ESP_OK) {
+        heap_caps_free(json);
+        return ret;
+    }
 
     /* Some provider/LLM paths preferentially consume text rather than the
      * structured object. Reuse the same bounded buffer after its JSON has
      * been copied into the result, so every visible name and exact logical ID
      * remains available without adding a second large callback-stack buffer. */
-    written = snprintf(json, sizeof(json),
+    written = snprintf(json, AUDIO_CATALOG_RESULT_MAX_BYTES,
                        "SMART_ROOM_AUDIO_TRACKS: count=%u; first_track_is_first_in_lexical_order; tracks=",
                        (unsigned)tracks.track_count);
-    if ((written < 0) || ((size_t)written >= sizeof(json))) return ESP_ERR_INVALID_SIZE;
+    if ((written < 0) || ((size_t)written >= AUDIO_CATALOG_RESULT_MAX_BYTES)) {
+        heap_caps_free(json);
+        return ESP_ERR_INVALID_SIZE;
+    }
     used = (size_t)written;
     for (uint8_t i = 0U; i < tracks.track_count; ++i) {
-        written = snprintf(json + used, sizeof(json) - used,
-                           "%sname=%s,id=%s]",
+        written = snprintf(json + used, AUDIO_CATALOG_RESULT_MAX_BYTES - used,
+                           "%sname=%s,id=%s,size_bytes=%llu]",
                            (i == 0U) ? "[FIRST:" : "[",
-                           tracks.tracks[i].name, tracks.tracks[i].id);
-        if ((written < 0) || ((size_t)written >= (sizeof(json) - used))) {
-            const size_t remaining = sizeof(json) - used;
+                           tracks.tracks[i].name, tracks.tracks[i].id,
+                           (unsigned long long)tracks.tracks[i].size_bytes);
+        if ((written < 0) || ((size_t)written >= (AUDIO_CATALOG_RESULT_MAX_BYTES - used))) {
+            const size_t remaining = AUDIO_CATALOG_RESULT_MAX_BYTES - used;
             if (remaining > 4U) memcpy(json + used, "...", 4U);
             break;
         }
         used += (size_t)written;
     }
-    return esp_mcp_tool_result_add_text(result, json);
+    ret = esp_mcp_tool_result_add_text(result, json);
+    heap_caps_free(json);
+    return ret;
 }
 
 static esp_err_t audio_play_track_callback(
@@ -558,7 +587,7 @@ esp_err_t xiaozhi_mcp_audio_playback_attach(esp_mcp_t *mcp)
         audio_list_tracks_callback);
     if (list_tracks == NULL) return ESP_ERR_NO_MEM;
     ret = esp_mcp_tool_set_output_schema_json(list_tracks,
-        "{\"type\":\"object\",\"properties\":{\"catalog_available\":{\"type\":\"boolean\"},\"truncated\":{\"type\":\"boolean\"},\"tracks\":{\"type\":\"array\"}},\"required\":[\"catalog_available\",\"truncated\",\"tracks\"]}");
+        "{\"type\":\"object\",\"properties\":{\"catalog_available\":{\"type\":\"boolean\"},\"truncated\":{\"type\":\"boolean\"},\"tracks\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"},\"size_bytes\":{\"type\":\"integer\",\"minimum\":0}},\"required\":[\"id\",\"name\",\"size_bytes\"]}}},\"required\":[\"catalog_available\",\"truncated\",\"tracks\"]}");
     if (ret == ESP_OK) ret = esp_mcp_tool_set_annotations_json(list_tracks,
         "{\"readOnlyHint\":true,\"destructiveHint\":false,\"idempotentHint\":true,\"openWorldHint\":false}");
     if (ret == ESP_OK) ret = esp_mcp_tool_set_task_support(list_tracks, "optional");

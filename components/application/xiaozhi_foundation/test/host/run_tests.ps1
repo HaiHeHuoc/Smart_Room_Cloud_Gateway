@@ -33,6 +33,9 @@ if (($toolSource -notmatch '"audio\.list_tracks"') -or
 if ($toolSource -notmatch 'first_track_is_first_in_lexical_order') {
     throw 'Catalog text result does not identify deterministic first-track ordering'
 }
+if ($toolSource -notmatch 'size_bytes') {
+    throw 'Catalog result does not expose bounded file-size metadata'
+}
 if ($toolSource -notmatch '\\"readOnlyHint\\":true') {
     throw 'Playback-state MCP readOnlyHint is not true'
 }

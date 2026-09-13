@@ -338,6 +338,8 @@ esp_err_t xiaozhi_foundation_register_audio_state_provider(
 typedef struct {
     char id[XIAOZHI_FOUNDATION_AUDIO_TRACK_ID_MAX_BYTES];
     char name[XIAOZHI_FOUNDATION_AUDIO_TRACK_NAME_MAX_BYTES];
+    /** File size copied from the catalog stat() result; no file handle escapes. */
+    uint64_t size_bytes;
 } xiaozhi_foundation_audio_track_t;
 
 typedef struct {

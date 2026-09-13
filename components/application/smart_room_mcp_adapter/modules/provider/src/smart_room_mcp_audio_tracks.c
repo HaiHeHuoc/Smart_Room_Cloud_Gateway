@@ -138,7 +138,9 @@ static esp_err_t scan_catalog(smart_room_catalog_t *catalog)
                                          SMART_ROOM_AUDIO_ROOT, entry.filename);
         if ((path_length < 0) || ((size_t)path_length >= sizeof(path))) continue;
         struct stat info = {0};
-        if ((stat(path, &info) != 0) || !S_ISREG(info.st_mode)) continue;
+        if ((stat(path, &info) != 0) || !S_ISREG(info.st_mode) ||
+            (info.st_size < 0)) continue;
+        entry.public_track.size_bytes = (uint64_t)info.st_size;
         insert_entry(catalog, &entry);
     }
     const int close_result = closedir(directory);
