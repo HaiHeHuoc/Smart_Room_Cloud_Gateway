@@ -26,8 +26,6 @@ main/
 components/application/
   smart_room_app/                product composition, startup and adapters
   smart_room_mcp_adapter/        domain snapshot providers for Xiaozhi MCP
-test_apps/
-  audio_legacy_test/             retired direct-I2S test source; not a product app
 ```
 
 `smart_room_app` registers all local service callbacks before starting network
@@ -62,9 +60,7 @@ that session starts.
     allocation until Wi-Fi has a valid IPv4 address and any BLE provisioning
     cleanup and Station adoption have completed. During WAV playback, its
     private reader owns the file/SD VFS lease and bounded PSRAM cache. Normal
-    startup is command-idle; the default-off golden/continuous-WAV stress
-    hooks are selected only in Kconfig and start through the same `ONLINE`
-    gate.
+    startup is command-idle.
 
 ## Runtime Event Flow
 

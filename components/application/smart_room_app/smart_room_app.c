@@ -62,7 +62,6 @@
 
 /* Audio manager ------------------------------------------------------------ */
 #include "audio_manager.h"
-#include "audio_api_test_task.h"
 #include "voice_assistant.h"
 
 /* Light manager ------------------------------------------------------------ */
@@ -1566,17 +1565,6 @@ static esp_err_t app_start_audio_manager_after_network_online(void)
     APP_LOGI(
         TAG, AUDIO_MANAGER_TASK_STARTED_M_5C489DBF,
         "Audio manager task started; mode is reported by audio_manager");
-
-#if CONFIG_AUDIO_MANAGER_PUBLIC_API_TEST
-    const esp_err_t audio_test_ret = app_audio_api_test_task_start();
-    if (audio_test_ret != ESP_OK)
-    {
-        APP_LOGW(
-            TAG, AUDIO_PUBLIC_TEST_START_FAILED_9B9F0B94,
-            "Enabled audio public-API test coordinator failed to start: %s",
-            esp_err_to_name(audio_test_ret));
-    }
-#endif
 
     return ESP_OK;
 }

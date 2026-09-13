@@ -77,35 +77,12 @@
 #define AUDIO_MANAGER_MANUAL_RECORD_MAX_SECONDS \
     CONFIG_AUDIO_MANAGER_MANUAL_RECORD_MAX_SECONDS
 
-#ifdef CONFIG_AUDIO_MANAGER_WAV_STRESS_TESTAPP
-#define AUDIO_MANAGER_WAV_STRESS_TASK_NAME             "wav_stress"
-#define AUDIO_MANAGER_WAV_STRESS_TASK_STACK_SIZE       3072U
-#define AUDIO_MANAGER_WAV_STRESS_RETRY_DELAY_MS         100U
-#define AUDIO_MANAGER_WAV_STRESS_POST_COMPLETION_DELAY_MS \
-    (CONFIG_AUDIO_MANAGER_WAV_STRESS_POST_COMPLETION_DELAY_SECONDS * 1000U)
-#define AUDIO_MANAGER_WAV_STRESS_TASK_PRIORITY \
-    CONFIG_AUDIO_MANAGER_WAV_STRESS_TASK_PRIORITY
-#endif
-
 #define AUDIO_MANAGER_TASK_READY_BIT  ((EventBits_t)(1U << 0U))
 #define AUDIO_MANAGER_TASK_STOPPED_BIT ((EventBits_t)(1U << 1U))
-#define AUDIO_MANAGER_WAV_STRESS_TASK_STOPPED_BIT ((EventBits_t)(1U << 2U))
-#define AUDIO_MANAGER_WAV_STRESS_TASK_SHUTDOWN_BIT ((EventBits_t)(1U << 3U))
 
-/* Production remains lightweight; test modes can raise the I2S owner to 6/7. */
-#ifdef CONFIG_AUDIO_MANAGER_GOLDEN_STABILITY_MODE
-#define AUDIO_MANAGER_DEFAULT_RECORD_SECONDS \
-    CONFIG_AUDIO_MANAGER_GOLDEN_STABILITY_RECORD_SECONDS
-#define AUDIO_MANAGER_TASK_PRIORITY \
-    CONFIG_AUDIO_MANAGER_GOLDEN_STABILITY_TASK_PRIORITY
-#elif defined(CONFIG_AUDIO_MANAGER_WAV_STRESS_TESTAPP)
-#define AUDIO_MANAGER_DEFAULT_RECORD_SECONDS          5U
-#define AUDIO_MANAGER_TASK_PRIORITY \
-    CONFIG_AUDIO_MANAGER_WAV_STRESS_TASK_PRIORITY
-#else
+/* Production defaults are fixed; test-only Kconfig overrides were retired. */
 #define AUDIO_MANAGER_DEFAULT_RECORD_SECONDS          5U
 #define AUDIO_MANAGER_TASK_PRIORITY                   7U
-#endif
 
 /* Six 16-ms RX descriptors retain 96 ms of microphone DMA slack while freeing
  * 4 KiB of Internal/DMA heap for the concurrent TLS uplink record. */
@@ -278,14 +255,6 @@ typedef enum
     AUDIO_MANAGER_OPERATION_STABILITY,
 } audio_manager_operation_t;
 
-/** @brief Completion record used only by the continuous WAV-stress coordinator. */
-typedef struct
-{
-    uint32_t sequence;
-    esp_err_t result;
-    bool cancelled;
-} audio_manager_wav_completion_t;
-
 typedef struct
 {
     bool task_running;
@@ -293,7 +262,6 @@ typedef struct
     bool cancel_requested;
     bool record_stop_requested;
     audio_manager_operation_t operation;
-    audio_manager_wav_completion_t wav_completion;
 } audio_manager_control_t;
 
 typedef struct
@@ -328,7 +296,6 @@ typedef struct
     i2s_chan_handle_t tx_channel;
 
     TaskHandle_t task_handle;
-    TaskHandle_t wav_stress_task_handle;
     SemaphoreHandle_t status_mutex;
     QueueHandle_t command_queue;
     EventGroupHandle_t lifecycle_events;
@@ -338,8 +305,6 @@ typedef struct
     audio_manager_status_callback_t status_callback;
     void *status_callback_context;
 
-    /* Set by stop() so the optional coordinator can leave its 60-second wait. */
-    bool wav_stress_shutdown_requested;
 } audio_manager_runtime_t;
 
 /* Static Variables --------------------------------------------------------- */
@@ -389,13 +354,7 @@ static audio_record_stop_reason_t audio_manager_record_stop_reason(
     audio_record_control_t control);
 static bool audio_manager_recorded_playback_cancel_enabled(void);
 static void audio_manager_finish_operation(void);
-#ifdef CONFIG_AUDIO_MANAGER_WAV_STRESS_TESTAPP
-static audio_manager_wav_completion_t
-audio_manager_snapshot_wav_completion(void);
-#endif
-static void audio_manager_finish_wav_operation(
-    esp_err_t result,
-    bool cancelled);
+static void audio_manager_finish_wav_operation(void);
 static bool audio_manager_try_begin_stability_operation(void);
 static void audio_manager_record_rx_io(
     esp_err_t result,
@@ -487,8 +446,6 @@ static void audio_manager_handle_pcm_stream_command(uint32_t generation);
 static void audio_manager_run_stability_iteration(void);
 static bool audio_manager_stability_mode_enabled(void);
 static bool audio_manager_mixed_stress_mode_enabled(void);
-static bool audio_manager_wav_stress_mode_enabled(void);
-static const char *audio_manager_wav_regression_path(void);
 static esp_err_t audio_manager_queue_simple_operation(
     audio_manager_command_kind_t command_kind,
     audio_manager_operation_t operation,
@@ -498,12 +455,6 @@ static void log_cycle_diagnostics(
     uint32_t cycle,
     const audio_manager_diagnostics_t *before);
 static void audio_manager_task(void *argument);
-
-#ifdef CONFIG_AUDIO_MANAGER_WAV_STRESS_TESTAPP
-static bool audio_manager_wav_stress_shutdown_is_requested(void);
-static void audio_manager_wav_stress_wait(uint32_t delay_ms);
-static void audio_manager_wav_stress_task(void *argument);
-#endif
 
 /* Static Functions: Status / Callback ------------------------------------- */
 static bool audio_manager_take_status_mutex(const char *operation)
@@ -901,37 +852,12 @@ static void audio_manager_finish_operation(void)
     portEXIT_CRITICAL(&s_control_lock);
 }
 
-#ifdef CONFIG_AUDIO_MANAGER_WAV_STRESS_TESTAPP
-static audio_manager_wav_completion_t
-audio_manager_snapshot_wav_completion(void)
-{
-    audio_manager_wav_completion_t completion;
-
-    portENTER_CRITICAL(&s_control_lock);
-    completion = s_control.wav_completion;
-    portEXIT_CRITICAL(&s_control_lock);
-
-    return completion;
-}
-#endif
-
-/**
- * @brief Publish one terminal WAV result even when GUI-status storage timed out.
- *
- * The coordinator uses this private sequence instead of status counters so a
- * bounded status-mutex timeout cannot stall an otherwise completed stress run.
- */
-static void audio_manager_finish_wav_operation(
-    esp_err_t result,
-    bool cancelled)
+static void audio_manager_finish_wav_operation(void)
 {
     portENTER_CRITICAL(&s_control_lock);
     s_control.operation = AUDIO_MANAGER_OPERATION_NONE;
     s_control.cancel_requested = false;
     s_control.record_stop_requested = false;
-    ++s_control.wav_completion.sequence;
-    s_control.wav_completion.result = result;
-    s_control.wav_completion.cancelled = cancelled;
     portEXIT_CRITICAL(&s_control_lock);
 }
 
@@ -3060,39 +2986,12 @@ static esp_err_t run_cycle(audio_cycle_metrics_t *metrics)
 
 static bool audio_manager_stability_mode_enabled(void)
 {
-#ifdef CONFIG_AUDIO_MANAGER_GOLDEN_STABILITY_MODE
-    return true;
-#else
     return false;
-#endif
 }
 
 static bool audio_manager_mixed_stress_mode_enabled(void)
 {
-#if defined(CONFIG_AUDIO_MANAGER_GOLDEN_STABILITY_MODE) && \
-    defined(CONFIG_AUDIO_MANAGER_WAV_STRESS_TESTAPP)
-    return true;
-#else
     return false;
-#endif
-}
-
-static bool audio_manager_wav_stress_mode_enabled(void)
-{
-#ifdef CONFIG_AUDIO_MANAGER_WAV_STRESS_TESTAPP
-    return true;
-#else
-    return false;
-#endif
-}
-
-static const char *audio_manager_wav_regression_path(void)
-{
-#ifdef CONFIG_AUDIO_MANAGER_WAV_VALIDATION_ONCE
-    return CONFIG_AUDIO_MANAGER_WAV_VALIDATION_PATH;
-#else
-    return NULL;
-#endif
 }
 
 static esp_err_t audio_manager_queue_simple_operation(
@@ -3160,182 +3059,6 @@ static esp_err_t audio_manager_queue_simple_operation(
     xSemaphoreGive(s_runtime.status_mutex);
     return ESP_OK;
 }
-
-#ifdef CONFIG_AUDIO_MANAGER_WAV_STRESS_TESTAPP
-static bool audio_manager_wav_stress_shutdown_is_requested(void)
-{
-    bool shutdown_requested;
-
-    portENTER_CRITICAL(&s_control_lock);
-    shutdown_requested = s_runtime.wav_stress_shutdown_requested;
-    portEXIT_CRITICAL(&s_control_lock);
-
-    return shutdown_requested;
-}
-
-/**
- * @brief Wait without delaying lifecycle shutdown for the optional test task.
- *
- * audio_manager_stop() sets a lifecycle event bit so this task can leave
- * either its short retry wait or configured post-completion sleep immediately.
- */
-static void audio_manager_wav_stress_wait(uint32_t delay_ms)
-{
-    if (s_runtime.lifecycle_events != NULL)
-    {
-        (void)xEventGroupWaitBits(
-            s_runtime.lifecycle_events,
-            AUDIO_MANAGER_WAV_STRESS_TASK_SHUTDOWN_BIT,
-            pdFALSE,
-            pdFALSE,
-            pdMS_TO_TICKS(delay_ms));
-    }
-    else
-    {
-        vTaskDelay(pdMS_TO_TICKS(delay_ms));
-    }
-}
-
-/**
- * @brief Submit the configured WAV only through the manager command API.
- *
- * This is a test coordinator, not a second I2S or SD/VFS owner. It submits
- * through the normal command-idle path, or through the bounded window between
- * complete golden record/DSP/recorded-playback cycles when golden is enabled.
- */
-static void audio_manager_wav_stress_task(void *argument)
-{
-    (void)argument;
-
-    // const char *const path = CONFIG_AUDIO_MANAGER_WAV_STRESS_PATH;
-    // const char *const path = "/sdcard/audio/input_long.wav";
-    const char *const path = "/sdcard/audio/input_2.wav";
-    bool waiting_for_sd = false;
-    uint32_t iteration = 0U;
-
-    APP_LOGI(
-        TAG, WAV_STRESS_COORDINATOR_START_B5C10204,
-        "WAV stress coordinator started: path=%s priority=%u delay=%us",
-        path,
-        (unsigned)AUDIO_MANAGER_WAV_STRESS_TASK_PRIORITY,
-        (unsigned)CONFIG_AUDIO_MANAGER_WAV_STRESS_POST_COMPLETION_DELAY_SECONDS);
-
-    while (!audio_manager_wav_stress_shutdown_is_requested())
-    {
-        if (!sd_card_manager_is_mounted())
-        {
-            if (!waiting_for_sd)
-            {
-                APP_LOGI(TAG, WAV_STRESS_WAITING_FOR_SD_7A9A71F2, "WAV stress waiting for SD VFS readiness");
-                waiting_for_sd = true;
-            }
-
-            audio_manager_wav_stress_wait(
-                AUDIO_MANAGER_WAV_STRESS_RETRY_DELAY_MS);
-            continue;
-        }
-
-        if (waiting_for_sd)
-        {
-            APP_LOGI(TAG, WAV_STRESS_DETECTED_SD_VFS_A363BBBA, "WAV stress detected SD VFS readiness");
-            waiting_for_sd = false;
-        }
-
-        audio_manager_status_t before = {0};
-        const esp_err_t status_result = audio_manager_get_status(&before);
-        if (status_result != ESP_OK)
-        {
-            audio_manager_wav_stress_wait(
-                AUDIO_MANAGER_WAV_STRESS_RETRY_DELAY_MS);
-            continue;
-        }
-
-        if ((before.state == AUDIO_MANAGER_STATE_INITIALIZED) ||
-            (before.state == AUDIO_MANAGER_STATE_UNINITIALIZED))
-        {
-            audio_manager_wav_stress_wait(
-                AUDIO_MANAGER_WAV_STRESS_RETRY_DELAY_MS);
-            continue;
-        }
-
-        const audio_manager_wav_completion_t completion_before =
-            audio_manager_snapshot_wav_completion();
-        const esp_err_t request_result = audio_manager_play_wav(path);
-        if (request_result == ESP_OK)
-        {
-            ++iteration;
-            APP_LOGI(
-                TAG, WAV_STRESS_U_ACCEPTED_WAITIN_F46F0F28,
-                "WAV_STRESS #%u accepted; waiting for terminal result",
-                (unsigned)iteration);
-
-            audio_manager_wav_completion_t completion_after =
-                completion_before;
-            bool terminal = false;
-            while (!audio_manager_wav_stress_shutdown_is_requested() &&
-                   !terminal)
-            {
-                completion_after = audio_manager_snapshot_wav_completion();
-                terminal =
-                    (completion_after.sequence != completion_before.sequence);
-
-                if (!terminal)
-                {
-                    audio_manager_wav_stress_wait(
-                        AUDIO_MANAGER_WAV_STRESS_RETRY_DELAY_MS);
-                }
-            }
-
-            if (audio_manager_wav_stress_shutdown_is_requested())
-            {
-                break;
-            }
-
-            const char *const outcome =
-                completion_after.cancelled
-                    ? "cancelled"
-                    : (completion_after.result == ESP_OK) ? "completed" : "failed";
-            APP_LOGI(
-                TAG, WAV_STRESS_U_S_S_BF940E00,
-                "WAV_STRESS #%u %s: %s; sleeping %us",
-                (unsigned)iteration,
-                outcome,
-                esp_err_to_name(completion_after.result),
-                (unsigned)CONFIG_AUDIO_MANAGER_WAV_STRESS_POST_COMPLETION_DELAY_SECONDS);
-
-            audio_manager_wav_stress_wait(
-                AUDIO_MANAGER_WAV_STRESS_POST_COMPLETION_DELAY_MS);
-            continue;
-        }
-
-        if ((request_result != ESP_ERR_INVALID_STATE) &&
-            (request_result != ESP_ERR_TIMEOUT))
-        {
-            APP_LOGE(
-                TAG, WAV_STRESS_REQUEST_REJECTED_065FF0D2,
-                "WAV stress request rejected: %s; retrying after %us",
-                esp_err_to_name(request_result),
-                (unsigned)CONFIG_AUDIO_MANAGER_WAV_STRESS_POST_COMPLETION_DELAY_SECONDS);
-            audio_manager_wav_stress_wait(
-                AUDIO_MANAGER_WAV_STRESS_POST_COMPLETION_DELAY_MS);
-        }
-        else
-        {
-            /* The manager owns I2S; retry when its command slot becomes free. */
-            audio_manager_wav_stress_wait(
-                AUDIO_MANAGER_WAV_STRESS_RETRY_DELAY_MS);
-        }
-    }
-
-    /* stop() clears the handle only after it has observed this terminal bit. */
-    xEventGroupSetBits(
-        s_runtime.lifecycle_events,
-        AUDIO_MANAGER_WAV_STRESS_TASK_STOPPED_BIT);
-
-    APP_LOGI(TAG, WAV_STRESS_COORDINATOR_STOPP_314BC2BA, "WAV stress coordinator stopped");
-    vTaskDelete(NULL);
-}
-#endif
 
 static void audio_manager_handle_record_command(bool manual)
 {
@@ -3747,7 +3470,7 @@ static void audio_manager_handle_wav_command(const char *path)
         audio_manager_set_state(AUDIO_MANAGER_STATE_IDLE);
     }
 
-    audio_manager_finish_wav_operation(result, cancelled);
+    audio_manager_finish_wav_operation();
 
     if (status_updated)
     {
@@ -4038,13 +3761,12 @@ static void audio_manager_task(void *argument)
 
     const bool stability_mode = audio_manager_stability_mode_enabled();
     const bool mixed_stress_mode = audio_manager_mixed_stress_mode_enabled();
-    const bool wav_stress_mode = audio_manager_wav_stress_mode_enabled();
     APP_LOGI(
         TAG, AUDIO_MANAGER_TASK_STARTED_M_64BC47F1,
         "Audio manager task started: mode=%s priority=%u volume=%u/100",
         stability_mode
             ? (mixed_stress_mode ? "golden_wav_stress" : "golden_stability")
-            : (wav_stress_mode ? "wav_stress" : "production_idle"),
+            : "production_idle",
         (unsigned)AUDIO_MANAGER_TASK_PRIORITY,
         (unsigned)s_runtime.config.playback_volume_percent);
 
@@ -4052,17 +3774,6 @@ static void audio_manager_task(void *argument)
     xEventGroupSetBits(
         s_runtime.lifecycle_events,
         AUDIO_MANAGER_TASK_READY_BIT);
-
-    const char *const wav_regression_path =
-        audio_manager_wav_regression_path();
-    bool wav_regression_pending = (wav_regression_path != NULL);
-    if (wav_regression_pending)
-    {
-        APP_LOGI(
-            TAG, WAV_STARTUP_REGRESSION_IS_WA_8AEF6E54,
-            "WAV startup regression is waiting for SD VFS readiness: %s",
-            wav_regression_path);
-    }
 
     bool task_done = false;
     while (!task_done)
@@ -4145,33 +3856,6 @@ static void audio_manager_task(void *argument)
                 }
             }
             continue;
-        }
-
-        /*
-         * SD recovery is intentionally asynchronous at boot. Submit the
-         * default-off hardware regression once only after the manager reports
-         * VFS availability, rather than consuming its one command while the
-         * card is still in the cold-start retry window. The stream itself
-         * acquires the real lease immediately before fopen().
-         */
-        if (wav_regression_pending && sd_card_manager_is_mounted())
-        {
-            const esp_err_t regression_result =
-                audio_manager_play_wav(wav_regression_path);
-            if (regression_result == ESP_OK)
-            {
-                wav_regression_pending = false;
-                APP_LOGI(TAG, WAV_STARTUP_REGRESSION_COMMA_EC985630, "WAV startup regression command accepted");
-            }
-            else if ((regression_result != ESP_ERR_INVALID_STATE) &&
-                     (regression_result != ESP_ERR_TIMEOUT))
-            {
-                wav_regression_pending = false;
-                APP_LOGE(
-                    TAG, WAV_STARTUP_REGRESSION_COMMA_76AA5F58,
-                    "WAV startup regression command failed permanently: %s",
-                    esp_err_to_name(regression_result));
-            }
         }
 
         audio_manager_command_t command = {0};
@@ -4566,26 +4250,17 @@ esp_err_t audio_manager_start(void)
     bool already_running;
     portENTER_CRITICAL(&s_control_lock);
     already_running = s_control.task_running;
-    if (!already_running &&
-        (s_runtime.task_handle == NULL) &&
-        (s_runtime.wav_stress_task_handle == NULL))
+    if (!already_running && (s_runtime.task_handle == NULL))
     {
         s_control.task_running = true;
         s_control.shutdown_requested = false;
         s_control.cancel_requested = false;
         s_control.record_stop_requested = false;
-        s_control.operation =
-            (audio_manager_stability_mode_enabled() &&
-             !audio_manager_mixed_stress_mode_enabled())
-                ? AUDIO_MANAGER_OPERATION_STABILITY
-                : AUDIO_MANAGER_OPERATION_NONE;
-        s_runtime.wav_stress_shutdown_requested = false;
+        s_control.operation = AUDIO_MANAGER_OPERATION_NONE;
     }
     portEXIT_CRITICAL(&s_control_lock);
 
-    if (already_running ||
-        (s_runtime.task_handle != NULL) ||
-        (s_runtime.wav_stress_task_handle != NULL))
+    if (already_running || (s_runtime.task_handle != NULL))
     {
         xSemaphoreGive(s_runtime.status_mutex);
         return ESP_ERR_INVALID_STATE;
@@ -4594,10 +4269,7 @@ esp_err_t audio_manager_start(void)
     (void)xQueueReset(s_runtime.command_queue);
     (void)xEventGroupClearBits(
         s_runtime.lifecycle_events,
-        AUDIO_MANAGER_TASK_READY_BIT |
-            AUDIO_MANAGER_TASK_STOPPED_BIT |
-            AUDIO_MANAGER_WAV_STRESS_TASK_STOPPED_BIT |
-            AUDIO_MANAGER_WAV_STRESS_TASK_SHUTDOWN_BIT);
+        AUDIO_MANAGER_TASK_READY_BIT | AUDIO_MANAGER_TASK_STOPPED_BIT);
     s_runtime.task_exit_result = ESP_OK;
 
     const BaseType_t result = xTaskCreate(
@@ -4633,23 +4305,6 @@ esp_err_t audio_manager_start(void)
     }
 
     APP_LOGI(TAG, STARTED_AND_READY_FOR_COMMAN_D6A037B6, "Started and ready for commands");
-
-#ifdef CONFIG_AUDIO_MANAGER_WAV_STRESS_TESTAPP
-    const BaseType_t wav_stress_task_result = xTaskCreate(
-        audio_manager_wav_stress_task,
-        AUDIO_MANAGER_WAV_STRESS_TASK_NAME,
-        AUDIO_MANAGER_WAV_STRESS_TASK_STACK_SIZE,
-        NULL,
-        AUDIO_MANAGER_WAV_STRESS_TASK_PRIORITY,
-        &s_runtime.wav_stress_task_handle);
-    if (wav_stress_task_result != pdPASS)
-    {
-        s_runtime.wav_stress_task_handle = NULL;
-        APP_LOGE(TAG, FAILED_TO_CREATE_WAV_STRESS_D3E63EB5, "Failed to create WAV stress coordinator task");
-        (void)audio_manager_stop();
-        return ESP_ERR_NO_MEM;
-    }
-#endif
 
     return ESP_OK;
 }
@@ -4812,8 +4467,7 @@ esp_err_t audio_manager_stop(void)
     }
 
     const TaskHandle_t current_task = xTaskGetCurrentTaskHandle();
-    if ((current_task == s_runtime.task_handle) ||
-        (current_task == s_runtime.wav_stress_task_handle))
+    if (current_task == s_runtime.task_handle)
     {
         return ESP_ERR_INVALID_STATE;
     }
@@ -4825,11 +4479,8 @@ esp_err_t audio_manager_stop(void)
 
     bool task_running;
     bool first_request = false;
-    bool wav_stress_task_running;
     portENTER_CRITICAL(&s_control_lock);
     task_running = s_control.task_running;
-    wav_stress_task_running =
-        (s_runtime.wav_stress_task_handle != NULL);
     if (task_running)
     {
         first_request = !s_control.shutdown_requested;
@@ -4837,10 +4488,9 @@ esp_err_t audio_manager_stop(void)
         s_control.cancel_requested = true;
         s_control.record_stop_requested = true;
     }
-    s_runtime.wav_stress_shutdown_requested = true;
     portEXIT_CRITICAL(&s_control_lock);
 
-    if (!task_running && !wav_stress_task_running)
+    if (!task_running)
     {
         const esp_err_t result = s_runtime.task_exit_result;
         xSemaphoreGive(s_runtime.status_mutex);
@@ -4860,24 +4510,9 @@ esp_err_t audio_manager_stop(void)
         }
     }
 
-    if (wav_stress_task_running)
-    {
-        xEventGroupSetBits(
-            s_runtime.lifecycle_events,
-            AUDIO_MANAGER_WAV_STRESS_TASK_SHUTDOWN_BIT);
-    }
-
     xSemaphoreGive(s_runtime.status_mutex);
 
-    EventBits_t expected_stopped_bits = 0U;
-    if (task_running)
-    {
-        expected_stopped_bits |= AUDIO_MANAGER_TASK_STOPPED_BIT;
-    }
-    if (wav_stress_task_running)
-    {
-        expected_stopped_bits |= AUDIO_MANAGER_WAV_STRESS_TASK_STOPPED_BIT;
-    }
+    const EventBits_t expected_stopped_bits = AUDIO_MANAGER_TASK_STOPPED_BIT;
 
     const EventBits_t stopped_bits = xEventGroupWaitBits(
         s_runtime.lifecycle_events,
@@ -4891,13 +4526,6 @@ esp_err_t audio_manager_stop(void)
             TAG, AUDIO_TASK_STOP_TIMED_OUT_2FC4F4DF,
             "Audio task stop timed out; shutdown remains pending");
         return ESP_ERR_TIMEOUT;
-    }
-
-    if (wav_stress_task_running)
-    {
-        portENTER_CRITICAL(&s_control_lock);
-        s_runtime.wav_stress_task_handle = NULL;
-        portEXIT_CRITICAL(&s_control_lock);
     }
 
     return s_runtime.task_exit_result;
@@ -4943,7 +4571,6 @@ esp_err_t audio_manager_deinit(void)
 
     if (task_running ||
         (s_runtime.task_handle != NULL) ||
-        (s_runtime.wav_stress_task_handle != NULL) ||
         audio_wav_prefetch_is_active(
             &s_runtime.playback_source.wav_prefetch))
     {

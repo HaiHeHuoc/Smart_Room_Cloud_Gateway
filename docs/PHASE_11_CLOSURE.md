@@ -25,9 +25,9 @@ fresh-file transient-SD resume, and the Phase 11.5 stress/lifecycle checkpoint.
 
 ## Production/Test Boundary
 
-`CONFIG_AUDIO_MANAGER_PUBLIC_API_TEST` is `n` by default. Normal boot starts
-only the production `audio_manager` task in `IDLE`; it does not continuously
-record, replay, or access `/sdcard`.
+The retired public-API stress task has been removed. Normal boot starts only
+the production `audio_manager` task in `IDLE`; it does not continuously record,
+replay, or access `/sdcard`.
 
 Enable the option only for an intentional target-hardware regression run. The
 test coordinator uses public APIs and owns neither I2S, PCM buffers, WAV files,

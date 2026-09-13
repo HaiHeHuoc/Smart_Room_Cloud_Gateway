@@ -9,7 +9,6 @@ idf_component_register(
         "modules/stream/src/audio_manager_pcm_stream_core.c"
         "modules/stream/src/audio_manager_stream.c"
         "modules/stream/src/audio_manager_stream_tap.c"
-        "modules/test_support/src/audio_api_test_task.c"
         "modules/dsp/src/audio_dsp.c"
         "modules/dsp/src/audio_dsp_cooperative.c"
         "modules/wav/src/audio_wav.c"

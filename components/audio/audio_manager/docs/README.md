@@ -5,20 +5,15 @@
 `audio_manager` owns the Phase 11 audio foundation for the INMP441 microphone
 and MAX98357A speaker path. The Phase 11 production task starts in `IDLE`,
 accepts one copied WAV request at a time, and owns all WAV, source, and I2S
-lifecycle work. The default production path no longer starts the infinite
-record/DSP/playback soak. The hardware-proven NewSolution algorithms remain
-available through a default-off golden stability mode. The optional continuous
-WAV stress hook is disabled by default with
-`CONFIG_AUDIO_MANAGER_PUBLIC_API_TEST`; when enabled, its second, test-only
-coordinator task only polls status and submits commands, and does not own I2S,
-a file, or an SD lease.
+lifecycle work. The production path starts in `IDLE` and waits for explicit
+commands; retired soak and public-API stress coordinators are not part of the
+product configuration.
 
 The application composition root defers `audio_manager_init()` and
 `audio_manager_start()` until `app_network_coordinator` reports `ONLINE`. This
 is an application lifecycle policy, not an audio-to-network dependency: it
 keeps audio I2S/DMA/task allocation out of BLE provisioning, Station
-association, and IPv4 handoff. The optional public-API stress coordinator is
-started only after that same gate has opened.
+association, and IPv4 handoff.
 
 ## State Model
 
@@ -37,8 +32,7 @@ INITIALIZED -> audio_manager_deinit() -> UNINITIALIZED
 `audio_manager_state_to_string()` provides stable text for logs and the
 application GUI mapping. `RECORDING` begins as soon as the manager enables RX,
 so it includes microphone startup discard and slot detection as well as the
-configured retained recording (five seconds by default; 60 seconds when the
-optional golden stress profile is selected).
+configured retained recording (five seconds by default).
 
 ## Public API
 
@@ -65,27 +59,6 @@ soak. Public lifecycle/control APIs are task-context APIs, not ISR APIs.
 Application code should serialize concurrent `start`, `stop`, and `deinit`
 calls. Busy audio requests are rejected rather than accumulated as a playlist.
 
-## Public-API Hardware Stress Coordinator
-
-Enable `CONFIG_AUDIO_MANAGER_PUBLIC_API_TEST` only for a target-hardware
-validation run. The application composition root calls
-`app_audio_api_test_task_start()`, which starts the test-only, priority-6
-coordinator implemented in
-`audio_api_test_task.c` after the application network coordinator reaches
-`ONLINE`. It calls only public `audio_manager` APIs and polls copied status; it
-does not own I2S, PCM buffers, WAV files, or SD leases.
-
-With the default `n` setting, no continuous record/playback/WAV coordinator is
-created during normal production startup.
-
-With the default local test selection, each cycle exercises fixed recording and
-manual recording followed by recorded playback, then attempts the configured
-WAV. If `sd_card_manager_is_mounted()` is false at the WAV step, the
-coordinator logs `WAV skipped`, reports the cycle as `PARTIAL`, and starts the
-next record/playback cycle after its configured delay. It neither mounts the
-card nor waits indefinitely for SD readiness. Once SD recovery returns VFS to
-READY, a later cycle automatically attempts WAV playback again.
-
 ## Production Command And Ownership Model
 
 ```text
@@ -104,13 +77,10 @@ public audio_manager_play_wav(path)
 
 The queue holds two fixed-size commands. Only one audio operation slot may be
 reserved, so the second slot exists for cooperative `SHUTDOWN`, not a second
-WAV or a playlist. `RECORDING`, `PROCESSING`, `PLAYBACK`, normal golden
-stability mode, and shutdown all reject a conflicting WAV request with
-`ESP_ERR_INVALID_STATE`. When continuous WAV stress is combined with golden
-mode, the scheduler releases the slot only after a complete golden cleanup and
-handles its coordinator's accepted WAV before the next golden cycle. The copied
-path is 256 bytes including its null terminator, and callers may immediately
-reuse their path buffer after a successful return.
+WAV or a playlist. `RECORDING`, `PROCESSING`, `PLAYBACK`, and shutdown reject a
+conflicting WAV request with `ESP_ERR_INVALID_STATE`. The copied path is 256
+bytes including its null terminator, and callers may immediately reuse their
+path buffer after a successful return.
 
 The audio-manager task is the sole owner of I2S RX/TX, `s_tx_block`, fixed WAV
 PCM16 amplitude mapping, and the playback-source lifecycle. Its private
@@ -349,27 +319,8 @@ failed, so `WAV cleanup also failed` now denotes a real teardown failure only.
 
 ### Default-off hardware regression hooks
 
-Normal production startup reaches `IDLE` and waits for commands. The following
-test-only options remain under `idf.py menuconfig` -> `Audio manager`:
-
-- `Submit one WAV through production API after SD is ready` is mutually
-  exclusive with golden mode and continuous WAV stress. It waits for the
-  configured `/sdcard/...` VFS to become ready, then submits that file once
-  through `audio_manager_play_wav()`. It uses the same arbitration, command,
-  cancellation, streaming, status, and cleanup path as an application request;
-  there is no private validation playback implementation.
-- `Run the golden record/DSP/playback stability loop` repeatedly calls the
-  unchanged `run_cycle()` regression path. Without continuous WAV stress, it
-  owns the operation slot and rejects production WAV requests.
-- `Run a continuous WAV playback stress coordinator` has no I2S or VFS
-  ownership. With golden mode disabled, it waits for SD readiness, repeatedly
-  plays its configured WAV to EOF/failure/cancellation, then sleeps for the
-  configured 60 seconds before its next submission. When combined with golden
-  mode, it uses the post-cycle command window instead.
-
-All hooks default off. Standalone continuous WAV stress does not capture or
-run DSP. When combined with golden mode, it serializes full WAV playback
-between golden cycles; it never records and plays a WAV simultaneously.
+Normal production startup reaches `IDLE` and waits for explicit commands. The
+retired test-only startup hooks are no longer exposed by `idf.py menuconfig`.
 
 One aggregate `WAV_DIAG` log reports accepted data bytes/duration, fixed Q16
 gain, observed post-volume output peak, raw bytes read, mono bytes submitted to
@@ -430,17 +381,17 @@ fixed full-scale WAV mapping:
 - RX/TX remain half-duplex with defensive cleanup every cycle.
 - The bounded WAV branch adds a fixed PCM16 amplitude map after SD-to-PCM
   handoff. It does not modify recorded-audio DSP algorithms, I2S format/pins,
-  DMA geometry, or golden capture policy.
+  DMA geometry, or recorded-audio capture policy.
 
 ## Status And Diagnostics
 
 `audio_manager_status_t` exposes lifecycle state, explicit RX/TX I2S-active
-flags, latest manager-operation result, golden-cycle counters, four WAV
+flags, latest manager-operation result, cycle counters, four WAV
 started/completed/failed/cancelled counters, the latest recorded sample count,
 lifetime RX/TX requested and returned byte totals, RX overflow/read-timeout
 counts, TX queue-overflow/write-timeout/partial-write counts, maximum RX/TX
 blocking duration, and manager task stack high-water mark. The existing
-`cycles_*` and `last_samples_recorded` fields remain golden-stability-only.
+`cycles_*` and `last_samples_recorded` remain diagnostic fields.
 
 Task and ISR diagnostic updates are protected by a short component spinlock;
 `audio_manager_get_status()` copies the resulting diagnostic snapshot while
@@ -456,7 +407,7 @@ does not require or justify a PCM ring. If a future measured design introduces
 an application-owned ring, its occupancy and starvation policy can add those
 metrics then.
 
-## Production And Golden Modes
+## Production Mode
 
 The default Phase 11.4 task is command-idle:
 
@@ -467,45 +418,9 @@ audio_manager_start()
   -> wait for PLAY_WAV or SHUTDOWN
 ```
 
-The default-off golden Kconfig mode still repeats:
-
-```text
-record configured duration
-  -> DSP
-  -> play the same recording
-  -> cleanup
-  -> log diagnostics/resources
-  -> repeat
-```
-
-It calls the same preserved `run_cycle()` and remains the golden hardware-soak
-path. It is a regression facility, not normal product behavior.
-
-For the current local WAV-only stress configuration,
-`CONFIG_AUDIO_MANAGER_GOLDEN_STABILITY_MODE` is disabled, so no 60-second
-capture, DSP, or recorded playback runs. `CONFIG_AUDIO_MANAGER_WAV_STRESS_TESTAPP=y`
-starts a priority-6 manager task and a priority-6 test coordinator for
-`/sdcard/audio/input.wav`. Its schedule is:
-
-```text
-WAV-only: full WAV playback -> EOF/error/cancellation -> cleanup
-      -> sleep 60 s
-      -> submit and play the full WAV again
-```
-
-The coordinator does not own I2S, and the manager plays the WAV exclusively
-until EOF/error/cancellation. A long file therefore plays in full before the
-60-second post-completion delay starts. Priority 6 is intentionally one level
-above the priority-5 GUI task; the existing bounded I2S calls remain in use.
-Priority 7 is available only as a measured follow-up if the board retains GUI,
-network, and watchdog responsiveness.
-
 ## Memory And Resource Budget
 
 - Task stack: 8192 bytes, unchanged from the existing manager task.
-- Continuous WAV stress only: one 3072-byte coordinator stack. It holds no WAV data,
-  I2S channel, source slot, or SD lease and is woken immediately by
-  `audio_manager_stop()` rather than waiting out its 60-second sleep.
 - Command queue: two fixed commands; each contains one enum plus a 256-byte
   copied path (520 bytes of payload total with the current 4-byte enum, plus
   FreeRTOS queue metadata/storage alignment).
@@ -516,7 +431,7 @@ network, and watchdog responsiveness.
 - WAV prefetch worker: one private 4096-byte stack at priority 5. It owns only
   SD/VFS and cache fill; it never owns I2S or LVGL.
 - PSRAM: the whole-recording PCM24 buffer and DSP workspace remain allocated at
-  init exactly as required by the preserved golden path. For the default
+  init for the recorded-audio pipeline. For the default
   five-second configuration, PCM24 history is 320000 bytes.
 - DMA/Internal staging: existing static RX/TX/silence blocks and I2S DMA
   geometry are unchanged. There is no whole-WAV allocation or second
@@ -537,14 +452,7 @@ network, and watchdog responsiveness.
   no component-level deadline; manager stop reports its finite five-second
   timeout without force-deleting the task or freeing a live reader buffer.
 - Automatic in-operation SD recovery is intentionally bounded to one fresh-file
-  resume and a five-second READY wait. Persistent media errors, a damaged file
-  or sector, or a slower remount fail the current playback; continuous stress
-  may submit a new iteration after its configured delay.
-- Optional golden stability shutdown is checked between complete `run_cycle()`
-  calls, so a configured long capture/playback cycle can outlast the public
-  stop wait and require a later stop-status check. The optional WAV coordinator
-  leaves its retry/sleep wait immediately when `audio_manager_stop()` signals
-  it, but it cannot preempt an active worker-owned WAV read or manager-owned
-  TX write.
-- End-to-end WAV sound quality, SD latency under Gateway load, and golden-path
-  MIC regression remain target-hardware validation work for Phase 11.4.4.
+  resume and a five-second READY wait. Persistent media errors, a damaged file,
+  sector, or slower remount fail the current playback.
+- End-to-end WAV sound quality, SD latency under Gateway load, and microphone
+  regression remain target-hardware validation work for Phase 11.4.4.

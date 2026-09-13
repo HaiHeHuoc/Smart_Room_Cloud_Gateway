@@ -39,9 +39,8 @@ separate reviewed merge is authorized.
 - `smart_room_mcp_adapter` consolidates the existing sensor, cloud-sync,
   system-status, light-state, and light-set-state provider bridges. The
   `xiaozhi_foundation` MCP engine/session lifecycle remains unchanged.
-- The Phase-16 target-HIL coordinator was retired during pre-base cleanup.
-  The retired direct-I2S `audio_test` source remains outside the production
-  application under `test_apps/audio_legacy_test`.
+- The Phase-16 target-HIL coordinator and the retired direct-I2S `audio_test`
+  source were removed during pre-base cleanup.
 - This refactor adds no MCP tool, light/audio behavior, protocol, credential,
   board mapping, or Phase-18.2 work. Phase 18.2 remains **NOT STARTED**.
 
