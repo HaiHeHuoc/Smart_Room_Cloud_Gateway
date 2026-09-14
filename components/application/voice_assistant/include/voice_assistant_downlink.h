@@ -79,6 +79,17 @@ esp_err_t voice_assistant_downlink_get_status(
 bool voice_assistant_downlink_is_busy(void);
 
 /**
+ * @brief True when a local response abort requires a fresh WebSocket
+ *        transport before another PTT capture on @p session_generation.
+ *
+ * This is a copied/atomic policy fact only. The caller must request the
+ * voice-lifecycle transport rotation; it must not touch Xiaozhi from a
+ * callback or audio task.
+ */
+bool voice_assistant_downlink_transport_fence_required(
+    uint32_t session_generation);
+
+/**
  * Interrupt the current Xiaozhi response from task context.
  *
  * The request is queued to the downlink owner, which taints/rejects stale PCM,

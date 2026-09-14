@@ -14,7 +14,9 @@
 #include "voice_assistant_playback_control.h"
 
 #define PTT_TASK_NAME                 "voice_ptt"
-#define PTT_TASK_STACK_BYTES          4096U
+/* PTT now also handles the bounded post-abort transport-fence path. Keep the
+ * policy worker on an 8 KiB Internal-RAM stack so that path retains margin. */
+#define PTT_TASK_STACK_BYTES          8192U
 #define PTT_TASK_PRIORITY             4U
 #define PTT_QUEUE_LENGTH              6U
 #define PTT_LOCK_TIMEOUT_MS           100U
@@ -185,6 +187,44 @@ static void ptt_prepare_and_authorize(
                    ESP_OK);
 }
 
+/* A downlink-local abort can leave raw old WebSocket frames in flight. Do not
+ * authorize capture on that client generation: reserve a replacement before
+ * the lifecycle worker stops/drains/restarts the transport. */
+static esp_err_t ptt_rotate_response_transport(
+    uint32_t ptt_generation,
+    const voice_assistant_status_t *voice)
+{
+    if ((voice == NULL) ||
+        (voice->state != VOICE_ASSISTANT_STATE_READY) ||
+        !voice_assistant_downlink_transport_fence_required(
+            voice->session_generation)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const esp_err_t rotate_ret = voice_assistant_rotate_session();
+    if (rotate_ret != ESP_OK) {
+        return rotate_ret;
+    }
+
+    voice_assistant_status_t updated = {0};
+    const esp_err_t status_ret = voice_assistant_get_status(&updated);
+    const uint32_t replacement_generation =
+        (status_ret == ESP_OK) ? updated.session_generation :
+        voice->session_generation;
+    s_arming_started = xTaskGetTickCount();
+    ptt_set_status(VOICE_ASSISTANT_PTT_ARMING_SESSION,
+                   true,
+                   false,
+                   replacement_generation,
+                   ESP_OK);
+    APP_LOGI(TAG, RESPONSE_TRANSPORT_FENCE_ARMED_550BDF62,
+             "press waiting for post-abort transport fence ptt_generation=%u old_generation=%u replacement_generation=%u",
+             (unsigned)ptt_generation,
+             (unsigned)voice->session_generation,
+             (unsigned)replacement_generation);
+    return ESP_OK;
+}
+
 static void ptt_reconcile_voice_state(void)
 {
     voice_assistant_ptt_status_t ptt = {0};
@@ -245,6 +285,19 @@ static void ptt_reconcile_voice_state(void)
 
     if (voice.state == VOICE_ASSISTANT_STATE_READY) {
         if (ptt.pressed) {
+            if (voice_assistant_downlink_transport_fence_required(
+                    voice.session_generation)) {
+                const esp_err_t rotate_ret = ptt_rotate_response_transport(
+                    ptt.ptt_generation, &voice);
+                if (rotate_ret != ESP_OK) {
+                    ptt_set_status(VOICE_ASSISTANT_PTT_ERROR,
+                                   false,
+                                   false,
+                                   voice.session_generation,
+                                   rotate_ret);
+                }
+                return;
+            }
             ptt_prepare_and_authorize(
                 ptt.ptt_generation,
                 voice.session_generation);
@@ -348,6 +401,33 @@ static void ptt_handle_press(const ptt_command_t *command)
         APP_LOGI(TAG, PRIOR_RESPONSE_INTERRUPTED_RETA_3E30133F,
                  "prior response interrupted; retained press generation=%u",
                  (unsigned)command->generation);
+    }
+
+    /* The interrupt waits for downlink cleanup, not for WebSocket teardown.
+     * Refresh the lifecycle snapshot before considering READY, then reserve a
+     * new transport generation if this response marked the hard fence. */
+    const esp_err_t refreshed_ret = voice_assistant_get_status(&voice);
+    if (refreshed_ret != ESP_OK) {
+        ptt_set_status(VOICE_ASSISTANT_PTT_ERROR,
+                       false,
+                       false,
+                       0U,
+                       refreshed_ret);
+        return;
+    }
+    if ((voice.state == VOICE_ASSISTANT_STATE_READY) &&
+        voice_assistant_downlink_transport_fence_required(
+            voice.session_generation)) {
+        const esp_err_t rotate_ret = ptt_rotate_response_transport(
+            command->generation, &voice);
+        if (rotate_ret != ESP_OK) {
+            ptt_set_status(VOICE_ASSISTANT_PTT_ERROR,
+                           false,
+                           false,
+                           voice.session_generation,
+                           rotate_ret);
+        }
+        return;
     }
 
     if (voice.state == VOICE_ASSISTANT_STATE_READY) {

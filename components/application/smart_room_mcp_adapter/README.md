@@ -59,17 +59,20 @@ runtime tool call
 - Audio providers translate only bounded action/status enums. Control is
   delegated to `voice_assistant` turn policy and then the public
   `audio_manager` control surface; the adapter never touches I2S, DMA, FILE,
-  SD leases, source paths, or PCM buffers. Phase 18.2.2 catalog providers
-  acquire one short SD lease only to scan `/sdcard/audio/`, retain no file or
-  directory handle, expose only bounded logical IDs, and construct the WAV
-  path internally after an exact catalog lookup. They never accept a path from
-  MCP. The on-demand scan is non-recursive, sorts deterministic ASCII IDs,
-  accepts only direct `.wav` files with a safe bounded display name (including
-  spaces/valid UTF-8). An ASCII-safe filename stem remains its logical ID;
-  other safe names get a deterministic `track_<hash>` ID. It returns at most
-  12 tracks. `audio.play_track` queues the trusted resolved source through the
-  existing playback arbiter; temporary PTT playback receives STOP as the
-  turn override, so an old source cannot auto-resume over the requested track.
+  or PCM buffers. For Phase 18.2.2, an adapter-owned low-priority worker alone
+  acquires a short SD lease and performs the bounded non-recursive
+  `/sdcard/audio/` scan. MCP callbacks only copy the published cache with a
+  zero-wait mutex or return a bounded unavailable result; they never perform
+  VFS I/O or hold an SD lease on the Xiaozhi WebSocket callback path. The
+  cache is a bounded snapshot rather than an instantaneous filesystem view;
+  the worker retries while unavailable and refreshes after catalog requests.
+  It retains no file or directory handle, exposes only unique bounded logical
+  IDs in lexical filename order, and constructs a trusted WAV path internally
+  after an exact lookup. It never accepts a path from MCP. Eligible files are
+  direct `.wav` entries with a safe bounded UTF-8 display name; at most 12 are
+  published. `audio.play_track` submits the trusted source through the existing
+  playback arbiter. Its accepted/scheduled result is not proof that I2S has
+  started or that sound has reached the speaker.
 - `xiaozhi_foundation` remains the sole direct `esp_xiaozhi`/MCP engine and
   session owner. It attaches tools after MCP engine creation and detaches them
   before engine destruction.

@@ -55,7 +55,7 @@ typedef struct {
 } manager_t;
 
 /* Static Variables --------------------------------------------------------- */
-/* INTERNAL_REQUIRED: locks, state and task stack/TCB. Never place in PSRAM. */
+/* INTERNAL_REQUIRED: locks and shared state. Never place these in PSRAM. */
 #if CONFIG_LOG_MANAGER_ENABLE
 static StaticSemaphore_t s_mutex_memory, s_done_memory;
 #endif
@@ -861,9 +861,8 @@ esp_err_t log_manager_start(void)
     if (s.running) { unlock(); return ESP_OK; }
     s.stopping = false;
     s.running = true;
-    /* ESP-IDF xTaskCreate uses internal stack allocation; no project-wide
-     * PSRAM task override is applied to this component. Priority 2, unpinned.
-     */
+    /* Component-local xTaskCreate override places this audited SD/VFS worker
+     * stack and TCB in PSRAM. Priority 2, unpinned. */
     if (xTaskCreate(writer, "log_writer", WRITER_STACK_BYTES, NULL, 2, &s.task) != pdPASS) {
         s.running = false;
         s.task = NULL;

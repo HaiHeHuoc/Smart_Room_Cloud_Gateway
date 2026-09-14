@@ -28,3 +28,25 @@ if ($LASTEXITCODE -ne 0) { throw 'Playback-control policy tests failed' }
 if ($LASTEXITCODE -ne 0) { throw 'WAV resume-position test build failed' }
 & (Join-Path $outputRoot 'audio_wav_resume_position_tests.exe')
 if ($LASTEXITCODE -ne 0) { throw 'WAV resume-position tests failed' }
+
+$arbiterSource = Get-Content `
+    (Join-Path $componentRoot 'modules\arbitration\src\audio_manager_playback_arbiter.c') `
+    -Raw
+if (($arbiterSource -notmatch 'pcm_manager_cleanup_complete') -or
+    ($arbiterSource -notmatch 'start_dispatching') -or
+    ($arbiterSource -notmatch 'take_lock_for_dispatch_reconciliation')) {
+    throw 'Arbiter lacks manager-cleanup and start-handoff ownership guards'
+}
+if (($arbiterSource -notmatch 'audio_manager_get_playback_status\(&playback\)') -or
+    ($arbiterSource -notmatch 'retrying later can play stale speech')) {
+    throw 'PCM admission does not revalidate paused WAV ownership or fail stale speech'
+}
+if ($arbiterSource -notmatch 'cancel_unstarted_wav_for_client') {
+    throw 'PTT cannot atomically cancel an unstarted local WAV request'
+}
+$managerSource = Get-Content (Join-Path $componentRoot 'audio_manager.c') -Raw
+if (($managerSource -notmatch 'audio_manager_consume_resume_requested') -or
+    ($managerSource -notmatch 'handoff_pending')) {
+    throw 'Rapid pause-resume intent is not consumed after retained playback suspension'
+}
+Write-Output 'audio arbiter lifecycle ownership boundary: PASS'

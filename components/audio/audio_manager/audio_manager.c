@@ -401,6 +401,10 @@ static void audio_manager_complete_playback_control(esp_err_t result);
 static void audio_manager_clear_resume_context(void);
 static void audio_manager_restore_retained_playback_status(void);
 static void audio_manager_suspend_operation(void);
+static bool audio_manager_consume_resume_requested(void);
+static esp_err_t audio_manager_queue_retained_playback(
+    uint32_t expected_generation,
+    bool restart_from_beginning);
 static bool audio_manager_shutdown_is_requested(void);
 static audio_record_stop_reason_t audio_manager_record_stop_reason(
     audio_record_control_t control);
@@ -1163,9 +1167,21 @@ static void audio_manager_suspend_operation(void)
     s_control.cancel_requested = false;
     s_control.record_stop_requested = false;
     s_control.pause_requested = false;
-    s_control.resume_requested = false;
+    /* Keep a resume requested while PAUSING until the released retained source
+     * is actually eligible for queueing. Clearing it here used to make a
+     * rapid pause->resume report success but leave the source paused forever. */
     s_control.restart_requested = false;
     portEXIT_CRITICAL(&s_control_lock);
+}
+
+static bool audio_manager_consume_resume_requested(void)
+{
+    bool requested = false;
+    portENTER_CRITICAL(&s_control_lock);
+    requested = s_control.resume_requested;
+    s_control.resume_requested = false;
+    portEXIT_CRITICAL(&s_control_lock);
+    return requested;
 }
 
 static void audio_manager_finish_wav_operation(void)
@@ -3841,6 +3857,17 @@ static void audio_manager_handle_recorded_playback_command(
     {
         audio_manager_suspend_operation();
         audio_manager_notify_status_changed();
+        if (audio_manager_consume_resume_requested())
+        {
+            const esp_err_t resume_result =
+                audio_manager_queue_retained_playback(0U, false);
+            if (resume_result != ESP_OK)
+            {
+                APP_LOGW(TAG, RAPID_RESUME_QUEUE_FAILED_6954B731,
+                         "Recorded rapid resume queue failed: %s",
+                         esp_err_to_name(resume_result));
+            }
+        }
         return;
     }
 
@@ -4162,6 +4189,17 @@ static void audio_manager_handle_wav_command(
     {
         audio_manager_suspend_operation();
         audio_manager_notify_status_changed();
+        if (audio_manager_consume_resume_requested())
+        {
+            const esp_err_t resume_result =
+                audio_manager_queue_retained_playback(0U, false);
+            if (resume_result != ESP_OK)
+            {
+                APP_LOGW(TAG, RAPID_RESUME_QUEUE_FAILED_6954B731,
+                         "WAV rapid resume queue failed: %s",
+                         esp_err_to_name(resume_result));
+            }
+        }
         return;
     }
 
@@ -5456,6 +5494,33 @@ esp_err_t audio_manager_resume_playback(uint32_t expected_generation)
     if (audio_manager_get_playback_status(&snapshot) == ESP_OK &&
         (snapshot.state == AUDIO_MANAGER_PLAYBACK_CONTROL_PAUSED))
     {
+        /* PAUSED becomes visible after the retained source has released I2S,
+         * but before its worker clears operation. Queueing in that hand-off
+         * window returns INVALID_STATE; latch the request for the owner to
+         * consume instead of losing a valid rapid resume. */
+        bool handoff_pending = false;
+        portENTER_CRITICAL(&s_control_lock);
+        const bool local_operation =
+            (s_control.operation == AUDIO_MANAGER_OPERATION_WAV) ||
+            (s_control.operation == AUDIO_MANAGER_OPERATION_RECORDED_PLAYBACK);
+        if (s_control.task_running && !s_control.shutdown_requested &&
+            local_operation &&
+            (s_control.playback_status.state ==
+             AUDIO_MANAGER_PLAYBACK_CONTROL_PAUSED) &&
+            ((expected_generation == 0U) ||
+             (expected_generation == s_control.playback_status.generation)))
+        {
+            s_control.resume_requested = true;
+            s_control.playback_status.last_action =
+                AUDIO_MANAGER_PLAYBACK_ACTION_RESUME;
+            s_control.playback_status.last_control_result = ESP_OK;
+            handoff_pending = true;
+        }
+        portEXIT_CRITICAL(&s_control_lock);
+        if (handoff_pending)
+        {
+            return ESP_OK;
+        }
         return audio_manager_queue_retained_playback(
             expected_generation,
             false);

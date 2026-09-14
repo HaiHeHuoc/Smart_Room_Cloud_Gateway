@@ -282,7 +282,9 @@ static esp_err_t uplink_end_turn(uint32_t generation)
     /* Stop listening and retain the channel only while downlink owns the
      * bounded response wait. A zero-packet turn cannot produce a valid
      * response and must not block the next PTT attempt. */
-    ret = xiaozhi_foundation_audio_uplink_stop(generation);
+    ret = response_wait_started
+              ? xiaozhi_foundation_audio_uplink_stop_for_response(generation)
+              : xiaozhi_foundation_audio_uplink_stop(generation);
     if ((ret != ESP_OK) && (ret != ESP_ERR_INVALID_STATE) &&
         (first_error == ESP_OK)) {
         first_error = ret;

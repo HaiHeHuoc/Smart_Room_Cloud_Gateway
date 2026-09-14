@@ -90,6 +90,18 @@ esp_err_t voice_assistant_begin_session(void);
 esp_err_t voice_assistant_end_session(void);
 
 /**
+ * @brief Rotate the active Xiaozhi WebSocket transport asynchronously.
+ *
+ * This is the fail-closed packet fence after a locally aborted response. The
+ * current chat object and MCP registrations are retained, but the old
+ * WebSocket task is stopped, its queued events are drained, and capture stays
+ * unauthorized until a fresh connection is READY under a new generation.
+ * Call only from normal application/PTT task context; never from a provider,
+ * audio, or UI callback.
+ */
+esp_err_t voice_assistant_rotate_session(void);
+
+/**
  * Recover explicitly from ERROR with bounded cleanup.
  *
  * Recovery is asynchronous. The orchestration task enters RECOVERING, cleans a

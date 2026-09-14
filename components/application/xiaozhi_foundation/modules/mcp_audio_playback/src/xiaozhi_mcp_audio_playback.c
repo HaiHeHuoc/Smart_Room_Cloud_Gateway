@@ -2,10 +2,12 @@
 #include "xiaozhi_mcp_audio_playback_policy.h"
 
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "app_log.h"
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_mcp_property.h"
 #include "esp_mcp_tool.h"
@@ -25,6 +27,13 @@ static xiaozhi_foundation_audio_track_play_provider_t s_track_play_provider = NU
 static void *s_track_play_context = NULL;
 static xiaozhi_foundation_audio_recorded_play_provider_t s_recorded_play_provider = NULL;
 static void *s_recorded_play_context = NULL;
+/* The provider list is 1.2 KiB. Keep it out of the synchronous Xiaozhi
+ * WebSocket callback stack and Internal RAM. It is normal task-context data,
+ * never DMA/ISR-visible nor used with flash cache disabled. Overlapping
+ * catalog calls fail fast rather than overwriting this shared snapshot. */
+EXT_RAM_BSS_ATTR static xiaozhi_foundation_audio_track_list_t
+    s_track_list_result = {0};
+static atomic_flag s_track_list_callback_busy = ATOMIC_FLAG_INIT;
 static bool s_attached = false;
 
 static const char *audio_state_name(xiaozhi_foundation_audio_state_t state)
@@ -304,89 +313,84 @@ static esp_err_t audio_list_tracks_callback(
 {
     (void)properties;
     if (result == NULL) return ESP_ERR_INVALID_ARG;
+    if (atomic_flag_test_and_set_explicit(
+            &s_track_list_callback_busy, memory_order_acquire)) {
+        return audio_set_error(result, "catalog_busy");
+    }
+
+    esp_err_t ret = ESP_OK;
     xiaozhi_foundation_audio_track_list_provider_t provider = NULL;
     void *context = NULL;
     portENTER_CRITICAL(&s_lock);
     provider = s_track_list_provider;
     context = s_track_list_context;
     portEXIT_CRITICAL(&s_lock);
-    xiaozhi_foundation_audio_track_list_t tracks = {0};
-    if ((provider == NULL) || (provider(&tracks, context) != ESP_OK) ||
-        !tracks.available ||
-        (tracks.track_count > XIAOZHI_FOUNDATION_AUDIO_TRACK_MAX_COUNT)) {
-        return audio_set_error(result, "catalog_unavailable");
+    s_track_list_result = (xiaozhi_foundation_audio_track_list_t){0};
+    if ((provider == NULL) ||
+        (provider(&s_track_list_result, context) != ESP_OK) ||
+        !s_track_list_result.available ||
+        (s_track_list_result.track_count >
+         XIAOZHI_FOUNDATION_AUDIO_TRACK_MAX_COUNT)) {
+        ret = audio_set_error(result, "catalog_unavailable");
+        goto callback_done;
     }
-    for (uint8_t i = 0U; i < tracks.track_count; ++i) {
-        if (!audio_track_token_is_safe(tracks.tracks[i].id,
+    for (uint8_t i = 0U; i < s_track_list_result.track_count; ++i) {
+        if (!audio_track_token_is_safe(s_track_list_result.tracks[i].id,
                                        XIAOZHI_FOUNDATION_AUDIO_TRACK_ID_MAX_BYTES) ||
-            !audio_track_display_name_is_safe(tracks.tracks[i].name,
+            !audio_track_display_name_is_safe(s_track_list_result.tracks[i].name,
                                               XIAOZHI_FOUNDATION_AUDIO_TRACK_NAME_MAX_BYTES)) {
-            return audio_set_error(result, "catalog_unavailable");
+            ret = audio_set_error(result, "catalog_unavailable");
+            goto callback_done;
         }
     }
     APP_LOGI(TAG, AUDIO_TRACK_CATALOG_LISTED_U_TR_03D873D1,
              "audio catalog listed tracks=%u truncated=%s",
-             (unsigned)tracks.track_count,
-             tracks.truncated ? "yes" : "no");
+             (unsigned)s_track_list_result.track_count,
+             s_track_list_result.truncated ? "yes" : "no");
     char *json = heap_caps_calloc(1U, AUDIO_CATALOG_RESULT_MAX_BYTES,
                                   MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
     if (json == NULL) {
-        /* Catalog queries must still work on an unexpected PSRAM pressure
-         * path; the allocation remains bounded and is immediately released. */
-        json = heap_caps_calloc(1U, AUDIO_CATALOG_RESULT_MAX_BYTES,
-                                MALLOC_CAP_8BIT);
+        /* Do not trade a catalog answer for the internal-RAM headroom TLS
+         * needs to keep the active Xiaozhi WebSocket alive. */
+        ret = audio_set_error(result, "internal_error");
+        goto callback_done;
     }
-    if (json == NULL) return audio_set_error(result, "internal_error");
     size_t used = 0U;
     int written = snprintf(json, AUDIO_CATALOG_RESULT_MAX_BYTES,
-                           "{\"catalog_available\":true,\"truncated\":%s,\"tracks\":[",
-                           tracks.truncated ? "true" : "false");
+                           "{\"catalog_available\":true,\"truncated\":%s,\"track_count\":%u}",
+                           s_track_list_result.truncated ? "true" : "false",
+                           (unsigned)s_track_list_result.track_count);
     if ((written < 0) || ((size_t)written >= AUDIO_CATALOG_RESULT_MAX_BYTES)) {
         heap_caps_free(json);
-        return ESP_ERR_INVALID_SIZE;
+        ret = ESP_ERR_INVALID_SIZE;
+        goto callback_done;
     }
-    used = (size_t)written;
-    for (uint8_t i = 0U; i < tracks.track_count; ++i) {
-        written = snprintf(json + used, AUDIO_CATALOG_RESULT_MAX_BYTES - used,
-                           "%s{\"id\":\"%s\",\"name\":\"%s\",\"size_bytes\":%llu}",
-                           (i == 0U) ? "" : ",", tracks.tracks[i].id,
-                           tracks.tracks[i].name,
-                           (unsigned long long)tracks.tracks[i].size_bytes);
-        if ((written < 0) || ((size_t)written >= (AUDIO_CATALOG_RESULT_MAX_BYTES - used))) {
-            heap_caps_free(json);
-            return ESP_ERR_INVALID_SIZE;
-        }
-        used += (size_t)written;
-    }
-    written = snprintf(json + used, AUDIO_CATALOG_RESULT_MAX_BYTES - used, "]}");
-    if ((written < 0) || ((size_t)written >= (AUDIO_CATALOG_RESULT_MAX_BYTES - used))) {
-        heap_caps_free(json);
-        return ESP_ERR_INVALID_SIZE;
-    }
-    esp_err_t ret = esp_mcp_tool_result_set_structured_json(result, json);
+    ret = esp_mcp_tool_result_set_structured_json(result, json);
     if (ret != ESP_OK) {
         heap_caps_free(json);
-        return ret;
+        goto callback_done;
     }
 
-    /* Some provider/LLM paths preferentially consume text rather than the
-     * structured object. Reuse the same bounded buffer after its JSON has
-     * been copied into the result, so every visible name and exact logical ID
-     * remains available without adding a second large callback-stack buffer. */
+    /* Keep the complete list in one text object. The compact structured
+     * summary avoids dozens of cJSON nodes allocated on the synchronous
+     * WebSocket path, while the LLM still receives every exact ID/name/size. */
     written = snprintf(json, AUDIO_CATALOG_RESULT_MAX_BYTES,
                        "SMART_ROOM_AUDIO_TRACKS: count=%u; first_track_is_first_in_lexical_order; tracks=",
-                       (unsigned)tracks.track_count);
+                       (unsigned)s_track_list_result.track_count);
     if ((written < 0) || ((size_t)written >= AUDIO_CATALOG_RESULT_MAX_BYTES)) {
         heap_caps_free(json);
-        return ESP_ERR_INVALID_SIZE;
+        ret = ESP_ERR_INVALID_SIZE;
+        goto callback_done;
     }
     used = (size_t)written;
-    for (uint8_t i = 0U; i < tracks.track_count; ++i) {
+    for (uint8_t i = 0U; i < s_track_list_result.track_count; ++i) {
         written = snprintf(json + used, AUDIO_CATALOG_RESULT_MAX_BYTES - used,
                            "%sname=%s,id=%s,size_bytes=%llu]",
                            (i == 0U) ? "[FIRST:" : "[",
-                           tracks.tracks[i].name, tracks.tracks[i].id,
-                           (unsigned long long)tracks.tracks[i].size_bytes);
+                           s_track_list_result.tracks[i].name,
+                           s_track_list_result.tracks[i].id,
+                           (unsigned long long)
+                               s_track_list_result.tracks[i].size_bytes);
         if ((written < 0) || ((size_t)written >= (AUDIO_CATALOG_RESULT_MAX_BYTES - used))) {
             const size_t remaining = AUDIO_CATALOG_RESULT_MAX_BYTES - used;
             if (remaining > 4U) memcpy(json + used, "...", 4U);
@@ -396,6 +400,10 @@ static esp_err_t audio_list_tracks_callback(
     }
     ret = esp_mcp_tool_result_add_text(result, json);
     heap_caps_free(json);
+
+callback_done:
+    atomic_flag_clear_explicit(
+        &s_track_list_callback_busy, memory_order_release);
     return ret;
 }
 
@@ -420,8 +428,27 @@ static esp_err_t audio_play_track_callback(
     if ((ret != ESP_OK) || (play.outcome != XIAOZHI_FOUNDATION_AUDIO_TRACK_SUCCESS)) {
         return audio_set_error(result, (ret == ESP_OK) ? audio_track_error(play.outcome) : "internal_error");
     }
-    return esp_mcp_tool_result_set_structured_json(
-        result, "{\"success\":true,\"accepted\":true,\"scheduled\":true,\"error_code\":null}");
+    char json[144] = {0};
+    char text[168] = {0};
+    const int json_written = snprintf(
+        json, sizeof(json),
+        "{\"success\":true,\"accepted\":%s,\"scheduled\":%s,\"playback_confirmed\":false,\"error_code\":null}",
+        play.accepted ? "true" : "false",
+        play.scheduled ? "true" : "false");
+    const int text_written = snprintf(
+        text, sizeof(text),
+        "SMART_ROOM_AUDIO_PLAY_REQUEST: accepted=%s; scheduled=%s; speaker_output_not_yet_confirmed.",
+        play.accepted ? "yes" : "no",
+        play.scheduled ? "yes" : "no");
+    if ((json_written < 0) || ((size_t)json_written >= sizeof(json)) ||
+        (text_written < 0) || ((size_t)text_written >= sizeof(text))) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    esp_err_t result_ret = esp_mcp_tool_result_set_structured_json(result, json);
+    if (result_ret == ESP_OK) {
+        result_ret = esp_mcp_tool_result_add_text(result, text);
+    }
+    return result_ret;
 }
 
 static esp_err_t audio_play_recorded_callback(
@@ -442,8 +469,27 @@ static esp_err_t audio_play_recorded_callback(
     if ((ret != ESP_OK) || (play.outcome != XIAOZHI_FOUNDATION_AUDIO_TRACK_SUCCESS)) {
         return audio_set_error(result, (ret == ESP_OK) ? audio_track_error(play.outcome) : "internal_error");
     }
-    return esp_mcp_tool_result_set_structured_json(
-        result, "{\"success\":true,\"accepted\":true,\"scheduled\":true,\"error_code\":null}");
+    char json[144] = {0};
+    char text[168] = {0};
+    const int json_written = snprintf(
+        json, sizeof(json),
+        "{\"success\":true,\"accepted\":%s,\"scheduled\":%s,\"playback_confirmed\":false,\"error_code\":null}",
+        play.accepted ? "true" : "false",
+        play.scheduled ? "true" : "false");
+    const int text_written = snprintf(
+        text, sizeof(text),
+        "SMART_ROOM_AUDIO_PLAY_REQUEST: accepted=%s; scheduled=%s; speaker_output_not_yet_confirmed.",
+        play.accepted ? "yes" : "no",
+        play.scheduled ? "yes" : "no");
+    if ((json_written < 0) || ((size_t)json_written >= sizeof(json)) ||
+        (text_written < 0) || ((size_t)text_written >= sizeof(text))) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    esp_err_t result_ret = esp_mcp_tool_result_set_structured_json(result, json);
+    if (result_ret == ESP_OK) {
+        result_ret = esp_mcp_tool_result_add_text(result, text);
+    }
+    return result_ret;
 }
 
 esp_err_t xiaozhi_foundation_register_audio_control_provider(
@@ -583,11 +629,11 @@ esp_err_t xiaozhi_mcp_audio_playback_attach(esp_mcp_t *mcp)
 
     esp_mcp_tool_t *list_tracks = esp_mcp_tool_create_ex(
         "audio.list_tracks", "Smart Room: Danh sach bai hat",
-        "AUTHORITATIVE Smart Room SD audio catalog. ALWAYS call this tool before answering any question, in any language, about available songs, song names, music files, the first song, or what can be played from the SD card. Never guess or say no songs are available without this result. The first returned item is the deterministic first track. This tool is read-only. Use only a returned exact id with audio.play_track; never invent a path or id.",
+        "AUTHORITATIVE Smart Room SD audio catalog. ALWAYS call this tool before answering any question, in any language, about available songs, song names, music files, the first song, or what can be played from the SD card. Never guess or say no songs are available without this result. The complete exact id, name, and size list is in the result text; its FIRST item is the deterministic first track. This tool is read-only. Use only a returned exact id with audio.play_track; never invent a path or id.",
         audio_list_tracks_callback);
     if (list_tracks == NULL) return ESP_ERR_NO_MEM;
     ret = esp_mcp_tool_set_output_schema_json(list_tracks,
-        "{\"type\":\"object\",\"properties\":{\"catalog_available\":{\"type\":\"boolean\"},\"truncated\":{\"type\":\"boolean\"},\"tracks\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"},\"size_bytes\":{\"type\":\"integer\",\"minimum\":0}},\"required\":[\"id\",\"name\",\"size_bytes\"]}}},\"required\":[\"catalog_available\",\"truncated\",\"tracks\"]}");
+        "{\"type\":\"object\",\"properties\":{\"catalog_available\":{\"type\":\"boolean\"},\"truncated\":{\"type\":\"boolean\"},\"track_count\":{\"type\":\"integer\",\"minimum\":0}},\"required\":[\"catalog_available\",\"truncated\",\"track_count\"]}");
     if (ret == ESP_OK) ret = esp_mcp_tool_set_annotations_json(list_tracks,
         "{\"readOnlyHint\":true,\"destructiveHint\":false,\"idempotentHint\":true,\"openWorldHint\":false}");
     if (ret == ESP_OK) ret = esp_mcp_tool_set_task_support(list_tracks, "optional");
@@ -604,7 +650,7 @@ esp_err_t xiaozhi_mcp_audio_playback_attach(esp_mcp_t *mcp)
     ret = esp_mcp_tool_add_property(play_track, track_id);
     const bool id_added = (ret == ESP_OK);
     if (ret == ESP_OK) ret = esp_mcp_tool_set_output_schema_json(play_track,
-        "{\"type\":\"object\",\"properties\":{\"success\":{\"type\":\"boolean\"},\"accepted\":{\"type\":\"boolean\"},\"scheduled\":{\"type\":\"boolean\"},\"error_code\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"success\",\"accepted\",\"scheduled\"]}");
+        "{\"type\":\"object\",\"properties\":{\"success\":{\"type\":\"boolean\"},\"accepted\":{\"type\":\"boolean\"},\"scheduled\":{\"type\":\"boolean\"},\"playback_confirmed\":{\"type\":\"boolean\"},\"error_code\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"success\",\"accepted\",\"scheduled\",\"playback_confirmed\"]}");
     if (ret == ESP_OK) ret = esp_mcp_tool_set_annotations_json(play_track,
         "{\"readOnlyHint\":false,\"destructiveHint\":false,\"idempotentHint\":false,\"openWorldHint\":false}");
     if (ret == ESP_OK) ret = esp_mcp_tool_set_task_support(play_track, "optional");
@@ -617,7 +663,7 @@ esp_err_t xiaozhi_mcp_audio_playback_attach(esp_mcp_t *mcp)
         audio_play_recorded_callback);
     if (play_recorded == NULL) return ESP_ERR_NO_MEM;
     ret = esp_mcp_tool_set_output_schema_json(play_recorded,
-        "{\"type\":\"object\",\"properties\":{\"success\":{\"type\":\"boolean\"},\"accepted\":{\"type\":\"boolean\"},\"scheduled\":{\"type\":\"boolean\"},\"error_code\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"success\",\"accepted\",\"scheduled\"]}");
+        "{\"type\":\"object\",\"properties\":{\"success\":{\"type\":\"boolean\"},\"accepted\":{\"type\":\"boolean\"},\"scheduled\":{\"type\":\"boolean\"},\"playback_confirmed\":{\"type\":\"boolean\"},\"error_code\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"success\",\"accepted\",\"scheduled\",\"playback_confirmed\"]}");
     if (ret == ESP_OK) ret = esp_mcp_tool_set_annotations_json(play_recorded,
         "{\"readOnlyHint\":false,\"destructiveHint\":false,\"idempotentHint\":false,\"openWorldHint\":false}");
     if (ret == ESP_OK) ret = esp_mcp_tool_set_task_support(play_recorded, "optional");

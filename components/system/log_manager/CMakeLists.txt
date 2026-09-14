@@ -28,3 +28,12 @@ set_source_files_properties(
     "log_manager.c"
     PROPERTIES COMPILE_DEFINITIONS "esp_log_write=log_manager_console_write"
 )
+
+# The writer only performs task-context SD/VFS and time operations. It never
+# reaches NVS, flash/OTA, or a cache-disabled callback, so its stack and TCB
+# can reside in PSRAM and leave Internal RAM for Wi-Fi, DMA, and esp_timer.
+target_compile_options(
+    ${COMPONENT_LIB}
+    PRIVATE
+        "-includepsram_task_create.h"
+)

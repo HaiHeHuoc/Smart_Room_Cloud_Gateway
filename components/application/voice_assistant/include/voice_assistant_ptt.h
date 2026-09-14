@@ -50,8 +50,11 @@ esp_err_t voice_assistant_ptt_start(void);
  * bounded recovery and starts a fresh session after IDLE. Capture authorization
  * becomes true only after real READY evidence exists. A press during an old
  * Xiaozhi response requests its bounded downlink-owned cancellation and keeps
- * the same physical press. Resumable local playback must first reach a safe,
- * resource-released PAUSED state; a fast release never authorizes capture.
+ * the same physical press. That abort forces a fresh WebSocket transport
+ * generation, so the press remains ARMING_SESSION until new READY evidence
+ * confirms the old packet stream cannot cross into it. Resumable local
+ * playback must first reach a safe, resource-released PAUSED state; a fast
+ * release never authorizes capture.
  */
 esp_err_t voice_assistant_ptt_press(void);
 

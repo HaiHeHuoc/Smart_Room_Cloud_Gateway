@@ -27,6 +27,11 @@ typedef struct {
     audio_manager_request_t request;
     playback_source_kind_t source;
     char path[AUDIO_MANAGER_WAV_PATH_MAX_BYTES];
+    /* Set while the arbiter has selected this request and is about to submit
+     * its manager command outside the arbiter mutex. A cancellation must not
+     * retire the slot during that hand-off or the manager command could become
+     * an unowned playback. */
+    bool start_dispatching;
     bool start_submitted;
     bool stream_finish_requested;
     bool cancel_requested;
@@ -62,6 +67,16 @@ static bool take_lock(void)
 {
     return (s_lock != NULL) &&
            (xSemaphoreTake(s_lock, pdMS_TO_TICKS(PLAYBACK_ARBITER_LOCK_MS)) == pdTRUE);
+}
+
+/* The task must reconcile a command after it has made it visible to
+ * audio_manager. Leaving start_dispatching set after a timed lock miss would
+ * permanently strand the slot, so this one internal hand-off is deliberate
+ * blocking ownership recovery rather than a public bounded API wait. */
+static bool take_lock_for_dispatch_reconciliation(void)
+{
+    return (s_lock != NULL) &&
+           (xSemaphoreTake(s_lock, portMAX_DELAY) == pdTRUE);
 }
 
 static void clear_slot(playback_slot_t *slot)
@@ -338,6 +353,18 @@ static esp_err_t current_stream_is_closed_locked(bool *closed)
     return ESP_OK;
 }
 
+static bool pcm_manager_cleanup_complete(
+    const audio_manager_playback_status_t *playback)
+{
+    /* Closing the PCM ingress ring is not the same thing as completing the
+     * audio-manager operation. In particular, the manager can still be
+     * restoring a PTT-suspended WAV while its public lifecycle is IDLE. Do not
+     * expose the arbiter terminal record (and resume that WAV) until the
+     * manager no longer reports PCM ownership. */
+    return (playback != NULL) &&
+           (playback->source != AUDIO_MANAGER_PLAYBACK_SOURCE_PCM16_STREAM);
+}
+
 static void playback_arbiter_task(void *arg)
 {
     (void)arg;
@@ -422,13 +449,13 @@ static void playback_arbiter_task(void *arg)
                         if ((s_current.source == PLAYBACK_SOURCE_PCM16_STREAM) &&
                             (stream_probe_result == ESP_OK) &&
                             stream_closed &&
-                            (manager.state != AUDIO_MANAGER_STATE_PLAYBACK)) {
+                            pcm_manager_cleanup_complete(&playback)) {
                             finish_current_locked(ESP_OK);
                         } else if ((s_current.source == PLAYBACK_SOURCE_WAV) &&
                                    (manager.state == AUDIO_MANAGER_STATE_IDLE)) {
                             finish_current_locked(ESP_OK);
                         }
-                    } else {
+                    } else if (!s_current.start_dispatching) {
                         /* No manager command owns I2S yet. Preserve the old
                          * request in terminal_slot, finish logically, then
                          * flush the prepared PCM ring after unlocking. */
@@ -465,8 +492,10 @@ static void playback_arbiter_task(void *arg)
                     } else if (s_current.source == PLAYBACK_SOURCE_PCM16_STREAM) {
                         /* IDLE is legitimate while the manager waits for the
                          * first bounded prefill; only a confirmed closed ring
-                         * is terminal. UNKNOWN status is retried/fails safely. */
-                        if ((stream_probe_result == ESP_OK) && stream_closed) {
+                         * and manager-side cleanup are terminal. UNKNOWN
+                         * status is retried/fails safely. */
+                        if ((stream_probe_result == ESP_OK) && stream_closed &&
+                            pcm_manager_cleanup_complete(&playback)) {
                             finish_current_locked(manager.last_error);
                         }
                     } else if ((manager.state == AUDIO_MANAGER_STATE_IDLE) &&
@@ -480,10 +509,12 @@ static void playback_arbiter_task(void *arg)
                  * iteration that is still cleaning up the previous owner. */
                 if (!terminal_observed &&
                     s_current_valid && !s_current.start_submitted &&
+                    !s_current.start_dispatching &&
                     !slot_terminal_requested(&s_current) &&
                     (manager.state == AUDIO_MANAGER_STATE_IDLE)) {
                     start_slot = s_current;
                     do_start = true;
+                    s_current.start_dispatching = true;
                     s_current.stream.state =
                         AUDIO_MANAGER_PLAYBACK_REQUEST_STARTING;
                 }
@@ -522,10 +553,11 @@ static void playback_arbiter_task(void *arg)
                 (start_slot.source == PLAYBACK_SOURCE_PCM16_STREAM)
                     ? audio_manager_pcm_stream_start(start_slot.request.request_id)
                     : audio_manager_play_wav(start_slot.path);
-            if (take_lock()) {
+            if (take_lock_for_dispatch_reconciliation()) {
                 if (slot_has_request_id(&s_current,
                                         s_current_valid,
                                         start_slot.request.request_id)) {
+                    s_current.start_dispatching = false;
                     if (ret == ESP_OK) {
                         s_current.start_submitted = true;
                         s_current.stream.state =
@@ -540,10 +572,18 @@ static void playback_arbiter_task(void *arg)
                                      ? "pcm16_stream"
                                      : "wav");
                     } else if (ret == ESP_ERR_INVALID_STATE) {
-                        /* A legacy caller may have won after the copied
-                         * status snapshot. Keep the request/ring and retry,
-                         * unless a terminal intent arrived while start ran. */
-                        if (!slot_terminal_requested(&s_current)) {
+                        if ((s_current.source == PLAYBACK_SOURCE_PCM16_STREAM) &&
+                            !slot_terminal_requested(&s_current)) {
+                            /* PCM belongs to one live Xiaozhi response. If
+                             * another manager owner won after admission,
+                             * retrying later can play stale speech after a
+                             * resumed WAV. Fail the response deterministically
+                             * and restore its suspended owner instead. */
+                            s_current.failure_requested = true;
+                            s_current.requested_failure = ret;
+                        } else if (!slot_terminal_requested(&s_current)) {
+                            /* A legacy WAV caller may have won after the
+                             * copied status snapshot; it remains retryable. */
                             s_current.stream.state =
                                 AUDIO_MANAGER_PLAYBACK_REQUEST_PENDING;
                         }
@@ -680,11 +720,6 @@ esp_err_t audio_manager_playback_arbiter_submit_pcm16_stream(
     };
 
     audio_manager_playback_status_t playback = {0};
-    const esp_err_t playback_status_result =
-        audio_manager_get_playback_status(&playback);
-    if (playback_status_result != ESP_OK) {
-        return playback_status_result;
-    }
 
     if (!take_lock()) {
         return ESP_ERR_TIMEOUT;
@@ -704,6 +739,20 @@ esp_err_t audio_manager_playback_arbiter_submit_pcm16_stream(
         ++s_status.rejected_count;
         xSemaphoreGive(s_lock);
         return prepare_result;
+    }
+
+    /* The PAUSED snapshot decides whether the retained WAV yields its logical
+     * arbiter slot. Read it only after PCM preparation, immediately before the
+     * hand-off, rather than using a stale pre-lock value. A later concurrent
+     * resume still makes audio_manager_pcm_stream_start reject PCM ownership,
+     * never allowing two manager sources to run at once. */
+    const esp_err_t playback_status_result =
+        audio_manager_get_playback_status(&playback);
+    if (playback_status_result != ESP_OK) {
+        ++s_status.rejected_count;
+        xSemaphoreGive(s_lock);
+        (void)audio_manager_pcm_stream_abort(request->request_id);
+        return playback_status_result;
     }
 
     esp_err_t submit_result = ESP_OK;
@@ -730,10 +779,10 @@ esp_err_t audio_manager_playback_arbiter_submit_pcm16_stream(
     } else {
         submit_result = submit_slot_locked(&incoming);
     }
+    xSemaphoreGive(s_lock);
     if (submit_result != ESP_OK) {
         (void)audio_manager_pcm_stream_abort(request->request_id);
     }
-    xSemaphoreGive(s_lock);
     return submit_result;
 }
 
@@ -902,6 +951,51 @@ esp_err_t audio_manager_playback_arbiter_cancel(uint32_t request_id)
 
     xSemaphoreGive(s_lock);
     return ESP_ERR_NOT_FOUND;
+}
+
+esp_err_t audio_manager_playback_arbiter_cancel_unstarted_wav_for_client(
+    audio_manager_client_t client,
+    uint32_t *cancelled_count)
+{
+    if ((s_lock == NULL) || (s_task == NULL)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (cancelled_count != NULL) {
+        *cancelled_count = 0U;
+    }
+    if (!take_lock()) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    uint32_t cancelled = 0U;
+    if (s_current_valid &&
+        (s_current.source == PLAYBACK_SOURCE_WAV) &&
+        (s_current.request.client == client) &&
+        !s_current.start_submitted && !s_current.start_dispatching) {
+        s_current.cancel_requested = true;
+        finish_current_locked(ESP_OK);
+        ++cancelled;
+    }
+    if (s_pending_valid &&
+        (s_pending.source == PLAYBACK_SOURCE_WAV) &&
+        (s_pending.request.client == client)) {
+        s_pending.cancel_requested = true;
+        store_terminal_locked(&s_pending,
+                              AUDIO_MANAGER_PLAYBACK_REQUEST_CANCELLED,
+                              ESP_OK);
+        clear_slot(&s_pending);
+        s_pending_valid = false;
+        ++cancelled;
+    }
+
+    if (cancelled != 0U) {
+        sync_status_locked(visible_state_locked(), ESP_OK);
+    }
+    xSemaphoreGive(s_lock);
+    if (cancelled_count != NULL) {
+        *cancelled_count = cancelled;
+    }
+    return (cancelled != 0U) ? ESP_OK : ESP_ERR_NOT_FOUND;
 }
 
 esp_err_t audio_manager_playback_arbiter_get_request_status(

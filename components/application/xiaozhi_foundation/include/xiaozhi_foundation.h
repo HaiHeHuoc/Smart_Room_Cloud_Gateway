@@ -46,6 +46,23 @@ esp_err_t xiaozhi_foundation_session_register_status_callback(
 
 esp_err_t xiaozhi_foundation_session_start(uint32_t client_generation);
 esp_err_t xiaozhi_foundation_session_stop(void);
+
+/**
+ * @brief Replace the active WebSocket transport without recreating the chat
+ *        object or MCP engine.
+ *
+ * This is the hard packet fence for a locally aborted response. It stops the
+ * old WebSocket task, drains its already-posted global events, then starts a
+ * fresh transport under @p replacement_client_generation. Response delivery
+ * remains disabled until the new connection is confirmed. It must run only
+ * from the normal internal-RAM voice lifecycle task, never from a Xiaozhi
+ * callback, ISR, or PSRAM-stack task. On failure the session enters ERROR and
+ * remains fail-closed; callers must not authorize a new capture attempt.
+ */
+esp_err_t xiaozhi_foundation_session_rotate_transport(
+    uint32_t expected_client_generation,
+    uint32_t replacement_client_generation);
+
 esp_err_t xiaozhi_foundation_session_get_status(
     xiaozhi_foundation_session_status_t *status);
 const char *xiaozhi_foundation_session_state_to_string(
@@ -419,13 +436,39 @@ esp_err_t xiaozhi_foundation_audio_uplink_send_opus_packet(
 
 /**
  * Stop MANUAL listening after PTT release but keep the audio channel open.
- * The open channel is retained so the server can deliver the response audio.
- * Phase 14-D closes it only after response completion/abort.
+ * This cleanup form keeps response delivery closed. Use it when no bounded
+ * downlink response wait owns the retained channel.
  */
 esp_err_t xiaozhi_foundation_audio_uplink_stop(uint32_t client_generation);
 
+/**
+ * @brief Stop MANUAL listening for an already-reserved current response.
+ *
+ * The caller must first reserve the matching downlink response epoch, then
+ * call this from normal task context. The response-delivery gate opens just
+ * before the stop-listening transmit so the first TTS/Opus callback cannot
+ * race the synchronous send return. If that transmit fails, the caller must
+ * cancel its response wait and close the channel when it still owns it; normal
+ * channel cleanup closes the gate. This API never authorizes a future turn or
+ * a response after a local abort/transport fence.
+ */
+esp_err_t xiaozhi_foundation_audio_uplink_stop_for_response(
+    uint32_t client_generation);
+
 /** Close the shared production audio channel after response completion. */
 esp_err_t xiaozhi_foundation_audio_channel_close(uint32_t client_generation);
+
+/**
+ * @brief Best-effort request for the server to stop the current response.
+ *
+ * Call from normal task context before closing an interrupted response
+ * channel. This sends the protocol abort while the server session ID is
+ * still valid, then locally blocks response delivery. It is not the packet
+ * identity boundary by itself; use session_rotate_transport() before a later
+ * capture is authorized.
+ */
+esp_err_t xiaozhi_foundation_audio_abort_response(
+    uint32_t client_generation);
 
 esp_err_t xiaozhi_foundation_audio_uplink_get_status(
     xiaozhi_foundation_audio_uplink_status_t *status);

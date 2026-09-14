@@ -15,6 +15,7 @@ idf_component_register(
     REQUIRES
         esp_common
     PRIV_REQUIRES
+        app_log
         audio_manager
         cloud_manager
         light_manager
@@ -24,4 +25,5 @@ idf_component_register(
         voice_assistant
         xiaozhi_foundation
         esp_timer
+        freertos
 )

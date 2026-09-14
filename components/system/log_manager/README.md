@@ -226,15 +226,15 @@ so producers never race deletion of a lock during deinit.
 | Resource | Default allocation |
 |---|---|
 | PSRAM_REQUIRED ring + retry batch | 524288 + 4097 = **528385 bytes**, one allocation |
-| INTERNAL_REQUIRED writer stack | **6144 bytes**, priority **2**, no affinity |
-| INTERNAL_REQUIRED runtime | One TCB, two static semaphores, small state/path counters |
+| PSRAM_REQUIRED writer stack + TCB | **6144 bytes**, priority **2**, no affinity |
+| INTERNAL_REQUIRED runtime | Two static semaphores, small state/path counters |
 | Writer file handles | One active FILE; up to two DIR handles during retention |
 | Producer stack | 512-byte record plus bounded time/printf frames |
 
 Libc/VFS may allocate at file/directory lifecycle boundaries. There is no logger
-allocation per record. FreeRTOS internal allocation behavior was verified against
-the configured SDK's `freertos/heap_idf.c`; this component has no PSRAM task-stack
-override. Actual heap deltas, stack high-water mark, CPU cost and SD contention
+allocation per record. The writer is explicitly audited for an external stack:
+it performs only task-context SD/VFS and time work, not NVS, flash/OTA, or
+cache-disabled callbacks. Actual heap deltas, stack high-water mark, CPU cost and SD contention
 with audio/LVGL require measurement on the board.
 
 Call sites must never pass passwords, PoP, tokens, authorization headers, private

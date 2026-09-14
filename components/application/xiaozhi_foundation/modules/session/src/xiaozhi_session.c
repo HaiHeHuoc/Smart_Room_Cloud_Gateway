@@ -26,9 +26,17 @@
 #define XIAOZHI_SESSION_EVENT_GOODBYE              BIT2
 #define XIAOZHI_SESSION_EVENT_AUDIO_OPENED          BIT3
 #define XIAOZHI_SESSION_EVENT_AUDIO_CLOSED          BIT4
+#define XIAOZHI_SESSION_EVENT_FENCE_DRAINED         BIT5
 #define XIAOZHI_SESSION_CONNECT_TIMEOUT_MS         15000U
 #define XIAOZHI_SESSION_AUDIO_OPEN_TIMEOUT_MS       15000U
 #define XIAOZHI_SESSION_AUDIO_CLOSE_TIMEOUT_MS       8000U
+#define XIAOZHI_SESSION_FENCE_DRAIN_TIMEOUT_MS       2000U
+#define XIAOZHI_SESSION_FENCE_EVENT_POST_TIMEOUT_MS   100U
+/* This ID is private to the project handler. It is deliberately outside the
+ * small bit-style event IDs published by esp_xiaozhi_chat.h. Posting it after
+ * the old WebSocket task has stopped gives a FIFO drain barrier for any old
+ * global CONNECTED/DISCONNECTED/GOODBYE notifications. */
+#define XIAOZHI_SESSION_PRIVATE_FENCE_DRAIN_EVENT_ID 0x7F00
 
 #define XIAOZHI_SESSION_UPSTREAM_CHAT_LOG_TAG    "ESP_XIAOZHI_CHAT"
 #define XIAOZHI_SESSION_UPSTREAM_MCP_MANAGER_TAG "esp_mcp_mgr"
@@ -53,6 +61,21 @@ static void *s_response_callback_context = NULL;
 static bool s_lifecycle_busy = false;
 static bool s_intentional_stop = false;
 
+typedef enum {
+    XIAOZHI_SESSION_TRANSPORT_NORMAL = 0,
+    XIAOZHI_SESSION_TRANSPORT_FENCE_DRAINING,
+    XIAOZHI_SESSION_TRANSPORT_FENCE_STARTING,
+    XIAOZHI_SESSION_TRANSPORT_FENCE_FAILED,
+} xiaozhi_session_transport_phase_t;
+
+/* Binary WebSocket callbacks carry no server turn ID. Keep delivery closed
+ * while a channel is listening/closed or a transport fence is active. The
+ * response owner admits only its already-reserved current epoch immediately
+ * before stop-listening transmits, so the first packet cannot race its return. */
+static xiaozhi_session_transport_phase_t s_transport_phase =
+    XIAOZHI_SESSION_TRANSPORT_NORMAL;
+static bool s_response_delivery_enabled = false;
+
 static EventGroupHandle_t s_events = NULL;
 static esp_mcp_t *s_mcp = NULL;
 static esp_xiaozhi_chat_handle_t s_chat = 0;
@@ -70,20 +93,13 @@ static esp_log_level_t s_mcp_manager_log_level = ESP_LOG_INFO;
 static esp_log_level_t s_mcp_engine_log_level = ESP_LOG_INFO;
 #endif
 
-static void xiaozhi_session_publish_status(void)
+static void xiaozhi_session_publish_status_snapshot(
+    const xiaozhi_foundation_session_status_t *snapshot,
+    xiaozhi_foundation_session_status_callback_t callback,
+    void *callback_context)
 {
-    xiaozhi_foundation_session_status_t snapshot = {0};
-    xiaozhi_foundation_session_status_callback_t callback = NULL;
-    void *callback_context = NULL;
-
-    portENTER_CRITICAL(&s_lock);
-    snapshot = s_status;
-    callback = s_status_callback;
-    callback_context = s_status_callback_context;
-    portEXIT_CRITICAL(&s_lock);
-
-    if (callback != NULL) {
-        callback(&snapshot, callback_context);
+    if ((snapshot != NULL) && (callback != NULL)) {
+        callback(snapshot, callback_context);
     }
 }
 
@@ -91,19 +107,28 @@ static void xiaozhi_session_publish_response(
     xiaozhi_foundation_response_event_kind_t kind,
     const uint8_t *data,
     size_t data_len,
-    esp_err_t error)
+    esp_err_t error,
+    uint32_t expected_client_generation,
+    bool bypass_delivery_gate)
 {
     xiaozhi_foundation_response_callback_t callback = NULL;
     void *callback_context = NULL;
     uint32_t generation = 0U;
+    bool delivery_allowed = false;
 
     portENTER_CRITICAL(&s_lock);
     callback = s_response_callback;
     callback_context = s_response_callback_context;
     generation = s_status.client_generation;
+    delivery_allowed = s_response_delivery_enabled &&
+        (s_transport_phase == XIAOZHI_SESSION_TRANSPORT_NORMAL) &&
+        s_status.active && !s_lifecycle_busy;
     portEXIT_CRITICAL(&s_lock);
 
-    if (callback == NULL) {
+    if ((callback == NULL) ||
+        ((expected_client_generation != 0U) &&
+         (generation != expected_client_generation)) ||
+        (!delivery_allowed && !bypass_delivery_gate)) {
         return;
     }
 
@@ -124,7 +149,9 @@ static void xiaozhi_session_set_status(
 {
     xiaozhi_foundation_session_state_t previous =
         XIAOZHI_FOUNDATION_SESSION_STOPPED;
-    uint32_t generation = 0U;
+    xiaozhi_foundation_session_status_t snapshot = {0};
+    xiaozhi_foundation_session_status_callback_t callback = NULL;
+    void *callback_context = NULL;
 
     portENTER_CRITICAL(&s_lock);
     previous = s_status.state;
@@ -133,7 +160,9 @@ static void xiaozhi_session_set_status(
     s_status.last_error =
         (state == XIAOZHI_FOUNDATION_SESSION_ERROR) ?
             ((error == ESP_OK) ? ESP_FAIL : error) : ESP_OK;
-    generation = s_status.client_generation;
+    snapshot = s_status;
+    callback = s_status_callback;
+    callback_context = s_status_callback_context;
     portEXIT_CRITICAL(&s_lock);
 
     if ((previous != state) || (state == XIAOZHI_FOUNDATION_SESSION_ERROR)) {
@@ -142,14 +171,82 @@ static void xiaozhi_session_set_status(
             "state %s -> %s generation=%u active=%s error=%s",
             xiaozhi_foundation_session_state_to_string(previous),
             xiaozhi_foundation_session_state_to_string(state),
-            (unsigned)generation,
+            (unsigned)snapshot.client_generation,
             active ? "yes" : "no",
             esp_err_to_name(
                 (state == XIAOZHI_FOUNDATION_SESSION_ERROR) ?
                     ((error == ESP_OK) ? ESP_FAIL : error) : ESP_OK));
     }
 
-    xiaozhi_session_publish_status();
+    xiaozhi_session_publish_status_snapshot(
+        &snapshot, callback, callback_context);
+}
+
+/* Global ESP_XIAOZHI_CHAT_EVENTS do not carry a transport identity. An event
+ * accepted before a transport fence can still be executing when the lifecycle
+ * task publishes its replacement generation. Update status only while the
+ * same normal transport generation remains current, so such an old CONNECTED
+ * cannot make the replacement appear READY before stop/drain/start completes. */
+static bool xiaozhi_session_set_normal_status_for_generation(
+    uint32_t expected_client_generation,
+    xiaozhi_foundation_session_state_t state,
+    bool active,
+    esp_err_t error)
+{
+    xiaozhi_foundation_session_state_t previous =
+        XIAOZHI_FOUNDATION_SESSION_STOPPED;
+    xiaozhi_foundation_session_status_t snapshot = {0};
+    xiaozhi_foundation_session_status_callback_t callback = NULL;
+    void *callback_context = NULL;
+    bool updated = false;
+
+    portENTER_CRITICAL(&s_lock);
+    if ((s_transport_phase == XIAOZHI_SESSION_TRANSPORT_NORMAL) &&
+        (s_status.client_generation == expected_client_generation)) {
+        previous = s_status.state;
+        s_status.state = state;
+        s_status.active = active;
+        s_status.last_error =
+            (state == XIAOZHI_FOUNDATION_SESSION_ERROR) ?
+                ((error == ESP_OK) ? ESP_FAIL : error) : ESP_OK;
+        snapshot = s_status;
+        callback = s_status_callback;
+        callback_context = s_status_callback_context;
+        updated = true;
+    }
+    portEXIT_CRITICAL(&s_lock);
+
+    if (!updated) {
+        return false;
+    }
+
+    if ((previous != state) || (state == XIAOZHI_FOUNDATION_SESSION_ERROR)) {
+        APP_LOGI(
+            TAG, STATE_S_S_GENERATION_U_B4C0AAEA,
+            "state %s -> %s generation=%u active=%s error=%s",
+            xiaozhi_foundation_session_state_to_string(previous),
+            xiaozhi_foundation_session_state_to_string(state),
+            (unsigned)expected_client_generation,
+            active ? "yes" : "no",
+            esp_err_to_name(
+                (state == XIAOZHI_FOUNDATION_SESSION_ERROR) ?
+                    ((error == ESP_OK) ? ESP_FAIL : error) : ESP_OK));
+    }
+
+    xiaozhi_session_publish_status_snapshot(
+        &snapshot, callback, callback_context);
+    return true;
+}
+
+static bool xiaozhi_session_normal_generation_is_current(
+    uint32_t expected_client_generation)
+{
+    bool current = false;
+    portENTER_CRITICAL(&s_lock);
+    current = (s_transport_phase == XIAOZHI_SESSION_TRANSPORT_NORMAL) &&
+        (s_status.client_generation == expected_client_generation);
+    portEXIT_CRITICAL(&s_lock);
+    return current;
 }
 
 static void xiaozhi_session_protocol_callback(
@@ -170,13 +267,17 @@ static void xiaozhi_session_protocol_callback(
                 XIAOZHI_FOUNDATION_RESPONSE_TTS_START,
                 NULL,
                 0U,
-                ESP_OK);
+                ESP_OK,
+                0U,
+                false);
         } else if (tts->state == ESP_XIAOZHI_CHAT_TTS_STATE_STOP) {
             xiaozhi_session_publish_response(
                 XIAOZHI_FOUNDATION_RESPONSE_TTS_STOP,
                 NULL,
                 0U,
-                ESP_OK);
+                ESP_OK,
+                0U,
+                false);
         }
         return;
     }
@@ -192,7 +293,9 @@ static void xiaozhi_session_protocol_callback(
             XIAOZHI_FOUNDATION_RESPONSE_ERROR,
             NULL,
             0U,
-            error);
+            error,
+            0U,
+            false);
     }
 }
 
@@ -209,7 +312,9 @@ static void xiaozhi_session_audio_callback(
         XIAOZHI_FOUNDATION_RESPONSE_AUDIO,
         data,
         (size_t)len,
-        ESP_OK);
+        ESP_OK,
+        0U,
+        false);
 }
 
 static void xiaozhi_session_event_handler(
@@ -227,15 +332,59 @@ static void xiaozhi_session_event_handler(
     bool intentional_stop = false;
     bool lifecycle_busy = false;
     bool had_audio_channel = false;
+    uint32_t event_generation = 0U;
+    xiaozhi_session_transport_phase_t transport_phase =
+        XIAOZHI_SESSION_TRANSPORT_NORMAL;
     portENTER_CRITICAL(&s_lock);
     events = s_events;
     active = s_status.active;
     intentional_stop = s_intentional_stop;
     lifecycle_busy = s_lifecycle_busy;
     had_audio_channel = s_uplink.audio_channel_open;
+    transport_phase = s_transport_phase;
+    event_generation = s_status.client_generation;
     portEXIT_CRITICAL(&s_lock);
 
     if (events == NULL) {
+        return;
+    }
+
+    if (event_id == XIAOZHI_SESSION_PRIVATE_FENCE_DRAIN_EVENT_ID) {
+        (void)xEventGroupSetBits(
+            events, XIAOZHI_SESSION_EVENT_FENCE_DRAINED);
+        return;
+    }
+
+    /* A controlled stop joins the old WebSocket producer before the private
+     * marker is posted. Ignore every global event until that marker has
+     * drained the old event FIFO; otherwise an old CONNECTED can make the
+     * replacement client generation appear READY too early. */
+    if ((transport_phase == XIAOZHI_SESSION_TRANSPORT_FENCE_DRAINING) ||
+        (transport_phase == XIAOZHI_SESSION_TRANSPORT_FENCE_FAILED)) {
+        return;
+    }
+
+    if (transport_phase == XIAOZHI_SESSION_TRANSPORT_FENCE_STARTING) {
+        switch (event_id) {
+            case ESP_XIAOZHI_CHAT_EVENT_CONNECTED:
+                (void)xEventGroupSetBits(
+                    events, XIAOZHI_SESSION_EVENT_CONNECTED);
+                break;
+            case ESP_XIAOZHI_CHAT_EVENT_DISCONNECTED:
+                (void)xEventGroupSetBits(
+                    events, XIAOZHI_SESSION_EVENT_DISCONNECTED);
+                break;
+            case ESP_XIAOZHI_CHAT_EVENT_SERVER_GOODBYE:
+                (void)xEventGroupSetBits(
+                    events, XIAOZHI_SESSION_EVENT_GOODBYE);
+                break;
+            default:
+                break;
+        }
+        return;
+    }
+
+    if (!xiaozhi_session_normal_generation_is_current(event_generation)) {
         return;
     }
 
@@ -247,11 +396,14 @@ static void xiaozhi_session_event_handler(
                 events,
                 XIAOZHI_SESSION_EVENT_DISCONNECTED |
                     XIAOZHI_SESSION_EVENT_GOODBYE);
-            xiaozhi_session_set_status(
-                XIAOZHI_FOUNDATION_SESSION_READY,
-                true,
-                ESP_OK);
-            (void)xEventGroupSetBits(events, XIAOZHI_SESSION_EVENT_CONNECTED);
+            if (xiaozhi_session_set_normal_status_for_generation(
+                    event_generation,
+                    XIAOZHI_FOUNDATION_SESSION_READY,
+                    true,
+                    ESP_OK)) {
+                (void)xEventGroupSetBits(
+                    events, XIAOZHI_SESSION_EVENT_CONNECTED);
+            }
             break;
 
         case ESP_XIAOZHI_CHAT_EVENT_DISCONNECTED:
@@ -272,6 +424,11 @@ static void xiaozhi_session_event_handler(
                     XIAOZHI_SESSION_EVENT_AUDIO_OPENED |
                     XIAOZHI_SESSION_EVENT_AUDIO_CLOSED);
             portENTER_CRITICAL(&s_lock);
+            if ((s_transport_phase != XIAOZHI_SESSION_TRANSPORT_NORMAL) ||
+                (s_status.client_generation != event_generation)) {
+                portEXIT_CRITICAL(&s_lock);
+                break;
+            }
             active = s_status.active;
             lifecycle_busy = s_lifecycle_busy;
             had_audio_channel = s_uplink.audio_channel_open;
@@ -285,16 +442,21 @@ static void xiaozhi_session_event_handler(
                 break;
             }
 
-            xiaozhi_session_set_status(
-                XIAOZHI_FOUNDATION_SESSION_CONNECTING,
-                active,
-                ESP_OK);
+            if (!xiaozhi_session_set_normal_status_for_generation(
+                    event_generation,
+                    XIAOZHI_FOUNDATION_SESSION_CONNECTING,
+                    active,
+                    ESP_OK)) {
+                break;
+            }
             if (had_audio_channel) {
                 xiaozhi_session_publish_response(
                     XIAOZHI_FOUNDATION_RESPONSE_ERROR,
                     NULL,
                     0U,
-                    ESP_ERR_INVALID_STATE);
+                    ESP_ERR_INVALID_STATE,
+                    event_generation,
+                    true);
             }
             (void)xEventGroupSetBits(
                 events, XIAOZHI_SESSION_EVENT_DISCONNECTED);
@@ -324,6 +486,11 @@ static void xiaozhi_session_event_handler(
                 XIAOZHI_SESSION_EVENT_GOODBYE |
                     XIAOZHI_SESSION_EVENT_AUDIO_OPENED);
             portENTER_CRITICAL(&s_lock);
+            if ((s_transport_phase != XIAOZHI_SESSION_TRANSPORT_NORMAL) ||
+                (s_status.client_generation != event_generation)) {
+                portEXIT_CRITICAL(&s_lock);
+                break;
+            }
             xiaozhi_session_reset_uplink_locked();
             portEXIT_CRITICAL(&s_lock);
             APP_LOGI(TAG, SERVER_GOODBYE_TREATED_AS_AU_439FC7B8,
@@ -336,6 +503,11 @@ static void xiaozhi_session_event_handler(
 
         case ESP_XIAOZHI_CHAT_EVENT_AUDIO_CHANNEL_CLOSED:
             portENTER_CRITICAL(&s_lock);
+            if ((s_transport_phase != XIAOZHI_SESSION_TRANSPORT_NORMAL) ||
+                (s_status.client_generation != event_generation)) {
+                portEXIT_CRITICAL(&s_lock);
+                break;
+            }
             xiaozhi_session_reset_uplink_locked();
             portEXIT_CRITICAL(&s_lock);
             (void)xEventGroupSetBits(events, XIAOZHI_SESSION_EVENT_AUDIO_CLOSED);
@@ -387,6 +559,7 @@ static void xiaozhi_session_reset_uplink_locked(void)
         .client_generation = s_status.client_generation,
         .last_error = ESP_OK,
     };
+    s_response_delivery_enabled = false;
 }
 
 static esp_err_t xiaozhi_session_close_uplink_best_effort(void)
@@ -396,6 +569,10 @@ static esp_err_t xiaozhi_session_close_uplink_best_effort(void)
     portENTER_CRITICAL(&s_lock);
     open = s_uplink.audio_channel_open;
     listening = s_uplink.listening;
+    /* Close the ingress gate before transmitting goodbye. A packet that was
+     * already queued by the old transport is then discarded at the foundation
+     * boundary instead of reaching a later local response epoch. */
+    s_response_delivery_enabled = false;
     portEXIT_CRITICAL(&s_lock);
 
     esp_err_t first_error = ESP_OK;
@@ -527,6 +704,7 @@ esp_err_t xiaozhi_foundation_session_start(uint32_t client_generation)
     }
     s_lifecycle_busy = true;
     s_intentional_stop = false;
+    s_transport_phase = XIAOZHI_SESSION_TRANSPORT_NORMAL;
     s_status.client_generation = client_generation;
     xiaozhi_session_reset_uplink_locked();
     portEXIT_CRITICAL(&s_lock);
@@ -740,8 +918,15 @@ esp_err_t xiaozhi_foundation_audio_uplink_start(uint32_t client_generation)
         !s_lifecycle_busy && s_status.active &&
         (s_status.state == XIAOZHI_FOUNDATION_SESSION_READY) &&
         (s_status.client_generation == client_generation) &&
+        (s_transport_phase == XIAOZHI_SESSION_TRANSPORT_NORMAL) &&
         !s_uplink.audio_channel_open && !s_uplink.listening &&
         (s_chat != 0) && (s_events != NULL);
+    if (valid) {
+        /* Do not admit a previous turn's raw packet while this new channel is
+         * handshaking/listening. It becomes eligible only after this turn's
+         * downlink response epoch is reserved by the dedicated stop path. */
+        s_response_delivery_enabled = false;
+    }
     events = s_events;
     portEXIT_CRITICAL(&s_lock);
     if (!valid) {
@@ -857,7 +1042,9 @@ esp_err_t xiaozhi_foundation_audio_uplink_send_opus_packet(
     return ret;
 }
 
-esp_err_t xiaozhi_foundation_audio_uplink_stop(uint32_t client_generation)
+static esp_err_t xiaozhi_session_audio_uplink_stop(
+    uint32_t client_generation,
+    bool admit_reserved_response)
 {
     if (client_generation == 0U) {
         return ESP_ERR_INVALID_ARG;
@@ -866,11 +1053,18 @@ esp_err_t xiaozhi_foundation_audio_uplink_stop(uint32_t client_generation)
     esp_xiaozhi_chat_handle_t chat = 0;
     portENTER_CRITICAL(&s_lock);
     const bool valid =
+        !s_lifecycle_busy && s_status.active &&
+        (s_status.state == XIAOZHI_FOUNDATION_SESSION_READY) &&
         (s_status.client_generation == client_generation) &&
+        (s_transport_phase == XIAOZHI_SESSION_TRANSPORT_NORMAL) &&
         (s_uplink.client_generation == client_generation) &&
         s_uplink.audio_channel_open && s_uplink.listening &&
         (s_chat != 0);
     chat = s_chat;
+    /* uplink_end_turn reserved the callback epoch before this point. Open the
+     * gate before the transmit only for that current response, otherwise a
+     * fast TTS_START/first Opus packet can arrive before send returns. */
+    s_response_delivery_enabled = valid && admit_reserved_response;
     portEXIT_CRITICAL(&s_lock);
     if (!valid) {
         return ESP_ERR_INVALID_STATE;
@@ -881,16 +1075,31 @@ esp_err_t xiaozhi_foundation_audio_uplink_stop(uint32_t client_generation)
     if (s_uplink.client_generation == client_generation) {
         if (ret == ESP_OK) {
             s_uplink.listening = false;
+        } else if (!admit_reserved_response) {
+            s_response_delivery_enabled = false;
         }
         s_uplink.last_error = ret;
     }
     portEXIT_CRITICAL(&s_lock);
 
     if (ret == ESP_OK) {
-        APP_LOGI(TAG, LISTENING_STOP_GENERATION_U_483FF50F, "listening STOP generation=%u; response channel retained",
-                 (unsigned)client_generation);
+        APP_LOGI(TAG, LISTENING_STOP_GENERATION_U_483FF50F,
+                 "listening STOP generation=%u; response channel retained admission=%s",
+                 (unsigned)client_generation,
+                 admit_reserved_response ? "yes" : "no");
     }
     return ret;
+}
+
+esp_err_t xiaozhi_foundation_audio_uplink_stop(uint32_t client_generation)
+{
+    return xiaozhi_session_audio_uplink_stop(client_generation, false);
+}
+
+esp_err_t xiaozhi_foundation_audio_uplink_stop_for_response(
+    uint32_t client_generation)
+{
+    return xiaozhi_session_audio_uplink_stop(client_generation, true);
 }
 
 esp_err_t xiaozhi_foundation_audio_channel_close(uint32_t client_generation)
@@ -908,6 +1117,226 @@ esp_err_t xiaozhi_foundation_audio_channel_close(uint32_t client_generation)
         return ESP_ERR_INVALID_STATE;
     }
     return xiaozhi_session_close_uplink_best_effort();
+}
+
+esp_err_t xiaozhi_foundation_audio_abort_response(
+    uint32_t client_generation)
+{
+    if (client_generation == 0U) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_xiaozhi_chat_handle_t chat = 0;
+    portENTER_CRITICAL(&s_lock);
+    const bool valid =
+        !s_lifecycle_busy && s_status.active &&
+        (s_status.state == XIAOZHI_FOUNDATION_SESSION_READY) &&
+        (s_status.client_generation == client_generation) &&
+        (s_transport_phase == XIAOZHI_SESSION_TRANSPORT_NORMAL) &&
+        (s_uplink.client_generation == client_generation) &&
+        s_uplink.audio_channel_open && (s_chat != 0);
+    chat = s_chat;
+    /* Gate first: the upstream binary callback has no session/turn metadata,
+     * so already-buffered old Opus frames must not reach a future response. */
+    if (valid) {
+        s_response_delivery_enabled = false;
+    }
+    portEXIT_CRITICAL(&s_lock);
+    if (!valid) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const esp_err_t ret = esp_xiaozhi_chat_send_abort_speaking(
+        chat, ESP_XIAOZHI_CHAT_ABORT_SPEAKING_REASON_WAKE_WORD_DETECTED);
+    portENTER_CRITICAL(&s_lock);
+    if ((s_status.client_generation == client_generation) &&
+        (s_uplink.client_generation == client_generation) &&
+        s_uplink.audio_channel_open) {
+        s_uplink.last_error = ret;
+    }
+    portEXIT_CRITICAL(&s_lock);
+
+    if (ret == ESP_OK) {
+        APP_LOGI(TAG, RESPONSE_ABORT_SIGNALLED_GENERAT_5CF49BE6,
+                 "response abort signalled generation=%u before channel close",
+                 (unsigned)client_generation);
+    }
+    return ret;
+}
+
+esp_err_t xiaozhi_foundation_session_rotate_transport(
+    uint32_t expected_client_generation,
+    uint32_t replacement_client_generation)
+{
+    if ((expected_client_generation == 0U) ||
+        (replacement_client_generation == 0U) ||
+        (expected_client_generation == replacement_client_generation)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    EventGroupHandle_t events = NULL;
+    esp_xiaozhi_chat_handle_t chat = 0;
+    xiaozhi_foundation_session_status_t status_snapshot = {0};
+    xiaozhi_foundation_session_status_callback_t status_callback = NULL;
+    void *status_callback_context = NULL;
+    portENTER_CRITICAL(&s_lock);
+    const bool valid =
+        !s_lifecycle_busy && s_status.active &&
+        (s_status.state == XIAOZHI_FOUNDATION_SESSION_READY) &&
+        (s_status.client_generation == expected_client_generation) &&
+        (s_chat != 0) && s_chat_started && (s_events != NULL) &&
+        (s_transport_phase == XIAOZHI_SESSION_TRANSPORT_NORMAL);
+    if (valid) {
+        /* The caller has already reserved replacement_client_generation in
+         * voice_assistant. Commit it here before stopping transport so every
+         * late old status is rejected at the product boundary as well. */
+        s_lifecycle_busy = true;
+        s_intentional_stop = true;
+        s_transport_phase = XIAOZHI_SESSION_TRANSPORT_FENCE_DRAINING;
+        s_status.client_generation = replacement_client_generation;
+        s_status.state = XIAOZHI_FOUNDATION_SESSION_CONNECTING;
+        s_status.active = true;
+        s_status.last_error = ESP_OK;
+        xiaozhi_session_reset_uplink_locked();
+        status_snapshot = s_status;
+        status_callback = s_status_callback;
+        status_callback_context = s_status_callback_context;
+        events = s_events;
+        chat = s_chat;
+    }
+    portEXIT_CRITICAL(&s_lock);
+    if (!valid) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    xiaozhi_session_publish_status_snapshot(
+        &status_snapshot, status_callback, status_callback_context);
+    APP_LOGI(TAG, TRANSPORT_FENCE_BEGIN_OLD_U_NEW_8068A3F9,
+             "transport fence begin old_generation=%u replacement_generation=%u",
+             (unsigned)expected_client_generation,
+             (unsigned)replacement_client_generation);
+
+    esp_err_t ret = esp_xiaozhi_chat_stop(chat);
+    if (ret != ESP_OK) {
+        goto fence_failed;
+    }
+    portENTER_CRITICAL(&s_lock);
+    s_chat_started = false;
+    s_intentional_stop = false;
+    portEXIT_CRITICAL(&s_lock);
+
+    (void)xEventGroupClearBits(
+        events,
+        XIAOZHI_SESSION_EVENT_CONNECTED |
+            XIAOZHI_SESSION_EVENT_DISCONNECTED |
+            XIAOZHI_SESSION_EVENT_GOODBYE |
+            XIAOZHI_SESSION_EVENT_AUDIO_OPENED |
+            XIAOZHI_SESSION_EVENT_AUDIO_CLOSED |
+            XIAOZHI_SESSION_EVENT_FENCE_DRAINED);
+    ret = esp_event_post(
+        ESP_XIAOZHI_CHAT_EVENTS,
+        XIAOZHI_SESSION_PRIVATE_FENCE_DRAIN_EVENT_ID,
+        NULL,
+        0U,
+        pdMS_TO_TICKS(XIAOZHI_SESSION_FENCE_EVENT_POST_TIMEOUT_MS));
+    if (ret != ESP_OK) {
+        goto fence_failed;
+    }
+    const EventBits_t drain_bits = xEventGroupWaitBits(
+        events,
+        XIAOZHI_SESSION_EVENT_FENCE_DRAINED,
+        pdTRUE,
+        pdTRUE,
+        pdMS_TO_TICKS(XIAOZHI_SESSION_FENCE_DRAIN_TIMEOUT_MS));
+    if ((drain_bits & XIAOZHI_SESSION_EVENT_FENCE_DRAINED) == 0U) {
+        ret = ESP_ERR_TIMEOUT;
+        goto fence_failed;
+    }
+
+    (void)xEventGroupClearBits(
+        events,
+        XIAOZHI_SESSION_EVENT_CONNECTED |
+            XIAOZHI_SESSION_EVENT_DISCONNECTED |
+            XIAOZHI_SESSION_EVENT_GOODBYE |
+            XIAOZHI_SESSION_EVENT_AUDIO_OPENED |
+            XIAOZHI_SESSION_EVENT_AUDIO_CLOSED);
+    portENTER_CRITICAL(&s_lock);
+    s_transport_phase = XIAOZHI_SESSION_TRANSPORT_FENCE_STARTING;
+    portEXIT_CRITICAL(&s_lock);
+
+    ret = esp_xiaozhi_chat_start(chat);
+    if (ret != ESP_OK) {
+        goto fence_failed;
+    }
+    portENTER_CRITICAL(&s_lock);
+    s_chat_started = true;
+    portEXIT_CRITICAL(&s_lock);
+
+    const EventBits_t connected_bits = xEventGroupWaitBits(
+        events,
+        XIAOZHI_SESSION_EVENT_CONNECTED |
+            XIAOZHI_SESSION_EVENT_DISCONNECTED |
+            XIAOZHI_SESSION_EVENT_GOODBYE,
+        pdFALSE,
+        pdFALSE,
+        pdMS_TO_TICKS(XIAOZHI_SESSION_CONNECT_TIMEOUT_MS));
+    if (((connected_bits & XIAOZHI_SESSION_EVENT_CONNECTED) == 0U) ||
+        ((connected_bits & (XIAOZHI_SESSION_EVENT_DISCONNECTED |
+                            XIAOZHI_SESSION_EVENT_GOODBYE)) != 0U)) {
+        ret = ((connected_bits & (XIAOZHI_SESSION_EVENT_DISCONNECTED |
+                                  XIAOZHI_SESSION_EVENT_GOODBYE)) != 0U)
+                  ? ESP_ERR_INVALID_STATE : ESP_ERR_TIMEOUT;
+        goto fence_failed;
+    }
+
+    portENTER_CRITICAL(&s_lock);
+    s_lifecycle_busy = false;
+    s_intentional_stop = false;
+    s_transport_phase = XIAOZHI_SESSION_TRANSPORT_NORMAL;
+    /* A fresh connection is not a response admission. A later response-owned
+     * stop-listening path opens this ingress gate immediately before send. */
+    s_response_delivery_enabled = false;
+    s_status.state = XIAOZHI_FOUNDATION_SESSION_READY;
+    s_status.active = true;
+    s_status.last_error = ESP_OK;
+    status_snapshot = s_status;
+    status_callback = s_status_callback;
+    status_callback_context = s_status_callback_context;
+    portEXIT_CRITICAL(&s_lock);
+    xiaozhi_session_publish_status_snapshot(
+        &status_snapshot, status_callback, status_callback_context);
+    APP_LOGI(TAG, TRANSPORT_FENCE_READY_GENERATION_9B1D629D,
+             "transport fence READY generation=%u",
+             (unsigned)replacement_client_generation);
+    return ESP_OK;
+
+fence_failed:
+    /* A fresh transport is mandatory after a local abort. Do not reopen the
+     * response gate on any stop/start/barrier failure. Best-effort stop is
+     * safe here and leaves the retained chat/MCP objects for normal recovery
+     * cleanup rather than recreating them from this path. */
+    (void)esp_xiaozhi_chat_stop(chat);
+    ret = (ret == ESP_OK) ? ESP_FAIL : ret;
+    portENTER_CRITICAL(&s_lock);
+    s_chat_started = false;
+    s_lifecycle_busy = false;
+    s_intentional_stop = false;
+    s_transport_phase = XIAOZHI_SESSION_TRANSPORT_FENCE_FAILED;
+    xiaozhi_session_reset_uplink_locked();
+    s_status.state = XIAOZHI_FOUNDATION_SESSION_ERROR;
+    s_status.active = true;
+    s_status.last_error = ret;
+    status_snapshot = s_status;
+    status_callback = s_status_callback;
+    status_callback_context = s_status_callback_context;
+    portEXIT_CRITICAL(&s_lock);
+    xiaozhi_session_publish_status_snapshot(
+        &status_snapshot, status_callback, status_callback_context);
+    APP_LOGE(TAG, TRANSPORT_FENCE_FAILED_GENERATI_1B6DBB6F,
+             "transport fence failed replacement_generation=%u error=%s",
+             (unsigned)replacement_client_generation,
+             esp_err_to_name(ret));
+    return ret;
 }
 
 esp_err_t xiaozhi_foundation_audio_uplink_get_status(

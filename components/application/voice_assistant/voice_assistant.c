@@ -28,6 +28,7 @@
 typedef enum {
     VOICE_ASSISTANT_COMMAND_BEGIN_SESSION = 0,
     VOICE_ASSISTANT_COMMAND_END_SESSION,
+    VOICE_ASSISTANT_COMMAND_ROTATE_SESSION,
     VOICE_ASSISTANT_COMMAND_RECOVER,
     VOICE_ASSISTANT_COMMAND_AUTO_RECOVER,
     VOICE_ASSISTANT_COMMAND_FOUNDATION_STATUS,
@@ -37,6 +38,7 @@ typedef enum {
 typedef struct {
     voice_assistant_command_type_t type;
     uint32_t generation;
+    uint32_t previous_generation;
     xiaozhi_foundation_session_status_t foundation_status;
 } voice_assistant_command_t;
 
@@ -585,6 +587,60 @@ static void voice_assistant_task(void *argument)
                 break;
             }
 
+            case VOICE_ASSISTANT_COMMAND_ROTATE_SESSION: {
+                if ((command.previous_generation == 0U) ||
+                    !voice_assistant_generation_is_current(
+                        command.generation)) {
+                    APP_LOGW(TAG, DROPPED_STALE_ROTATE_COMMAND_41E6CE8E,
+                             "Dropped stale transport rotate old_generation=%u replacement_generation=%u",
+                             (unsigned)command.previous_generation,
+                             (unsigned)command.generation);
+                    voice_assistant_finish_public_command();
+                    break;
+                }
+
+                const esp_err_t ret =
+                    xiaozhi_foundation_session_rotate_transport(
+                        command.previous_generation,
+                        command.generation);
+                if (ret == ESP_OK) {
+                    xiaozhi_foundation_session_status_t foundation = {0};
+                    const esp_err_t status_ret =
+                        xiaozhi_foundation_session_get_status(&foundation);
+                    if ((status_ret == ESP_OK) && foundation.active &&
+                        (foundation.state ==
+                         XIAOZHI_FOUNDATION_SESSION_READY) &&
+                        (foundation.client_generation == command.generation)) {
+                        voice_assistant_cancel_auto_recovery();
+                        voice_assistant_set_status(
+                            VOICE_ASSISTANT_STATE_READY, true, ESP_OK);
+                        APP_LOGI(TAG, TRANSPORT_FENCE_READY_GENERATION_8D224C17,
+                                 "transport fence complete generation=%u",
+                                 (unsigned)command.generation);
+                    } else {
+                        const esp_err_t normalized =
+                            (status_ret == ESP_OK) ? ESP_ERR_INVALID_STATE :
+                            status_ret;
+                        voice_assistant_set_status(
+                            VOICE_ASSISTANT_STATE_ERROR,
+                            (status_ret == ESP_OK) && foundation.active,
+                            normalized);
+                        voice_assistant_schedule_auto_recovery(normalized);
+                    }
+                } else {
+                    xiaozhi_foundation_session_status_t foundation = {0};
+                    const esp_err_t status_ret =
+                        xiaozhi_foundation_session_get_status(&foundation);
+                    voice_assistant_set_status(
+                        VOICE_ASSISTANT_STATE_ERROR,
+                        (status_ret == ESP_OK) ? foundation.active : true,
+                        ret);
+                    voice_assistant_schedule_auto_recovery(ret);
+                }
+                voice_assistant_finish_public_command();
+                break;
+            }
+
             case VOICE_ASSISTANT_COMMAND_RECOVER:
             case VOICE_ASSISTANT_COMMAND_AUTO_RECOVER: {
                 const bool automatic =
@@ -834,6 +890,69 @@ esp_err_t voice_assistant_end_session(void)
     }
     APP_LOGI(TAG, END_SESSION_QUEUED_GENERATIO_84CA4638, "end session queued generation=%u",
              (unsigned)command.generation);
+    return ESP_OK;
+}
+
+esp_err_t voice_assistant_rotate_session(void)
+{
+    if ((s_status_lock == NULL) || (s_command_queue == NULL) ||
+        (s_task_handle == NULL)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    voice_assistant_command_t command = {
+        .type = VOICE_ASSISTANT_COMMAND_ROTATE_SESSION,
+        .generation = 0U,
+        .previous_generation = 0U,
+    };
+    voice_assistant_status_t previous = {0};
+    if (!voice_assistant_take_lock()) {
+        return ESP_ERR_TIMEOUT;
+    }
+    if ((s_status.state != VOICE_ASSISTANT_STATE_READY) ||
+        !s_status.session_active || s_command_pending ||
+        (s_status.session_generation == 0U)) {
+        xSemaphoreGive(s_status_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    previous = s_status;
+    command.previous_generation = s_status.session_generation;
+    if (s_status.session_generation == UINT32_MAX) {
+        s_status.session_generation = 1U;
+    } else {
+        ++s_status.session_generation;
+        if (s_status.session_generation == 0U) {
+            s_status.session_generation = 1U;
+        }
+    }
+    command.generation = s_status.session_generation;
+    s_status.state = VOICE_ASSISTANT_STATE_CONNECTING;
+    s_status.session_active = true;
+    s_status.last_error = ESP_OK;
+    s_command_pending = true;
+    xSemaphoreGive(s_status_lock);
+
+    if (xQueueSend(s_command_queue, &command, 0U) != pdTRUE) {
+        if (voice_assistant_take_lock()) {
+            if (s_command_pending &&
+                (s_status.session_generation == command.generation)) {
+                s_status = previous;
+                s_command_pending = false;
+            }
+            xSemaphoreGive(s_status_lock);
+        }
+        return ESP_ERR_TIMEOUT;
+    }
+
+    APP_LOGI(TAG, TRANSPORT_FENCE_QUEUED_OLD_U_NEW_07C6D54E,
+             "transport fence queued old_generation=%u replacement_generation=%u",
+             (unsigned)command.previous_generation,
+             (unsigned)command.generation);
+    /* Publish CONNECTING synchronously with the reservation so the PTT task
+     * cannot observe stale READY and authorize capture before the queued
+     * lifecycle worker has stopped the old transport. */
+    voice_assistant_publish_status();
     return ESP_OK;
 }
 

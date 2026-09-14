@@ -15,6 +15,11 @@
 static const char *const TAG = "VOICE_PB_POLICY";
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static bool s_initialized = false;
+/* Catalog submission and PTT admission run from different task contexts.
+ * Keep the short admission window explicit so a WAV cannot be accepted after
+ * PTT has already decided that capture owns the speaker. */
+static bool s_ptt_preparing = false;
+static uint32_t s_catalog_submissions_inflight = 0U;
 static voice_playback_turn_policy_t s_turn = {0};
 static uint32_t s_catalog_request_id = 0x18220000U;
 
@@ -167,22 +172,97 @@ esp_err_t voice_assistant_playback_prepare_ptt(
         return ESP_ERR_INVALID_ARG;
     }
 
+    bool already_current = false;
     portENTER_CRITICAL(&s_lock);
-    const bool already_current = s_initialized && s_turn.active &&
-        (s_turn.ptt_generation == ptt_generation);
-    const bool initialized = s_initialized;
-    portEXIT_CRITICAL(&s_lock);
-    if (!initialized) {
+    if (!s_initialized) {
+        portEXIT_CRITICAL(&s_lock);
         return ESP_ERR_INVALID_STATE;
     }
+    already_current = s_turn.active &&
+        (s_turn.ptt_generation == ptt_generation);
+    if (!already_current && s_ptt_preparing) {
+        portEXIT_CRITICAL(&s_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!already_current) {
+        s_ptt_preparing = true;
+    }
+    portEXIT_CRITICAL(&s_lock);
     if (already_current) {
         return ESP_OK;
     }
 
+    esp_err_t ret = ESP_OK;
+    uint32_t waited_ms = 0U;
+    /* A catalog WAV is accepted by the arbiter before audio_manager has a
+     * visible source. Drain that narrow ownership hand-off before PTT opens
+     * capture; otherwise the WAV can begin after capture has been admitted. */
+    for (;;) {
+        bool submission_inflight = false;
+        portENTER_CRITICAL(&s_lock);
+        submission_inflight = (s_catalog_submissions_inflight != 0U);
+        portEXIT_CRITICAL(&s_lock);
+        if (submission_inflight) {
+            if (waited_ms >= VOICE_PLAYBACK_PAUSE_WAIT_MS) {
+                ret = ESP_ERR_TIMEOUT;
+                goto preparation_done;
+            }
+            vTaskDelay(pdMS_TO_TICKS(VOICE_PLAYBACK_POLL_MS));
+            waited_ms += VOICE_PLAYBACK_POLL_MS;
+            continue;
+        }
+
+        uint32_t cancelled = 0U;
+        const esp_err_t unstarted_ret =
+            audio_manager_playback_arbiter_cancel_unstarted_wav_for_client(
+                AUDIO_MANAGER_CLIENT_UI, &cancelled);
+        if ((unstarted_ret != ESP_OK) && (unstarted_ret != ESP_ERR_NOT_FOUND)) {
+            ret = unstarted_ret;
+            goto preparation_done;
+        }
+        if (cancelled != 0U) {
+            /* Re-read both owners after the atomic cancellation has published
+             * its terminal record. */
+            continue;
+        }
+
+        audio_manager_playback_status_t admission_playback = {0};
+        audio_manager_playback_arbiter_status_t arbiter = {0};
+        ret = audio_manager_get_playback_status(&admission_playback);
+        if (ret == ESP_OK) {
+            ret = audio_manager_playback_arbiter_get_status(&arbiter);
+        }
+        if (ret != ESP_OK) {
+            goto preparation_done;
+        }
+
+        const bool unowned_catalog_dispatch = arbiter.current_valid &&
+            (arbiter.current.client == AUDIO_MANAGER_CLIENT_UI) &&
+            (arbiter.current.resource == AUDIO_MANAGER_RESOURCE_PLAYBACK) &&
+            (admission_playback.source == AUDIO_MANAGER_PLAYBACK_SOURCE_NONE) &&
+            (admission_playback.state == AUDIO_MANAGER_PLAYBACK_CONTROL_IDLE);
+        if (!unowned_catalog_dispatch) {
+            break;
+        }
+
+        const esp_err_t cancel_ret = audio_manager_playback_arbiter_cancel(
+            arbiter.current.request_id);
+        if ((cancel_ret != ESP_OK) && (cancel_ret != ESP_ERR_NOT_FOUND)) {
+            ret = cancel_ret;
+            goto preparation_done;
+        }
+        if (waited_ms >= VOICE_PLAYBACK_PAUSE_WAIT_MS) {
+            ret = ESP_ERR_TIMEOUT;
+            goto preparation_done;
+        }
+        vTaskDelay(pdMS_TO_TICKS(VOICE_PLAYBACK_POLL_MS));
+        waited_ms += VOICE_PLAYBACK_POLL_MS;
+    }
+
     audio_manager_playback_status_t playback = {0};
-    esp_err_t ret = audio_manager_get_playback_status(&playback);
+    ret = audio_manager_get_playback_status(&playback);
     if (ret != ESP_OK) {
-        return ret;
+        goto preparation_done;
     }
 
     bool has_local_source = playback_source_is_local(playback.source) &&
@@ -195,7 +275,8 @@ esp_err_t voice_assistant_playback_prepare_ptt(
 
     if ((playback.source == AUDIO_MANAGER_PLAYBACK_SOURCE_PCM16_STREAM) &&
         (playback.state != AUDIO_MANAGER_PLAYBACK_CONTROL_IDLE)) {
-        return ESP_ERR_NOT_SUPPORTED;
+        ret = ESP_ERR_NOT_SUPPORTED;
+        goto preparation_done;
     }
 
     if (has_local_source &&
@@ -204,10 +285,10 @@ esp_err_t voice_assistant_playback_prepare_ptt(
          (playback.state == AUDIO_MANAGER_PLAYBACK_CONTROL_PAUSING))) {
         ret = audio_manager_pause_playback(AUDIO_MANAGER_PLAYBACK_PAUSE_PTT);
         if (ret != ESP_OK) {
-            return ret;
+            goto preparation_done;
         }
 
-        uint32_t waited_ms = 0U;
+        waited_ms = 0U;
         for (;;) {
             audio_manager_status_t manager = {0};
             ret = audio_manager_get_playback_status(&playback);
@@ -245,14 +326,15 @@ esp_err_t voice_assistant_playback_prepare_ptt(
         }
         if (ret != ESP_OK) {
             (void)audio_manager_resume_playback(playback_generation);
-            return ret;
+            goto preparation_done;
         }
     } else if (has_local_source &&
                (playback.state == AUDIO_MANAGER_PLAYBACK_CONTROL_PAUSED)) {
         temporary_suspension =
             (playback.pause_reason == AUDIO_MANAGER_PLAYBACK_PAUSE_PTT);
     } else if (has_local_source) {
-        return ESP_ERR_INVALID_STATE;
+        ret = ESP_ERR_INVALID_STATE;
+        goto preparation_done;
     }
 
     portENTER_CRITICAL(&s_lock);
@@ -271,7 +353,13 @@ esp_err_t voice_assistant_playback_prepare_ptt(
              has_local_source ? "yes" : "no",
              temporary_suspension ? "yes" : "no",
              (unsigned)playback_generation);
-    return ESP_OK;
+    ret = ESP_OK;
+
+preparation_done:
+    portENTER_CRITICAL(&s_lock);
+    s_ptt_preparing = false;
+    portEXIT_CRITICAL(&s_lock);
+    return ret;
 }
 
 esp_err_t voice_assistant_playback_supersede_ptt(
@@ -417,6 +505,10 @@ esp_err_t voice_assistant_playback_start_catalog_wav(const char *resolved_path)
     bool active_turn = false;
     bool has_local_source = false;
     portENTER_CRITICAL(&s_lock);
+    if (!s_initialized || s_ptt_preparing) {
+        portEXIT_CRITICAL(&s_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
     active_turn = s_initialized && s_turn.active;
     has_local_source = active_turn && s_turn.has_local_source;
     if (has_local_source) {
@@ -430,6 +522,7 @@ esp_err_t voice_assistant_playback_start_catalog_wav(const char *resolved_path)
     if (request_id == 0U) {
         request_id = ++s_catalog_request_id;
     }
+    ++s_catalog_submissions_inflight;
     portEXIT_CRITICAL(&s_lock);
 
     if (!active_turn) {
@@ -439,11 +532,18 @@ esp_err_t voice_assistant_playback_start_catalog_wav(const char *resolved_path)
             (playback.state != AUDIO_MANAGER_PLAYBACK_CONTROL_IDLE)) {
             const esp_err_t stop_ret = audio_manager_stop_playback();
             if ((stop_ret != ESP_OK) && (stop_ret != ESP_ERR_INVALID_STATE)) {
+                portENTER_CRITICAL(&s_lock);
+                --s_catalog_submissions_inflight;
+                portEXIT_CRITICAL(&s_lock);
                 return stop_ret;
             }
         }
     }
-    return audio_manager_play_catalog_wav(request_id, resolved_path);
+    const esp_err_t ret = audio_manager_play_catalog_wav(request_id, resolved_path);
+    portENTER_CRITICAL(&s_lock);
+    --s_catalog_submissions_inflight;
+    portEXIT_CRITICAL(&s_lock);
+    return ret;
 }
 
 esp_err_t voice_assistant_playback_start_recorded(void)

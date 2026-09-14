@@ -340,10 +340,11 @@ LVGL task.
   `STOPPED`, either after bounded verified-handoff/late-DHCP checks fail or
   while the Phase 7 reset transaction is quiescing the network.
 - The N16R8 target enables 8 MiB Octal PSRAM at 80 MHz. NimBLE's dynamic pools
-  explicitly use the external allocator. Ordinary allocations larger than
-  16 KB prefer PSRAM and a 32 KB internal reserve protects internal/DMA-capable
-  requests. `CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP` remains disabled; LCD DMA
-  buffers and Phase 7 task stacks are not moved to PSRAM.
+  explicitly use the external allocator. Ordinary `malloc()` allocations prefer
+  PSRAM (`CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0`), while a 48 KiB internal
+  reserve protects Internal/DMA/cache-safe requests such as Wi-Fi PHY timers.
+  `CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP` lets Wi-Fi/lwIP try PSRAM first and
+  fall back to Internal RAM. LCD DMA buffers remain capability-constrained.
 - Runtime validation on hardware is still required for unreachable AP, wrong
   password, association without DHCP, BLE teardown followed by the 5-second
   settle, SSID mismatch rejection, repeated timeout/retry cycles, successful
