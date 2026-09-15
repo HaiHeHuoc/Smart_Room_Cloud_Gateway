@@ -1,0 +1,15 @@
+menu "Performance monitor"
+
+config PERFORMANCE_MONITOR_ENABLE
+    bool "Enable runtime performance monitor"
+    default y
+    depends on FREERTOS_GENERATE_RUN_TIME_STATS
+    help
+        Start the low-priority performance monitor during Smart Room product
+        boot. It periodically logs CPU, Internal RAM, PSRAM, DMA-capable RAM,
+        application partition use, and task stack high-water marks.
+
+        Disable this option when a production deployment does not require
+        periodic diagnostic logging.
+
+endmenu

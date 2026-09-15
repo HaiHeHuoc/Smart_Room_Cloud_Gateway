@@ -31,6 +31,7 @@
 #include "time_manager.h"
 #include "log_manager.h"
 #include "app_log.h"
+#include "performance_monitor.h"
 
 /* Wifi manager ------------------------------------------------------------ */
 #include "wifi_manager.h"
@@ -291,6 +292,16 @@ void smart_room_app_start(void)
     APP_LOGI(TAG, BOOT_START, "project=%s", APP_PROJECT_NAME);
     APP_LOGI(TAG, VERSION_S_9810027F, "VERSION: %s", APP_PROJECT_VER);
     APP_LOGI(TAG, BUILD_DATE_S_8522DA1C, "BUILD DATE: %s", APP_PROJECT_VER_DATE);
+
+#if CONFIG_PERFORMANCE_MONITOR_ENABLE
+    /* Low-priority diagnostics observe boot and later steady-state services. */
+    const esp_err_t monitor_ret = performance_monitor_start();
+    if (monitor_ret != ESP_OK) {
+        APP_LOGW(TAG, PERFORMANCE_MONITOR_START_FAILED,
+                 "Performance monitor unavailable: %s",
+                 esp_err_to_name(monitor_ret));
+    }
+#endif
 
     esp_err_t light_ret = light_manager_init(&LIGHT_MANAGER_CONFIG);
     if (light_ret != ESP_OK)

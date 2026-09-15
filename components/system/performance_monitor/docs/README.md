@@ -48,6 +48,10 @@ CPU measurement requires:
 CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
 ```
 
+`CONFIG_PERFORMANCE_MONITOR_ENABLE` controls whether `smart_room_app` starts
+the monitor during product boot. It defaults to `y`; disable it through
+`menuconfig` when periodic diagnostic logging is not wanted.
+
 When runtime statistics are disabled, `performance_monitor_start()` returns
 `ESP_ERR_NOT_SUPPORTED` and does not create a task.
 

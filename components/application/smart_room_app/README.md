@@ -15,7 +15,8 @@ callback routing.
   ownership.
 - Keep product policy here: sensor cadence/staleness, provisioning timing,
   cloud publish cadence/deployment endpoint, Firebase-auth references, and
-  audio/network startup gating.
+  audio/network startup gating. It also starts the opt-in low-priority
+  `performance_monitor` diagnostic task during boot.
 - Copy manager snapshots into GUI/cloud/coordinator inputs. Callbacks must not
   call LVGL or execute long network/storage work.
 - Register the bounded Smart Room provider set through
