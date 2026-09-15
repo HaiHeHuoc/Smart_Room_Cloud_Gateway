@@ -3,9 +3,11 @@
 #include <stdbool.h>
 
 #include "esp_attr.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "app_log.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/task.h"
 
 #include "voice_assistant_ptt.h"
@@ -173,13 +175,17 @@ esp_err_t voice_assistant_ptt_gpio_start(void)
         return ESP_OK;
     }
 
-    if (xTaskCreate(
+    /* This worker only debounces GPIO and queues PTT intents. Its ISR only
+     * notifies the task; it never runs on this task's stack. Keep the worker
+     * stack/TCB in PSRAM to preserve Internal RAM for voice transport. */
+    if (xTaskCreateWithCaps(
             ptt_gpio_task,
             PTT_GPIO_TASK_NAME,
             PTT_GPIO_TASK_STACK_BYTES,
             NULL,
             PTT_GPIO_TASK_PRIORITY,
-            &s_task) != pdPASS) {
+            &s_task,
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
         s_task = NULL;
         return ESP_ERR_NO_MEM;
     }

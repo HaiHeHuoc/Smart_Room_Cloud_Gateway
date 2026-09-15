@@ -17,6 +17,11 @@ smart_room.get_system_status
 light.set_state
 light.get_state
 light.get_capabilities
+audio.control_playback
+audio.get_playback_state
+audio.list_tracks
+audio.play_track
+audio.play_recorded
 ```
 
 The light tool names intentionally use the current source contract
@@ -76,6 +81,49 @@ Xiaozhi backend
 
 `light_manager` remains the light-state/effect owner. MCP never drives GPIO/RMT
 or the NeoPixel component directly.
+
+## Phase 18.2.2 Bounded Audio Selection
+
+`audio.list_tracks` and `audio.play_track` are provider-bound tools, not a
+filesystem API. The MCP layer accepts only an exact bounded logical `track_id`
+and validates it again before calling the project adapter. The adapter's
+dedicated worker scans `/sdcard/audio/` and publishes a bounded cache; no MCP
+or Xiaozhi WebSocket callback performs catalog VFS I/O. The list result carries
+a compact structured availability summary and a bounded text list containing
+the exact ID, name, size, and deterministic first entry. Its reusable list
+staging and output buffer use PSRAM rather than consuming the WebSocket stack
+or persistent Internal RAM.
+
+The adapter constructs a trusted internal path only after an exact cache match;
+it never passes a model-supplied path to an audio API. Playback still flows
+through `voice_assistant` policy, the existing arbiter and `audio_manager`,
+which remains the sole I2S/DMA owner. `audio.play_recorded` uses only an
+existing retained processed recording and cannot trigger capture. Successful
+`audio.play_track` and `audio.play_recorded` results mean that a request was
+accepted/scheduled; `playback_confirmed` remains `false` until a separate
+manager-status or target-log observation proves playback actually began.
+
+## Response-interruption transport fence
+
+The pinned provider exposes a long-lived client generation but no server turn
+or response ID, and raw WebSocket Opus frames carry no per-turn metadata. On a
+local response abort, `xiaozhi_foundation_audio_abort_response()` first closes
+the project response-delivery gate and sends the upstream abort while the
+current audio session ID still exists. The next PTT capture cannot reuse that
+transport: `voice_assistant` reserves a new generation and calls
+`xiaozhi_foundation_session_rotate_transport()` from its normal Internal-RAM
+lifecycle task.
+
+The rotation retains the chat object and MCP engine/tool registrations, but
+stops the old WebSocket task, posts a private FIFO drain marker on the same
+event base, ignores old global connection events until the marker is observed,
+then starts a fresh transport. Response delivery stays closed until the new
+connection is READY and downlink has reserved a new local response epoch. It
+opens immediately before that epoch's `stop-listening` transmit, so a fast
+first TTS/Opus callback cannot race the synchronous send return; normal channel
+cleanup, local abort, and every fence failure close it. A stop/start/drain
+failure stays fail-closed and is reported as session ERROR; callers must not
+authorize microphone capture in that case.
 
 ## Retired Validation Infrastructure
 

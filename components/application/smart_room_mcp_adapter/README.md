@@ -24,6 +24,11 @@ smart_room.get_system_status
 light.set_state
 light.get_state
 light.get_capabilities
+audio.control_playback
+audio.get_playback_state
+audio.list_tracks
+audio.play_track
+audio.play_recorded
 ```
 
 Tool definition, schema parsing, MCP engine/session lifecycle, and managed
@@ -51,6 +56,23 @@ runtime tool call
   `audio_manager`, and `light_manager` where required by the current provider.
 - Light providers invoke only the public `light_manager` logical-state API;
   they never access GPIO, RMT, NeoPixel handles, or board mapping.
+- Audio providers translate only bounded action/status enums. Control is
+  delegated to `voice_assistant` turn policy and then the public
+  `audio_manager` control surface; the adapter never touches I2S, DMA, FILE,
+  or PCM buffers. For Phase 18.2.2, an adapter-owned low-priority worker alone
+  acquires a short SD lease and performs the bounded non-recursive
+  `/sdcard/audio/` scan. MCP callbacks only copy the published cache with a
+  zero-wait mutex or return a bounded unavailable result; they never perform
+  VFS I/O or hold an SD lease on the Xiaozhi WebSocket callback path. The
+  cache is a bounded snapshot rather than an instantaneous filesystem view;
+  the worker retries while unavailable and refreshes after catalog requests.
+  It retains no file or directory handle, exposes only unique bounded logical
+  IDs in lexical filename order, and constructs a trusted WAV path internally
+  after an exact lookup. It never accepts a path from MCP. Eligible files are
+  direct `.wav` entries with a safe bounded UTF-8 display name; at most 12 are
+  published. `audio.play_track` submits the trusted source through the existing
+  playback arbiter. Its accepted/scheduled result is not proof that I2S has
+  started or that sound has reached the speaker.
 - `xiaozhi_foundation` remains the sole direct `esp_xiaozhi`/MCP engine and
   session owner. It attaches tools after MCP engine creation and detaches them
   before engine destruction.
@@ -72,7 +94,10 @@ light.set_state
 ```
 
 `light.get_state` and `light.get_capabilities` are read-only companions.
-Phase 18.1 is complete and accepted; Phase 18.2-18.4 remain not started.
+Phase 18.1 is complete and accepted. Phase 18.2.1 Prompt 3 now adds control of
+an already-existing resumable source plus a read-only copied playback snapshot;
+it does not select tracks or expose an arbitrary path. Phase 18.2.2, 18.3, and
+18.4 remain unchanged.
 
 The application-structure cleanup only consolidated existing provider logic. It
 added no new MCP tool, transport/protocol behavior, hardware ownership, or

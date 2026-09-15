@@ -17,6 +17,7 @@ typedef enum {
     AUDIO_MANAGER_PLAYBACK_ARBITER_IDLE,
     AUDIO_MANAGER_PLAYBACK_ARBITER_STARTING,
     AUDIO_MANAGER_PLAYBACK_ARBITER_ACTIVE,
+    AUDIO_MANAGER_PLAYBACK_ARBITER_PAUSED,
     AUDIO_MANAGER_PLAYBACK_ARBITER_PREEMPTING,
     AUDIO_MANAGER_PLAYBACK_ARBITER_ERROR,
 } audio_manager_playback_arbiter_state_t;
@@ -26,6 +27,7 @@ typedef enum {
     AUDIO_MANAGER_PLAYBACK_REQUEST_PENDING = 0,
     AUDIO_MANAGER_PLAYBACK_REQUEST_STARTING,
     AUDIO_MANAGER_PLAYBACK_REQUEST_ACTIVE,
+    AUDIO_MANAGER_PLAYBACK_REQUEST_PAUSED,
     AUDIO_MANAGER_PLAYBACK_REQUEST_DRAINING,
     AUDIO_MANAGER_PLAYBACK_REQUEST_COMPLETED,
     AUDIO_MANAGER_PLAYBACK_REQUEST_CANCELLED,
@@ -130,6 +132,20 @@ esp_err_t audio_manager_playback_arbiter_fail_pcm16_stream(
  * Current playback cancellation is cooperative through audio_manager.
  */
 esp_err_t audio_manager_playback_arbiter_cancel(uint32_t request_id);
+
+/**
+ * @brief Atomically cancel WAV requests for one client that have not yet been
+ *        dispatched to audio_manager.
+ *
+ * This is used by PTT admission to remove a locally accepted catalog request
+ * before microphone capture starts. A command already being dispatched or
+ * owned by audio_manager is deliberately left intact so normal cooperative
+ * pause/stop handling retains ownership. `cancelled_count` is optional and
+ * receives the number of terminal records written.
+ */
+esp_err_t audio_manager_playback_arbiter_cancel_unstarted_wav_for_client(
+    audio_manager_client_t client,
+    uint32_t *cancelled_count);
 
 /** Copy current or bounded retained terminal state for one PCM16 request. */
 esp_err_t audio_manager_playback_arbiter_get_request_status(

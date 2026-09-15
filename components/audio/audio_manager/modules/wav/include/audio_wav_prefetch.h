@@ -80,9 +80,12 @@ typedef struct
     char path[AUDIO_MANAGER_WAV_PATH_MAX_BYTES];
     audio_wav_stream_t stream;
     audio_wav_info_t info;
+    audio_wav_info_t expected_info;
     audio_wav_prefetch_metrics_t metrics;
+    uint64_t initial_data_offset;
     esp_err_t worker_result;
     bool info_valid;
+    bool expected_info_valid;
     bool started;
     bool stop_requested;
     bool worker_stopped;
@@ -95,6 +98,23 @@ esp_err_t audio_wav_prefetch_start(
     const char *path,
     size_t slot_bytes,
     UBaseType_t task_priority);
+
+/**
+ * Start a private reader at a committed data-byte offset.
+ *
+ * When expected_info is non-NULL, the freshly opened source must match it
+ * before seek/read begins. This supports long-lived pause without retaining a
+ * stale FILE, SD lease, or PSRAM prefetch block. Offset is relative to the WAV
+ * data chunk, must be aligned to one manager commit block, and must be
+ * strictly below data size.
+ */
+esp_err_t audio_wav_prefetch_start_at_offset(
+    audio_wav_prefetch_t *prefetch,
+    const char *path,
+    size_t slot_bytes,
+    UBaseType_t task_priority,
+    uint64_t committed_data_offset,
+    const audio_wav_info_t *expected_info);
 
 /** Poll or wait for a producer-ready PCM block or terminal reader error. */
 BaseType_t audio_wav_prefetch_take_ready(

@@ -336,6 +336,32 @@ static void audio_wav_prefetch_task(void *argument)
         {
             prefetch->info = prefetch->stream.info;
             prefetch->info_valid = true;
+
+            if (prefetch->expected_info_valid &&
+                !audio_wav_prefetch_info_matches(
+                    &prefetch->expected_info,
+                    &prefetch->info))
+            {
+                APP_LOGE(
+                    TAG, WAV_CHANGED_BEFORE_CONTROL_8E5B8A26,
+                    "WAV changed before controlled resume; refusing stale source");
+                result = ESP_ERR_INVALID_RESPONSE;
+            }
+            else if (prefetch->initial_data_offset > 0U)
+            {
+                result = audio_wav_stream_seek_data(
+                    &prefetch->stream,
+                    prefetch->initial_data_offset);
+                if (result == ESP_OK)
+                {
+                    prefetch->metrics.data_bytes_read =
+                        prefetch->initial_data_offset;
+                    APP_LOGI(
+                        TAG, CONTROLLED_RESUME_AT_DATA_OFF_EC9F84C0,
+                        "controlled resume at data offset %llu",
+                        (unsigned long long)prefetch->initial_data_offset);
+                }
+            }
         }
     }
 
@@ -533,8 +559,30 @@ esp_err_t audio_wav_prefetch_start(
     size_t slot_bytes,
     UBaseType_t task_priority)
 {
+    return audio_wav_prefetch_start_at_offset(
+        prefetch,
+        path,
+        slot_bytes,
+        task_priority,
+        0U,
+        NULL);
+}
+
+esp_err_t audio_wav_prefetch_start_at_offset(
+    audio_wav_prefetch_t *prefetch,
+    const char *path,
+    size_t slot_bytes,
+    UBaseType_t task_priority,
+    uint64_t committed_data_offset,
+    const audio_wav_info_t *expected_info)
+{
     if ((prefetch == NULL) || (path == NULL) || (slot_bytes == 0U) ||
-        ((slot_bytes % sizeof(int16_t)) != 0U))
+        ((slot_bytes % sizeof(int16_t)) != 0U) ||
+        ((committed_data_offset %
+          (AUDIO_MANAGER_PLAYBACK_POSITION_GRANULARITY_FRAMES *
+           sizeof(int16_t))) != 0U) ||
+        ((expected_info != NULL) &&
+         (committed_data_offset >= expected_info->data_size_bytes)))
     {
         return ESP_ERR_INVALID_ARG;
     }
@@ -552,6 +600,12 @@ esp_err_t audio_wav_prefetch_start(
     portMUX_INITIALIZE(&prefetch->lock);
     memcpy(prefetch->path, path, path_length + 1U);
     prefetch->slot_bytes = slot_bytes;
+    prefetch->initial_data_offset = committed_data_offset;
+    if (expected_info != NULL)
+    {
+        prefetch->expected_info = *expected_info;
+        prefetch->expected_info_valid = true;
+    }
     prefetch->worker_result = ESP_OK;
     prefetch->owner_task = xTaskGetCurrentTaskHandle();
 
@@ -611,10 +665,11 @@ esp_err_t audio_wav_prefetch_start(
 
     APP_LOGI(
         TAG, STARTED_SLOT_BYTES_U_SLOTS_B42EFDB6,
-        "started slot_bytes=%u slots=%u priority=%u path=%s",
+        "started slot_bytes=%u slots=%u priority=%u offset=%llu path=%s",
         (unsigned)slot_bytes,
         (unsigned)AUDIO_WAV_PREFETCH_SLOT_COUNT,
         (unsigned)task_priority,
+        (unsigned long long)committed_data_offset,
         path);
     return ESP_OK;
 }

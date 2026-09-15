@@ -11,9 +11,12 @@
 
 #include "voice_assistant.h"
 #include "voice_assistant_downlink.h"
+#include "voice_assistant_playback_control.h"
 
 #define PTT_TASK_NAME                 "voice_ptt"
-#define PTT_TASK_STACK_BYTES          4096U
+/* PTT now also handles the bounded post-abort transport-fence path. Keep the
+ * policy worker on an 8 KiB Internal-RAM stack so that path retains margin. */
+#define PTT_TASK_STACK_BYTES          8192U
 #define PTT_TASK_PRIORITY             4U
 #define PTT_QUEUE_LENGTH              6U
 #define PTT_LOCK_TIMEOUT_MS           100U
@@ -139,6 +142,89 @@ static bool ptt_release_is_queued(void)
     return queued;
 }
 
+static void ptt_prepare_and_authorize(
+    uint32_t ptt_generation,
+    uint32_t session_generation)
+{
+    ptt_set_status(VOICE_ASSISTANT_PTT_SUSPENDING_PLAYBACK,
+                   true,
+                   false,
+                   session_generation,
+                   ESP_OK);
+    const esp_err_t prepare_ret = voice_assistant_playback_prepare_ptt(
+        ptt_generation,
+        session_generation);
+    if (prepare_ret != ESP_OK) {
+        ptt_set_status(VOICE_ASSISTANT_PTT_ERROR,
+                       false,
+                       false,
+                       session_generation,
+                       prepare_ret);
+        return;
+    }
+
+    if (ptt_release_is_queued()) {
+        const esp_err_t restore_ret =
+            voice_assistant_playback_cancel_unstarted(ptt_generation);
+        ptt_set_status(VOICE_ASSISTANT_PTT_RELEASED,
+                       false,
+                       false,
+                       session_generation,
+                       (restore_ret == ESP_ERR_INVALID_STATE)
+                           ? ESP_OK
+                           : restore_ret);
+        APP_LOGI(TAG, PRESS_RELEASED_DURING_AUDIO__0F290C31,
+                 "press released during audio suspension generation=%u restore=%s",
+                 (unsigned)ptt_generation,
+                 esp_err_to_name(restore_ret));
+        return;
+    }
+
+    ptt_set_status(VOICE_ASSISTANT_PTT_AUTHORIZED,
+                   true,
+                   true,
+                   session_generation,
+                   ESP_OK);
+}
+
+/* A downlink-local abort can leave raw old WebSocket frames in flight. Do not
+ * authorize capture on that client generation: reserve a replacement before
+ * the lifecycle worker stops/drains/restarts the transport. */
+static esp_err_t ptt_rotate_response_transport(
+    uint32_t ptt_generation,
+    const voice_assistant_status_t *voice)
+{
+    if ((voice == NULL) ||
+        (voice->state != VOICE_ASSISTANT_STATE_READY) ||
+        !voice_assistant_downlink_transport_fence_required(
+            voice->session_generation)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const esp_err_t rotate_ret = voice_assistant_rotate_session();
+    if (rotate_ret != ESP_OK) {
+        return rotate_ret;
+    }
+
+    voice_assistant_status_t updated = {0};
+    const esp_err_t status_ret = voice_assistant_get_status(&updated);
+    const uint32_t replacement_generation =
+        (status_ret == ESP_OK) ? updated.session_generation :
+        voice->session_generation;
+    s_arming_started = xTaskGetTickCount();
+    ptt_set_status(VOICE_ASSISTANT_PTT_ARMING_SESSION,
+                   true,
+                   false,
+                   replacement_generation,
+                   ESP_OK);
+    APP_LOGI(TAG, RESPONSE_TRANSPORT_FENCE_ARMED_550BDF62,
+             "press waiting for post-abort transport fence ptt_generation=%u old_generation=%u replacement_generation=%u",
+             (unsigned)ptt_generation,
+             (unsigned)voice->session_generation,
+             (unsigned)replacement_generation);
+    return ESP_OK;
+}
+
 static void ptt_reconcile_voice_state(void)
 {
     voice_assistant_ptt_status_t ptt = {0};
@@ -199,11 +285,22 @@ static void ptt_reconcile_voice_state(void)
 
     if (voice.state == VOICE_ASSISTANT_STATE_READY) {
         if (ptt.pressed) {
-            ptt_set_status(VOICE_ASSISTANT_PTT_AUTHORIZED,
-                           true,
-                           true,
-                           voice.session_generation,
-                           ESP_OK);
+            if (voice_assistant_downlink_transport_fence_required(
+                    voice.session_generation)) {
+                const esp_err_t rotate_ret = ptt_rotate_response_transport(
+                    ptt.ptt_generation, &voice);
+                if (rotate_ret != ESP_OK) {
+                    ptt_set_status(VOICE_ASSISTANT_PTT_ERROR,
+                                   false,
+                                   false,
+                                   voice.session_generation,
+                                   rotate_ret);
+                }
+                return;
+            }
+            ptt_prepare_and_authorize(
+                ptt.ptt_generation,
+                voice.session_generation);
         } else {
             ptt_set_status(VOICE_ASSISTANT_PTT_CANCEL_PENDING,
                            false,
@@ -284,25 +381,59 @@ static void ptt_handle_press(const ptt_command_t *command)
         return;
     }
 
-    /* A response owns the shared Xiaozhi audio channel until its terminal
-     * callback and any WAV playback complete. Do not advertise a new press as
-     * authorized when uplink will correctly refuse to start it. */
+    /* PTT interruption is a local product-policy path. Transfer any retained
+     * local suspension to this press, then ask the downlink owner to terminate
+     * the old non-seekable response before capture authorization. */
     if (voice_assistant_downlink_is_busy()) {
-        APP_LOGW(TAG, PRESS_IGNORED_PRIOR_SERVER_R_34B26E5E, "press ignored: prior server response is still active");
-        ptt_set_status(VOICE_ASSISTANT_PTT_RELEASED,
+        (void)voice_assistant_playback_supersede_ptt(
+            command->generation,
+            voice.session_generation);
+        const esp_err_t interrupt_ret =
+            voice_assistant_downlink_interrupt_active_response();
+        if (interrupt_ret != ESP_OK) {
+            ptt_set_status(VOICE_ASSISTANT_PTT_ERROR,
+                           false,
+                           false,
+                           voice.session_generation,
+                           interrupt_ret);
+            return;
+        }
+        APP_LOGI(TAG, PRIOR_RESPONSE_INTERRUPTED_RETA_3E30133F,
+                 "prior response interrupted; retained press generation=%u",
+                 (unsigned)command->generation);
+    }
+
+    /* The interrupt waits for downlink cleanup, not for WebSocket teardown.
+     * Refresh the lifecycle snapshot before considering READY, then reserve a
+     * new transport generation if this response marked the hard fence. */
+    const esp_err_t refreshed_ret = voice_assistant_get_status(&voice);
+    if (refreshed_ret != ESP_OK) {
+        ptt_set_status(VOICE_ASSISTANT_PTT_ERROR,
                        false,
                        false,
-                       voice.session_generation,
-                       ESP_OK);
+                       0U,
+                       refreshed_ret);
+        return;
+    }
+    if ((voice.state == VOICE_ASSISTANT_STATE_READY) &&
+        voice_assistant_downlink_transport_fence_required(
+            voice.session_generation)) {
+        const esp_err_t rotate_ret = ptt_rotate_response_transport(
+            command->generation, &voice);
+        if (rotate_ret != ESP_OK) {
+            ptt_set_status(VOICE_ASSISTANT_PTT_ERROR,
+                           false,
+                           false,
+                           voice.session_generation,
+                           rotate_ret);
+        }
         return;
     }
 
     if (voice.state == VOICE_ASSISTANT_STATE_READY) {
-        ptt_set_status(VOICE_ASSISTANT_PTT_AUTHORIZED,
-                       true,
-                       true,
-                       voice.session_generation,
-                       ESP_OK);
+        ptt_prepare_and_authorize(
+            command->generation,
+            voice.session_generation);
         return;
     }
 
@@ -397,11 +528,19 @@ static void ptt_handle_release(void)
                            false,
                            current.session_generation,
                            ESP_OK);
+            /* If uplink has not crossed its start marker, this is a fast tap
+             * and restores the temporary source. A real started turn retains
+             * the context until its downlink terminal event. */
+            (void)voice_assistant_playback_cancel_unstarted(
+                current.ptt_generation);
+            break;
+        case VOICE_ASSISTANT_PTT_SUSPENDING_PLAYBACK:
+            /* The PRESS handler observes the queued release after its bounded
+             * suspension wait and restores before authorization. */
             break;
         case VOICE_ASSISTANT_PTT_IDLE:
         case VOICE_ASSISTANT_PTT_RELEASED:
-            /* A busy-response press is deliberately ignored, so its matching
-             * physical release has no PTT turn to cancel. */
+            /* Repeated released-level samples are idempotent. */
             break;
         default:
             APP_LOGW(TAG, RELEASE_IGNORED_IN_STATE_S_B06D417A, "release ignored in state=%s",
@@ -431,6 +570,17 @@ static void ptt_handle_cancel(void)
         return;
     }
 
+    /* Resource-gate failures before capture start arrive here through the
+     * uplink coordinator. Revoke the unstarted transaction so a successfully
+     * suspended local source is not left paused indefinitely. If capture has
+     * already started this returns INVALID_STATE and the normal downlink
+     * terminal path remains the sole finalizer. */
+    if ((current.state == VOICE_ASSISTANT_PTT_AUTHORIZED) ||
+        (current.state == VOICE_ASSISTANT_PTT_SUSPENDING_PLAYBACK)) {
+        (void)voice_assistant_playback_cancel_unstarted(
+            current.ptt_generation);
+    }
+
     if ((voice.state == VOICE_ASSISTANT_STATE_READY) ||
         (voice.state == VOICE_ASSISTANT_STATE_CONNECTING)) {
         /* Cancellation revokes the current PTT intent only. The production
@@ -444,7 +594,8 @@ static void ptt_handle_cancel(void)
     }
 
     if ((voice.state == VOICE_ASSISTANT_STATE_CONNECTING) ||
-        (current.state == VOICE_ASSISTANT_PTT_ARMING_SESSION)) {
+        (current.state == VOICE_ASSISTANT_PTT_ARMING_SESSION) ||
+        (current.state == VOICE_ASSISTANT_PTT_SUSPENDING_PLAYBACK)) {
         ptt_set_status(VOICE_ASSISTANT_PTT_CANCEL_PENDING,
                        false,
                        false,
@@ -698,6 +849,8 @@ const char *voice_assistant_ptt_state_to_string(voice_assistant_ptt_state_t stat
             return "IDLE";
         case VOICE_ASSISTANT_PTT_ARMING_SESSION:
             return "ARMING_SESSION";
+        case VOICE_ASSISTANT_PTT_SUSPENDING_PLAYBACK:
+            return "SUSPENDING_PLAYBACK";
         case VOICE_ASSISTANT_PTT_AUTHORIZED:
             return "AUTHORIZED";
         case VOICE_ASSISTANT_PTT_RELEASED:

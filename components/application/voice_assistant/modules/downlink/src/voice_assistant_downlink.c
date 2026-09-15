@@ -5,6 +5,7 @@
 
 #include "voice_assistant_audio_arbitration_bridge.h"
 #include "voice_assistant_opus.h"
+#include "voice_assistant_playback_control.h"
 #include "xiaozhi_foundation.h"
 
 #include "esp_heap_caps.h"
@@ -50,10 +51,18 @@
  * by this component. */
 #define DOWNLINK_STREAM_BACKPRESSURE_RETRY_MS    20U
 #define DOWNLINK_STREAM_BACKPRESSURE_TIMEOUT_MS  5000U
+#define DOWNLINK_INTERRUPT_QUEUE_TIMEOUT_MS       500U
+#define DOWNLINK_INTERRUPT_TERMINAL_TIMEOUT_MS   2500U
+#define DOWNLINK_INTERRUPT_POLL_MS                 20U
 
 typedef struct {
     xiaozhi_foundation_response_event_kind_t kind;
+    bool local_cancel;
     uint32_t generation;
+    /* The Xiaozhi client generation is a long-lived WebSocket-session value.
+     * Tag each queued callback with a project-owned response epoch as well so
+     * a packet copied before an interrupt cannot affect the next PTT turn. */
+    uint32_t response_epoch;
     size_t data_len;
     esp_err_t error;
     uint8_t data[DOWNLINK_CHUNK_BYTES];
@@ -80,17 +89,84 @@ static atomic_bool s_callback_stack_reported = false;
 static int16_t s_decoded_pcm[VOICE_ASSISTANT_OPUS_PCM_SAMPLES] = {0};
 static TickType_t s_last_response_activity = 0U;
 static TickType_t s_response_started_at = 0U;
-/* A damaged callback packet must invalidate only the response generation that
- * owned it. A late packet from a completed turn is expected during transport
- * teardown and must not poison the next PTT response. */
-static atomic_uint_fast32_t s_response_tainted_generation = 0U;
+/* The provider exposes only a WebSocket client generation, which can span
+ * many PTT turns. The private epoch separates queue/staging work belonging to
+ * one response from another response on that same session. */
+static uint32_t s_next_response_epoch = 0U;
+static uint32_t s_active_response_epoch = 0U;
+/* Zero immediately disables callback admission during abort cleanup while the
+ * active state remains busy until the audio arbiter has been terminalized. */
+static uint32_t s_callback_response_epoch = 0U;
+static atomic_uint_fast32_t s_response_tainted_epoch = 0U;
+/* Queue admission is best effort. Keep an interrupt intent independently so
+ * a full callback queue cannot leave a tainted active response running. */
+static atomic_uint_fast32_t s_interrupt_requested_epoch = 0U;
+/* A local abort has no upstream turn ID to distinguish late raw WebSocket
+ * frames after the next PTT turn opens. Remember the owning client generation
+ * so PTT can rotate the transport before it authorizes another capture. */
+static atomic_uint_fast32_t s_transport_fence_generation = 0U;
 static voice_assistant_downlink_status_t s_status = {0};
 
-static bool downlink_response_is_tainted(uint32_t generation)
+static bool downlink_response_active_locked(void)
 {
-    return (generation != 0U) &&
-           (atomic_load_explicit(&s_response_tainted_generation,
-                                 memory_order_acquire) == generation);
+    return s_status.awaiting_response || s_status.collecting ||
+           s_status.finalizing || s_status.playback_requested;
+}
+
+static bool downlink_response_owns_locked(uint32_t generation,
+                                          uint32_t response_epoch)
+{
+    return (generation != 0U) && (response_epoch != 0U) &&
+           (generation == s_status.session_generation) &&
+           (response_epoch == s_active_response_epoch) &&
+           downlink_response_active_locked();
+}
+
+static uint32_t downlink_capture_callback_epoch(uint32_t generation)
+{
+    uint32_t response_epoch = 0U;
+    portENTER_CRITICAL(&s_lock);
+    if (downlink_response_owns_locked(
+            generation, s_callback_response_epoch)) {
+        response_epoch = s_callback_response_epoch;
+    }
+    portEXIT_CRITICAL(&s_lock);
+    return response_epoch;
+}
+
+static bool downlink_response_is_tainted(uint32_t response_epoch)
+{
+    return (response_epoch != 0U) &&
+           (atomic_load_explicit(&s_response_tainted_epoch,
+                                 memory_order_acquire) == response_epoch);
+}
+
+static void downlink_clear_response_taint(uint32_t response_epoch)
+{
+    if (response_epoch == 0U) {
+        return;
+    }
+    uint_fast32_t expected = response_epoch;
+    (void)atomic_compare_exchange_strong_explicit(
+        &s_response_tainted_epoch,
+        &expected,
+        0U,
+        memory_order_acq_rel,
+        memory_order_acquire);
+}
+
+static void downlink_clear_interrupt_request(uint32_t response_epoch)
+{
+    if (response_epoch == 0U) {
+        return;
+    }
+    uint_fast32_t expected = response_epoch;
+    (void)atomic_compare_exchange_strong_explicit(
+        &s_interrupt_requested_epoch,
+        &expected,
+        0U,
+        memory_order_acq_rel,
+        memory_order_acquire);
 }
 
 static void downlink_set_error(esp_err_t error)
@@ -104,49 +180,59 @@ static void downlink_set_error(esp_err_t error)
 static void downlink_mark_response_tainted(
     const char *reason,
     uint32_t generation,
+    uint32_t response_epoch,
     size_t data_len)
 {
     bool owns_response = false;
     portENTER_CRITICAL(&s_lock);
-    owns_response = (generation != 0U) &&
-                    (generation == s_status.session_generation) &&
-                    (s_status.awaiting_response || s_status.collecting ||
-                     s_status.finalizing || s_status.playback_requested);
+    owns_response = downlink_response_owns_locked(generation, response_epoch) &&
+                    (s_callback_response_epoch == response_epoch);
     portEXIT_CRITICAL(&s_lock);
     if (!owns_response) {
         APP_LOGD(TAG, IGNORED_STALE_RESPONSE_TAINT_D1364F11,
-                 "Ignored stale response taint generation=%u reason=%s",
-                 (unsigned)generation,
+                 "Ignored stale response taint generation=%u epoch=%u reason=%s",
+                 (unsigned)generation, (unsigned)response_epoch,
                  reason);
         return;
     }
 
     const uint32_t previous = (uint32_t)atomic_exchange_explicit(
-        &s_response_tainted_generation,
-        generation,
+        &s_response_tainted_epoch,
+        response_epoch,
         memory_order_acq_rel);
-    if (previous != generation) {
+    if (previous != response_epoch) {
         APP_LOGW(TAG, RESPONSE_TAINTED_GENERATION_6BE6DC95,
-                 "response tainted generation=%u reason=%s packet_bytes=%u",
-                 (unsigned)generation,
+                 "response tainted generation=%u epoch=%u reason=%s packet_bytes=%u",
+                 (unsigned)generation, (unsigned)response_epoch,
                  reason,
                  (unsigned)data_len);
     }
 }
 
-static void downlink_finish_turn_state(void)
+static bool downlink_finish_turn_state(uint32_t generation,
+                                       uint32_t response_epoch)
 {
-    atomic_store_explicit(
-        &s_response_tainted_generation, 0U, memory_order_release);
+    bool owns_response = false;
     portENTER_CRITICAL(&s_lock);
-    s_last_response_activity = 0U;
-    s_response_started_at = 0U;
-    s_status.awaiting_response = false;
-    s_status.collecting = false;
-    s_status.finalizing = false;
-    s_status.playback_requested = false;
-    s_status.response_bytes_buffered = 0U;
+    owns_response = downlink_response_owns_locked(generation, response_epoch);
+    if (owns_response) {
+        s_last_response_activity = 0U;
+        s_response_started_at = 0U;
+        s_status.awaiting_response = false;
+        s_status.collecting = false;
+        s_status.finalizing = false;
+        s_status.playback_requested = false;
+        s_status.ptt_generation = 0U;
+        s_status.response_bytes_buffered = 0U;
+        s_active_response_epoch = 0U;
+        s_callback_response_epoch = 0U;
+    }
     portEXIT_CRITICAL(&s_lock);
+    if (owns_response) {
+        downlink_clear_response_taint(response_epoch);
+        downlink_clear_interrupt_request(response_epoch);
+    }
+    return owns_response;
 }
 
 static bool downlink_generation_is_current(uint32_t generation)
@@ -163,8 +249,10 @@ static bool downlink_generation_is_current(uint32_t generation)
 
 static void downlink_abort_response(
     uint32_t generation,
+    uint32_t response_epoch,
     esp_err_t error,
-    bool timeout);
+    bool timeout,
+    bool interrupted);
 
 /* The PCM stream core uses all-or-nothing writes. Retrying the same decoded
  * packet is therefore safe: a timeout never transfers a partial packet. This
@@ -172,6 +260,7 @@ static void downlink_abort_response(
  * the bounded retry window. */
 static esp_err_t downlink_write_pcm_with_backpressure(
     uint32_t generation,
+    uint32_t response_epoch,
     const int16_t *samples,
     size_t sample_count)
 {
@@ -179,7 +268,7 @@ static esp_err_t downlink_write_pcm_with_backpressure(
     bool backpressured = false;
 
     for (;;) {
-        if (downlink_response_is_tainted(generation)) {
+        if (downlink_response_is_tainted(response_epoch)) {
             return ESP_ERR_INVALID_RESPONSE;
         }
         const esp_err_t result = voice_assistant_audio_stream_write(
@@ -188,7 +277,7 @@ static esp_err_t downlink_write_pcm_with_backpressure(
         /* A callback can mark the response tainted while the arbiter write
          * takes its lock. Do not accept a successful retry after a dropped or
          * oversized Opus packet: terminate the incomplete response instead. */
-        if (downlink_response_is_tainted(generation)) {
+        if (downlink_response_is_tainted(response_epoch)) {
             return ESP_ERR_INVALID_RESPONSE;
         }
         if (result != ESP_ERR_TIMEOUT) {
@@ -211,7 +300,7 @@ static esp_err_t downlink_write_pcm_with_backpressure(
             backpressured = true;
         }
 
-        if (downlink_response_is_tainted(generation)) {
+        if (downlink_response_is_tainted(response_epoch)) {
             APP_LOGW(TAG, PCM_INGRESS_STOPPED_GENERATI_CFCD7D0F,
                      "PCM ingress stopped generation=%u: response tainted while backpressured",
                      (unsigned)generation);
@@ -234,11 +323,13 @@ static void downlink_check_stream_terminal(void)
 {
     bool finalizing = false;
     uint32_t generation = 0U;
+    uint32_t response_epoch = 0U;
     portENTER_CRITICAL(&s_lock);
     finalizing = s_status.finalizing;
     generation = s_status.session_generation;
+    response_epoch = s_active_response_epoch;
     portEXIT_CRITICAL(&s_lock);
-    if (!finalizing || (generation == 0U)) {
+    if (!finalizing || (generation == 0U) || (response_epoch == 0U)) {
         return;
     }
 
@@ -246,12 +337,28 @@ static void downlink_check_stream_terminal(void)
     const esp_err_t status_result = voice_assistant_audio_stream_get_status(&stream);
     if (status_result != ESP_OK) {
         if (status_result != ESP_ERR_TIMEOUT) {
-            downlink_abort_response(generation, status_result, false);
+            downlink_abort_response(
+                generation, response_epoch, status_result, false, false);
         }
         return;
     }
 
     if (stream.state == AUDIO_MANAGER_PLAYBACK_REQUEST_COMPLETED) {
+        uint32_t ptt_generation = 0U;
+        bool owns_response = false;
+        portENTER_CRITICAL(&s_lock);
+        owns_response = downlink_response_owns_locked(
+            generation, response_epoch);
+        ptt_generation = owns_response ? s_status.ptt_generation : 0U;
+        if (owns_response) {
+            /* The stream is terminal, but downlink remains busy until the
+             * deferred playback policy has made its final ownership choice. */
+            s_callback_response_epoch = 0U;
+        }
+        portEXIT_CRITICAL(&s_lock);
+        if (!owns_response) {
+            return;
+        }
         portENTER_CRITICAL(&s_lock);
         ++s_status.responses_completed;
         s_status.last_error = ESP_OK;
@@ -264,7 +371,18 @@ static void downlink_check_stream_terminal(void)
                  (unsigned)stream.ingress_queue_high_water,
                  (unsigned)stream.starvation_count);
         voice_assistant_audio_stream_release();
-        downlink_finish_turn_state();
+        if (ptt_generation != 0U) {
+            const esp_err_t policy_ret =
+                voice_assistant_playback_finish_turn(ptt_generation);
+            if ((policy_ret != ESP_OK) &&
+                (policy_ret != ESP_ERR_INVALID_STATE)) {
+                APP_LOGW(TAG, PLAYBACK_POLICY_COMPLETE_FAI_180230AA,
+                         "playback policy completion failed ptt_generation=%u error=%s",
+                         (unsigned)ptt_generation,
+                         esp_err_to_name(policy_ret));
+            }
+        }
+        (void)downlink_finish_turn_state(generation, response_epoch);
     } else if ((stream.state == AUDIO_MANAGER_PLAYBACK_REQUEST_CANCELLED) ||
                (stream.state == AUDIO_MANAGER_PLAYBACK_REQUEST_PREEMPTED) ||
                (stream.state == AUDIO_MANAGER_PLAYBACK_REQUEST_FAILED)) {
@@ -276,7 +394,8 @@ static void downlink_check_stream_terminal(void)
                  (unsigned)generation,
                  (int)stream.state,
                  esp_err_to_name(error));
-        downlink_abort_response(generation, error, false);
+        downlink_abort_response(
+            generation, response_epoch, error, false, false);
     }
 }
 
@@ -292,19 +411,34 @@ static void downlink_response_callback(
     if (atomic_flag_test_and_set_explicit(
             &s_callback_busy,
             memory_order_acquire)) {
+        const uint32_t response_epoch =
+            downlink_capture_callback_epoch(event->client_generation);
         portENTER_CRITICAL(&s_lock);
         ++s_status.chunks_dropped_queue_full;
         portEXIT_CRITICAL(&s_lock);
         downlink_mark_response_tainted(
             "callback-reentry",
             event->client_generation,
+            response_epoch,
             event->data_len);
         return;
     }
 
+    const uint32_t response_epoch =
+        downlink_capture_callback_epoch(event->client_generation);
+    if (response_epoch == 0U) {
+        portENTER_CRITICAL(&s_lock);
+        ++s_status.chunks_dropped_stale;
+        portEXIT_CRITICAL(&s_lock);
+        atomic_flag_clear_explicit(&s_callback_busy, memory_order_release);
+        return;
+    }
+
     if (event->kind != XIAOZHI_FOUNDATION_RESPONSE_AUDIO) {
+        s_callback_item.local_cancel = false;
         s_callback_item.kind = event->kind;
         s_callback_item.generation = event->client_generation;
+        s_callback_item.response_epoch = response_epoch;
         s_callback_item.data_len = 0U;
         s_callback_item.error = event->error;
         if (xQueueSend(s_queue, &s_callback_item, 0U) != pdTRUE) {
@@ -314,6 +448,7 @@ static void downlink_response_callback(
             downlink_mark_response_tainted(
                 "control-queue-full",
                 event->client_generation,
+                response_epoch,
                 0U);
         }
         if ((event->kind == XIAOZHI_FOUNDATION_RESPONSE_TTS_START) &&
@@ -333,6 +468,13 @@ static void downlink_response_callback(
         atomic_flag_clear_explicit(&s_callback_busy, memory_order_release);
         return;
     }
+    if (downlink_response_is_tainted(response_epoch)) {
+        portENTER_CRITICAL(&s_lock);
+        ++s_status.chunks_dropped_stale;
+        portEXIT_CRITICAL(&s_lock);
+        atomic_flag_clear_explicit(&s_callback_busy, memory_order_release);
+        return;
+    }
 
     /* A WebSocket binary message is one complete Opus packet. Never split an
      * oversized packet because doing so would destroy the decoder boundary. */
@@ -343,6 +485,7 @@ static void downlink_response_callback(
         downlink_mark_response_tainted(
             "packet-oversize",
             event->client_generation,
+            response_epoch,
             event->data_len);
         APP_LOGE(TAG, OPUS_PACKET_DROPPED_SIZE_U_3E42EC7B,
                  "Opus packet dropped: size=%u exceeds capacity=%u",
@@ -353,7 +496,9 @@ static void downlink_response_callback(
     }
 
     s_callback_item.kind = XIAOZHI_FOUNDATION_RESPONSE_AUDIO;
+    s_callback_item.local_cancel = false;
     s_callback_item.generation = event->client_generation;
+    s_callback_item.response_epoch = response_epoch;
     s_callback_item.data_len = event->data_len;
     s_callback_item.error = ESP_OK;
     memcpy(s_callback_item.data, event->data, event->data_len);
@@ -364,6 +509,7 @@ static void downlink_response_callback(
         downlink_mark_response_tainted(
             "audio-queue-full",
             event->client_generation,
+            response_epoch,
             event->data_len);
         atomic_flag_clear_explicit(&s_callback_busy, memory_order_release);
         return;
@@ -377,42 +523,123 @@ static void downlink_response_callback(
 
 static void downlink_abort_response(
     uint32_t generation,
+    uint32_t response_epoch,
     esp_err_t error,
-    bool timeout)
+    bool timeout,
+    bool interrupted)
 {
     const esp_err_t normalized_error =
         (error == ESP_OK) ? ESP_FAIL : error;
+    uint32_t ptt_generation = 0U;
+    bool owns_response = false;
+    bool first_abort = false;
+    portENTER_CRITICAL(&s_lock);
+    owns_response = downlink_response_owns_locked(generation, response_epoch);
+    if (owns_response) {
+        ptt_generation = s_status.ptt_generation;
+        /* Reject a callback that races the cleanup work below. The busy state
+         * remains true until the stream/channel terminalization completes. */
+        first_abort = (s_callback_response_epoch == response_epoch);
+        s_callback_response_epoch = 0U;
+    }
+    portEXIT_CRITICAL(&s_lock);
+    if (!owns_response) {
+        return;
+    }
     /* Once a response is aborting, reject any queued audio until the arbiter
      * has accepted the terminal intent. This prevents stale PCM from being
      * appended if the first bounded cleanup attempt meets lock contention. */
     atomic_store_explicit(
-        &s_response_tainted_generation, generation, memory_order_release);
-    const esp_err_t stream_fail_ret =
-        voice_assistant_audio_stream_fail(normalized_error);
+        &s_response_tainted_epoch, response_epoch, memory_order_release);
+    if (first_abort) {
+        /* The protocol abort is best effort, but the fresh transport fence is
+         * mandatory before a later PTT capture on this same client generation.
+         * Set it before manager cleanup so a transient cleanup retry cannot
+         * accidentally permit the next press on the old WebSocket. */
+        atomic_store_explicit(
+            &s_transport_fence_generation, generation, memory_order_release);
+        const esp_err_t abort_ret =
+            xiaozhi_foundation_audio_abort_response(generation);
+        if ((abort_ret != ESP_OK) &&
+            (abort_ret != ESP_ERR_INVALID_STATE)) {
+            APP_LOGW(TAG, RESPONSE_ABORT_SIGNAL_FAILED_GE_6FDD46BD,
+                     "response abort signal failed generation=%u error=%s",
+                     (unsigned)generation,
+                     esp_err_to_name(abort_ret));
+        }
+    }
+    const esp_err_t stream_fail_ret = interrupted
+        ? voice_assistant_audio_stream_cancel()
+        : voice_assistant_audio_stream_fail(normalized_error);
     if ((stream_fail_ret != ESP_OK) &&
         (stream_fail_ret != ESP_ERR_INVALID_STATE)) {
         APP_LOGW(TAG, RESPONSE_CLEANUP_PENDING_GEN_4FCCC6E3,
-                 "response cleanup pending generation=%u error=%s",
-                 (unsigned)generation,
+                 "response cleanup pending generation=%u epoch=%u error=%s",
+                 (unsigned)generation, (unsigned)response_epoch,
                  esp_err_to_name(stream_fail_ret));
         return;
     }
+    downlink_clear_interrupt_request(response_epoch);
     (void)xiaozhi_foundation_audio_channel_close(generation);
     if (timeout) {
         portENTER_CRITICAL(&s_lock);
         ++s_status.response_timeouts;
         portEXIT_CRITICAL(&s_lock);
     }
-    downlink_set_error(normalized_error);
-    APP_LOGE(TAG, RESPONSE_ABORT_GENERATION_U_83BD6F50,
-             "response ABORT generation=%u timeout=%s error=%s",
-             (unsigned)generation,
-             timeout ? "yes" : "no",
-             esp_err_to_name(normalized_error));
-    downlink_finish_turn_state();
-    if (s_queue != NULL) {
-        (void)xQueueReset(s_queue);
+    if (interrupted) {
+        portENTER_CRITICAL(&s_lock);
+        s_status.last_error = ESP_OK;
+        portEXIT_CRITICAL(&s_lock);
+        APP_LOGI(TAG, RESPONSE_CANCEL_GENERATION_U_5956B59E,
+                 "response CANCEL generation=%u epoch=%u reason=GPIO38_PTT",
+                 (unsigned)generation, (unsigned)response_epoch);
+    } else {
+        downlink_set_error(normalized_error);
+        APP_LOGE(TAG, RESPONSE_ABORT_GENERATION_U_83BD6F50,
+                 "response ABORT generation=%u epoch=%u timeout=%s error=%s",
+                 (unsigned)generation, (unsigned)response_epoch,
+                 timeout ? "yes" : "no",
+                 esp_err_to_name(normalized_error));
     }
+    if (ptt_generation != 0U) {
+        const esp_err_t policy_ret =
+            voice_assistant_playback_finish_turn(ptt_generation);
+        if ((policy_ret != ESP_OK) &&
+            (policy_ret != ESP_ERR_INVALID_STATE)) {
+            APP_LOGW(TAG, PLAYBACK_POLICY_ABORT_FINAL_F_111A6E2A,
+                     "playback policy abort finalization failed ptt_generation=%u error=%s",
+                     (unsigned)ptt_generation,
+                         esp_err_to_name(policy_ret));
+        }
+    }
+    (void)downlink_finish_turn_state(generation, response_epoch);
+}
+
+static bool downlink_process_pending_interrupt(void)
+{
+    const uint32_t response_epoch = (uint32_t)atomic_load_explicit(
+        &s_interrupt_requested_epoch, memory_order_acquire);
+    if (response_epoch == 0U) {
+        return false;
+    }
+
+    uint32_t generation = 0U;
+    bool owns_response = false;
+    portENTER_CRITICAL(&s_lock);
+    generation = s_status.session_generation;
+    owns_response = downlink_response_owns_locked(generation, response_epoch);
+    portEXIT_CRITICAL(&s_lock);
+    if (!owns_response) {
+        downlink_clear_interrupt_request(response_epoch);
+        return false;
+    }
+
+    downlink_abort_response(generation,
+                            response_epoch,
+                            ESP_ERR_INVALID_STATE,
+                            false,
+                            true);
+    return true;
 }
 
 static void downlink_check_timeout(void)
@@ -421,6 +648,7 @@ static void downlink_check_timeout(void)
     bool collecting = false;
     bool finalizing = false;
     uint32_t generation = 0U;
+    uint32_t response_epoch = 0U;
     TickType_t response_started_at = 0U;
     TickType_t last_activity = 0U;
     portENTER_CRITICAL(&s_lock);
@@ -428,10 +656,12 @@ static void downlink_check_timeout(void)
     collecting = s_status.collecting;
     finalizing = s_status.finalizing;
     generation = s_status.session_generation;
+    response_epoch = s_active_response_epoch;
     response_started_at = s_response_started_at;
     last_activity = s_last_response_activity;
     portEXIT_CRITICAL(&s_lock);
-    if (!awaiting_response && !collecting && !finalizing) {
+    if ((!awaiting_response && !collecting && !finalizing) ||
+        (response_epoch == 0U)) {
         return;
     }
 
@@ -443,7 +673,8 @@ static void downlink_check_timeout(void)
                  (unsigned)generation,
                  awaiting_response ? "yes" : "no",
                  (unsigned)pdTICKS_TO_MS(now - response_started_at));
-        downlink_abort_response(generation, ESP_ERR_TIMEOUT, true);
+        downlink_abort_response(
+            generation, response_epoch, ESP_ERR_TIMEOUT, true, false);
     } else if (finalizing) {
         /* TTS_STOP starts a PCM drain. Do not fall through to the short
          * server-inactivity watchdog: playback can legitimately outlive the
@@ -454,7 +685,8 @@ static void downlink_check_timeout(void)
                      "PCM stream drain timeout generation=%u elapsed_ms=%u",
                      (unsigned)generation,
                      (unsigned)pdTICKS_TO_MS(now - last_activity));
-            downlink_abort_response(generation, ESP_ERR_TIMEOUT, true);
+            downlink_abort_response(
+                generation, response_epoch, ESP_ERR_TIMEOUT, true, false);
         }
     } else if (awaiting_response) {
         if ((now - last_activity) >=
@@ -471,7 +703,8 @@ static void downlink_check_timeout(void)
                      uplink.listening ? "yes" : "no",
                      esp_err_to_name(uplink.last_error),
                      esp_err_to_name(uplink_status_ret));
-            downlink_abort_response(generation, ESP_ERR_TIMEOUT, true);
+            downlink_abort_response(
+                generation, response_epoch, ESP_ERR_TIMEOUT, true, false);
         }
     } else if (collecting &&
                ((now - last_activity) >=
@@ -480,7 +713,8 @@ static void downlink_check_timeout(void)
                  "response audio inactivity timeout generation=%u waited_ms=%u",
                  (unsigned)generation,
                  (unsigned)pdTICKS_TO_MS(now - last_activity));
-        downlink_abort_response(generation, ESP_ERR_TIMEOUT, true);
+        downlink_abort_response(
+            generation, response_epoch, ESP_ERR_TIMEOUT, true, false);
     }
 }
 
@@ -499,6 +733,12 @@ static void downlink_task(void *argument)
         /* Check before every dequeue, not only after an empty poll. This keeps
          * the collection deadline effective even if the server repeatedly
          * emits non-terminal events. */
+        if (downlink_process_pending_interrupt()) {
+            /* Keep retrying a bounded terminal intent if its first manager
+             * cleanup call met transient lock contention. */
+            vTaskDelay(pdMS_TO_TICKS(DOWNLINK_INTERRUPT_POLL_MS));
+            continue;
+        }
         downlink_check_timeout();
         downlink_check_stream_terminal();
 
@@ -507,6 +747,23 @@ static void downlink_task(void *argument)
                 s_queue,
                 &item,
                 pdMS_TO_TICKS(DOWNLINK_QUEUE_POLL_MS)) != pdTRUE) {
+            continue;
+        }
+
+        if (item.local_cancel) {
+            bool owns_response = false;
+            portENTER_CRITICAL(&s_lock);
+            owns_response = downlink_response_owns_locked(
+                item.generation, item.response_epoch);
+            portEXIT_CRITICAL(&s_lock);
+            if (owns_response) {
+                downlink_abort_response(
+                    item.generation,
+                    item.response_epoch,
+                    ESP_ERR_INVALID_STATE,
+                    false,
+                    true);
+            }
             continue;
         }
 
@@ -519,9 +776,8 @@ static void downlink_task(void *argument)
         if (item.kind == XIAOZHI_FOUNDATION_RESPONSE_ERROR) {
             bool owns_response = false;
             portENTER_CRITICAL(&s_lock);
-            owns_response = (s_status.awaiting_response || s_status.collecting ||
-                             s_status.finalizing || s_status.playback_requested) &&
-                            (s_status.session_generation == item.generation);
+            owns_response = downlink_response_owns_locked(
+                item.generation, item.response_epoch);
             portEXIT_CRITICAL(&s_lock);
             if (owns_response) {
                 const esp_err_t error =
@@ -530,12 +786,25 @@ static void downlink_task(void *argument)
                          "response error generation=%u error=%s; aborting collection",
                          (unsigned)item.generation,
                          esp_err_to_name(error));
-                downlink_abort_response(item.generation, error, false);
+                downlink_abort_response(
+                    item.generation, item.response_epoch, error, false, false);
             } else {
                 portENTER_CRITICAL(&s_lock);
                 ++s_status.chunks_dropped_stale;
                 portEXIT_CRITICAL(&s_lock);
             }
+            continue;
+        }
+
+        bool owns_response = false;
+        portENTER_CRITICAL(&s_lock);
+        owns_response = downlink_response_owns_locked(
+            item.generation, item.response_epoch);
+        portEXIT_CRITICAL(&s_lock);
+        if (!owns_response) {
+            portENTER_CRITICAL(&s_lock);
+            ++s_status.chunks_dropped_stale;
+            portEXIT_CRITICAL(&s_lock);
             continue;
         }
 
@@ -554,7 +823,8 @@ static void downlink_task(void *argument)
                      !s_status.collecting &&
                      !s_status.finalizing &&
                      !s_status.playback_requested &&
-                     (s_status.session_generation == item.generation);
+                     downlink_response_owns_locked(
+                         item.generation, item.response_epoch);
             if (accept) {
                 /* Claim the response before resetting the decoder. A failed
                  * stop-listening cancellation now sees awaiting_response=false
@@ -575,16 +845,42 @@ static void downlink_task(void *argument)
                 portEXIT_CRITICAL(&s_lock);
                 continue;
             }
-            atomic_store_explicit(
-                &s_response_tainted_generation, 0U, memory_order_release);
+            if (downlink_response_is_tainted(item.response_epoch)) {
+                downlink_abort_response(item.generation,
+                                        item.response_epoch,
+                                        ESP_ERR_INVALID_RESPONSE,
+                                        false,
+                                        false);
+                continue;
+            }
             const esp_err_t reset_ret = voice_assistant_opus_decoder_reset();
             if (reset_ret != ESP_OK) {
-                downlink_abort_response(item.generation, reset_ret, false);
+                downlink_abort_response(
+                    item.generation, item.response_epoch,
+                    reset_ret, false, false);
+                continue;
+            }
+            if (downlink_response_is_tainted(item.response_epoch)) {
+                downlink_abort_response(item.generation,
+                                        item.response_epoch,
+                                        ESP_ERR_INVALID_RESPONSE,
+                                        false,
+                                        false);
                 continue;
             }
             const esp_err_t stream_ret = voice_assistant_audio_stream_begin();
             if (stream_ret != ESP_OK) {
-                downlink_abort_response(item.generation, stream_ret, false);
+                downlink_abort_response(
+                    item.generation, item.response_epoch,
+                    stream_ret, false, false);
+                continue;
+            }
+            if (downlink_response_is_tainted(item.response_epoch)) {
+                downlink_abort_response(item.generation,
+                                        item.response_epoch,
+                                        ESP_ERR_INVALID_RESPONSE,
+                                        false,
+                                        false);
                 continue;
             }
             APP_LOGI(TAG, RESPONSE_START_GENERATION_U_BDA6975A,
@@ -597,7 +893,8 @@ static void downlink_task(void *argument)
             bool accept = false;
             portENTER_CRITICAL(&s_lock);
             accept = s_status.collecting &&
-                     (s_status.session_generation == item.generation);
+                     downlink_response_owns_locked(
+                         item.generation, item.response_epoch);
             portEXIT_CRITICAL(&s_lock);
             if (!accept) {
                 portENTER_CRITICAL(&s_lock);
@@ -618,7 +915,9 @@ static void downlink_task(void *argument)
                          (unsigned)item.generation,
                          (unsigned)item.data_len,
                          esp_err_to_name(decode_ret));
-                downlink_abort_response(item.generation, decode_ret, false);
+                downlink_abort_response(
+                    item.generation, item.response_epoch,
+                    decode_ret, false, false);
                 continue;
             }
             const size_t decoded_bytes = decoded_samples * sizeof(int16_t);
@@ -636,6 +935,7 @@ static void downlink_task(void *argument)
             }
             const esp_err_t stream_ret = downlink_write_pcm_with_backpressure(
                 item.generation,
+                item.response_epoch,
                 s_decoded_pcm,
                 decoded_samples);
             if (stream_ret != ESP_OK) {
@@ -644,7 +944,9 @@ static void downlink_task(void *argument)
                          (unsigned)item.generation,
                          (unsigned)decoded_samples,
                          esp_err_to_name(stream_ret));
-                downlink_abort_response(item.generation, stream_ret, false);
+                downlink_abort_response(
+                    item.generation, item.response_epoch,
+                    stream_ret, false, false);
                 continue;
             }
             portENTER_CRITICAL(&s_lock);
@@ -658,7 +960,8 @@ static void downlink_task(void *argument)
             bool accept = false;
             portENTER_CRITICAL(&s_lock);
             accept = s_status.collecting &&
-                     (s_status.session_generation == item.generation);
+                     downlink_response_owns_locked(
+                         item.generation, item.response_epoch);
             if (accept) {
                 s_status.collecting = false;
                 s_status.finalizing = true;
@@ -672,7 +975,8 @@ static void downlink_task(void *argument)
                 portEXIT_CRITICAL(&s_lock);
                 continue;
             }
-            const bool tainted = downlink_response_is_tainted(item.generation);
+            const bool tainted = downlink_response_is_tainted(
+                item.response_epoch);
             uint64_t pcm_bytes = 0U;
             portENTER_CRITICAL(&s_lock);
             pcm_bytes = s_status.response_bytes_buffered;
@@ -680,19 +984,25 @@ static void downlink_task(void *argument)
             if (tainted || (pcm_bytes == 0U)) {
                 downlink_abort_response(
                     item.generation,
+                    item.response_epoch,
                     tainted ? ESP_ERR_INVALID_RESPONSE : ESP_ERR_INVALID_SIZE,
+                    false,
                     false);
                 continue;
             }
             const esp_err_t finish_ret = voice_assistant_audio_stream_finish();
             if (finish_ret != ESP_OK) {
-                downlink_abort_response(item.generation, finish_ret, false);
+                downlink_abort_response(
+                    item.generation, item.response_epoch,
+                    finish_ret, false, false);
                 continue;
             }
             const esp_err_t close_ret =
                 xiaozhi_foundation_audio_channel_close(item.generation);
             if ((close_ret != ESP_OK) && (close_ret != ESP_ERR_INVALID_STATE)) {
-                downlink_abort_response(item.generation, close_ret, false);
+                downlink_abort_response(
+                    item.generation, item.response_epoch,
+                    close_ret, false, false);
                 continue;
             }
             APP_LOGI(TAG, RESPONSE_DRAINING_GENERATION_53FE4A86,
@@ -738,10 +1048,17 @@ esp_err_t voice_assistant_downlink_init(void)
     }
 
     atomic_store_explicit(
-        &s_response_tainted_generation, 0U, memory_order_release);
+        &s_response_tainted_epoch, 0U, memory_order_release);
+    atomic_store_explicit(
+        &s_interrupt_requested_epoch, 0U, memory_order_release);
+    atomic_store_explicit(
+        &s_transport_fence_generation, 0U, memory_order_release);
     portENTER_CRITICAL(&s_lock);
     s_last_response_activity = 0U;
     s_response_started_at = 0U;
+    s_next_response_epoch = 0U;
+    s_active_response_epoch = 0U;
+    s_callback_response_epoch = 0U;
     s_status = (voice_assistant_downlink_status_t) {
         .initialized = true,
         .last_error = ESP_OK,
@@ -783,14 +1100,17 @@ esp_err_t voice_assistant_downlink_start(void)
     return ESP_OK;
 }
 
-esp_err_t voice_assistant_downlink_begin_response_wait(uint32_t session_generation)
+esp_err_t voice_assistant_downlink_begin_response_wait(
+    uint32_t session_generation,
+    uint32_t ptt_generation)
 {
-    if (session_generation == 0U) {
+    if ((session_generation == 0U) || (ptt_generation == 0U)) {
         return ESP_ERR_INVALID_ARG;
     }
 
     const TickType_t started_at = xTaskGetTickCount();
     esp_err_t ret = ESP_OK;
+    uint32_t response_epoch = 0U;
     portENTER_CRITICAL(&s_lock);
     if (!s_status.initialized || !s_status.running ||
         s_status.awaiting_response || s_status.collecting ||
@@ -801,12 +1121,28 @@ esp_err_t voice_assistant_downlink_begin_response_wait(uint32_t session_generati
         s_last_response_activity = started_at;
         s_status.awaiting_response = true;
         s_status.session_generation = session_generation;
+        s_status.ptt_generation = ptt_generation;
         s_status.last_error = ESP_OK;
+        response_epoch = ++s_next_response_epoch;
+        if (response_epoch == 0U) {
+            response_epoch = ++s_next_response_epoch;
+        }
+        /* Clear any terminal residue before the epoch is visible to a
+         * callback. Clearing after callback admission can erase a real
+         * queue-full/oversize taint from this response. */
+        atomic_store_explicit(
+            &s_response_tainted_epoch, 0U, memory_order_release);
+        atomic_store_explicit(
+            &s_interrupt_requested_epoch, 0U, memory_order_release);
+        s_active_response_epoch = response_epoch;
+        s_callback_response_epoch = response_epoch;
     }
     portEXIT_CRITICAL(&s_lock);
 
     if (ret == ESP_OK) {
-        APP_LOGI(TAG, RESPONSE_WAIT_GENERATION_U_12292D93, "response WAIT generation=%u", (unsigned)session_generation);
+        APP_LOGI(TAG, RESPONSE_WAIT_GENERATION_U_12292D93,
+                 "response WAIT generation=%u epoch=%u",
+                 (unsigned)session_generation, (unsigned)response_epoch);
     }
     return ret;
 }
@@ -820,13 +1156,20 @@ esp_err_t voice_assistant_downlink_cancel_response_wait(
     }
 
     bool cancelled = false;
+    uint32_t response_epoch = 0U;
     portENTER_CRITICAL(&s_lock);
     if (s_status.awaiting_response &&
-        (s_status.session_generation == session_generation)) {
+        (s_status.session_generation == session_generation) &&
+        (s_active_response_epoch != 0U)) {
+        response_epoch = s_active_response_epoch;
         s_response_started_at = 0U;
         s_last_response_activity = 0U;
         s_status.awaiting_response = false;
+        s_status.ptt_generation = 0U;
+        s_status.response_bytes_buffered = 0U;
         s_status.last_error = (error == ESP_OK) ? ESP_FAIL : error;
+        s_active_response_epoch = 0U;
+        s_callback_response_epoch = 0U;
         cancelled = true;
     }
     portEXIT_CRITICAL(&s_lock);
@@ -834,6 +1177,8 @@ esp_err_t voice_assistant_downlink_cancel_response_wait(
     if (!cancelled) {
         return ESP_ERR_INVALID_STATE;
     }
+    downlink_clear_response_taint(response_epoch);
+    downlink_clear_interrupt_request(response_epoch);
 
     APP_LOGW(TAG, RESPONSE_WAIT_CANCELLED_GENE_AE301946,
              "response WAIT cancelled generation=%u error=%s",
@@ -862,4 +1207,77 @@ bool voice_assistant_downlink_is_busy(void)
            s_status.finalizing || s_status.playback_requested;
     portEXIT_CRITICAL(&s_lock);
     return busy;
+}
+
+bool voice_assistant_downlink_transport_fence_required(
+    uint32_t session_generation)
+{
+    if (session_generation == 0U) {
+        return false;
+    }
+    return atomic_load_explicit(
+               &s_transport_fence_generation,
+               memory_order_acquire) == session_generation;
+}
+
+esp_err_t voice_assistant_downlink_interrupt_active_response(void)
+{
+    if ((s_queue == NULL) || (s_task == NULL)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    uint32_t generation = 0U;
+    uint32_t response_epoch = 0U;
+    bool busy = false;
+    portENTER_CRITICAL(&s_lock);
+    busy = s_status.awaiting_response || s_status.collecting ||
+           s_status.finalizing || s_status.playback_requested;
+    generation = s_status.session_generation;
+    response_epoch = s_active_response_epoch;
+    portEXIT_CRITICAL(&s_lock);
+    if (!busy || (generation == 0U) || (response_epoch == 0U)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    atomic_store_explicit(
+        &s_response_tainted_epoch, response_epoch, memory_order_release);
+    atomic_store_explicit(
+        &s_interrupt_requested_epoch, response_epoch, memory_order_release);
+    bool queued = false;
+    uint32_t waited_ms = 0U;
+    while (waited_ms <= DOWNLINK_INTERRUPT_QUEUE_TIMEOUT_MS) {
+        if (!atomic_flag_test_and_set_explicit(
+                &s_callback_busy,
+                memory_order_acquire)) {
+            s_callback_item.kind = XIAOZHI_FOUNDATION_RESPONSE_ERROR;
+            s_callback_item.local_cancel = true;
+            s_callback_item.generation = generation;
+            s_callback_item.response_epoch = response_epoch;
+            s_callback_item.data_len = 0U;
+            s_callback_item.error = ESP_ERR_INVALID_STATE;
+            queued = (xQueueSendToFront(s_queue, &s_callback_item, 0U) ==
+                      pdTRUE);
+            atomic_flag_clear_explicit(
+                &s_callback_busy, memory_order_release);
+            if (queued) {
+                break;
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(DOWNLINK_INTERRUPT_POLL_MS));
+        waited_ms += DOWNLINK_INTERRUPT_POLL_MS;
+    }
+
+    waited_ms = 0U;
+    while (voice_assistant_downlink_is_busy()) {
+        if (waited_ms >= DOWNLINK_INTERRUPT_TERMINAL_TIMEOUT_MS) {
+            return ESP_ERR_TIMEOUT;
+        }
+        vTaskDelay(pdMS_TO_TICKS(DOWNLINK_INTERRUPT_POLL_MS));
+        waited_ms += DOWNLINK_INTERRUPT_POLL_MS;
+    }
+    APP_LOGI(TAG, RESPONSE_INTERRUPTED_FOR_PTT_G_33B4BE14,
+             "response interrupted for PTT generation=%u waited_ms=%u",
+             (unsigned)generation,
+             (unsigned)waited_ms);
+    return ESP_OK;
 }

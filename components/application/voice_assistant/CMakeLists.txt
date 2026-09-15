@@ -8,6 +8,8 @@ idf_component_register(
         "modules/ui/src/voice_assistant_ui_gui_adapter.c"
         "modules/ptt/src/voice_assistant_ptt.c"
         "modules/ptt/src/voice_assistant_ptt_gpio.c"
+        "modules/playback/src/voice_assistant_playback_control.c"
+        "modules/playback/src/voice_assistant_playback_turn_policy.c"
         "modules/codec/src/voice_assistant_opus.c"
         "modules/uplink/src/voice_assistant_uplink.c"
         "modules/downlink/src/voice_assistant_downlink.c"
@@ -17,6 +19,7 @@ idf_component_register(
 
     PRIV_INCLUDE_DIRS
         "modules/codec/include"
+        "modules/playback/include"
 
     REQUIRES
         esp_common

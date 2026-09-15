@@ -6,6 +6,8 @@ idf_component_register(
         "modules/provider/src/smart_room_mcp_system_status.c"
         "modules/provider/src/smart_room_mcp_light_state.c"
         "modules/provider/src/smart_room_mcp_light_set_state.c"
+        "modules/provider/src/smart_room_mcp_audio_playback.c"
+        "modules/provider/src/smart_room_mcp_audio_tracks.c"
     INCLUDE_DIRS
         "include"
     PRIV_INCLUDE_DIRS
@@ -13,12 +15,15 @@ idf_component_register(
     REQUIRES
         esp_common
     PRIV_REQUIRES
+        app_log
         audio_manager
         cloud_manager
         light_manager
         sd_card_manager
         sensor_manager
         time_manager
+        voice_assistant
         xiaozhi_foundation
         esp_timer
+        freertos
 )

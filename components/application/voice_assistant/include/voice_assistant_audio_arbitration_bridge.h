@@ -36,6 +36,9 @@ esp_err_t voice_assistant_audio_stream_finish(void);
 /** Mark the selected stream failed and flush its bounded ingress. */
 esp_err_t voice_assistant_audio_stream_fail(esp_err_t error);
 
+/** Cooperatively cancel an interrupted Xiaozhi stream without faulting it. */
+esp_err_t voice_assistant_audio_stream_cancel(void);
+
 /** Copy selected stream state without exposing the arbiter request id. */
 esp_err_t voice_assistant_audio_stream_get_status(
     audio_manager_playback_request_status_t *status);

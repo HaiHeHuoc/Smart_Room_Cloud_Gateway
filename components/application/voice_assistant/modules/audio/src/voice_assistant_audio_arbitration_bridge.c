@@ -4,6 +4,7 @@
 #include "audio_manager_playback_arbiter.h"
 #include "voice_assistant_audio_arbitration_bridge.h"
 
+#include <stdbool.h>
 #include <stdatomic.h>
 #include <stdint.h>
 
@@ -165,9 +166,11 @@ esp_err_t voice_assistant_audio_stream_finish(void)
     return audio_manager_playback_arbiter_finish_pcm16_stream(request_id);
 }
 
-esp_err_t voice_assistant_audio_stream_fail(esp_err_t error)
+static esp_err_t voice_assistant_audio_stream_terminalize(
+    bool failed,
+    esp_err_t error)
 {
-    if (error == ESP_OK) {
+    if (failed && (error == ESP_OK)) {
         error = ESP_FAIL;
     }
     uint32_t request_id = (uint32_t)atomic_load_explicit(
@@ -179,8 +182,10 @@ esp_err_t voice_assistant_audio_stream_fail(esp_err_t error)
     esp_err_t ret = ESP_ERR_TIMEOUT;
     uint32_t waited_ms = 0U;
     do {
-        ret = audio_manager_playback_arbiter_fail_pcm16_stream(request_id,
-                                                                error);
+        ret = failed
+            ? audio_manager_playback_arbiter_fail_pcm16_stream(
+                  request_id, error)
+            : audio_manager_playback_arbiter_cancel(request_id);
         if (ret != ESP_ERR_TIMEOUT) {
             break;
         }
@@ -194,6 +199,35 @@ esp_err_t voice_assistant_audio_stream_fail(esp_err_t error)
         return ret;
     }
 
+    if (ret == ESP_OK) {
+        waited_ms = 0U;
+        for (;;) {
+            audio_manager_playback_request_status_t status = {0};
+            const esp_err_t status_ret =
+                audio_manager_playback_arbiter_get_request_status(
+                    request_id,
+                    &status);
+            const bool terminal = (status_ret == ESP_OK) &&
+                ((status.state == AUDIO_MANAGER_PLAYBACK_REQUEST_CANCELLED) ||
+                 (status.state == AUDIO_MANAGER_PLAYBACK_REQUEST_PREEMPTED) ||
+                 (status.state == AUDIO_MANAGER_PLAYBACK_REQUEST_FAILED) ||
+                 (status.state == AUDIO_MANAGER_PLAYBACK_REQUEST_COMPLETED));
+            if (terminal) {
+                break;
+            }
+            if ((status_ret != ESP_OK) &&
+                (status_ret != ESP_ERR_TIMEOUT) &&
+                (status_ret != ESP_ERR_NOT_FOUND)) {
+                return status_ret;
+            }
+            if (waited_ms >= XIAOZHI_ARB_TERMINAL_TIMEOUT_MS) {
+                return ESP_ERR_TIMEOUT;
+            }
+            vTaskDelay(pdMS_TO_TICKS(XIAOZHI_ARB_TERMINAL_RETRY_MS));
+            waited_ms += XIAOZHI_ARB_TERMINAL_RETRY_MS;
+        }
+    }
+
     (void)atomic_compare_exchange_strong_explicit(
         &s_playback_request_id,
         &request_id,
@@ -201,6 +235,16 @@ esp_err_t voice_assistant_audio_stream_fail(esp_err_t error)
         memory_order_acq_rel,
         memory_order_acquire);
     return ESP_OK;
+}
+
+esp_err_t voice_assistant_audio_stream_fail(esp_err_t error)
+{
+    return voice_assistant_audio_stream_terminalize(true, error);
+}
+
+esp_err_t voice_assistant_audio_stream_cancel(void)
+{
+    return voice_assistant_audio_stream_terminalize(false, ESP_OK);
 }
 
 esp_err_t voice_assistant_audio_stream_get_status(
