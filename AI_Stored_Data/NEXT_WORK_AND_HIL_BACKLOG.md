@@ -1,8 +1,8 @@
 # Next Work + Deferred HIL Backlog
 
-Updated: 2026-09-13
+Updated: 2026-09-15
 Active branch: `main_including_Firebase_security`
-Current production/source baseline before documentation-only synchronization: `0a8c83f7776d8259f22208a66f7fc4bd52156aff`
+Current integration source baseline before this AI-state synchronization: `b3b2e9b6f21ed355d6bdc7867ab184f73a4dd933` (`merge(audio): integrate Phase 18.2 playback and bounded selection`)
 
 Purpose: route future sessions to the highest-value next work without reopening
 accepted phases or inventing validation evidence.
@@ -19,9 +19,13 @@ Phase 16.1   COMPLETE BASELINE / streaming HIL accepted / endurance pending
 Phase 17     COMPLETE / read-only MCP voice HIL accepted
 Phase 18     MCP CONTROLLED ACTIONS / IN PROGRESS
 Phase 18.1   COMPLETE / build PASS / target HIL accepted by Hải on 2026-09-13
-Phase 18.2   NOT STARTED
-Phase 18.3   NOT STARTED
-Phase 18.4   NOT STARTED
+Phase 18.2   SOFTWARE INTEGRATED / TARGET HIL PENDING
+18.2.1       Playback control + PTT suspension/auto-resume
+              software implemented / build + host tests verified / HIL pending
+18.2.2       Bounded playback start + voice SD audio selection
+              software implemented / build + host tests verified / HIL pending
+Phase 18.3   NOT STARTED / scope preserved
+Phase 18.4   NOT STARTED / scope preserved
 Sprint 19    Local Web Control V1: SD Card File Manager / PLANNED / NOT STARTED
 Sprint 20    Local Web Control V2: Playback + Volume / PLANNED / NOT STARTED
 Sprint 21    Local Web Control V3: Lights / PLANNED / NOT STARTED
@@ -30,36 +34,140 @@ Sprint 23    Local Web Control V5: Scenes + Logs + Diagnostics / PLANNED / NOT S
 Sprint 24    Wake Word + Advanced Voice UX / PLANNED / NOT STARTED
 ```
 
-The application-structure cleanup is integrated. `main/main.c` is now a thin
-entrypoint; `smart_room_app` owns product composition and
-`smart_room_mcp_adapter` owns Smart Room MCP-provider adaptation. The cleanup
-recorded a normal ESP-IDF build PASS but no new target HIL specific to the
-structural move.
-
-The post-Sprint-18 roadmap is approved but not started. Local Web work is
-SD-card-first and is detailed in `AI_Stored_Data/LOCAL_WEB_DASHBOARD_PLAN.md`.
-The former Sprint 19 Wake Word plan is deferred to Sprint 24.
+Phase-18.2 source is integrated on the active branch. This does not close the
+phase: real SD/I2S/audio/PTT/network timing and resource stability remain target
+acceptance work.
 
 ## Immediate next work
 
-Do **not** rerun Phase-18.1 light acceptance merely because its source moved.
-Phase 18.1 is closed unless a concrete regression is found.
-
-Current deferred validation, in priority order when relevant:
+The highest-value next work is now:
 
 ```text
-1. delayed-first-PCM / streaming regression on the current voice path
-2. bounded post-structure-cleanup target smoke before a release checkpoint
-3. Phase-16/16.1 endurance and resource-trend work
-4. long-duration Firebase/cloud + Xiaozhi simultaneous-traffic regression
-5. start Phase 18.2 only when Hải explicitly requests it
-6. do not start Sprint 19-24 implementation until Hải explicitly requests it
+1. Run the combined Phase-18.2.1 + 18.2.2 target HIL matrix.
+2. Capture equivalent-checkpoint Internal/DMA/PSRAM and task-stack/resource trends.
+3. Record failures/fixes against the exact tested source revision.
+4. Close Phase 18.2 only after the required hardware/system evidence is accepted.
+5. Start Phase 18.3 only when Hải explicitly requests it after/around the accepted gate.
+6. Do not start Sprint 19-24 implementation until Hải explicitly requests it.
 ```
+
+Do **not** rerun Phase-18.1 light acceptance merely because later audio source
+was merged. Phase 18.1 remains closed unless a concrete regression is found.
+
+## Phase 18.2 target HIL — priority matrix
+
+### P0 — basic owner/state correctness
+
+- WAV PLAY -> PAUSE -> RESUME near the retained committed position.
+- WAV PLAY/PAUSE -> RESTART from frame zero.
+- WAV PLAY/PAUSE -> STOP and then prove a fresh playback can start.
+- Repeated PAUSE/STOP and invalid RESUME from IDLE.
+- Pause near EOF and during prefetch/refill.
+- Retained-recording control where available.
+- Confirm Xiaozhi PCM/TTS remains non-resumable and terminates through its
+  intended abort/cancel path.
+
+### P0 — GPIO38 PTT policy
+
+- Local resumable playback -> GPIO38 hold -> safe temporary suspension -> same
+  held press reaches capture -> Xiaozhi response -> guarded auto-resume.
+- Fast release during suspension -> no late microphone start; local source
+  returns to the correct state.
+- Temporary suspension plus explicit STOP -> remain IDLE after response.
+- Temporary suspension plus explicit PAUSE -> remain USER-paused.
+- Temporary suspension plus explicit RESUME/RESTART -> apply after TTS according
+  to current policy without overlapping the acknowledgement unnecessarily.
+- GPIO38 during Xiaozhi TTS -> old response terminates; same press may start the
+  new turn only after the required cleanup/fence; old speech never resumes.
+
+### P0 — bounded SD track catalog / playback start
+
+- Valid catalog and exact logical ID playback.
+- Unknown/overlong ID rejection.
+- Empty directory.
+- More than 12 valid tracks -> deterministic bounded set with `truncated=true`.
+- Non-WAV, unsupported/corrupt WAV, directory entries, and unsafe names.
+- SD unavailable at boot then recovery/remount.
+- SD/media error while scanning -> old/partial invalid snapshot is not published.
+- List/play while the catalog worker scans.
+- Confirm an accepted track request either reaches the owner WAV-start evidence
+  or later reports an owner failure; do not equate request scheduling with
+  audible playback.
+
+### P0 — response generation / transport fence
+
+Run 20-50 GPIO38 response interruptions and play/stop alternations. For local
+response aborts, verify the expected transport-fence sequence and that capture
+is never authorized before a fresh READY generation. A stop/start/drain/fence
+failure must remain fail-closed.
+
+Confirm that no stale `PCM_STREAM_REJECTED`, old response abort, old speech, or
+old queued downlink work enters the next response generation after cancellation.
+
+### P1 — resource and endurance evidence
+
+At equivalent lifecycle/workload checkpoints capture:
+
+```text
+Internal free / minimum / largest
+DMA free / minimum / largest
+PSRAM free / minimum / largest
+catalog-worker stack HWM
+WAV-reader stack HWM
+voice/PTT/uplink/downlink stack HWM
+arbiter/audio-manager stack HWM where observable
+CPU
+SD lease count/trend
+pause/resume/PTT-authorization/play-start latency
+```
+
+Run repeated pause/resume, PTT interruption, catalog/list/play, SD failure and
+recovery cycles and verify there is no monotonic heap/resource loss, stale task,
+stale SD lease, deadlock, watchdog, Guru Meditation, or uncontrolled playback.
+
+## Phase 18.2 software evidence already recorded
+
+18.2.1:
+
+```text
+audio-manager host tests       PASS
+voice-assistant host tests     PASS
+Xiaozhi/provider host tests    PASS
+ESP-IDF 6.0.1 build            PASS
+target HIL                     PENDING / NOT CLAIMED
+```
+
+18.2.2:
+
+```text
+audio-manager host tests       PASS
+voice-assistant host tests     PASS
+Xiaozhi/provider host tests    PASS
+ESP-IDF 6.0.1 build            PASS
+target HIL                     PENDING / NOT CLAIMED
+firmware size                  0x26fb90
+free app partition             0x190470 (39%)
+DIRAM build-size snapshot      167376 / 341760 bytes (48.97%)
+```
+
+Host/build evidence does not emulate FATFS/SD removal, FreeRTOS interleavings,
+I2S/MAX98357A, TLS/network timing, audible output, or runtime resource minima.
+
+## Canonical roadmap discrepancy
+
+`XIAOZHI_IMPLEMENTATION_ROADMAP.md` still contains the older statement that
+Phases 18.2-18.4 are not started. Do not use that line to overwrite the actual
+integrated Phase-18.2 source/evidence.
+
+Current execution status must follow current source plus
+`PHASE18_2_PLAN.md`, `PHASE18_2_1_PROGRESS.md`, and
+`PHASE18_2_2_PROGRESS.md`. Preserve Phase 18.3/18.4 numbering and scope; reconcile
+the canonical roadmap in a dedicated documentation task rather than silently
+renumbering work.
 
 ## Future roadmap routing
 
-When the current Phase 18 work is complete and Hải explicitly starts the next
-roadmap item, route future sessions as follows:
+After current Sprint-18 work and only when Hải explicitly starts the next item:
 
 ```text
 Sprint 19 -> Local Web Control V1: SD Card File Manager
@@ -70,24 +178,31 @@ Sprint 23 -> Local Web Control V5: Scenes + Logs + Diagnostics
 Sprint 24 -> Wake Word + Advanced Voice UX
 ```
 
-Do not reintroduce Wake Word as Sprint 19. The Sprint 24 voice sequence remains:
-feasibility/resource audit -> continuous local capture + WakeNet/VAD -> advanced
-conversation -> endurance/HIL.
+Do not reintroduce Wake Word as Sprint 19. Web/LCD remain sibling frontends over
+existing manager/service ownership. Web UI must not configure/control Wi-Fi.
+Advanced OTA/factory-management flows remain outside the approved Local Web
+scope.
 
-Web/LCD must remain frontends over existing manager/service ownership. Web UI
-must not configure/control Wi-Fi. Advanced OTA/factory-management flows remain
-outside the approved Local Web scope.
+## Deferred work outside Phase 18.2 closure
 
-## PTT / TLS — accepted smoke, endurance still deferred
+These remain useful but are not substitutes for Phase-18.2 acceptance:
+
+- delayed-first-PCM / streaming regression on the current voice path;
+- Phase-16/16.1 long-duration arbitration/streaming endurance;
+- repeated PTT/resource-trend work beyond the Phase-18.2 bounded matrix;
+- long-duration Firebase/cloud + Xiaozhi simultaneous traffic;
+- relevant visible UI/text regression only when a defect touches that path;
+- release/documentation/portfolio closure after feature and acceptance work.
+
+## PTT / TLS retained facts
 
 Current source uses dynamic TLS buffers in PSRAM, 1 KiB outbound TLS records,
 and a 20 KiB total/largest-contiguous PSRAM gate before a PTT turn starts.
 
-Hải confirmed the repeated PTT/TLS smoke PASS during Phase-18.1 acceptance.
-Therefore do not list basic PTT/TLS smoke as a Phase-18.1 blocker.
-
-Long-duration/repeated-turn endurance and heap/stack/resource-trend checks remain
-separate deferred work.
+Hải confirmed repeated PTT/TLS smoke PASS during Phase-18.1 acceptance. Do not
+list the old basic smoke as an unresolved Phase-18.1 blocker. Phase-18.2 still
+needs its own real timing/fence/PTT interaction evidence because it adds new
+audio-control concurrency and response-generation behavior.
 
 ## Streaming downlink — focused regression still deferred
 
@@ -95,31 +210,9 @@ Current source uses a 7.68-second bounded PSRAM ingress ring and a 0.96-second
 normal prefill. The 5-second prefill wait starts only after the first PCM packet,
 not at `TTS_START`.
 
-A focused delayed-first-PCM regression remains useful because the timing
-semantics changed after the older accepted Phase-16.1 baseline. Do not claim it
-PASS unless a newer target run explicitly records it.
-
-## Phase 18.1 light — accepted
-
-The user accepted the bounded matrix on 2026-09-13, including:
-
-```text
-pink 100%
-green 20%
-brightness 0 / 100
-off
-rapid color/brightness updates
-solid / blink / breath / pulse / rainbow
-effect-only while off -> turns on
-effect-only with preserved black RGB -> visible white fallback
-off + color -> rejected
-off + brightness -> rejected
-off + effect -> rejected
-light.get_state matches applied logical state
-light.get_capabilities matches the fixed contract
-```
-
-Current pulse timing is 1200 ms. The older 300 ms expectation is historical.
+A focused delayed-first-PCM regression remains useful because timing semantics
+changed after the older accepted Phase-16.1 baseline. Do not claim it PASS
+unless a newer target run explicitly records it.
 
 ## Historical HIL routing
 
@@ -138,14 +231,6 @@ RUN PHASE 16.1 HIL -> phase/16.1-streaming-downlink
 Inspect the actual worktree before using an old test branch. Never auto-stash,
 reset, discard, delete, or generalize old-branch evidence to a newer source tree.
 
-## Broader deferred integration work
-
-- Phase-16/16.1 long-duration audio arbitration/streaming endurance.
-- Repeated PTT and resource-trend checks beyond the accepted smoke run.
-- Long-duration Firebase/cloud + Xiaozhi simultaneous traffic.
-- Relevant visible UI/text regression only when a defect touches that path.
-- Release/documentation/portfolio closure after feature and acceptance work.
-
 ## Evidence vocabulary
 
 - `IMPLEMENTED` — source exists.
@@ -156,5 +241,5 @@ reset, discard, delete, or generalize old-branch evidence to a newer source tree
 - `PENDING` — no current evidence yet.
 
 A build or HIL result belongs to the source/checkpoint actually tested. A later
-behavior-preserving refactor may retain phase closure, but it must not be
-misreported as a new hardware run.
+merge or behavior-preserving refactor does not become a new hardware run unless
+target evidence is actually recorded for that source.
