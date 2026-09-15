@@ -70,7 +70,7 @@ secrets, or private payloads here.
 
 ## Current synchronization snapshot
 
-Latest handoff synchronization: **2026-09-13**.
+Latest handoff synchronization: **2026-09-15**.
 
 Active integration branch:
 
@@ -78,12 +78,11 @@ Active integration branch:
 main_including_Firebase_security
 ```
 
-Current production/source baseline before the documentation-only synchronization
-that followed it:
+Current integration source baseline before the AI-state synchronization commits:
 
 ```text
-0a8c83f7776d8259f22208a66f7fc4bd52156aff
-Cleanup code structure
+b3b2e9b6f21ed355d6bdc7867ab184f73a4dd933
+merge(audio): integrate Phase 18.2 playback and bounded selection
 ```
 
 Current major state:
@@ -93,7 +92,13 @@ Phase 16 / 16.1  accepted baseline; endurance/integration follow-up remains
 Phase 17         COMPLETE / read-only MCP voice HIL accepted
 Phase 18         MCP Controlled Actions / IN PROGRESS
 Phase 18.1       COMPLETE / build PASS / target HIL accepted by Hải (2026-09-13)
-Phase 18.2-18.4  NOT STARTED
+Phase 18.2       SOFTWARE INTEGRATED / TARGET HIL PENDING
+18.2.1           playback control + PTT suspension/auto-resume
+                 software implemented / build + host tests verified / HIL pending
+18.2.2           bounded playback start + voice SD audio selection
+                 software implemented / build + host tests verified / HIL pending
+Phase 18.3       NOT STARTED / scope preserved
+Phase 18.4       NOT STARTED / scope preserved
 Sprint 19        Local Web V1: SD Card File Manager / PLANNED / NOT STARTED
 Sprint 20        Local Web V2: Playback + Volume / PLANNED / NOT STARTED
 Sprint 21        Local Web V3: Lights / PLANNED / NOT STARTED
@@ -102,7 +107,11 @@ Sprint 23        Local Web V5: Scenes + Logs + Diagnostics / PLANNED / NOT START
 Sprint 24        Wake Word + Advanced Voice UX / PLANNED / NOT STARTED
 ```
 
-Current application structure:
+The Phase-18.2 merge is source-integration evidence only. It does not claim
+hardware acceptance. Both 18.2.1 and 18.2.2 still require target HIL/resource
+closure.
+
+## Current application structure
 
 ```text
 main/main.c
@@ -111,19 +120,40 @@ main/main.c
             -> xiaozhi_foundation
 ```
 
-`main` is now a thin entrypoint. `smart_room_app` owns product composition and
+`main` is a thin entrypoint. `smart_room_app` owns product composition and
 application policy. `smart_room_mcp_adapter` owns Smart Room provider
 adaptation. `xiaozhi_foundation` remains the sole managed Xiaozhi/MCP
 engine/session boundary.
 
-The application-structure cleanup is integrated on the active branch, not an
-unmerged refactor. See `APPLICATION_STRUCTURE_CLEANUP.md`.
+`audio_manager` remains the sole I2S/DMA/playback owner and `sd_card_manager`
+remains the SD/VFS lifecycle/lease owner. Phase-18.2 does not transfer these
+resources into MCP, WebSocket callbacks, or application glue.
 
-The approved future Local Web roadmap is SD-card-first. Web/LCD remain frontends
-over existing manager/service boundaries; Web UI does not configure/control
-Wi-Fi; advanced OTA/factory-management remains out of the current scope. The
-former Sprint 19 Wake Word plan is deferred to Sprint 24. See
-`LOCAL_WEB_DASHBOARD_PLAN.md`.
+## Current Phase 18.2 surfaces
+
+Phase 18.2.1:
+
+```text
+audio.control_playback { action: pause | resume | stop | restart }
+audio.get_playback_state {}
+```
+
+Phase 18.2.2:
+
+```text
+audio.list_tracks {}
+audio.play_track { track_id: exact-id }
+audio.play_recorded {}
+```
+
+The SD audio catalog is bounded and rooted at `/sdcard/audio/`. MCP receives
+logical track IDs/names/metadata only and never arbitrary model-supplied
+filesystem paths. A persistent catalog worker owns bounded scanning and SD lease
+use; callbacks use a copied cache.
+
+The Phase-18.2 response path also contains generation/transport-fence hardening
+after locally aborted Xiaozhi responses. Target evidence is still required to
+prove stale speech/response isolation under real network timing.
 
 ## Current validation facts
 
@@ -138,43 +168,78 @@ Phase-18.1 light HIL      PASS
 
 Do not reinterpret this as a target run performed by an AI agent.
 
-The later application-structure cleanup recorded a normal ESP-IDF build PASS but
-no new target HIL specific to the structural move. Earlier Phase-18.1 acceptance
-and the cleanup build remain separate evidence.
+Phase-18.2 recorded software evidence includes:
 
-Current implementation facts that supersede older notes include:
+```text
+18.2.1 audio-manager host tests       PASS
+18.2.1 voice-assistant host tests     PASS
+18.2.1 Xiaozhi/provider host tests    PASS
+18.2.1 ESP-IDF build                  PASS
+18.2.1 target HIL                     PENDING / NOT CLAIMED
 
-- dynamic mbedTLS buffers in PSRAM;
-- 1 KiB outbound TLS record;
-- 20 KiB total/largest-contiguous PSRAM gate before PTT;
-- 7.68-second streaming ingress ring;
-- 0.96-second normal streaming prefill;
-- prefill timeout begins after first PCM, not at `TTS_START`;
-- Phase-18.1 effect-only activation and visible-white fallback semantics;
-- pulse effect timing is 1200 ms, not the earlier 300 ms value.
+18.2.2 audio-manager host tests       PASS
+18.2.2 voice-assistant host tests     PASS
+18.2.2 Xiaozhi/provider host tests    PASS
+18.2.2 ESP-IDF build                  PASS
+18.2.2 target HIL                     PENDING / NOT CLAIMED
+```
 
-A delayed-first-PCM streaming regression and longer endurance/resource checks
-remain deferred and do not reopen Phase 18.1.
+The 18.2.2 implementation record also captured firmware size `0x26fb90`, free
+app partition `0x190470` (39%), and DIRAM `167376 / 341760` bytes (48.97%).
+These are build/link evidence, not runtime heap/stack/HIL evidence.
+
+Current retained voice/streaming facts include dynamic TLS buffers in PSRAM,
+1 KiB outbound TLS records, a 20 KiB total/largest-contiguous PSRAM gate before
+PTT, a 7.68-second streaming ingress ring, and 0.96-second normal prefill. A
+delayed-first-PCM regression and longer endurance/resource checks remain
+deferred outside Phase-18.2 target closure unless a newer target run explicitly
+records them.
+
+## Current documentation discrepancy
+
+`XIAOZHI_IMPLEMENTATION_ROADMAP.md` still says Phases 18.2-18.4 are not started.
+That execution status is older than the merged Phase-18.2 source and the newer
+`PHASE18_2_PLAN.md`, `PHASE18_2_1_PROGRESS.md`, and
+`PHASE18_2_2_PROGRESS.md` records.
+
+For current execution status, source plus the newer Phase-18.2 records take
+precedence. Preserve this discrepancy visibly until the canonical roadmap is
+reconciled. Do not renumber or silently repurpose Phase 18.3/18.4 while doing
+so.
+
+## Future roadmap
+
+The approved future Local Web roadmap remains SD-card-first:
+
+```text
+Sprint 19  Local Web V1: SD Card File Manager
+Sprint 20  Local Web V2: Playback + Volume
+Sprint 21  Local Web V3: Lights
+Sprint 22  Local Web V4: Dashboard + System Status
+Sprint 23  Local Web V5: Scenes + Logs + Diagnostics
+Sprint 24  Wake Word + Advanced Voice UX
+```
+
+Web/LCD remain sibling frontends over existing manager/service boundaries. Web
+UI does not configure/control Wi-Fi. Advanced OTA/factory-management remains
+out of the current scope. The former Sprint 19 Wake Word plan is deferred to
+Sprint 24.
 
 ## File index
 
 ### Current state / decisions
 
-- `PROJECT_STATE.md` — primary current integrated snapshot, ownership, accepted
-  state, deferred validation, approved future roadmap, and next-action guardrails.
-- `PROJECT_STATE_CURRENT.md` — synchronization companion created during the
-  2026-09-13 documentation reconciliation.
+- `PROJECT_STATE.md` — primary current integrated snapshot, ownership, current
+  Phase-18.2 state, validation status, future roadmap, and next-action guardrails.
+- `PROJECT_STATE_CURRENT.md` — compact current-state synchronization companion.
 - `DECISIONS.md` — durable project decisions and historical status overrides.
-- `NEXT_WORK_AND_HIL_BACKLOG.md` — current deferred validation and next-work
-  routing.
-- `LOCAL_WEB_DASHBOARD_PLAN.md` — durable approved Sprint 19-23 Local Web scope,
-  Sprint 24 Wake Word deferral, SD-card-first ordering, and frontend/ownership
-  anti-drift rules.
+- `NEXT_WORK_AND_HIL_BACKLOG.md` — deferred validation and next-work routing.
+- `LOCAL_WEB_DASHBOARD_PLAN.md` — approved Sprint 19-23 Local Web scope and
+  Sprint 24 Wake Word deferral.
 - `APPLICATION_STRUCTURE_CLEANUP.md` — integrated thin-main / application
   composition cleanup record.
 - `COMPONENT_PORTABILITY_HARDENING.md` — earlier portability-hardening history
-  and frozen architecture conclusions. Newer current-state files supersede any
-  pre-integration wording inside its historical sections.
+  and frozen architecture conclusions.
 
 ### Current Xiaozhi / voice phases
 
@@ -184,10 +249,14 @@ remain deferred and do not reopen Phase 18.1.
 - `PHASE16_HIL_TEST_BRANCH.md`
 - `PHASE16_1_STREAMING_DOWNLINK.md`
 - `PHASE17_XIAOZHI_SENSOR_ANSWER.md`
-- `PHASE18_MCP_CONTROLLED_ACTIONS.md` — current approved Phase-18 scope,
-  finalized Phase-18.1 contract/acceptance, and 18.2-18.4 NOT STARTED state.
-- `PHASE18_2_PLAN.md` — detailed approved Phase-18.2 planning record; preserve
-  its numbering/scope independently from future Sprint 19-24 allocation.
+- `PHASE18_MCP_CONTROLLED_ACTIONS.md` — Phase-18 umbrella history; newer
+  Phase-18.2 records supersede its stale pre-18.2 execution-status wording.
+- `PHASE18_2_PLAN.md` — locked Phase-18.2 subdivision and evidence status.
+- `PHASE18_2_1_DESIGN_AUDIT.md` — 18.2.1 owner/state/PTT design audit.
+- `PHASE18_2_1_PROGRESS.md` — 18.2.1 implementation/build/host-test status and
+  target HIL matrix.
+- `PHASE18_2_2_PROGRESS.md` — 18.2.2 bounded catalog/playback implementation,
+  stability hardening, build/host evidence, and target HIL matrix.
 
 ### Earlier phase records
 
@@ -206,10 +275,10 @@ remain deferred and do not reopen Phase 18.1.
 - `P2F_KNOWN_AUDIO_HIL.md`
 - `CODEX_HIL_INDEX.md`
 
-Historical files may intentionally contain the terminology and pending state
-that was true at the time they were written. Do not rewrite history merely to
-match today's source. Use `PROJECT_STATE.md` for current truth and
-`LOCAL_WEB_DASHBOARD_PLAN.md` for the approved future Local Web scope.
+Historical files may intentionally contain terminology and pending state that
+was true at the time they were written. Do not rewrite history merely to match
+today's source. Use `PROJECT_STATE.md` for current execution truth and
+phase-specific progress files for detailed evidence.
 
 This directory remains support metadata only and is intentionally safe to
 delete without changing firmware behavior.
