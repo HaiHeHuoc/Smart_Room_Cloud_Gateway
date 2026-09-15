@@ -14,6 +14,7 @@ production Xiaozhi/MCP session:
 smart_room.get_current_temperature_humidity
 smart_room.get_cloud_sync_status
 smart_room.get_system_status
+cloud.push_latest
 light.set_state
 light.get_state
 light.get_capabilities
@@ -81,6 +82,22 @@ Xiaozhi backend
 
 `light_manager` remains the light-state/effect owner. MCP never drives GPIO/RMT
 or the NeoPixel component directly.
+
+For Phase 18.4, `cloud.push_latest {}` is a no-argument controlled action:
+
+```text
+Xiaozhi backend
+-> xiaozhi_foundation cloud.push_latest tool
+-> smart_room_mcp_adapter cloud provider
+-> cloud_manager_request_push_latest()
+-> existing cloud task/Firebase path
+```
+
+The foundation accepts neither telemetry values nor cloud endpoint/auth/HTTP
+data. It delegates one copied scheduling result only. `accepted=true` always
+means `upload_complete=false`; an MCP callback never waits for network work or
+claims Firebase success. `not_ready`, `offline`, `busy`, `invalid_state`, and
+`failed` remain bounded provider outcomes.
 
 ## Phase 18.2.2 Bounded Audio Selection
 

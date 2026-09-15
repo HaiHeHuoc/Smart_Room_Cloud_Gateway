@@ -106,7 +106,9 @@ available; active TTS ordering is handled by the existing turn-final policy.
 - No arbitrary path flows from MCP to filesystem: PASS.
 - `audio_manager` remains sole I2S/DMA owner; `sd_card_manager` retains mount
   lifecycle: PASS.
-- Phase 18.3/18.4 source untouched: PASS.
+- Phase 18.3 historical playback scope is fully covered by 18.2.2: PASS.
+- Phase 18.4 is implemented separately on its dedicated branch; it is not
+  evidence for Phase 18.2 target acceptance.
 
 ### Host tests
 

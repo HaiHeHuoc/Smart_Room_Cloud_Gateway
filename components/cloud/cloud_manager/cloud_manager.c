@@ -1,5 +1,6 @@
 /* Includes ----------------------------------------------------------------- */
 #include "cloud_manager.h"
+#include "cloud_push_latest_policy.h"
 #include "cloud_telemetry_json.h"
 
 #include <math.h>
@@ -47,9 +48,11 @@
 
 #define CLOUD_MANAGER_NOTIFY_TELEMETRY_AVAILABLE   (1UL << 0)
 #define CLOUD_MANAGER_NOTIFY_NETWORK_CHANGED       (1UL << 1)
+#define CLOUD_MANAGER_NOTIFY_FORCED_PUSH           (1UL << 2)
 #define CLOUD_MANAGER_NOTIFY_ALL                    \
     (CLOUD_MANAGER_NOTIFY_TELEMETRY_AVAILABLE |     \
-     CLOUD_MANAGER_NOTIFY_NETWORK_CHANGED)
+     CLOUD_MANAGER_NOTIFY_NETWORK_CHANGED |         \
+     CLOUD_MANAGER_NOTIFY_FORCED_PUSH)
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "CLOUD_MANAGER";
@@ -80,6 +83,13 @@ typedef struct
     bool has_ipv4_address;
     uint32_t epoch;
 } cloud_network_snapshot_t;
+
+typedef enum
+{
+    CLOUD_DELAY_NONE = 0,
+    CLOUD_DELAY_PUBLISH_PERIOD,
+    CLOUD_DELAY_RETRY,
+} cloud_delay_reason_t;
 
 /* Static Variables --------------------------------------------------------- */
 static cloud_manager_config_t s_config;
@@ -120,6 +130,10 @@ static portMUX_TYPE s_signal_lock =
     portMUX_INITIALIZER_UNLOCKED;
 static bool s_network_has_ipv4_address;
 static uint32_t s_network_epoch;
+/* Retain only admission facts here. The telemetry data itself remains in the
+ * queue/task-owned cache, so a model cannot provide or mutate cloud payloads. */
+static bool s_has_latest_telemetry;
+static bool s_forced_push_pending;
 
 static cloud_manager_status_t s_status;
 static SemaphoreHandle_t s_status_mutex;
@@ -148,6 +162,10 @@ static void cloud_manager_wake_task(
 
 static cloud_network_snapshot_t
 cloud_manager_get_network_snapshot(void);
+
+static bool cloud_manager_forced_push_is_pending(void);
+
+static void cloud_manager_clear_forced_push_pending(void);
 
 static void cloud_manager_notify_status_changed(void);
 
@@ -302,6 +320,24 @@ cloud_manager_get_network_snapshot(void)
     portEXIT_CRITICAL(&s_signal_lock);
 
     return snapshot;
+}
+
+static bool cloud_manager_forced_push_is_pending(void)
+{
+    bool pending = false;
+
+    portENTER_CRITICAL(&s_signal_lock);
+    pending = s_forced_push_pending;
+    portEXIT_CRITICAL(&s_signal_lock);
+
+    return pending;
+}
+
+static void cloud_manager_clear_forced_push_pending(void)
+{
+    portENTER_CRITICAL(&s_signal_lock);
+    s_forced_push_pending = false;
+    portEXIT_CRITICAL(&s_signal_lock);
 }
 
 static void cloud_manager_notify_status_changed(void)
@@ -1057,7 +1093,9 @@ static void cloud_manager_task(
     (void)argument;
 
     cloud_sensor_telemetry_t pending_telemetry = {0};
+    cloud_sensor_telemetry_t latest_telemetry = {0};
     bool has_pending_telemetry = false;
+    bool has_latest_telemetry = false;
     bool upload_has_succeeded = false;
     bool terminal_error_latched = false;
     bool forced_403_recovery_active = false;
@@ -1069,6 +1107,7 @@ static void cloud_manager_task(
     bool delay_active = false;
     TickType_t delay_start = 0U;
     TickType_t delay_duration = 0U;
+    cloud_delay_reason_t delay_reason = CLOUD_DELAY_NONE;
 
     APP_LOGD(
         TAG, CLOUD_TASK_STARTED_PUBLISH_P_7110997C,
@@ -1086,7 +1125,27 @@ static void cloud_manager_task(
         {
             pending_telemetry =
                 received_telemetry;
+            latest_telemetry =
+                received_telemetry;
             has_pending_telemetry = true;
+            has_latest_telemetry = true;
+        }
+
+        const bool forced_push_pending =
+            cloud_manager_forced_push_is_pending();
+        if (forced_push_pending && has_latest_telemetry)
+        {
+            /* A requested push uses only the latest manager-owned copy. It
+             * never accepts caller values and coalesces behind one sentinel. */
+            pending_telemetry = latest_telemetry;
+            has_pending_telemetry = true;
+
+            if (delay_active &&
+                (delay_reason == CLOUD_DELAY_PUBLISH_PERIOD))
+            {
+                delay_active = false;
+                delay_reason = CLOUD_DELAY_NONE;
+            }
         }
 
         const cloud_network_snapshot_t network =
@@ -1123,6 +1182,7 @@ static void cloud_manager_task(
                 retry_delay_ms =
                     CLOUD_MANAGER_RETRY_INITIAL_MS;
                 delay_active = false;
+                delay_reason = CLOUD_DELAY_NONE;
             }
         }
 
@@ -1178,6 +1238,7 @@ static void cloud_manager_task(
             }
 
             delay_active = false;
+            delay_reason = CLOUD_DELAY_NONE;
         }
 
         cloud_manager_set_state(
@@ -1204,6 +1265,10 @@ static void cloud_manager_task(
              * queued and will become pending on the next loop.
              */
             has_pending_telemetry = false;
+            if (forced_push_pending)
+            {
+                cloud_manager_clear_forced_push_pending();
+            }
             upload_has_succeeded = true;
             forced_403_recovery_active = false;
             retry_delay_ms =
@@ -1215,6 +1280,7 @@ static void cloud_manager_task(
                 cloud_manager_ms_to_ticks_nonzero(
                     s_config.publish_period_ms);
             delay_active = true;
+            delay_reason = CLOUD_DELAY_PUBLISH_PERIOD;
 
             continue;
         }
@@ -1241,6 +1307,7 @@ static void cloud_manager_task(
                 CLOUD_MANAGER_STATE_WAITING_FOR_NETWORK,
                 CLOUD_MANAGER_RETRY_INITIAL_MS);
             delay_active = false;
+            delay_reason = CLOUD_DELAY_NONE;
             continue;
         }
 
@@ -1314,6 +1381,7 @@ static void cloud_manager_task(
                 cloud_manager_ms_to_ticks_nonzero(
                     retry_delay_ms);
             delay_active = true;
+            delay_reason = CLOUD_DELAY_RETRY;
             retry_delay_ms =
                 cloud_manager_next_retry_delay(
                     retry_delay_ms);
@@ -1350,6 +1418,7 @@ static void cloud_manager_task(
                 cloud_manager_ms_to_ticks_nonzero(
                     retry_delay_ms);
             delay_active = true;
+            delay_reason = CLOUD_DELAY_RETRY;
             retry_delay_ms =
                 cloud_manager_next_retry_delay(
                     retry_delay_ms);
@@ -1492,6 +1561,8 @@ esp_err_t cloud_manager_init(
     portENTER_CRITICAL(&s_signal_lock);
     s_network_has_ipv4_address = false;
     s_network_epoch = 1U;
+    s_has_latest_telemetry = false;
+    s_forced_push_pending = false;
     portEXIT_CRITICAL(&s_signal_lock);
 
     s_status.network_epoch = 1U;
@@ -1669,9 +1740,96 @@ esp_err_t cloud_manager_post_sensor_telemetry(
         return ESP_FAIL;
     }
 
+    portENTER_CRITICAL(&s_signal_lock);
+    s_has_latest_telemetry = true;
+    portEXIT_CRITICAL(&s_signal_lock);
+
     cloud_manager_wake_task(
         CLOUD_MANAGER_NOTIFY_TELEMETRY_AVAILABLE);
 
+    return ESP_OK;
+}
+
+esp_err_t cloud_manager_request_push_latest(
+    cloud_manager_push_latest_result_t *result)
+{
+    if (result == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *result = (cloud_manager_push_latest_result_t){
+        .outcome = CLOUD_MANAGER_PUSH_LATEST_FAILED,
+        .accepted = false,
+    };
+
+    if (!s_is_initialized || !s_is_started ||
+        (s_status_mutex == NULL))
+    {
+        result->outcome = CLOUD_MANAGER_PUSH_LATEST_NOT_READY;
+        return ESP_OK;
+    }
+
+    /* MCP/provider callbacks must stay short. Do not wait behind a status
+     * callback or the cloud task merely to classify one scheduling request. */
+    if (xSemaphoreTake(s_status_mutex, 0U) != pdTRUE)
+    {
+        return ESP_OK;
+    }
+
+    cloud_push_latest_policy_input_t admission = {
+        .initialized = s_is_initialized,
+        .started = s_is_started,
+        .state = s_status.state,
+    };
+
+    xSemaphoreGive(s_status_mutex);
+
+    TaskHandle_t task_handle = NULL;
+    portENTER_CRITICAL(&s_signal_lock);
+    admission.has_ipv4_address = s_network_has_ipv4_address;
+    admission.has_latest_telemetry = s_has_latest_telemetry;
+    admission.request_pending = s_forced_push_pending;
+    task_handle = s_cloud_task_handle;
+    portEXIT_CRITICAL(&s_signal_lock);
+
+    result->outcome = cloud_push_latest_policy_evaluate(&admission);
+    if (result->outcome != CLOUD_MANAGER_PUSH_LATEST_ACCEPTED)
+    {
+        return ESP_OK;
+    }
+
+    if (task_handle == NULL)
+    {
+        result->outcome = CLOUD_MANAGER_PUSH_LATEST_FAILED;
+        return ESP_OK;
+    }
+
+    portENTER_CRITICAL(&s_signal_lock);
+    if (s_forced_push_pending)
+    {
+        portEXIT_CRITICAL(&s_signal_lock);
+        result->outcome = CLOUD_MANAGER_PUSH_LATEST_BUSY;
+        return ESP_OK;
+    }
+    s_forced_push_pending = true;
+    portEXIT_CRITICAL(&s_signal_lock);
+
+    if (xTaskNotify(
+            task_handle,
+            CLOUD_MANAGER_NOTIFY_FORCED_PUSH,
+            eSetBits) != pdPASS)
+    {
+        cloud_manager_clear_forced_push_pending();
+        result->outcome = CLOUD_MANAGER_PUSH_LATEST_FAILED;
+        return ESP_OK;
+    }
+
+    result->accepted = true;
+    result->outcome = CLOUD_MANAGER_PUSH_LATEST_ACCEPTED;
+    APP_LOGI(
+        TAG, PUSH_LATEST_REQUEST_ACCEPTED_6E91D4C2,
+        "Latest telemetry upload request accepted");
     return ESP_OK;
 }
 

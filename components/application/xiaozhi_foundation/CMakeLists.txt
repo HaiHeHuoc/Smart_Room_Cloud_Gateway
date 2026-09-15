@@ -1,6 +1,8 @@
 set(xiaozhi_foundation_sources
     "modules/mcp_audio_playback/src/xiaozhi_mcp_audio_playback.c"
     "modules/mcp_audio_playback/src/xiaozhi_mcp_audio_playback_policy.c"
+    "modules/mcp_cloud_push_latest/src/xiaozhi_mcp_cloud_push_latest.c"
+    "modules/mcp_cloud_push_latest/src/xiaozhi_mcp_cloud_push_latest_policy.c"
     "modules/mcp_cloud_sync/src/xiaozhi_mcp_cloud_sync.c"
     "modules/mcp_light_capabilities/src/xiaozhi_mcp_light_capabilities.c"
     "modules/mcp_light_state_query/src/xiaozhi_mcp_light_state_query.c"
@@ -33,6 +35,7 @@ idf_component_register(
 
     PRIV_INCLUDE_DIRS
         "modules/mcp_audio_playback/include"
+        "modules/mcp_cloud_push_latest/include"
         "modules/mcp_cloud_sync/include"
         "modules/mcp_light_capabilities/include"
         "modules/mcp_light_state_query/include"

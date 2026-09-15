@@ -137,6 +137,43 @@ esp_err_t xiaozhi_foundation_register_cloud_sync_query_provider(
     xiaozhi_foundation_cloud_sync_query_provider_t provider,
     void *user_context);
 
+/* Phase 18.4 controlled cloud-push MCP boundary -------------------------- */
+
+/** Bounded outcome returned by the project-owned cloud push provider. */
+typedef enum {
+    XIAOZHI_FOUNDATION_CLOUD_PUSH_LATEST_ACCEPTED = 0,
+    XIAOZHI_FOUNDATION_CLOUD_PUSH_LATEST_NOT_READY,
+    XIAOZHI_FOUNDATION_CLOUD_PUSH_LATEST_OFFLINE,
+    XIAOZHI_FOUNDATION_CLOUD_PUSH_LATEST_BUSY,
+    XIAOZHI_FOUNDATION_CLOUD_PUSH_LATEST_INVALID_STATE,
+    XIAOZHI_FOUNDATION_CLOUD_PUSH_LATEST_FAILED,
+} xiaozhi_foundation_cloud_push_latest_outcome_t;
+
+/** Copied result of asking the product cloud owner to push current telemetry. */
+typedef struct {
+    xiaozhi_foundation_cloud_push_latest_outcome_t outcome;
+    /** True only when the manager accepted scheduling; never upload success. */
+    bool accepted;
+} xiaozhi_foundation_cloud_push_latest_result_t;
+
+/**
+ * @brief Request one bounded upload of the product-owned latest snapshot.
+ *
+ * The MCP callback calls this provider in normal task context. It must return
+ * quickly, must not perform network I/O or LVGL work, and must not expose or
+ * accept Firebase/auth/HTTP handles, credentials, endpoint paths, or payload
+ * values. Registration is before voice start; the function/context remain
+ * borrowed for firmware lifetime.
+ */
+typedef esp_err_t (*xiaozhi_foundation_cloud_push_latest_provider_t)(
+    xiaozhi_foundation_cloud_push_latest_result_t *result,
+    void *user_context);
+
+/** Register the composition-owned bounded cloud push provider before voice start. */
+esp_err_t xiaozhi_foundation_register_cloud_push_latest_provider(
+    xiaozhi_foundation_cloud_push_latest_provider_t provider,
+    void *user_context);
+
 /* Production Smart Room system-status MCP boundary ----------------------- */
 
 #define XIAOZHI_FOUNDATION_SYSTEM_STATUS_TOKEN_MAX_BYTES  16U

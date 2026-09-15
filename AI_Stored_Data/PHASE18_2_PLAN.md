@@ -17,8 +17,9 @@ Current Phase-18 execution state remains:
 18.1    NeoPixel MCP control                                  COMPLETE
 18.2.1  Audio Playback Control + PTT Suspension/Auto-Resume   IN PROGRESS
 18.2.2  Bounded Playback Start + Voice SD Audio Selection     SOFTWARE IMPLEMENTED / HIL PENDING
-18.3    Existing previously planned scope                     NOT STARTED / UNCHANGED
-18.4    Existing previously planned scope                     NOT STARTED / UNCHANGED
+18.3    Historical bounded playback scope                     SUPERSEDED / ABSORBED INTO 18.2.2
+18.4    cloud.push_latest                                     SOFTWARE IMPLEMENTED / HOST TESTS VERIFIED /
+                                                               ESP-IDF BUILD ENVIRONMENT BLOCKED / HIL PENDING
 ```
 
 Do not collapse 18.2.1 and 18.2.2 back into one coarse `18.2` implementation
@@ -304,10 +305,19 @@ remain **Q&A decisions, not approved implementation yet**.
 
 ---
 
-# Phase 18.3 / 18.4 preservation
+# Phase 18.3 / 18.4 reconciliation
 
-Phase 18.3 and Phase 18.4 keep their previously planned numbering and scope.
-This Phase-18.2 subdivision does not consume, rename, or repurpose either phase.
+Phase 18.3 keeps its historical number, but source review confirms that its
+bounded playback-start contract is already implemented by 18.2.2 through
+`audio.list_tracks`, `audio.play_track`, and `audio.play_recorded`. It is
+therefore **SUPERSEDED / ABSORBED INTO 18.2.2** and requires no duplicate
+production implementation.
+
+Phase 18.4 remains the distinct `cloud.push_latest` action. It is implemented
+through the public `cloud_manager` scheduling API and reports acceptance only,
+never Firebase upload completion. Current host tests verify policy and provider
+boundaries; the ESP-IDF build is blocked in this checkout because `IDF_PATH`
+is not available, and target HIL remains pending.
 
 Any future roadmap reconciliation must preserve completed Phase 18.1 history
 and this 18.2.1/18.2.2 split unless Hải explicitly changes the plan.
@@ -323,4 +333,8 @@ This file records planning decisions only:
 18.2.2 implementation   SOFTWARE IMPLEMENTED
 18.2.2 build            BUILD + HOST TESTS VERIFIED
 18.2.2 HIL              NOT RUN / NOT CLAIMED
+18.3 reconciliation     SUPERSEDED / ABSORBED INTO 18.2.2 / NO NEW CODE
+18.4 implementation     SOFTWARE IMPLEMENTED / HOST TESTS VERIFIED
+18.4 ESP-IDF build      BLOCKED -- ESP-IDF environment unavailable in checkout
+18.4 HIL                NOT RUN / NOT CLAIMED
 ```

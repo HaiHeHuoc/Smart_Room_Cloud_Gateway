@@ -53,6 +53,7 @@ Task 4 time telemetry: build and host-serializer verified; Firebase runtime acce
 | `cloud_manager_register_status_callback()` | Register one short non-blocking status callback |
 | `cloud_manager_notify_network_state()` | Retain IPv4 state, advance network epoch, and wake task |
 | `cloud_manager_post_sensor_telemetry()` | Replace pending sensor/audio/time data with the newest validated snapshot |
+| `cloud_manager_request_push_latest()` | Coalesce one non-blocking request to upload the current manager-owned latest snapshot |
 | `cloud_manager_get_status()` | Copy cloud state, counters, HTTP status, and retry delay |
 
 ## Initialization
@@ -101,6 +102,12 @@ Wi-Fi callback
     -> cloud_manager_notify_network_state(has_ipv4)
     -> retain edge and advance network epoch
     -> wake cloud task
+
+MCP cloud action
+    -> smart_room_mcp_adapter provider
+    -> cloud_manager_request_push_latest()
+    -> retain one forced-push sentinel only
+    -> wake cloud task without data, auth, or HTTP work
 
 cloud task
     -> discard client from an obsolete network/token generation
@@ -188,6 +195,30 @@ if they occur entirely between snapshots.
 Consumers must inspect `sensor.sensor_valid` and `sensor.sensor_stale`; not
 every finite number represents a valid physical reading.
 
+## Bounded push-latest scheduling
+
+`cloud_manager_request_push_latest()` exists for the Phase-18.4 product action.
+It takes no telemetry input: the cloud task reuses only its latest copied,
+validated application snapshot. The API is normal task-context, non-blocking,
+and has no Firebase, HTTP, authentication, or LVGL work.
+
+One request sentinel is retained at a time. The result is `accepted`,
+`not_ready`, `offline`, `busy`, `invalid_state`, or `failed`:
+
+- `accepted` means only that the cloud task retained the request. It never
+  proves Firebase upload completion;
+- `not_ready` means the worker or a latest snapshot is unavailable;
+- `offline` means no usable Station IPv4 is currently retained;
+- `busy` coalesces repeated delivery while a prior requested upload, active
+  upload, or retry is outstanding;
+- `invalid_state` covers terminal auth/configuration states; and
+- `failed` covers a local non-network scheduling/lock failure.
+
+A retained request can cancel the ordinary delay after a successful upload, but
+it cannot bypass retry backoff or create a second HTTP client/task. An accepted
+MCP result must therefore say that upload completion is pending; callers use a
+later `cloud_manager_get_status()` snapshot for separately-owned outcome state.
+
 ## State And Retry Policy
 
 | State / result | Behavior |
@@ -218,6 +249,8 @@ being retried. A successful request clears only the snapshot actually uploaded.
 - `cloud_manager` does not depend on `audio_manager` headers or own I2S/audio
   lifecycle.
 - The status callback runs in cloud-task context and must remain short.
+- The push-latest request copies no caller data and uses a critical-section
+  sentinel only; it performs no queue wait, task creation, or network I/O.
 - HTTP clients are reused only across successful uploads with unchanged network
   and token generations.
 - Network edges invalidate earlier TLS sessions.

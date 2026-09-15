@@ -60,6 +60,31 @@ typedef enum
     CLOUD_MANAGER_FAILURE_NONRETRYABLE_INTERNAL
 } cloud_manager_failure_class_t;
 
+/** @brief Bounded scheduling result for one requested latest-value upload. */
+typedef enum
+{
+    /** The cloud task has retained one request; upload completion is pending. */
+    CLOUD_MANAGER_PUSH_LATEST_ACCEPTED = 0,
+    /** The manager/task or a latest product-owned telemetry snapshot is unavailable. */
+    CLOUD_MANAGER_PUSH_LATEST_NOT_READY,
+    /** Station has no usable IPv4 address, so the request was not accepted. */
+    CLOUD_MANAGER_PUSH_LATEST_OFFLINE,
+    /** A previous requested upload is still pending or retrying. */
+    CLOUD_MANAGER_PUSH_LATEST_BUSY,
+    /** Authentication or configuration is in a terminal cloud-manager state. */
+    CLOUD_MANAGER_PUSH_LATEST_INVALID_STATE,
+    /** The manager could not retain or signal the request. */
+    CLOUD_MANAGER_PUSH_LATEST_FAILED,
+} cloud_manager_push_latest_outcome_t;
+
+/** @brief Copied result of a bounded request to publish the latest snapshot. */
+typedef struct
+{
+    cloud_manager_push_latest_outcome_t outcome;
+    /** True only when the cloud task retained this request for a later attempt. */
+    bool accepted;
+} cloud_manager_push_latest_result_t;
+
 /** @brief Cloud-owned audio state used by the Firebase telemetry schema. */
 typedef enum
 {
@@ -279,6 +304,29 @@ esp_err_t cloud_manager_notify_network_state(
  */
 esp_err_t cloud_manager_post_sensor_telemetry(
     const cloud_sensor_telemetry_t *telemetry);
+
+/**
+ * @brief Schedule one upload of the latest project-owned telemetry snapshot.
+ *
+ * This non-blocking normal-task-context API performs no authentication, HTTP,
+ * Firebase, or LVGL work and copies no model-supplied data. The single cloud
+ * task later uploads its cached latest telemetry through the normal
+ * authentication, retry, and network-epoch path. At most one requested upload
+ * is outstanding; a repeated request returns CLOUD_MANAGER_PUSH_LATEST_BUSY
+ * until that request succeeds or reaches its existing terminal cloud state. A
+ * request may bypass the normal successful publish-period delay, but never an
+ * active retry backoff.
+ *
+ * `accepted` means only that the worker retained a request. It is not proof
+ * that Firebase authentication, HTTPS, or the upload has completed. Call
+ * cloud_manager_get_status() later to observe the separately-owned result.
+ *
+ * @param[out] result Destination for the copied scheduling result.
+ * @return ESP_OK when @p result contains an outcome, ESP_ERR_INVALID_ARG when
+ *         @p result is NULL. This API never waits for a network operation.
+ */
+esp_err_t cloud_manager_request_push_latest(
+    cloud_manager_push_latest_result_t *result);
 
 /**
  * @brief Copy cloud state and statistics under the component mutex.

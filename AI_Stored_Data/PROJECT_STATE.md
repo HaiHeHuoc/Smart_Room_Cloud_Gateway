@@ -2,7 +2,7 @@
 
 Updated: 2026-09-15
 Active integration branch: `main_including_Firebase_security`
-Current integration source baseline before this AI-state synchronization: `b3b2e9b6f21ed355d6bdc7867ab184f73a4dd933` (`merge(audio): integrate Phase 18.2 playback and bounded selection`)
+Phase-18.3/18.4 base HEAD: `bccd5a0754f393710f123b6bfc2a952cb9d46470` (`main_including_Firebase_security`)
 
 ## Working authority
 
@@ -68,8 +68,9 @@ Phase 18.2  SOFTWARE INTEGRATED / TARGET HIL PENDING
             SOFTWARE IMPLEMENTED / BUILD + HOST TESTS VERIFIED / TARGET HIL PENDING
 18.2.2      Bounded Playback Start + Voice SD Audio Selection
             SOFTWARE IMPLEMENTED / BUILD + HOST TESTS VERIFIED / TARGET HIL PENDING
-Phase 18.3  NOT STARTED / scope preserved
-Phase 18.4  NOT STARTED / scope preserved
+Phase 18.3  SUPERSEDED / absorbed into 18.2.2 / no duplicate production code
+Phase 18.4  cloud.push_latest / software implemented / host tests verified /
+            ESP-IDF build environment blocked / target HIL pending
 Sprint 19   Local Web Control V1: SD Card File Manager / PLANNED / NOT STARTED
 Sprint 20   Local Web Control V2: Playback + Volume / PLANNED / NOT STARTED
 Sprint 21   Local Web Control V3: Lights / PLANNED / NOT STARTED
@@ -235,16 +236,34 @@ Until target evidence is recorded:
 PHASE 18.2 READY TO CLOSE: NO
 ```
 
+## Phase 18.3 / 18.4 current implementation
+
+Phase 18.3 preserves its historical bounded playback-start number, but current
+source proves it is already covered by Phase 18.2.2 `audio.list_tracks`,
+`audio.play_track`, and `audio.play_recorded`. It is **SUPERSEDED / ABSORBED
+INTO 18.2.2** and adds no duplicate feature or production test.
+
+Phase 18.4 implements `cloud.push_latest {}` through the bounded path
+`xiaozhi_foundation -> smart_room_mcp_adapter -> cloud_manager`. It requests
+only the manager-owned latest snapshot; it accepts no model telemetry, path,
+URL, credentials, tokens, or raw handles. One outstanding request is
+coalesced. `accepted=true` and `upload_complete=false` mean scheduling only,
+not Firebase completion; `not_ready`, `offline`, `busy`, `invalid_state`, and
+`failed` are deterministic admission outcomes.
+
+Cloud-manager and Xiaozhi host policy/boundary suites pass. The serialized
+ESP-IDF build was attempted but CMake cannot regenerate without `IDF_PATH`;
+target HIL has not run and is not claimed.
+
 ## Canonical roadmap discrepancy
 
-`XIAOZHI_IMPLEMENTATION_ROADMAP.md` currently still says Phases 18.2-18.4 are
-not started. That status is older than the actual merged source and the newer
-Phase-18.2 planning/progress files.
+`XIAOZHI_IMPLEMENTATION_ROADMAP.md` now records the Phase-18.3 reconciliation
+and Phase-18.4 software state. Older historical lines that call 18.2-18.4
+unstarted remain planning history only and do not override current source or
+current Phase-18 records.
 
-For current execution status, source plus the newer Phase-18.2 records take
-precedence. Preserve the discrepancy visibly and reconcile the canonical
-roadmap in a separate documentation task. Do not invent, renumber, or silently
-repurpose the preserved Phase 18.3/18.4 scope while doing so.
+Do not renumber Phase 18.3 or infer target HIL from host/source evidence for
+Phase 18.4.
 
 ## Approved roadmap after Sprint 18
 
@@ -297,8 +316,8 @@ The highest-value unfinished work is **Phase 18.2 combined target HIL and
 resource validation**. Do not mark 18.2 complete from merge/build/host tests
 alone.
 
-Do not start Phase 18.3, Phase 18.4, or Sprint 19-24 automatically. Start new
-implementation only when Hải explicitly requests the relevant scope.
+Phase 18.3 and 18.4 are recorded above; do not start Sprint 19-24
+implementation automatically. New scope still requires Hải's explicit request.
 
 ## Security invariants
 

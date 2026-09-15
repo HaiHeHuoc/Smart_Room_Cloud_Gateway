@@ -2,7 +2,7 @@
 
 Updated: 2026-09-15
 Active branch: `main_including_Firebase_security`
-Current integration source baseline before this AI-state synchronization: `b3b2e9b6f21ed355d6bdc7867ab184f73a4dd933` (`merge(audio): integrate Phase 18.2 playback and bounded selection`)
+Phase-18.3/18.4 base HEAD: `bccd5a0754f393710f123b6bfc2a952cb9d46470` (`main_including_Firebase_security`)
 
 Purpose: route future sessions to the highest-value next work without reopening
 accepted phases or inventing validation evidence.
@@ -24,8 +24,9 @@ Phase 18.2   SOFTWARE INTEGRATED / TARGET HIL PENDING
               software implemented / build + host tests verified / HIL pending
 18.2.2       Bounded playback start + voice SD audio selection
               software implemented / build + host tests verified / HIL pending
-Phase 18.3   NOT STARTED / scope preserved
-Phase 18.4   NOT STARTED / scope preserved
+Phase 18.3   SUPERSEDED / absorbed into 18.2.2 / no duplicate production code
+Phase 18.4   cloud.push_latest / software implemented / host tests verified /
+             ESP-IDF build environment blocked / target HIL pending
 Sprint 19    Local Web Control V1: SD Card File Manager / PLANNED / NOT STARTED
 Sprint 20    Local Web Control V2: Playback + Volume / PLANNED / NOT STARTED
 Sprint 21    Local Web Control V3: Lights / PLANNED / NOT STARTED
@@ -53,6 +54,31 @@ The highest-value next work is now:
 
 Do **not** rerun Phase-18.1 light acceptance merely because later audio source
 was merged. Phase 18.1 remains closed unless a concrete regression is found.
+
+The older numbered suggestion to start Phase 18.3 is superseded: 18.3 is
+historical traceability only and its bounded playback scope is already in 18.2.2.
+Before target work, restore `IDF_PATH` and rerun the serialized ESP-IDF build;
+the build attempted from this checkout cannot regenerate without
+`/tools/cmake/project.cmake`.
+
+## Phase 18.4 cloud.push_latest target matrix
+
+`cloud.push_latest {}` is software implemented but has no target evidence.
+After a clean ESP-IDF build, validate these bounded result and later-state cases:
+
+- normal latest snapshot request: MCP returns `accepted=true` and
+  `upload_complete=false`; later cloud status/logs determine success or failure;
+- no latest telemetry or cloud worker not started: `not_ready`, with no HTTP;
+- no IPv4: `offline`, with no accepted request or HTTP;
+- repeated delivery before completion, active upload, and retry backoff:
+  `busy`, with no second forced upload queued;
+- terminal auth/configuration state: `invalid_state`;
+- Wi-Fi loss after accepted scheduling: retained request follows existing
+  reconnect/epoch/retry policy without duplicate transport;
+- a newly accepted request may bypass only successful-upload pacing, never a
+  retry backoff; and
+- no credentials/tokens/payloads in MCP/log output, no LVGL work from callbacks,
+  and stable Internal/DMA/PSRAM minima plus cloud task high-water mark.
 
 ## Phase 18.2 target HIL — priority matrix
 
@@ -155,15 +181,12 @@ I2S/MAX98357A, TLS/network timing, audible output, or runtime resource minima.
 
 ## Canonical roadmap discrepancy
 
-`XIAOZHI_IMPLEMENTATION_ROADMAP.md` still contains the older statement that
-Phases 18.2-18.4 are not started. Do not use that line to overwrite the actual
-integrated Phase-18.2 source/evidence.
+`XIAOZHI_IMPLEMENTATION_ROADMAP.md` now records Phase 18.3 as superseded by
+18.2.2 and Phase 18.4 as software implemented with HIL pending. Older lines
+that say 18.2-18.4 are unstarted are historical planning context only.
 
-Current execution status must follow current source plus
-`PHASE18_2_PLAN.md`, `PHASE18_2_1_PROGRESS.md`, and
-`PHASE18_2_2_PROGRESS.md`. Preserve Phase 18.3/18.4 numbering and scope; reconcile
-the canonical roadmap in a dedicated documentation task rather than silently
-renumbering work.
+Current execution status follows current source and Phase-18 records. Preserve
+the Phase 18.3 number and do not infer Phase-18.4 HIL from host evidence.
 
 ## Future roadmap routing
 

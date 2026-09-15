@@ -4,7 +4,11 @@ Status: **IN PROGRESS — 18.1 COMPLETE / 18.2 SOFTWARE INTEGRATED, TARGET HIL P
 
 Updated: 2026-09-15
 Integration branch: `main_including_Firebase_security`
-Current integration source baseline before this AI-state synchronization: `b3b2e9b6f21ed355d6bdc7867ab184f73a4dd933` (`merge(audio): integrate Phase 18.2 playback and bounded selection`)
+Phase-18.3/18.4 base source: `bccd5a0754f393710f123b6bfc2a952cb9d46470` (`main_including_Firebase_security`)
+
+Current branch override: **18.3 SUPERSEDED / ABSORBED INTO 18.2.2; 18.4
+SOFTWARE IMPLEMENTED / HOST TESTS VERIFIED / ESP-IDF BUILD ENVIRONMENT BLOCKED
+/ TARGET HIL PENDING.**
 
 ## Current-status override — 2026-09-15
 
@@ -37,20 +41,18 @@ Current execution status is:
 18.1    NeoPixel MCP control                                  COMPLETE / HIL ACCEPTED
 18.2.1  Audio Playback Control + PTT Suspension/Auto-Resume   SOFTWARE INTEGRATED / TARGET HIL PENDING
 18.2.2  Bounded Playback Start + Voice SD Audio Selection     SOFTWARE INTEGRATED / TARGET HIL PENDING
-18.3    NOT STARTED / NUMBERING AND PRIOR SCOPE PRESERVED
-18.4    NOT STARTED / NUMBERING AND PRIOR SCOPE PRESERVED
+18.3    SUPERSEDED / ABSORBED INTO 18.2.2 / NO DUPLICATE PRODUCTION FEATURE
+18.4    cloud.push_latest / SOFTWARE IMPLEMENTED / HOST TESTS VERIFIED /
+        ESP-IDF BUILD ENVIRONMENT BLOCKED / TARGET HIL PENDING
 ```
 
 Do not infer Phase-18.2 hardware acceptance from the merge/build/host tests.
-Do not start, renumber, replace, or silently repurpose 18.3/18.4 from this
-status synchronization. The older umbrella allocation below is retained as
-historical planning context; if its wording conflicts with the newer locked
-18.2 subdivision, use current source plus `PHASE18_2_PLAN.md` and explicitly
-reconcile the remaining 18.3/18.4 scope before implementation.
+Do not renumber, replace, or silently repurpose 18.3/18.4. The older umbrella
+allocation remains historical context. The current source plus
+`PHASE18_2_PLAN.md` records 18.3 reconciliation and the distinct 18.4 action.
 
-`XIAOZHI_IMPLEMENTATION_ROADMAP.md` also still contains the older statement that
-Phases 18.2-18.4 are not started. That is a known canonical-document discrepancy
-to reconcile separately; it must not override the integrated 18.2 source.
+`XIAOZHI_IMPLEMENTATION_ROADMAP.md` is updated to the same execution status.
+Neither source review, host tests, nor build evidence is target HIL acceptance.
 
 ## Goal
 
@@ -275,10 +277,70 @@ cloud.push_latest
 ```
 
 The bounded playback-start capability is now present inside the locked 18.2.2
-implementation. Therefore do not mechanically reuse this old allocation to
-implement a duplicate Phase 18.3. The current `PHASE18_2_PLAN.md` explicitly
-requires the numbering and prior 18.3/18.4 scope to be preserved, but a future
-session must reconcile the remaining canonical scope before starting 18.3.
+implementation. Source review confirms the complete historical contract:
+
+```text
+audio.list_tracks {}
+audio.play_track { track_id: exact-id }
+audio.play_recorded {}
+```
+
+The implementations use bounded logical IDs/cache lookup or the retained
+recording only, then delegate through existing product-owned playback policy.
+They do not accept arbitrary paths, start a capture, or bypass the audio owner.
+
+```text
+Phase 18.3
+SUPERSEDED / ABSORBED INTO PHASE 18.2.2
+NO NEW PRODUCTION FEATURE REQUIRED
+```
+
+The Phase 18.3 number remains reserved for historical traceability. No
+playback code or duplicate production test was added under 18.3; existing
+18.2.2 source and host coverage remain its evidence.
+
+## Phase 18.4 update -- cloud.push_latest
+
+Status: **SOFTWARE IMPLEMENTED / HOST TESTS VERIFIED / ESP-IDF BUILD
+ENVIRONMENT BLOCKED / TARGET HIL PENDING**.
+
+The no-argument MCP tool requests one upload of the latest telemetry snapshot
+already owned by the product. Its only runtime path is:
+
+```text
+User intent
+-> xiaozhi_foundation cloud.push_latest schema/tool
+-> smart_room_mcp_adapter provider
+-> cloud_manager_request_push_latest()
+-> existing cloud task / firebase_auth / HTTPS PUT path
+```
+
+The MCP callback supplies no telemetry value, URL, Firebase path, credential,
+token, task handle, or network handle. `cloud_manager` retains one outstanding
+request sentinel and its task reuses the copied latest snapshot, normal retry,
+network-epoch, auth, and HTTPS ownership. It creates no second cloud transport.
+
+`accepted=true` means the worker retained the request only;
+`upload_complete=false` is always returned by this MCP call. A later
+`smart_room.get_cloud_sync_status` is required to observe uploader state.
+
+Admission results are bounded: `not_ready` without a started worker/latest
+snapshot, `offline` without IPv4, `busy` for an outstanding request, active
+upload, or retry, `invalid_state` for terminal auth/configuration state, and
+`failed` for a local scheduling/lock failure. The force request can bypass only
+the normal successful-upload period; it never bypasses retry backoff. There is
+no force-command FIFO to fill: one outstanding sentinel coalesces repeated MCP
+delivery rather than accumulating requests.
+
+Host coverage verifies normal/not-ready/offline/busy/retry/terminal admission,
+MCP result tokens, and source-level provider ownership. The serialized ESP-IDF
+build was attempted with the existing build directory, but CMake could not
+regenerate because `IDF_PATH` is absent (`include could not find
+/tools/cmake/project.cmake`). This is an environment blocker, not a successful
+build claim. No target HIL has been run.
+
+> Historical status below is superseded by the 18.4 update above; it is kept
+> only to preserve the original planning record.
 
 The historical Phase-18.4 direction was `cloud.push_latest`: request a bounded
 latest telemetry operation through `cloud_manager`, never expose Firebase/auth/
@@ -303,8 +365,10 @@ Phase 18 does not authorize:
 
 ## Next action
 
-Highest-value unfinished Sprint-18 work is the combined Phase-18.2 target HIL
-and resource validation recorded in `NEXT_WORK_AND_HIL_BACKLOG.md`.
+First restore the ESP-IDF 6.0.1 environment and rerun the serialized build for
+this branch. Then complete the combined Phase-18.2 target HIL/resource matrix
+and Phase-18.4 cloud-push acceptance cases recorded in
+`NEXT_WORK_AND_HIL_BACKLOG.md`.
 
-Do not start Phase 18.3, Phase 18.4, or any Sprint 19-24 implementation
-automatically. Start new scope only when Hải explicitly requests it.
+Phase 18.3 and 18.4 are recorded above. Do not start Sprint 19-24
+implementation automatically; new scope still needs explicit user direction.

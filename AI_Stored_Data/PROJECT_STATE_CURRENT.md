@@ -2,7 +2,7 @@
 
 Updated: 2026-09-15
 Active integration branch: `main_including_Firebase_security`
-Current integration HEAD before this AI-state synchronization: `b3b2e9b6f21ed355d6bdc7867ab184f73a4dd933` (`merge(audio): integrate Phase 18.2 playback and bounded selection`)
+Phase-18.3/18.4 base HEAD: `bccd5a0754f393710f123b6bfc2a952cb9d46470` (`main_including_Firebase_security`)
 
 > This file is the current-state companion for cross-session AI handoff.
 > Current source, `AGENTS.md`, canonical repository documentation, and explicit
@@ -54,8 +54,9 @@ Phase 18.2  SOFTWARE INTEGRATED / TARGET HIL PENDING
             SOFTWARE IMPLEMENTED / BUILD + HOST TESTS VERIFIED / TARGET HIL PENDING
 18.2.2      Bounded Playback Start + Voice SD Audio Selection
             SOFTWARE IMPLEMENTED / BUILD + HOST TESTS VERIFIED / TARGET HIL PENDING
-Phase 18.3  NOT STARTED / scope preserved
-Phase 18.4  NOT STARTED / scope preserved
+Phase 18.3  SUPERSEDED / absorbed into 18.2.2 / no duplicate production code
+Phase 18.4  cloud.push_latest / software implemented / host tests verified /
+            ESP-IDF build environment blocked / target HIL pending
 Sprint 19   Local Web Control V1: SD Card File Manager / PLANNED / NOT STARTED
 Sprint 20   Local Web Control V2: Playback + Volume / PLANNED / NOT STARTED
 Sprint 21   Local Web Control V3: Lights / PLANNED / NOT STARTED
@@ -127,6 +128,35 @@ The Phase-18.2 stability hardening also adds generation/response fencing around
 locally aborted Xiaozhi responses so stale queued/network response work cannot
 silently authorize the next PTT turn. A failed fence remains fail-closed.
 
+## Phase 18.3 / 18.4 current implementation
+
+Phase 18.3 preserves its historical bounded playback-start number, but source
+review shows its contract is already covered by Phase 18.2.2
+`audio.list_tracks`, `audio.play_track`, and `audio.play_recorded`. It is
+**SUPERSEDED / ABSORBED INTO 18.2.2**; no duplicate feature or test was added.
+
+Phase 18.4 adds `cloud.push_latest {}` through only this bounded ownership path:
+
+```text
+xiaozhi_foundation tool/schema
+-> smart_room_mcp_adapter provider
+-> cloud_manager_request_push_latest()
+-> existing cloud task/Firebase path
+```
+
+The manager accepts only a request to upload its existing latest snapshot; the
+MCP tool accepts no telemetry fields, endpoint, credentials, or raw handles.
+One outstanding sentinel coalesces repeated delivery. `accepted=true` means
+scheduling only and always pairs with `upload_complete=false`; it never proves
+an upload completed. `not_ready`, `offline`, `busy`, `invalid_state`, and
+`failed` are deterministic scheduling outcomes. Successful-upload pacing can
+be bypassed for this request, but existing retry backoff cannot.
+
+New cloud-manager and Xiaozhi host policy/boundary suites pass. The serialized
+ESP-IDF build was attempted but is blocked because this checkout has no
+`IDF_PATH`; CMake cannot find `/tools/cmake/project.cmake`. Target HIL has not
+run and is not claimed.
+
 ## Validation evidence currently recorded
 
 ### 18.2.1
@@ -176,14 +206,14 @@ PHASE 18.2 READY TO CLOSE: NO
 
 ## Canonical-document discrepancy to preserve visibly
 
-`XIAOZHI_IMPLEMENTATION_ROADMAP.md` still records Phases 18.2-18.4 as not
-started. That status is older than the merged Phase-18.2 source and the newer
-`PHASE18_2_PLAN.md`, `PHASE18_2_1_PROGRESS.md`, and
-`PHASE18_2_2_PROGRESS.md` records.
+`XIAOZHI_IMPLEMENTATION_ROADMAP.md` now records the Phase-18.3 reconciliation
+and Phase-18.4 software state. Older historical lines that call 18.2-18.4
+unstarted remain planning history only and do not override current source,
+`PHASE18_2_PLAN.md`, or this record.
 
-For current execution status, use the actual integration source and newer
-Phase-18.2 records. Do **not** silently invent or renumber the preserved Phase
-18.3/18.4 scope while reconciling the canonical roadmap later.
+For current execution status, use current source plus the current Phase-18
+records. Do not renumber Phase 18.3 or infer target HIL from host/source
+evidence for Phase 18.4.
 
 ## Approved post-Sprint-18 roadmap
 
@@ -211,8 +241,8 @@ and services. Advanced OTA/factory-management remains outside current scope.
 - bounded post-structure-cleanup target smoke if desired for a release
   checkpoint.
 
-Do not start Phase 18.3, Phase 18.4, or Sprint 19-24 automatically. Start new
-implementation only when Hải explicitly requests the relevant scope.
+Phase 18.3 and 18.4 are recorded above; do not start Sprint 19-24
+implementation automatically. New scope still requires Hải's explicit request.
 
 ## Security invariants
 

@@ -906,7 +906,12 @@ MCP request
       `light_manager` owner.
 - [x] Phase 18.1 reports the applied logical state through bounded MCP output.
 - [x] Phase 18.1 target HIL accepted by the user on 2026-09-13.
-- [ ] Define and validate the independent contracts for 18.2–18.4.
+- [x] Phase 18.3 reconciliation: historical bounded playback start is covered
+      by Phase 18.2.2; preserve its number without duplicate implementation.
+- [x] Phase 18.4 contract: `cloud.push_latest {}` is bounded to a
+      manager-owned latest snapshot and acceptance is distinct from completion.
+- [ ] Phase 18.4 target validation: ESP-IDF build environment restoration and
+      target HIL remain pending.
 
 Always reject factory reset, credential erase, reboot, arbitrary OTA/GPIO, task
 control, and shell/system commands.
@@ -921,6 +926,39 @@ control, and shell/system commands.
 
 Phase 18 remains in progress. Phases 18.2–18.4 are not started and require an
 explicit user request.
+
+## Phase 18.3 -- Historical bounded playback reconciliation
+
+Phase 18.3 is **SUPERSEDED / ABSORBED INTO PHASE 18.2.2**. Its historical
+bounded playback-start scope is already implemented by `audio.list_tracks`,
+`audio.play_track`, and `audio.play_recorded`. The number remains for
+traceability; no duplicate audio implementation or production test is added.
+
+## Phase 18.4 -- cloud.push_latest
+
+`cloud.push_latest {}` is implemented through:
+
+```text
+xiaozhi_foundation MCP tool/schema
+-> smart_room_mcp_adapter provider
+-> cloud_manager_request_push_latest()
+-> existing cloud task, Firebase auth, and HTTPS ownership
+```
+
+The tool has no input values. It cannot choose telemetry, URLs, Firebase paths,
+credentials, tokens, or raw handles. The manager coalesces one outstanding
+request against its current latest project-owned snapshot. It reports one of
+`accepted`, `not_ready`, `offline`, `busy`, `invalid_state`, or `failed`.
+`accepted=true` always carries `upload_complete=false`: it proves scheduling
+only, not an authentication, HTTP, or Firebase upload result. A request can
+bypass only normal successful-upload pacing; it never bypasses retry backoff.
+
+Host policy/provider-boundary tests pass. The serialized ESP-IDF build was
+attempted but CMake cannot regenerate in this checkout because `IDF_PATH` is
+absent. Target HIL is pending and is not claimed. Required target cases are
+normal acceptance then later completion observation, not-ready/offline/busy,
+retry/terminal state, Wi-Fi loss after acceptance, coalescing, no secret leak,
+and resource/task high-water observations.
 
 ---
 

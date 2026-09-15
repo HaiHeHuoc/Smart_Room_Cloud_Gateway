@@ -19,6 +19,17 @@ if ($LASTEXITCODE -ne 0) { throw 'MCP audio playback policy test build failed' }
 & (Join-Path $outputRoot 'mcp_audio_playback_policy_tests.exe')
 if ($LASTEXITCODE -ne 0) { throw 'MCP audio playback policy tests failed' }
 
+& $gcc -std=c11 -Wall -Wextra -Werror `
+    -I (Join-Path $testRoot 'include') `
+    -I (Join-Path $componentRoot 'include') `
+    -I (Join-Path $componentRoot 'modules\mcp_cloud_push_latest\include') `
+    (Join-Path $componentRoot 'modules\mcp_cloud_push_latest\src\xiaozhi_mcp_cloud_push_latest_policy.c') `
+    (Join-Path $testRoot 'test_mcp_cloud_push_latest_policy.c') `
+    -o (Join-Path $outputRoot 'mcp_cloud_push_latest_policy_tests.exe')
+if ($LASTEXITCODE -ne 0) { throw 'MCP cloud push-latest policy test build failed' }
+& (Join-Path $outputRoot 'mcp_cloud_push_latest_policy_tests.exe')
+if ($LASTEXITCODE -ne 0) { throw 'MCP cloud push-latest policy tests failed' }
+
 $toolSource = Get-Content `
     (Join-Path $componentRoot 'modules\mcp_audio_playback\src\xiaozhi_mcp_audio_playback.c') `
     -Raw
@@ -47,6 +58,24 @@ if ($toolSource -notmatch '\\"readOnlyHint\\":true') {
 }
 if ($toolSource -match 'audio_manager_|i2s_|FILE\s*\*') {
     throw 'Xiaozhi MCP module bypasses the project-owned provider boundary'
+}
+$cloudPushToolSource = Get-Content `
+    (Join-Path $componentRoot 'modules\mcp_cloud_push_latest\src\xiaozhi_mcp_cloud_push_latest.c') `
+    -Raw
+if (($cloudPushToolSource -notmatch '"cloud\.push_latest"') -or
+    (-not $cloudPushToolSource.Contains('\"upload_complete\":false')) -or
+    (-not $cloudPushToolSource.Contains('\"idempotentHint\":false'))) {
+    throw 'Cloud push-latest MCP tool lacks its bounded scheduling semantics'
+}
+if ($cloudPushToolSource -match '#include\s+"cloud_manager\.h"|firebase_auth|esp_http_client|esp_wifi|nvs_') {
+    throw 'Cloud push-latest MCP tool bypasses the project-owned provider boundary'
+}
+$cloudPushAdapterSource = Get-Content `
+    (Join-Path $repoRoot 'components\application\smart_room_mcp_adapter\modules\provider\src\smart_room_mcp_cloud_push_latest.c') `
+    -Raw
+if (($cloudPushAdapterSource -notmatch 'cloud_manager_request_push_latest') -or
+    ($cloudPushAdapterSource -match 'firebase_auth|esp_http_client|esp_wifi|nvs_')) {
+    throw 'Cloud push-latest adapter does not remain on the public manager boundary'
 }
 $adapterTracksSource = Get-Content `
     (Join-Path $repoRoot 'components\application\smart_room_mcp_adapter\modules\provider\src\smart_room_mcp_audio_tracks.c') `
@@ -92,7 +121,12 @@ if ($sessionSource -notmatch 's_response_delivery_enabled = valid && admit_reser
 if ($sessionSource -notmatch 'esp_xiaozhi_chat_stop\(chat\)[\s\S]{0,1800}esp_event_post\([\s\S]{0,2500}esp_xiaozhi_chat_start\(chat\)') {
     throw 'Transport fence does not preserve stop, FIFO drain, then fresh-start ordering'
 }
+if (($sessionSource -notmatch 'xiaozhi_mcp_cloud_push_latest_attach\(s_mcp\)') -or
+    ($sessionSource -notmatch 'xiaozhi_mcp_cloud_push_latest_detach\(\)')) {
+    throw 'Cloud push-latest MCP lifecycle attachment is incomplete'
+}
 Write-Output 'MCP read-only state boundary: PASS'
 Write-Output 'MCP bounded track-tool boundary: PASS'
+Write-Output 'MCP cloud push-latest provider boundary: PASS'
 Write-Output 'MCP asynchronous catalog-cache boundary: PASS'
 Write-Output 'Xiaozhi transport packet fence boundary: PASS'

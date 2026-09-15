@@ -2,6 +2,7 @@ idf_component_register(
     SRCS
         "smart_room_mcp_adapter.c"
         "modules/provider/src/smart_room_mcp_sensor.c"
+        "modules/provider/src/smart_room_mcp_cloud_push_latest.c"
         "modules/provider/src/smart_room_mcp_cloud_sync.c"
         "modules/provider/src/smart_room_mcp_system_status.c"
         "modules/provider/src/smart_room_mcp_light_state.c"

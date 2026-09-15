@@ -10,6 +10,7 @@
 #include "esp_xiaozhi_chat.h"
 #include "esp_xiaozhi_info.h"
 
+#include "xiaozhi_mcp_cloud_push_latest.h"
 #include "xiaozhi_mcp_cloud_sync.h"
 #include "xiaozhi_mcp_audio_playback.h"
 #include "xiaozhi_mcp_light_capabilities.h"
@@ -643,6 +644,7 @@ static esp_err_t xiaozhi_session_cleanup(void)
     if (s_mcp != NULL) {
         xiaozhi_mcp_audio_playback_detach();
         xiaozhi_mcp_system_status_detach();
+        xiaozhi_mcp_cloud_push_latest_detach();
         xiaozhi_mcp_cloud_sync_detach();
         xiaozhi_mcp_light_capabilities_detach();
         xiaozhi_mcp_light_state_query_detach();
@@ -756,6 +758,14 @@ esp_err_t xiaozhi_foundation_session_start(uint32_t client_generation)
     if (ret != ESP_OK) {
         APP_LOGE(TAG, CLOUD_SYNC_MCP_ATTACH_FAILED_58D10FC7,
                  "Smart Room cloud-sync MCP attach failed: %s",
+                 esp_err_to_name(ret));
+        goto fail;
+    }
+
+    ret = xiaozhi_mcp_cloud_push_latest_attach(s_mcp);
+    if (ret != ESP_OK) {
+        APP_LOGE(TAG, CLOUD_PUSH_LATEST_MCP_ATTACH_FAIL_7A1B2CB9,
+                 "Smart Room cloud push-latest MCP attach failed: %s",
                  esp_err_to_name(ret));
         goto fail;
     }

@@ -21,6 +21,7 @@ Current provider coverage supports the production tools:
 smart_room.get_current_temperature_humidity
 smart_room.get_cloud_sync_status
 smart_room.get_system_status
+cloud.push_latest
 light.set_state
 light.get_state
 light.get_capabilities
@@ -96,8 +97,20 @@ light.set_state
 `light.get_state` and `light.get_capabilities` are read-only companions.
 Phase 18.1 is complete and accepted. Phase 18.2.1 Prompt 3 now adds control of
 an already-existing resumable source plus a read-only copied playback snapshot;
-it does not select tracks or expose an arbitrary path. Phase 18.2.2, 18.3, and
-18.4 remain unchanged.
+it does not select tracks or expose an arbitrary path. Phase 18.2.2 remains
+the audio selection owner; the Phase 18.3/18.4 reconciliation is recorded
+below.
+
+Phase 18.3 is **SUPERSEDED / ABSORBED INTO 18.2.2**: its historical bounded
+playback-start scope is already covered by `audio.list_tracks`,
+`audio.play_track`, and `audio.play_recorded`. The number remains for
+traceability; no duplicate provider or production feature was added.
+
+Phase 18.4 adds `cloud.push_latest {}`. Its provider calls only the public
+`cloud_manager_request_push_latest()` scheduling API and translates copied
+outcomes. It never receives Firebase/auth/HTTP/URL/task data and never supplies
+telemetry. `accepted` is scheduling only, never upload completion; repeated
+delivery is coalesced as `busy` by `cloud_manager`.
 
 The application-structure cleanup only consolidated existing provider logic. It
 added no new MCP tool, transport/protocol behavior, hardware ownership, or

@@ -19,6 +19,11 @@ esp_err_t smart_room_mcp_adapter_register_providers(void)
         return ret;
     }
 
+    ret = smart_room_mcp_cloud_push_latest_register_provider();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
     ret = smart_room_mcp_cloud_sync_register_provider();
     if (ret != ESP_OK) {
         return ret;
