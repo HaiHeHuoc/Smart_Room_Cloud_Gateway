@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "esp_err.h"
@@ -9,6 +10,8 @@
 #define SD_CARD_MANAGER_LOGICAL_PATH_MAX_LEN 192U
 #define SD_CARD_MANAGER_DIRECTORY_ENTRY_NAME_MAX_LEN 64U
 #define SD_CARD_MANAGER_DIRECTORY_LIST_MAX_ENTRIES 32U
+#define SD_CARD_MANAGER_TRANSFER_CHUNK_SIZE 4096U
+#define SD_CARD_MANAGER_TRANSFER_MAX_BYTES (8U * 1024U * 1024U)
 
 /** A bounded metadata type for a direct directory entry. */
 typedef enum
@@ -49,6 +52,13 @@ typedef struct
     uint64_t used_bytes;
     uint64_t free_bytes;
 } sd_card_manager_filesystem_usage_t;
+
+/** Opaque-by-ID, single active Web storage transfer metadata. */
+typedef struct
+{
+    uint32_t transfer_id;
+    uint64_t size_bytes;
+} sd_card_manager_transfer_info_t;
 
 /**
  * @brief Observable lifecycle state of the SD recovery service.
@@ -247,6 +257,26 @@ esp_err_t sd_card_manager_get_filesystem_usage(
 esp_err_t sd_card_manager_list_directory(
     const char *logical_path,
     sd_card_manager_directory_listing_t *listing);
+
+/* The transfer APIs intentionally expose only a generated ID and copied bytes;
+ * FILE/DIR handles remain private to the mount/recovery owner. Exactly one
+ * upload or download may be active. A busy transfer returns ESP_ERR_TIMEOUT. */
+esp_err_t sd_card_manager_download_begin(const char *logical_path, sd_card_manager_transfer_info_t *info);
+esp_err_t sd_card_manager_download_read(uint32_t transfer_id, void *buffer, size_t buffer_size, size_t *read_size);
+esp_err_t sd_card_manager_download_end(uint32_t transfer_id);
+
+/* Upload writes to a hidden `.webupload-partial` sibling and publishes it only
+ * after close+rename succeeds. Existing destinations are rejected; `abort`
+ * best-effort removes the temporary file and always releases the SD lease. */
+esp_err_t sd_card_manager_upload_begin(const char *logical_path, uint64_t content_length, sd_card_manager_transfer_info_t *info);
+esp_err_t sd_card_manager_upload_write(uint32_t transfer_id, const void *data, size_t data_size);
+esp_err_t sd_card_manager_upload_finish(uint32_t transfer_id);
+void sd_card_manager_upload_abort(uint32_t transfer_id);
+
+esp_err_t sd_card_manager_delete_file(const char *logical_path);
+esp_err_t sd_card_manager_rename_path(const char *source_logical_path, const char *destination_logical_path);
+esp_err_t sd_card_manager_make_directory(const char *logical_path);
+esp_err_t sd_card_manager_remove_empty_directory(const char *logical_path);
 
 /**
  * @brief Create or overwrite a small test file on the SD card.

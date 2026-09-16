@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+#include <unistd.h>
 
 #include "board_config.h"
 
@@ -55,6 +56,23 @@ static sd_card_manager_status_t s_status = {
     .last_error = ESP_OK,
 };
 
+typedef enum { SD_WEB_TRANSFER_NONE = 0, SD_WEB_TRANSFER_DOWNLOAD, SD_WEB_TRANSFER_UPLOAD } sd_web_transfer_kind_t;
+typedef struct {
+    sd_web_transfer_kind_t kind;
+    uint32_t id;
+    FILE *file;
+    char final_path[SD_CARD_MANAGER_PATH_MAX_LEN];
+    char temporary_path[SD_CARD_MANAGER_PATH_MAX_LEN];
+    uint64_t expected_size;
+    uint64_t transferred_size;
+} sd_web_transfer_t;
+static sd_web_transfer_t s_web_transfer;
+static uint32_t s_web_transfer_next_id = 1U;
+/* One web mutation or transfer may hold the SD lease at a time.  This keeps
+ * FATFS metadata changes deterministic while ordinary readers still use the
+ * existing lease/recovery contract. */
+static bool s_web_mutation_active = false;
+
 /* Function Prototypes ------------------------------------------------------ */
 static esp_err_t sd_card_manager_init_spi_bus(void);
 static esp_err_t sd_card_manager_release_spi_bus(void);
@@ -84,6 +102,10 @@ static esp_err_t sd_card_manager_build_rooted_path(
     char *full_path,
     size_t full_path_size);
 static esp_err_t sd_card_manager_error_from_errno(int error_number);
+static esp_err_t sd_card_manager_web_transfer_claim(sd_web_transfer_kind_t kind, sd_web_transfer_t **transfer);
+static void sd_card_manager_web_transfer_release(bool remove_temporary);
+static esp_err_t sd_card_manager_web_mutation_claim(void);
+static void sd_card_manager_web_mutation_release(void);
 
 /* Static Functions --------------------------------------------------------- */
 static void sd_card_manager_notify_availability(void)
@@ -991,6 +1013,343 @@ static esp_err_t sd_card_manager_error_from_errno(int error_number)
     return ESP_FAIL;
 }
 
+static esp_err_t sd_card_manager_web_transfer_claim(sd_web_transfer_kind_t kind, sd_web_transfer_t **transfer)
+{
+    if (transfer == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    taskENTER_CRITICAL(&s_state_lock);
+    if ((s_web_transfer.kind != SD_WEB_TRANSFER_NONE) || s_web_mutation_active)
+    {
+        taskEXIT_CRITICAL(&s_state_lock);
+        return ESP_ERR_TIMEOUT;
+    }
+    s_web_transfer = (sd_web_transfer_t){
+        .kind = kind,
+        .id = s_web_transfer_next_id++,
+    };
+    if (s_web_transfer_next_id == 0U)
+    {
+        s_web_transfer_next_id = 1U;
+    }
+    *transfer = &s_web_transfer;
+    taskEXIT_CRITICAL(&s_state_lock);
+    return ESP_OK;
+}
+
+static void sd_card_manager_web_transfer_release(bool remove_temporary)
+{
+    if (s_web_transfer.file != NULL) {
+        (void)fclose(s_web_transfer.file);
+        s_web_transfer.file = NULL;
+    }
+    if (remove_temporary && (s_web_transfer.temporary_path[0] != '\0')) {
+        (void)unlink(s_web_transfer.temporary_path);
+    }
+    sd_card_manager_release();
+    taskENTER_CRITICAL(&s_state_lock);
+    s_web_transfer = (sd_web_transfer_t){0};
+    taskEXIT_CRITICAL(&s_state_lock);
+}
+
+static esp_err_t sd_card_manager_web_mutation_claim(void)
+{
+    taskENTER_CRITICAL(&s_state_lock);
+    const bool busy = (s_web_transfer.kind != SD_WEB_TRANSFER_NONE) ||
+                      s_web_mutation_active;
+    if (!busy)
+    {
+        s_web_mutation_active = true;
+    }
+    taskEXIT_CRITICAL(&s_state_lock);
+    return busy ? ESP_ERR_TIMEOUT : ESP_OK;
+}
+
+static void sd_card_manager_web_mutation_release(void)
+{
+    taskENTER_CRITICAL(&s_state_lock);
+    s_web_mutation_active = false;
+    taskEXIT_CRITICAL(&s_state_lock);
+}
+
+esp_err_t sd_card_manager_download_begin(const char *logical_path, sd_card_manager_transfer_info_t *info)
+{
+    if ((info == NULL) || !sd_card_manager_logical_path_is_valid(logical_path) ||
+        (strcmp(logical_path, "/") == 0))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *info = (sd_card_manager_transfer_info_t){0};
+    sd_web_transfer_t *transfer = NULL;
+    esp_err_t result = sd_card_manager_web_transfer_claim(SD_WEB_TRANSFER_DOWNLOAD, &transfer);
+    if (result != ESP_OK) return result;
+    if ((result = sd_card_manager_acquire()) != ESP_OK)
+    {
+        taskENTER_CRITICAL(&s_state_lock);
+        s_web_transfer = (sd_web_transfer_t){0};
+        taskEXIT_CRITICAL(&s_state_lock);
+        return result;
+    }
+    if ((result = sd_card_manager_build_rooted_path(logical_path, transfer->final_path, sizeof(transfer->final_path))) != ESP_OK) { sd_card_manager_web_transfer_release(false); return result; }
+    struct stat file_stat = {0};
+    if (stat(transfer->final_path, &file_stat) != 0) { const int error=errno; sd_card_manager_web_transfer_release(false); sd_card_manager_report_errno_io_error(error); return sd_card_manager_error_from_errno(error); }
+    if (!S_ISREG(file_stat.st_mode)) { sd_card_manager_web_transfer_release(false); return ESP_ERR_NOT_SUPPORTED; }
+    transfer->file = fopen(transfer->final_path, "rb");
+    if (transfer->file == NULL) { const int error=errno; sd_card_manager_web_transfer_release(false); sd_card_manager_report_errno_io_error(error); return sd_card_manager_error_from_errno(error); }
+    transfer->expected_size = (uint64_t)file_stat.st_size;
+    *info = (sd_card_manager_transfer_info_t){ .transfer_id=transfer->id, .size_bytes=transfer->expected_size };
+    return ESP_OK;
+}
+
+esp_err_t sd_card_manager_download_read(uint32_t transfer_id, void *buffer, size_t buffer_size, size_t *read_size)
+{
+    if ((buffer == NULL) || (read_size == NULL) || (buffer_size == 0U)) return ESP_ERR_INVALID_ARG;
+    *read_size = 0U;
+    if ((s_web_transfer.kind != SD_WEB_TRANSFER_DOWNLOAD) || (s_web_transfer.id != transfer_id) || (s_web_transfer.file == NULL)) return ESP_ERR_INVALID_STATE;
+    const size_t read = fread(buffer, 1U, buffer_size, s_web_transfer.file);
+    if ((read == 0U) && ferror(s_web_transfer.file)) { sd_card_manager_report_io_error(ESP_FAIL); return ESP_FAIL; }
+    s_web_transfer.transferred_size += read; *read_size = read; return ESP_OK;
+}
+
+esp_err_t sd_card_manager_download_end(uint32_t transfer_id)
+{
+    if ((s_web_transfer.kind != SD_WEB_TRANSFER_DOWNLOAD) || (s_web_transfer.id != transfer_id)) return ESP_ERR_INVALID_STATE;
+    const int close_result = fclose(s_web_transfer.file); s_web_transfer.file = NULL;
+    if (close_result != 0) sd_card_manager_report_io_error(ESP_FAIL);
+    sd_card_manager_release(); taskENTER_CRITICAL(&s_state_lock); s_web_transfer=(sd_web_transfer_t){0}; taskEXIT_CRITICAL(&s_state_lock);
+    return close_result == 0 ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t sd_card_manager_upload_begin(const char *logical_path, uint64_t content_length, sd_card_manager_transfer_info_t *info)
+{
+    if ((info == NULL) || !sd_card_manager_logical_path_is_valid(logical_path) ||
+        (strcmp(logical_path, "/") == 0) || (content_length == 0U) ||
+        (content_length > SD_CARD_MANAGER_TRANSFER_MAX_BYTES))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *info = (sd_card_manager_transfer_info_t){0};
+    sd_web_transfer_t *transfer = NULL;
+    esp_err_t result = sd_card_manager_web_transfer_claim(
+        SD_WEB_TRANSFER_UPLOAD, &transfer);
+    if (result != ESP_OK)
+    {
+        return result;
+    }
+    if ((result = sd_card_manager_acquire()) != ESP_OK)
+    {
+        taskENTER_CRITICAL(&s_state_lock);
+        s_web_transfer = (sd_web_transfer_t){0};
+        taskEXIT_CRITICAL(&s_state_lock);
+        return result;
+    }
+    if ((result = sd_card_manager_build_rooted_path(
+             logical_path, transfer->final_path, sizeof(transfer->final_path))) != ESP_OK)
+    {
+        sd_card_manager_web_transfer_release(false);
+        return result;
+    }
+
+    struct stat existing = {0};
+    if (stat(transfer->final_path, &existing) == 0)
+    {
+        sd_card_manager_web_transfer_release(false);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    if (errno != ENOENT)
+    {
+        const int error = errno;
+        sd_card_manager_web_transfer_release(false);
+        sd_card_manager_report_errno_io_error(error);
+        return sd_card_manager_error_from_errno(error);
+    }
+
+    const int suffix = snprintf(
+        transfer->temporary_path, sizeof(transfer->temporary_path),
+        "%s.webupload-partial", transfer->final_path);
+    if ((suffix < 0) || (suffix >= (int)sizeof(transfer->temporary_path)))
+    {
+        sd_card_manager_web_transfer_release(false);
+        return ESP_ERR_INVALID_SIZE;
+    }
+    (void)unlink(transfer->temporary_path);
+    transfer->file = fopen(transfer->temporary_path, "wb");
+    if (transfer->file == NULL)
+    {
+        const int error = errno;
+        sd_card_manager_web_transfer_release(true);
+        sd_card_manager_report_errno_io_error(error);
+        return sd_card_manager_error_from_errno(error);
+    }
+
+    transfer->expected_size = content_length;
+    *info = (sd_card_manager_transfer_info_t){
+        .transfer_id = transfer->id,
+        .size_bytes = content_length,
+    };
+    return ESP_OK;
+}
+
+esp_err_t sd_card_manager_upload_write(uint32_t transfer_id, const void *data, size_t data_size)
+{
+    if ((data == NULL) || (data_size == 0U)) return ESP_ERR_INVALID_ARG;
+    if ((s_web_transfer.kind != SD_WEB_TRANSFER_UPLOAD) || (s_web_transfer.id != transfer_id) || (s_web_transfer.file == NULL)) return ESP_ERR_INVALID_STATE;
+    if ((s_web_transfer.transferred_size + data_size) > s_web_transfer.expected_size) return ESP_ERR_INVALID_SIZE;
+    if (fwrite(data, 1U, data_size, s_web_transfer.file) != data_size) { sd_card_manager_report_io_error(ESP_FAIL); return ESP_FAIL; }
+    s_web_transfer.transferred_size += data_size; return ESP_OK;
+}
+
+esp_err_t sd_card_manager_upload_finish(uint32_t transfer_id)
+{
+    if ((s_web_transfer.kind != SD_WEB_TRANSFER_UPLOAD) || (s_web_transfer.id != transfer_id) || (s_web_transfer.transferred_size != s_web_transfer.expected_size)) return ESP_ERR_INVALID_STATE;
+    const int close_result=fclose(s_web_transfer.file); s_web_transfer.file=NULL; if(close_result!=0){sd_card_manager_report_io_error(ESP_FAIL);sd_card_manager_web_transfer_release(true);return ESP_FAIL;}
+    if(rename(s_web_transfer.temporary_path,s_web_transfer.final_path)!=0){const int error=errno;sd_card_manager_report_errno_io_error(error);sd_card_manager_web_transfer_release(true);return sd_card_manager_error_from_errno(error);}
+    sd_card_manager_release(); taskENTER_CRITICAL(&s_state_lock);s_web_transfer=(sd_web_transfer_t){0};taskEXIT_CRITICAL(&s_state_lock); return ESP_OK;
+}
+
+void sd_card_manager_upload_abort(uint32_t transfer_id) { if ((s_web_transfer.kind == SD_WEB_TRANSFER_UPLOAD) && (s_web_transfer.id == transfer_id)) sd_card_manager_web_transfer_release(true); }
+
+static esp_err_t sd_card_manager_mutate_one(const char *logical_path, int operation)
+{
+    if (!sd_card_manager_logical_path_is_valid(logical_path) ||
+        (strcmp(logical_path, "/") == 0))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_err_t result = sd_card_manager_web_mutation_claim();
+    if (result != ESP_OK)
+    {
+        return result;
+    }
+    if ((result = sd_card_manager_acquire()) != ESP_OK)
+    {
+        sd_card_manager_web_mutation_release();
+        return result;
+    }
+
+    char path[SD_CARD_MANAGER_PATH_MAX_LEN] = {0};
+    result = sd_card_manager_build_rooted_path(logical_path, path, sizeof(path));
+    if (result == ESP_OK)
+    {
+        struct stat state = {0};
+        if (stat(path, &state) != 0)
+        {
+            const int error = errno;
+            result = sd_card_manager_error_from_errno(error);
+            sd_card_manager_report_errno_io_error(error);
+        }
+        else if (((operation == 0) && !S_ISREG(state.st_mode)) ||
+                 ((operation == 1) && !S_ISDIR(state.st_mode)))
+        {
+            result = ESP_ERR_NOT_SUPPORTED;
+        }
+        else if ((operation == 0 ? unlink(path) : rmdir(path)) != 0)
+        {
+            const int error = errno;
+            result = sd_card_manager_error_from_errno(error);
+            sd_card_manager_report_errno_io_error(error);
+        }
+    }
+    sd_card_manager_release();
+    sd_card_manager_web_mutation_release();
+    return result;
+}
+
+esp_err_t sd_card_manager_delete_file(const char *logical_path) { return sd_card_manager_mutate_one(logical_path,0); }
+esp_err_t sd_card_manager_remove_empty_directory(const char *logical_path) { return sd_card_manager_mutate_one(logical_path,1); }
+
+esp_err_t sd_card_manager_make_directory(const char *logical_path)
+{
+    if (!sd_card_manager_logical_path_is_valid(logical_path) ||
+        (strcmp(logical_path, "/") == 0))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+    esp_err_t result = sd_card_manager_web_mutation_claim();
+    if (result != ESP_OK)
+    {
+        return result;
+    }
+    if ((result = sd_card_manager_acquire()) != ESP_OK)
+    {
+        sd_card_manager_web_mutation_release();
+        return result;
+    }
+    char path[SD_CARD_MANAGER_PATH_MAX_LEN] = {0};
+    result = sd_card_manager_build_rooted_path(logical_path, path, sizeof(path));
+    if ((result == ESP_OK) && (mkdir(path, 0775) != 0))
+    {
+        const int error = errno;
+        result = (error == EEXIST) ? ESP_ERR_INVALID_RESPONSE :
+                                     sd_card_manager_error_from_errno(error);
+        sd_card_manager_report_errno_io_error(error);
+    }
+    sd_card_manager_release();
+    sd_card_manager_web_mutation_release();
+    return result;
+}
+
+esp_err_t sd_card_manager_rename_path(const char *source_logical_path, const char *destination_logical_path)
+{
+    if (!sd_card_manager_logical_path_is_valid(source_logical_path) ||
+        !sd_card_manager_logical_path_is_valid(destination_logical_path) ||
+        (strcmp(source_logical_path, "/") == 0) ||
+        (strcmp(destination_logical_path, "/") == 0))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+    esp_err_t result = sd_card_manager_web_mutation_claim();
+    if (result != ESP_OK)
+    {
+        return result;
+    }
+    if ((result = sd_card_manager_acquire()) != ESP_OK)
+    {
+        sd_card_manager_web_mutation_release();
+        return result;
+    }
+
+    char source[SD_CARD_MANAGER_PATH_MAX_LEN] = {0};
+    char destination[SD_CARD_MANAGER_PATH_MAX_LEN] = {0};
+    result = sd_card_manager_build_rooted_path(
+        source_logical_path, source, sizeof(source));
+    if (result == ESP_OK)
+    {
+        result = sd_card_manager_build_rooted_path(
+            destination_logical_path, destination, sizeof(destination));
+    }
+    struct stat state = {0};
+    if ((result == ESP_OK) && (stat(source, &state) != 0))
+    {
+        const int error = errno;
+        result = sd_card_manager_error_from_errno(error);
+        sd_card_manager_report_errno_io_error(error);
+    }
+    if ((result == ESP_OK) && (stat(destination, &state) == 0))
+    {
+        result = ESP_ERR_INVALID_RESPONSE;
+    }
+    else if ((result == ESP_OK) && (errno != ENOENT))
+    {
+        const int error = errno;
+        result = sd_card_manager_error_from_errno(error);
+        sd_card_manager_report_errno_io_error(error);
+    }
+    if ((result == ESP_OK) && (rename(source, destination) != 0))
+    {
+        const int error = errno;
+        result = sd_card_manager_error_from_errno(error);
+        sd_card_manager_report_errno_io_error(error);
+    }
+    sd_card_manager_release();
+    sd_card_manager_web_mutation_release();
+    return result;
+}
+
 esp_err_t sd_card_manager_get_filesystem_usage(
     sd_card_manager_filesystem_usage_t *usage)
 {
@@ -1078,8 +1437,16 @@ esp_err_t sd_card_manager_list_directory(
             break;
         }
 
+        static const char web_partial_suffix[] = ".webupload-partial";
+        const size_t entry_name_length = strnlen(
+            entry->d_name, SD_CARD_MANAGER_PATH_MAX_LEN);
+        const bool is_web_partial =
+            (entry_name_length >= (sizeof(web_partial_suffix) - 1U)) &&
+            (strcmp(&entry->d_name[entry_name_length -
+                                  (sizeof(web_partial_suffix) - 1U)],
+                    web_partial_suffix) == 0);
         if ((strcmp(entry->d_name, ".") == 0) ||
-            (strcmp(entry->d_name, "..") == 0))
+            (strcmp(entry->d_name, "..") == 0) || is_web_partial)
         {
             continue;
         }
