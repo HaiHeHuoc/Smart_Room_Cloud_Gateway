@@ -1,0 +1,16 @@
+idf_component_register(
+    SRCS
+        "src/local_web_server.c"
+        "src/local_web_path_policy.c"
+    INCLUDE_DIRS
+        "include"
+        "src"
+    EMBED_FILES
+        "web/index.html"
+    REQUIRES
+        esp_common
+        esp_http_server
+    PRIV_REQUIRES
+        app_log
+        sd_card_manager
+)

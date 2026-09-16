@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Smart Room Storage</title>
+  <style>
+    :root{color-scheme:dark;--bg:#101827;--card:#1d293a;--text:#eef5ff;--muted:#9badc3;--line:#33435a;--accent:#62b7ff;--error:#ff9696}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px system-ui,sans-serif}
+    main{max-width:900px;margin:auto;padding:18px}header{display:flex;gap:12px;align-items:baseline;justify-content:space-between;flex-wrap:wrap}
+    h1{font-size:1.35rem;margin:0}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;margin-top:16px;padding:14px}
+    #capacity{display:grid;grid-template-columns:repeat(3,minmax(110px,1fr));gap:10px}.metric{color:var(--muted);font-size:.82rem}.metric b{display:block;color:var(--text);font-size:1.05rem;margin-top:3px}
+    nav{display:flex;gap:8px;align-items:center;flex-wrap:wrap}button{background:#263a53;color:var(--text);border:1px solid #4e6d90;border-radius:7px;padding:8px 11px;font:inherit;cursor:pointer}button:disabled{opacity:.5;cursor:wait}
+    #path{font-family:ui-monospace,monospace;overflow-wrap:anywhere}.state{color:var(--muted);margin:12px 0 0}.state.error{color:var(--error)}ul{list-style:none;padding:0;margin:12px 0 0;border-top:1px solid var(--line)}li{display:grid;grid-template-columns:1fr auto;gap:12px;padding:10px 3px;border-bottom:1px solid var(--line);align-items:center}.entry{background:none;border:0;padding:0;text-align:left;color:var(--text);min-width:0;overflow-wrap:anywhere}.entry.dir{color:var(--accent)}.meta{color:var(--muted);font-variant-numeric:tabular-nums;font-size:.9rem}
+    @media(max-width:480px){main{padding:12px}#capacity{grid-template-columns:1fr}li{grid-template-columns:1fr}.meta{padding-left:0}}
+  </style>
+</head>
+<body><main>
+  <header><h1>Storage</h1><span id="availability">Checking SD…</span></header>
+  <section class="card" id="capacity"><div class="metric">Total<b id="total">—</b></div><div class="metric">Used<b id="used">—</b></div><div class="metric">Free<b id="free">—</b></div></section>
+  <section class="card"><nav><button id="up" type="button">Up</button><strong id="path">/</strong></nav><p class="state" id="state" role="status">Loading…</p><ul id="entries"></ul></section>
+</main><script>
+(() => {
+  const q = s => document.querySelector(s), state=q('#state'), list=q('#entries'); let path='/';
+  const bytes = n => { const u=['B','KB','MB','GB']; let i=0; while(n>=1024&&i<u.length-1){n/=1024;i++} return `${n.toFixed(i?1:0)} ${u[i]}` };
+  const setState = (text,error=false) => {state.textContent=text;state.className=`state${error?' error':''}`};
+  const parent = p => p==='/' ? '/' : (p.slice(0,p.lastIndexOf('/')) || '/');
+  async function status(){try{const r=await fetch('/api/storage/status',{cache:'no-store'}),d=await r.json();if(!r.ok)throw Error(d.error);q('#availability').textContent=d.available?'SD ready':`SD ${d.state}`;q('#total').textContent=bytes(d.total_bytes);q('#used').textContent=bytes(d.used_bytes);q('#free').textContent=bytes(d.free_bytes)}catch(e){q('#availability').textContent='SD unavailable'}}
+  async function browse(next=path){path=next;q('#path').textContent=path;q('#up').disabled=path==='/' ;list.replaceChildren();setState('Loading…');try{const r=await fetch(`/api/storage/list?path=${encodeURIComponent(path)}`,{cache:'no-store'}),d=await r.json();if(!r.ok)throw Error(d.error);path=d.path;q('#path').textContent=path;if(!d.entries.length){setState('This directory is empty.')}else{setState(d.truncated?'Showing a bounded result.':'');for(const item of d.entries){const li=document.createElement('li'),name=document.createElement(item.type==='directory'?'button':'span'),meta=document.createElement('span');name.className=`entry ${item.type==='directory'?'dir':''}`;name.textContent=item.type==='directory'?`▸ ${item.name}`:item.name;if(item.type==='directory')name.onclick=()=>browse(`${path==='/'?'':path}/${item.name}`);meta.className='meta';meta.textContent=item.type==='file'?bytes(item.size_bytes):item.type;li.append(name,meta);list.append(li)}}}catch(e){setState(`Unable to browse this directory (${e.message}).`,true)}}
+  q('#up').onclick=()=>browse(parent(path)); status(); browse();
+})();
+</script></body></html>

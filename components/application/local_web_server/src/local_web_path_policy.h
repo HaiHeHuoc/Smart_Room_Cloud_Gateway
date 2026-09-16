@@ -1,0 +1,18 @@
+#pragma once
+
+#include <stddef.h>
+
+#include "esp_err.h"
+
+#define LOCAL_WEB_LOGICAL_PATH_MAX_LEN 192U
+
+/**
+ * Decode once and normalize a browser-supplied path into a logical path below
+ * the Web-visible root. The output always starts with `/`; raw VFS paths,
+ * traversal components, duplicate separators, controls, backslashes, and
+ * malformed percent escapes are rejected.
+ */
+esp_err_t local_web_path_policy_normalize(
+    const char *encoded_path,
+    char *logical_path,
+    size_t logical_path_size);
