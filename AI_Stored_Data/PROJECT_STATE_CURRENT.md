@@ -2,11 +2,14 @@
 
 Updated: 2026-09-16
 Active integration branch: `main_including_Firebase_security`
-Voice-recording completion source checkpoint: `3394818578972ed4187192c4a5e22f46dfc09e1f`
+Sprint-18 closure authority: explicit user acceptance by Hải on 2026-09-16
 
 > This file is the current-state companion for cross-session AI handoff.
 > Current source, `AGENTS.md`, canonical repository documentation, and explicit
-> build/HIL evidence remain higher authority.
+> build/HIL evidence remain higher authority for technical facts. The closure
+> status below is an explicit project-management decision by Hải and must not be
+> rewritten back to `IN PROGRESS` merely because some historical validation
+> matrices remain useful as regression work.
 
 ## Current architecture
 
@@ -47,16 +50,13 @@ Sprint 15   COMPLETE / BUILD VERIFIED / HIL ACCEPTED
 Sprint 16   COMPLETE / STATIC REVIEW COMPLETE / BUILD VERIFIED / BOUNDED HIL ACCEPTED
 Phase 16.1  COMPLETE BASELINE / streaming HIL accepted / endurance pending
 Sprint 17   COMPLETE / read-only MCP voice HIL accepted
-Sprint 18   MCP CONTROLLED ACTIONS / IN PROGRESS
+Sprint 18   COMPLETE / USER ACCEPTED BY HẢI ON 2026-09-16
 Phase 18.1  COMPLETE / build PASS / target HIL accepted by Hải on 2026-09-13
-Phase 18.2  SOFTWARE INTEGRATED / TARGET HIL PENDING
-18.2.1      Audio Playback Control + PTT Suspension/Auto-Resume
-            SOFTWARE IMPLEMENTED / BUILD + HOST TESTS VERIFIED / TARGET HIL PENDING
-18.2.2      Bounded Playback Start + Voice SD Audio Selection
-            SOFTWARE IMPLEMENTED / BUILD + HOST TESTS VERIFIED / TARGET HIL PENDING
-Phase 18.3  SUPERSEDED / absorbed into 18.2.2 / no duplicate production code
-Phase 18.4  cloud.push_latest / software implemented / host tests verified /
-            ESP-IDF build environment blocked / target HIL pending
+Phase 18.2  COMPLETE / USER ACCEPTED BY HẢI ON 2026-09-16
+18.2.1      COMPLETE / playback control + PTT suspension/auto-resume
+18.2.2      COMPLETE / bounded playback start + voice SD audio selection
+Phase 18.3  COMPLETE / SUPERSEDED AND ABSORBED INTO 18.2.2 / NO DUPLICATE CODE
+Phase 18.4  COMPLETE / cloud.push_latest / USER ACCEPTED BY HẢI ON 2026-09-16
 Voice Recording Critical Window
             COMPLETE / USER ACCEPTED BY HẢI ON 2026-09-16
 Sprint 19   Local Web Control V1: SD Card File Manager / PLANNED / NOT STARTED
@@ -67,77 +67,82 @@ Sprint 23   Local Web Control V5: Scenes + Logs + Diagnostics / PLANNED / NOT ST
 Sprint 24   Wake Word + Advanced Voice UX / PLANNED / NOT STARTED
 ```
 
-The Phase-18.2 implementation was merged into the integration branch by
-`b3b2e9b6...` on 2026-09-15. The merge is source-integration evidence only; it
-does not convert the pending target HIL into acceptance.
+## Sprint 18 closure interpretation
 
-## Phase 18.2.1 integrated contract
+Hải explicitly instructed the project to mark **all Phase 18 work from 18.1
+through 18.4 complete** on 2026-09-16. This is the active project-management
+status and supersedes older `IN PROGRESS`, `HIL PENDING`, and `READY TO CLOSE:
+NO` status gates where they were being used to prevent phase closure.
 
-Production MCP/control surface:
+This closure does **not** fabricate missing technical evidence. Preserve these
+facts when discussing historical validation quality:
+
+- Phase 18.1 has recorded build PASS and user-accepted target HIL.
+- Phase 18.2.1/18.2.2 have recorded host-test/build evidence from their
+  implementation checkpoints; older target-HIL matrices remain useful as
+  optional regression coverage but are no longer phase blockers.
+- Phase 18.3 is closed by reconciliation: its historical bounded playback-start
+  scope is already implemented by 18.2.2, so no duplicate production feature is
+  required.
+- Phase 18.4 `cloud.push_latest` has recorded host policy/provider evidence. An
+  earlier checkout-specific ESP-IDF build attempt was blocked by missing
+  `IDF_PATH`; do not rewrite that historical event as a build PASS. Hải's
+  explicit closure is the project acceptance decision.
+- Voice Recording Critical Window has host state-machine evidence and is
+  explicitly accepted complete by Hải; no extra target-HIL run should be
+  invented.
+
+Therefore future sessions must distinguish:
+
+```text
+PROJECT STATUS       = COMPLETE / ACCEPTED
+RECORDED EVIDENCE    = whatever was actually observed and documented
+OPTIONAL REGRESSION  = may still be run later without reopening Sprint 18
+```
+
+## Phase 18 delivered controlled-action surface
+
+### 18.1 — Lights
+
+Project-owned allowlisted light control remains routed through the Smart Room
+provider/application boundary to `light_manager`; no arbitrary GPIO ownership
+is exposed to MCP.
+
+### 18.2 / 18.3 — Audio playback and bounded selection
+
+Production MCP/control surface includes:
 
 ```text
 audio.control_playback { action: pause | resume | stop | restart }
 audio.get_playback_state {}
-```
-
-Key semantics:
-
-- MCP reports bounded copied state and never exposes I2S/DMA handles, raw PCM,
-  FILE pointers, filesystem paths, or SD ownership objects.
-- `audio_manager` owns physical playback state and source context.
-- Local WAV and retained-recording sources are resumable; Xiaozhi live PCM/TTS
-  remains non-seekable and is cancelled/terminated rather than resumed.
-- GPIO38 PTT uses the same project-owned control seam locally: resumable local
-  playback can be temporarily paused with PTT reason, the same still-held press
-  continues into capture after bounded suspension, and fast release revokes an
-  unstarted turn.
-- After the voice response terminates, temporary PTT suspension auto-resumes
-  only if no explicit audio action replaced that intent. Explicit
-  pause/resume/stop/restart wins.
-- Acceptance of a command is not reported as physical completion unless copied
-  owner state proves the applied result.
-
-## Phase 18.2.2 integrated contract
-
-Production MCP surface:
-
-```text
 audio.list_tracks {}
 audio.play_track { track_id: exact-id }
 audio.play_recorded {}
 ```
 
-Bounded catalog policy:
+Important retained contracts:
 
-- media root is `/sdcard/audio/`;
-- maximum 12 retained tracks;
-- only bounded direct `.wav` entries are eligible;
-- logical IDs are deterministic and token-safe;
-- MCP receives logical IDs/names/metadata only, never arbitrary raw paths;
-- the catalog worker is the only scanner and holds the SD lease only while
-  `opendir`/`readdir`/`stat` work is in progress;
-- MCP/WebSocket callbacks use bounded cached lookup and do not mount, unmount,
-  initialize, or scan the card;
-- catalog snapshot/worker resources and list staging use PSRAM where designed to
-  preserve Internal RAM for TLS/I2S/transport work;
-- `audio.play_track` resolves an approved logical ID to an internal validated
-  path and submits through the existing playback arbitration/`audio_manager`
-  ownership path;
-- `accepted` / `scheduled` means a request exists, not that audible playback is
-  already confirmed.
+- `audio_manager` remains the sole physical audio/I2S owner;
+- MCP receives copied/bounded state, never I2S/DMA handles or raw filesystem
+  ownership;
+- logical track IDs resolve only through the bounded catalog under the approved
+  media root;
+- local resumable playback and GPIO38 PTT coordination preserve explicit-user
+  command precedence;
+- stale response/generation work is fenced fail-closed.
 
-The Phase-18.2 stability hardening also adds generation/response fencing around
-locally aborted Xiaozhi responses so stale queued/network response work cannot
-silently authorize the next PTT turn. A failed fence remains fail-closed.
+Phase 18.3 remains historically numbered but is closed as **absorbed into
+18.2.2** rather than implemented a second time.
 
-## Phase 18.3 / 18.4 current implementation
+### 18.4 — Cloud push
 
-Phase 18.3 preserves its historical bounded playback-start number, but source
-review shows its contract is already covered by Phase 18.2.2
-`audio.list_tracks`, `audio.play_track`, and `audio.play_recorded`. It is
-**SUPERSEDED / ABSORBED INTO 18.2.2**; no duplicate feature or test was added.
+Production MCP surface:
 
-Phase 18.4 adds `cloud.push_latest {}` through only this bounded ownership path:
+```text
+cloud.push_latest {}
+```
+
+Ownership path remains:
 
 ```text
 xiaozhi_foundation tool/schema
@@ -146,142 +151,64 @@ xiaozhi_foundation tool/schema
 -> existing cloud task/Firebase path
 ```
 
-The manager accepts only a request to upload its existing latest snapshot; the
-MCP tool accepts no telemetry fields, endpoint, credentials, or raw handles.
-One outstanding sentinel coalesces repeated delivery. `accepted=true` means
-scheduling only and always pairs with `upload_complete=false`; it never proves
-an upload completed. `not_ready`, `offline`, `busy`, `invalid_state`, and
-`failed` are deterministic scheduling outcomes. Successful-upload pacing can
-be bypassed for this request, but existing retry backoff cannot.
+`accepted=true` means scheduling/retention of the request only, not proof of a
+completed Firebase upload. Existing retry, auth, network-epoch, and cloud-task
+ownership remain authoritative.
 
-New cloud-manager and Xiaozhi host policy/boundary suites pass. The serialized
-ESP-IDF build was attempted but is blocked because this checkout has no
-`IDF_PATH`; CMake cannot find `/tools/cmake/project.cmake`. Target HIL has not
-run and is not claimed.
+## Voice Recording Critical Window — COMPLETE
 
-## Voice Recording Critical Window -- COMPLETE / USER ACCEPTED
+The project-owned `VOICE_RECORDING_CRITICAL` runtime contract is retained as a
+cooperative workload-priority hint for the actual live microphone capture
+interval:
 
-Hải explicitly marked this implementation complete on 2026-09-16 for project
-tracking. This closes the Voice Recording Critical Window work item itself.
-It does **not** automatically close Phase 18.2 or Phase 18.4, and it does not
-invent a target HIL run that was not supplied in the conversation.
+- `voice_assistant_uplink` is the sole writer;
+- entry occurs only after real capture/I2S RX activation;
+- exit is generation-guarded;
+- Wi-Fi/TCPIP/TLS/Xiaozhi/core audio tasks are not suspended;
+- optional logging, monitor, DHT sampling, and ordinary periodic cloud work may
+  defer at safe points;
+- the bounded uplink queue is not enlarged to hide timing failures;
+- one per-turn summary records timing/drop diagnostics without per-frame log
+  spam.
 
-The completed implementation adds a small project-owned
-`VOICE_RECORDING_CRITICAL` runtime state for the actual Xiaozhi microphone
-capture interval. It enters only after the capture arbiter observes real
-`AUDIO_MANAGER_STATE_RECORDING`/I2S RX activation, and is generation-guarded on
-normal release, cancellation, local capture loss, transport loss, and bounded
-stop cleanup. It is not a GPIO38-press flag and does not suspend arbitrary
-tasks.
+This work item is closed by Hải's explicit acceptance on 2026-09-16.
 
-The bounded uplink RAM queue and its lifetime counters remain unchanged. One
-post-turn summary provides PTT-to-authorization/capture, first PCM/queued/Opus,
-capture-stop, and queue/drop evidence. `audio_manager` suppresses its
-per-second recorder progress console message only while the state is active.
+## What happens next
 
-Cooperative consumers are intentionally narrow:
+Sprint 18 is closed. Do **not** automatically start the next sprint merely from
+this state update.
 
-- `log_manager` parks/releases any file lease at its safe writer boundary and
-  defers batch persistence, fsync, rotation and retention while producers and
-  ERROR console/RAM records continue;
-- `performance_monitor` skips/defer its low-priority report cycle;
-- `sensor_manager` skips one due DHT GPIO-timing read and retains prior state;
-- `cloud_manager` defers a new ordinary periodic attempt only. In-flight HTTP
-  and Phase-18.4 `cloud.push_latest` requests already accepted are unchanged.
-
-No Wi-Fi/TCPIP/TLS/Xiaozhi transport/audio task is suspended. PTT policy moved
-from priority 4 to 5, above cloud/sensor 4 but below audio_manager 7; all voice
-and background tasks remain unpinned pending measured core-affinity evidence.
-Host state-machine tests are the recorded automated evidence for this source.
-No additional ESP32-S3 HIL log was supplied with the 2026-09-16 completion
-instruction, so future sessions must not relabel this as a measured HIL PASS.
-
-## Validation evidence currently recorded
-
-### 18.2.1
-
-- host audio-manager tests: PASS;
-- host voice-assistant tests: PASS;
-- host Xiaozhi/provider boundary tests: PASS;
-- ESP-IDF 6.0.1 build: PASS on the implementation checkpoint;
-- target HIL: **NOT RUN / PENDING**.
-
-### 18.2.2
-
-- audio-manager, voice-assistant, and Xiaozhi host suites: PASS after stability
-  hardening;
-- ESP-IDF 6.0.1 `ninja -C build -j 1 all`: PASS on the implementation
-  checkpoint;
-- recorded firmware size: `0x26fb90`, free app partition `0x190470` (39%);
-- recorded `ninja -C build size` DIRAM: `167376 / 341760` bytes (48.97%);
-- target HIL: **NOT RUN / PENDING**.
-
-Do not reinterpret feature-branch build/host-test evidence as a separate
-post-merge target run. No audible output, real SD removal/recovery, I2S timing,
-TLS timing, or long-duration resource stability is accepted for Phase 18.2
-until target evidence is recorded.
-
-## Required Phase 18.2 target closure direction
-
-At minimum, combined target validation still needs to cover:
-
-- WAV play/pause/resume/restart/stop and repeated-cycle continuity;
-- GPIO38 suspend -> same held press -> PTT -> response -> guarded auto-resume;
-- explicit audio-command override during a voice turn;
-- fast GPIO38 release and GPIO38 interruption during Xiaozhi TTS;
-- valid/unknown tracks, empty/over-limit catalog, unsupported/non-WAV entries;
-- SD unavailable/remount/recovery and media-error snapshot invalidation;
-- catalog scan races with list/play/PTT admission;
-- repeated response interruption/transport-fence cycles with no stale speech or
-  stale response entering the next generation;
-- Internal/DMA/PSRAM free/min/largest, relevant task stack HWM, CPU, SD lease
-  trend, and playback/authorization latency.
-
-Until this evidence is recorded:
+When Hải explicitly requests new implementation, the approved sequence is:
 
 ```text
-PHASE 18.2 READY TO CLOSE: NO
+Sprint 19 -> Local Web Control V1: SD Card File Manager
+Sprint 20 -> Local Web Control V2: Playback + Volume
+Sprint 21 -> Local Web Control V3: Lights
+Sprint 22 -> Local Web Control V4: Dashboard + System Status
+Sprint 23 -> Local Web Control V5: Scenes + Logs + Diagnostics
+Sprint 24 -> Wake Word + Advanced Voice UX
 ```
 
-## Canonical-document discrepancy to preserve visibly
+The Web roadmap remains SD-card-first. Web UI is for an already-networked
+device and must not configure/control Wi-Fi, provisioning, credentials,
+reconnect, or network lifecycle. Web and LCD remain sibling frontends over
+existing managers/services. Advanced OTA/factory-management remains outside
+current scope.
 
-`XIAOZHI_IMPLEMENTATION_ROADMAP.md` now records the Phase-18.3 reconciliation
-and Phase-18.4 software state. Older historical lines that call 18.2-18.4
-unstarted remain planning history only and do not override current source,
-`PHASE18_2_PLAN.md`, or this record.
+## Deferred regression work — non-blocking
 
-For current execution status, use current source plus the current Phase-18
-records. Do not renumber Phase 18.3 or infer target HIL from host/source
-evidence for Phase 18.4.
+The following may still be useful later but **must not reopen Sprint 18 merely
+because they are pending**:
 
-## Approved post-Sprint-18 roadmap
+- combined audio/PTT/SD regression matrix from the former Phase-18.2 closure
+  checklist;
+- long-duration Phase-16/16.1 arbitration/streaming endurance;
+- delayed-first-PCM focused regression;
+- long-duration Firebase/cloud + Xiaozhi simultaneous traffic;
+- Voice Recording Critical Window resource/timing trend measurements;
+- release-level target smoke before a future tagged release if desired.
 
-The approved future sequence remains:
-
-```text
-19  Local Web Control V1: SD Card File Manager
-20  Local Web Control V2: Playback + Volume
-21  Local Web Control V3: Lights
-22  Local Web Control V4: Dashboard + System Status
-23  Local Web Control V5: Scenes + Logs + Diagnostics
-24  Wake Word + Advanced Voice UX
-```
-
-The Web roadmap is SD-card-first. Web UI is for an already-networked device and
-must not configure/control Wi-Fi, provisioning, credentials, reconnect, or
-network lifecycle. Web and LCD remain sibling frontends over existing managers
-and services. Advanced OTA/factory-management remains outside current scope.
-
-## Deferred work outside Phase 18.2 closure
-
-- delayed-first-PCM / streaming regression on the current voice path;
-- Phase-16/16.1 endurance and long-duration resource trend checks;
-- long-duration Firebase/cloud + Xiaozhi simultaneous-traffic regression;
-- bounded post-structure-cleanup target smoke if desired for a release
-  checkpoint.
-
-Phase 18.3 and 18.4 are recorded above; do not start Sprint 19-24
-implementation automatically. New scope still requires Hải's explicit request.
+Only a concrete regression or explicit Hải instruction should reopen Sprint 18.
 
 ## Security invariants
 
