@@ -52,6 +52,11 @@ esp_err_t local_web_path_policy_normalize(
         decoded[decoded_length++] = (char)character;
     }
 
+    if ((decoded_length > 1U) && (decoded[decoded_length - 1U] == '/'))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
     size_t output_length = 0U;
     logical_path[output_length++] = '/';
 
@@ -76,6 +81,10 @@ esp_err_t local_web_path_policy_normalize(
              (decoded[segment_start + 1U] == '.')))
         {
             return ESP_ERR_INVALID_ARG;
+        }
+        if (segment_length > LOCAL_WEB_LOGICAL_COMPONENT_MAX_LEN)
+        {
+            return ESP_ERR_INVALID_SIZE;
         }
 
         if ((output_length > 1U) &&

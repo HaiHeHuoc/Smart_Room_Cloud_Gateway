@@ -258,23 +258,71 @@ esp_err_t sd_card_manager_list_directory(
     const char *logical_path,
     sd_card_manager_directory_listing_t *listing);
 
-/* The transfer APIs intentionally expose only a generated ID and copied bytes;
- * FILE/DIR handles remain private to the mount/recovery owner. Exactly one
- * upload or download may be active. A busy transfer returns ESP_ERR_TIMEOUT. */
-esp_err_t sd_card_manager_download_begin(const char *logical_path, sd_card_manager_transfer_info_t *info);
-esp_err_t sd_card_manager_download_read(uint32_t transfer_id, void *buffer, size_t buffer_size, size_t *read_size);
+/**
+ * @brief Start one bounded Web download and copy its opaque transfer ID.
+ *
+ * Logical paths are rooted at `/`, at most
+ * `SD_CARD_MANAGER_LOGICAL_PATH_MAX_LEN`, and use components of at most
+ * `SD_CARD_MANAGER_DIRECTORY_ENTRY_NAME_MAX_LEN`; root and reserved temporary
+ * suffixes are rejected. FILE handles remain private to this manager. Exactly
+ * one Web upload, download, or mutation may run globally; a conflict returns
+ * `ESP_ERR_TIMEOUT`. All Web transfer APIs are task-context only and must be
+ * called sequentially by the owner of `transfer_id`; they may block for SD I/O
+ * and must never be used from an ISR.
+ *
+ * @return ESP_OK, validation/state/not-found/type errors, ESP_ERR_TIMEOUT when
+ *         another Web operation owns the transfer slot, or ESP_FAIL on VFS I/O.
+ */
+esp_err_t sd_card_manager_download_begin(
+    const char *logical_path,
+    sd_card_manager_transfer_info_t *info);
+
+/** @brief Read one caller-owned buffer from an active download; EOF has `read_size` zero. */
+esp_err_t sd_card_manager_download_read(
+    uint32_t transfer_id,
+    void *buffer,
+    size_t buffer_size,
+    size_t *read_size);
+
+/** @brief Close an active download and release its managed SD lease. */
 esp_err_t sd_card_manager_download_end(uint32_t transfer_id);
 
-/* Upload writes to a hidden `.webupload-partial` sibling and publishes it only
- * after close+rename succeeds. Existing destinations are rejected; `abort`
- * best-effort removes the temporary file and always releases the SD lease. */
-esp_err_t sd_card_manager_upload_begin(const char *logical_path, uint64_t content_length, sd_card_manager_transfer_info_t *info);
-esp_err_t sd_card_manager_upload_write(uint32_t transfer_id, const void *data, size_t data_size);
+/**
+ * @brief Start an upload of 1 through `SD_CARD_MANAGER_TRANSFER_MAX_BYTES`.
+ *
+ * The manager writes a hidden `.webupload-partial` sibling and publishes it
+ * only after a successful close and rename. Existing destinations are
+ * rejected; callers must finish the exact declared byte count or abort.
+ */
+esp_err_t sd_card_manager_upload_begin(
+    const char *logical_path,
+    uint64_t content_length,
+    sd_card_manager_transfer_info_t *info);
+
+/** @brief Write one non-empty caller-owned chunk to an active upload. */
+esp_err_t sd_card_manager_upload_write(
+    uint32_t transfer_id,
+    const void *data,
+    size_t data_size);
+
+/** @brief Close and atomically publish an active upload with its declared size. */
 esp_err_t sd_card_manager_upload_finish(uint32_t transfer_id);
+
+/** @brief Best-effort remove an active upload temporary file and release its lease. */
 void sd_card_manager_upload_abort(uint32_t transfer_id);
 
+/**
+ * @brief Delete a regular file, rename a non-root path without overwrite,
+ * create a directory, or remove an empty directory.
+ *
+ * These task-context, SD-I/O operations share the same global Web-operation
+ * slot as transfers. They accept the same logical-path policy as downloads;
+ * the root is never mutable.
+ */
 esp_err_t sd_card_manager_delete_file(const char *logical_path);
-esp_err_t sd_card_manager_rename_path(const char *source_logical_path, const char *destination_logical_path);
+esp_err_t sd_card_manager_rename_path(
+    const char *source_logical_path,
+    const char *destination_logical_path);
 esp_err_t sd_card_manager_make_directory(const char *logical_path);
 esp_err_t sd_card_manager_remove_empty_directory(const char *logical_path);
 

@@ -1,7 +1,7 @@
 # Local Web Dashboard Plan
 
 Updated: 2026-09-13
-Status: **APPROVED ROADMAP / Sprint 19 Prompt 1 IN PROGRESS**
+Status: **SPRINT 19 SOFTWARE HARDENED / BUILD PASS / TARGET HIL PENDING**
 Active integration branch: `main_including_Firebase_security`
 
 ## Purpose
@@ -108,7 +108,7 @@ first. Do not create a shortcut from the web server to a driver.
 
 ## Sprint 19 — Local Web Control V1: SD Card File Manager
 
-Status: **PROMPTS 1-2 IMPLEMENTED / PROMPT 3 VALIDATION PENDING**
+Status: **PROMPTS 1-3 SOFTWARE HARDENED / BUILD PASS / TARGET HIL PENDING**
 
 ### Goal
 
@@ -186,10 +186,42 @@ card before adding other web-control features.
   model gives exact upload progress without a second persistent connection.
 - `app_gui` adds a routed `WEB_STORAGE` LCD sub-view. HTTP never calls LVGL;
   it posts a copied status snapshot to the app_gui latest-value queue.
-- Host path-policy test and individual changed-source syntax checks pass.
-  Full ESP-IDF build is still blocked before compilation because this shell
-  has no `IDF_PATH` export, so CMake resolves `/tools/...`; target/HIL is not
-  claimed and remains Prompt 3 work.
+- Prompt 3 supersedes the earlier build-environment note with a clean ESP-IDF
+  6.0.1 build. Target/browser/SD HIL remains unclaimed.
+
+### Prompt 3 hardening and validation record (2026-09-16)
+
+- Final review tightened the shared logical-path contract: trailing separators,
+  components over 64 bytes, and names ending in the reserved
+  `.webupload-partial` suffix are rejected. The suffix comparison is
+  case-insensitive to match FATFS behavior, so a completed user file cannot be
+  accidentally hidden as a temporary upload.
+- Upload abort cleanup now reports failed close or temporary-file removal to
+  the existing SD recovery owner. `rmdir` of a non-empty directory is reported
+  as a deterministic conflict rather than a generic server error.
+- The HTTP query buffer now covers two fully percent-encoded 192-byte logical
+  paths, instead of relying on a smaller server-stack buffer. The server has a
+  1,280-byte URI limit and rejects upload bodies over 8 MiB before SD work.
+- `app_gui`'s Web Storage capacity text now has enough space for two full
+  `uint64_t` KiB values. The ESP-IDF embed-file symbol now matches the actual
+  generated `_binary_index_html_*` symbol.
+- Validation: host path-policy test PASS, `git diff --check` PASS, and clean
+  serialized ESP-IDF 6.0.1 build PASS. The application binary is 2,600,464
+  bytes, leaving 38% free in the smallest 4 MiB app partition.
+- The host exposed only `COM1`; no ESP32-S3 target, browser session, or SD-card
+  HIL evidence was available. Sprint 20+ remains unstarted.
+
+### Target HIL matrix (pending)
+
+1. Open `/` from a phone and PC on the existing local LAN; verify the LCD
+   Web Storage status, browsing, parent navigation, and unavailable-card state.
+2. Exercise upload, download, delete, rename, mkdir, and empty/non-empty rmdir
+   with normal files, 8 MiB boundary files, duplicate names, and invalid paths.
+3. Disconnect the browser during upload/download; verify no published partial
+   file, server recovery, and subsequent transfer capability.
+4. Remove/reinsert the SD card during browse and transfer; verify lease drain,
+   recovery/remount, sensible HTTP errors, and no impact on normal Gateway
+   audio/voice behavior.
 
 ### Acceptance direction when implementation starts
 

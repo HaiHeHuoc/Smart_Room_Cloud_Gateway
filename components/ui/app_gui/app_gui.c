@@ -3986,7 +3986,8 @@ static void app_gui_render_web_storage_status(
         return;
     }
 
-    char usage[24] = {0};
+    /* Two uint64_t KiB values plus separator and terminator need up to 40 bytes. */
+    char usage[40] = {0};
     char progress[12] = {0};
     (void)snprintf(usage, sizeof(usage), "%llu/%llu KB",
                    (unsigned long long)(status->used_bytes / 1024U),

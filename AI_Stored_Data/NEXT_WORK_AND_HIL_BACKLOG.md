@@ -1,7 +1,7 @@
 # Next Work + Deferred HIL Backlog
 
-Updated: 2026-09-15
-Active branch: `main_including_Firebase_security`
+Updated: 2026-09-16
+Active Sprint-19 branch: `phase/19-local-web-storage-v1`
 Phase-18.3/18.4 base HEAD: `bccd5a0754f393710f123b6bfc2a952cb9d46470` (`main_including_Firebase_security`)
 
 Purpose: route future sessions to the highest-value next work without reopening
@@ -27,7 +27,7 @@ Phase 18.2   SOFTWARE INTEGRATED / TARGET HIL PENDING
 Phase 18.3   SUPERSEDED / absorbed into 18.2.2 / no duplicate production code
 Phase 18.4   cloud.push_latest / software implemented / host tests verified /
              ESP-IDF build environment blocked / target HIL pending
-Sprint 19    Local Web Control V1: SD Card File Manager / Prompt 1 in progress
+Sprint 19    Local Web Control V1: SD Card File Manager / software hardened / build PASS / target HIL pending
 Sprint 20    Local Web Control V2: Playback + Volume / PLANNED / NOT STARTED
 Sprint 21    Local Web Control V3: Lights / PLANNED / NOT STARTED
 Sprint 22    Local Web Control V4: Dashboard + System Status / PLANNED / NOT STARTED
@@ -41,10 +41,12 @@ acceptance work.
 
 ## Immediate next work
 
-Sprint 19 was explicitly started with Prompt 1 on branch
-`phase/19-local-web-storage-v1`. Finish/validate only its read-only local HTTP
-foundation before considering Prompt 2. Do not treat this as Phase-18 target
-acceptance or mark Sprint 18 closed.
+Sprint 19 Prompts 1-3 are implemented and hardened on branch
+`phase/19-local-web-storage-v1`. The local HTTP feature now has browse,
+streamed transfer, file/folder mutations, path hardening, and LCD status
+routing. A clean ESP-IDF 6.0.1 build passes, but browser/board/SD HIL has not
+run. Do not treat Sprint 19 work as Phase-18 target acceptance or mark Sprint
+18 closed.
 
 The highest-value next work is now:
 
@@ -57,14 +59,27 @@ The highest-value next work is now:
 6. Do not start Sprint 19-24 implementation until Hải explicitly requests it.
 ```
 
+The preceding numbered suggestion is historical and fully superseded by this
+current priority order:
+
+```text
+1. Run the pending Sprint-19 browser/board/SD HIL matrix from
+   LOCAL_WEB_DASHBOARD_PLAN.md, including transfer interruption and SD remount.
+2. Run the combined Phase-18.2.1 + 18.2.2 target HIL matrix.
+3. Capture equivalent-checkpoint Internal/DMA/PSRAM and task-stack/resource trends.
+4. Record failures/fixes against the exact tested source revision.
+5. Close Phase 18.2 only after the required hardware/system evidence is accepted.
+6. Do not start Sprint 20+ implementation without an explicit request.
+```
+
 Do **not** rerun Phase-18.1 light acceptance merely because later audio source
 was merged. Phase 18.1 remains closed unless a concrete regression is found.
 
 The older numbered suggestion to start Phase 18.3 is superseded: 18.3 is
 historical traceability only and its bounded playback scope is already in 18.2.2.
-Before target work, restore `IDF_PATH` and rerun the serialized ESP-IDF build;
-the build attempted from this checkout cannot regenerate without
-`/tools/cmake/project.cmake`.
+The Sprint-19 checkout now has a clean serialized ESP-IDF 6.0.1 build PASS.
+Target work still requires an attached ESP32-S3, mounted SD card, and a browser
+on the existing LAN; the host used for the final review exposed only COM1.
 
 ## Phase 18.4 cloud.push_latest target matrix
 

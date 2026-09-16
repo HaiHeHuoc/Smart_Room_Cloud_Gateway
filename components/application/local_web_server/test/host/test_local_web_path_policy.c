@@ -39,7 +39,10 @@ int main(void)
     failures += expect_rejected("../file");
     failures += expect_rejected("foo/../bar");
     failures += expect_rejected("/foo//bar");
+    failures += expect_rejected("/foo/");
     failures += expect_rejected("/foo/%2e%2e/bar");
+    failures += expect_rejected("/foo/%2Fbar");
+    failures += expect_rejected("/foo/%5cbar");
     failures += expect_rejected("/foo/%ZZ");
     failures += expect_rejected("/foo/%");
     failures += expect_rejected("/foo\\bar");
@@ -48,5 +51,10 @@ int main(void)
     memset(long_path, 'a', sizeof(long_path) - 1U);
     long_path[sizeof(long_path) - 1U] = '\0';
     failures += expect_rejected(long_path);
+
+    char long_component[LOCAL_WEB_LOGICAL_COMPONENT_MAX_LEN + 2U];
+    memset(long_component, 'a', sizeof(long_component) - 1U);
+    long_component[sizeof(long_component) - 1U] = '\0';
+    failures += expect_rejected(long_component);
     return failures == 0 ? 0 : 1;
 }

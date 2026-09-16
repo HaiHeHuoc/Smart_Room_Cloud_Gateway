@@ -14,27 +14,31 @@
 
 #define LOCAL_WEB_HTTP_STACK_SIZE_BYTES 6144U
 #define LOCAL_WEB_HTTP_MAX_OPEN_SOCKETS 2U
-#define LOCAL_WEB_HTTP_MAX_URI_LEN 640U
+#define LOCAL_WEB_HTTP_MAX_URI_LEN 1280U
 #define LOCAL_WEB_RESPONSE_CHUNK_SIZE 512U
 #define LOCAL_WEB_TRANSFER_CHUNK_SIZE SD_CARD_MANAGER_TRANSFER_CHUNK_SIZE
+#define LOCAL_WEB_QUERY_VALUE_SIZE \
+    ((LOCAL_WEB_LOGICAL_PATH_MAX_LEN * 3U) + 1U)
 #define LOCAL_WEB_QUERY_BUFFER_SIZE \
-    ((LOCAL_WEB_LOGICAL_PATH_MAX_LEN * 3U) + 16U)
+    ((LOCAL_WEB_LOGICAL_PATH_MAX_LEN * 3U * 2U) + 24U)
 
 static const char *const TAG = "local_web_server";
 
 extern const unsigned char local_web_index_html_start[]
-    asm("_binary_web_index_html_start");
+    asm("_binary_index_html_start");
 extern const unsigned char local_web_index_html_end[]
-    asm("_binary_web_index_html_end");
+    asm("_binary_index_html_end");
 
 static httpd_handle_t s_server;
 static bool s_initialized;
 
-/* HTTPD invokes URI handlers serially in its one server task. This avoids
- * placing the bounded list (about 2.5 KiB) on that task's call stack. */
+/* HTTPD invokes URI handlers serially in one server task. Keep bounded
+ * response, transfer, and query buffers out of its 6 KiB stack. */
 static sd_card_manager_directory_listing_t s_listing;
 static char s_response_chunk[LOCAL_WEB_RESPONSE_CHUNK_SIZE];
 static uint8_t s_transfer_chunk[LOCAL_WEB_TRANSFER_CHUNK_SIZE];
+static char s_query_buffer[LOCAL_WEB_QUERY_BUFFER_SIZE];
+static char s_query_value[LOCAL_WEB_QUERY_VALUE_SIZE];
 
 static esp_err_t local_web_root_get(httpd_req_t *request);
 static esp_err_t local_web_storage_status_get(httpd_req_t *request);
@@ -261,6 +265,10 @@ static esp_err_t local_web_storage_upload_post(httpd_req_t *request)
     {
         return local_web_send_error(request, "400 Bad Request", "invalid_request");
     }
+    if ((uint64_t)request->content_len > SD_CARD_MANAGER_TRANSFER_MAX_BYTES)
+    {
+        return local_web_send_error(request, "413 Payload Too Large", "upload_too_large");
+    }
 
     sd_card_manager_transfer_info_t transfer = {0};
     const esp_err_t begin_result = sd_card_manager_upload_begin(
@@ -373,16 +381,16 @@ static esp_err_t local_web_get_normalized_query_path(
         return ESP_ERR_INVALID_ARG;
     }
 
-    char query[LOCAL_WEB_QUERY_BUFFER_SIZE] = {0};
-    char encoded_path[LOCAL_WEB_QUERY_BUFFER_SIZE] = {0};
-    if ((httpd_req_get_url_query_str(request, query, sizeof(query)) != ESP_OK) ||
-        (httpd_query_key_value(query, key, encoded_path,
-                               sizeof(encoded_path)) != ESP_OK))
+    if ((httpd_req_get_url_query_str(
+             request, s_query_buffer, sizeof(s_query_buffer)) != ESP_OK) ||
+        (httpd_query_key_value(
+             s_query_buffer, key, s_query_value,
+             sizeof(s_query_value)) != ESP_OK))
     {
         return ESP_ERR_INVALID_ARG;
     }
     return local_web_path_policy_normalize(
-        encoded_path, logical_path, logical_path_size);
+        s_query_value, logical_path, logical_path_size);
 }
 
 static esp_err_t local_web_send_storage_result(
@@ -406,6 +414,10 @@ static esp_err_t local_web_send_storage_result(
     if (result == ESP_ERR_INVALID_RESPONSE)
     {
         return local_web_send_error(request, "409 Conflict", "already_exists");
+    }
+    if (result == ESP_ERR_NOT_FINISHED)
+    {
+        return local_web_send_error(request, "409 Conflict", "directory_not_empty");
     }
     if (result == ESP_ERR_INVALID_STATE)
     {

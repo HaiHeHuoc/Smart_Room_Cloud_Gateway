@@ -1,10 +1,11 @@
 menu "Local Web Server"
 
 config LOCAL_WEB_SERVER_ENABLE
-    bool "Enable local read-only Storage Web UI"
+    bool "Enable local Storage Web UI"
     default y
     help
         Starts the local HTTP Storage UI only after the application has an
-        online network handoff. It never configures or controls Wi-Fi.
+        online network handoff. It provides bounded SD browsing and transfer
+        controls, but never configures or controls Wi-Fi.
 
 endmenu

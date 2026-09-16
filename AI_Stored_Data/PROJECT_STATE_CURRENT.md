@@ -57,7 +57,7 @@ Phase 18.2  SOFTWARE INTEGRATED / TARGET HIL PENDING
 Phase 18.3  SUPERSEDED / absorbed into 18.2.2 / no duplicate production code
 Phase 18.4  cloud.push_latest / software implemented / host tests verified /
             ESP-IDF build environment blocked / target HIL pending
-Sprint 19   Local Web Control V1: SD Card File Manager / PROMPTS 1-2 IMPLEMENTED / PROMPT 3 PENDING
+Sprint 19   Local Web Control V1: SD Card File Manager / SOFTWARE HARDENED / BUILD PASS / TARGET HIL PENDING
 Sprint 20   Local Web Control V2: Playback + Volume / PLANNED / NOT STARTED
 Sprint 21   Local Web Control V3: Lights / PLANNED / NOT STARTED
 Sprint 22   Local Web Control V4: Dashboard + System Status / PLANNED / NOT STARTED
@@ -263,7 +263,7 @@ must not configure/control Wi-Fi, provisioning, credentials, reconnect, or
 network lifecycle. Web and LCD remain sibling frontends over existing managers
 and services. Advanced OTA/factory-management remains outside current scope.
 
-## Sprint 19 Prompts 1-2 checkpoint
+## Sprint 19 Prompts 1-3 checkpoint
 
 Branch: `phase/19-local-web-storage-v1` based on
 `3394818578972ed4187192c4a5e22f46dfc09e1f`.
@@ -291,14 +291,18 @@ Branch: `phase/19-local-web-storage-v1` based on
 - The embedded UI now supports picker/drag-drop upload, download, confirmed
   delete, rename, and folder operations. `app_gui` owns a queued LCD
   `WEB_STORAGE` view; local_web_server only posts copied status data.
-- Prompt 3 remains responsible for actual board/browser/SD HIL. Sprint 20+
-  remain unstarted.
+- Prompt 3 hardened path validation against trailing separators, components
+  over 64 bytes, and case-insensitive reserved upload-temporary names. It also
+  reports abort-cleanup media errors, maps non-empty rmdir to conflict, moves
+  worst-case query data out of the HTTP server stack, fixes the LCD capacity
+  buffer bound, and corrects the generated embedded-asset linker symbol.
+  Sprint 20+ remain unstarted.
 
-Validation recorded for this checkpoint: host path-policy test PASS and stale
-compilation-database syntax checks for `sd_card_manager.c`, `app_gui.c`, and
-`local_web_server.c` PASS. A full serialized ESP-IDF build was attempted but
-cannot reconfigure because the active shell has no `IDF_PATH` export and CMake
-resolves `/tools/...`; it is not a firmware build PASS. Target/HIL has not run.
+Validation recorded for this checkpoint: host path-policy test PASS, source
+syntax checks PASS, `git diff --check` PASS, and a clean serialized ESP-IDF
+6.0.1 build PASS. The 2,600,464-byte application binary leaves 38% free in the
+smallest 4 MiB app partition. The host exposed only COM1, not a target board;
+browser/SD target HIL has not run.
 
 ## Deferred work outside Phase 18.2 closure
 
