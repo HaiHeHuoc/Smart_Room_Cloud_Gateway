@@ -108,7 +108,7 @@ first. Do not create a shortcut from the web server to a driver.
 
 ## Sprint 19 — Local Web Control V1: SD Card File Manager
 
-Status: **PROMPT 1 IN PROGRESS / PROMPT 2+ NOT STARTED**
+Status: **PROMPTS 1-2 IMPLEMENTED / PROMPT 3 VALIDATION PENDING**
 
 ### Goal
 
@@ -165,6 +165,31 @@ card before adding other web-control features.
   It deliberately has no transfer or mutation control.
 - Host path-policy coverage passes. An ESP-IDF build was attempted but did not
   complete at a FreeRTOS archive toolchain failure; no target/HIL is claimed.
+
+### Prompt 2 implementation record (2026-09-16)
+
+- `sd_card_manager` remains the sole SD/VFS/lease owner and now exposes only
+  bounded, opaque-ID transfers plus narrow file/folder mutations. It keeps
+  `FILE` handles private, permits one Web transfer or mutation at a time, and
+  returns a deterministic busy result to concurrent clients.
+- Downloads stream in 4 KiB chunks. Uploads accept at most 8 MiB, write a
+  hidden sibling ending in `.webupload-partial`, remove it on interrupted or
+  failed requests, and publish only after `fclose()` then `rename()` succeeds.
+  Existing destination names are rejected; overwrite is never implicit.
+- The Web routes now cover download, raw-body upload, delete, rename,
+  mkdir, and empty-directory removal. Path policy remains central for every
+  source and destination. HTTP responses distinguish unavailable storage,
+  not-found, conflict, busy, invalid-path, and I/O failures.
+- The compiled-in UI adds file picker/drag-drop upload with browser XHR byte
+  progress, download, confirmation before deletion, rename, and folder
+  creation/removal. No WebSocket was added: the bounded request-response
+  model gives exact upload progress without a second persistent connection.
+- `app_gui` adds a routed `WEB_STORAGE` LCD sub-view. HTTP never calls LVGL;
+  it posts a copied status snapshot to the app_gui latest-value queue.
+- Host path-policy test and individual changed-source syntax checks pass.
+  Full ESP-IDF build is still blocked before compilation because this shell
+  has no `IDF_PATH` export, so CMake resolves `/tools/...`; target/HIL is not
+  claimed and remains Prompt 3 work.
 
 ### Acceptance direction when implementation starts
 

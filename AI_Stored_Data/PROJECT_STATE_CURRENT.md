@@ -57,7 +57,7 @@ Phase 18.2  SOFTWARE INTEGRATED / TARGET HIL PENDING
 Phase 18.3  SUPERSEDED / absorbed into 18.2.2 / no duplicate production code
 Phase 18.4  cloud.push_latest / software implemented / host tests verified /
             ESP-IDF build environment blocked / target HIL pending
-Sprint 19   Local Web Control V1: SD Card File Manager / PROMPT 1 IN PROGRESS
+Sprint 19   Local Web Control V1: SD Card File Manager / PROMPTS 1-2 IMPLEMENTED / PROMPT 3 PENDING
 Sprint 20   Local Web Control V2: Playback + Volume / PLANNED / NOT STARTED
 Sprint 21   Local Web Control V3: Lights / PLANNED / NOT STARTED
 Sprint 22   Local Web Control V4: Dashboard + System Status / PLANNED / NOT STARTED
@@ -263,7 +263,7 @@ must not configure/control Wi-Fi, provisioning, credentials, reconnect, or
 network lifecycle. Web and LCD remain sibling frontends over existing managers
 and services. Advanced OTA/factory-management remains outside current scope.
 
-## Sprint 19 Prompt 1 checkpoint
+## Sprint 19 Prompts 1-2 checkpoint
 
 Branch: `phase/19-local-web-storage-v1` based on
 `3394818578972ed4187192c4a5e22f46dfc09e1f`.
@@ -282,14 +282,23 @@ Branch: `phase/19-local-web-storage-v1` based on
 - Lists are non-recursive and bounded to 32 returned entries and 64 scanned
   direct children. Capacity facts and each directory scan use the existing
   SD lease contract; no HTTP callback mounts or unmounts the card.
-- Prompt 2 remains responsible for upload, download, delete, rename,
-  mkdir/rmdir, progress/events, and all mutation/transfer behavior. Sprint 20+
+- Prompt 2 added 4 KiB streaming download and bounded 8 MiB upload, with a
+  private SD-manager transfer ID, one-operation gate, temporary
+  `.webupload-partial` cleanup, and atomic close-then-rename publication.
+  Delete, rename-without-overwrite, mkdir, and empty-directory removal are
+  narrow SD-manager APIs; handlers do not retain `FILE`, `DIR`, mount, or VFS
+  handles. The browser uses XHR upload progress rather than a WebSocket.
+- The embedded UI now supports picker/drag-drop upload, download, confirmed
+  delete, rename, and folder operations. `app_gui` owns a queued LCD
+  `WEB_STORAGE` view; local_web_server only posts copied status data.
+- Prompt 3 remains responsible for actual board/browser/SD HIL. Sprint 20+
   remain unstarted.
 
-Validation recorded for this checkpoint: host path-policy test PASS. The
-serialized ESP-IDF build was attempted after reconfiguration but did not
-complete because the toolchain could not archive `libfreertos.a`; it is not a
-firmware build PASS. Target/HIL has not run.
+Validation recorded for this checkpoint: host path-policy test PASS and stale
+compilation-database syntax checks for `sd_card_manager.c`, `app_gui.c`, and
+`local_web_server.c` PASS. A full serialized ESP-IDF build was attempted but
+cannot reconfigure because the active shell has no `IDF_PATH` export and CMake
+resolves `/tools/...`; it is not a firmware build PASS. Target/HIL has not run.
 
 ## Deferred work outside Phase 18.2 closure
 
