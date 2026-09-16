@@ -6,6 +6,49 @@
 #include "esp_err.h"
 
 #define SD_CARD_MANAGER_PATH_MAX_LEN 256U
+#define SD_CARD_MANAGER_LOGICAL_PATH_MAX_LEN 192U
+#define SD_CARD_MANAGER_DIRECTORY_ENTRY_NAME_MAX_LEN 64U
+#define SD_CARD_MANAGER_DIRECTORY_LIST_MAX_ENTRIES 32U
+
+/** A bounded metadata type for a direct directory entry. */
+typedef enum
+{
+    SD_CARD_MANAGER_DIRECTORY_ENTRY_FILE = 0,
+    SD_CARD_MANAGER_DIRECTORY_ENTRY_DIRECTORY,
+    SD_CARD_MANAGER_DIRECTORY_ENTRY_OTHER,
+} sd_card_manager_directory_entry_type_t;
+
+/** Bounded metadata copied from one direct child of a logical SD directory. */
+typedef struct
+{
+    char name[SD_CARD_MANAGER_DIRECTORY_ENTRY_NAME_MAX_LEN + 1U];
+    sd_card_manager_directory_entry_type_t type;
+    uint64_t size_bytes;
+} sd_card_manager_directory_entry_t;
+
+/**
+ * @brief Bounded non-recursive directory-list result.
+ *
+ * `path` is a Web-safe logical path rooted at `/`, never the mounted VFS path.
+ * `truncated` is true when the scan/list cap prevented a complete result.
+ */
+typedef struct
+{
+    char path[SD_CARD_MANAGER_LOGICAL_PATH_MAX_LEN + 1U];
+    uint16_t entry_count;
+    uint16_t unsupported_entry_count;
+    bool truncated;
+    sd_card_manager_directory_entry_t
+        entries[SD_CARD_MANAGER_DIRECTORY_LIST_MAX_ENTRIES];
+} sd_card_manager_directory_listing_t;
+
+/** Copied FATFS capacity facts for the approved mounted storage root. */
+typedef struct
+{
+    uint64_t total_bytes;
+    uint64_t used_bytes;
+    uint64_t free_bytes;
+} sd_card_manager_filesystem_usage_t;
 
 /**
  * @brief Observable lifecycle state of the SD recovery service.
@@ -170,6 +213,40 @@ void sd_card_manager_report_io_error(esp_err_t error);
  * @return true when the error indicates a recoverable SD VFS/media failure.
  */
 bool sd_card_manager_is_vfs_media_error(int error_number);
+
+/**
+ * @brief Copy capacity facts for the mounted SD filesystem.
+ *
+ * The function holds a managed lease only while `statvfs()` reads FATFS
+ * metadata. It never exposes the mount path, raw FATFS state, or card handle.
+ *
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG for NULL, or
+ *         ESP_ERR_INVALID_STATE when the VFS cannot accept a new lease.
+ */
+esp_err_t sd_card_manager_get_filesystem_usage(
+    sd_card_manager_filesystem_usage_t *usage);
+
+/**
+ * @brief Copy a bounded, non-recursive list below the approved SD root.
+ *
+ * `logical_path` must be `/` or a normalized slash-separated path below that
+ * root. It must not contain empty, `.`, or `..` components. The caller never
+ * receives a VFS mount path or directory handle. The manager holds one lease
+ * from `opendir()` through `closedir()` and reports a confirmed media error to
+ * recovery before returning.
+ *
+ * At most `SD_CARD_MANAGER_DIRECTORY_LIST_MAX_ENTRIES` entries are returned;
+ * scanning is also capped so a hostile or very large directory cannot turn one
+ * request into an unbounded SD operation.
+ *
+ * @return ESP_OK, ESP_ERR_INVALID_ARG for an unsafe argument/path,
+ *         ESP_ERR_INVALID_STATE while SD is unavailable, ESP_ERR_NOT_FOUND
+ *         for a missing directory, ESP_ERR_NOT_SUPPORTED for a non-directory,
+ *         or ESP_FAIL for a VFS/media failure.
+ */
+esp_err_t sd_card_manager_list_directory(
+    const char *logical_path,
+    sd_card_manager_directory_listing_t *listing);
 
 /**
  * @brief Create or overwrite a small test file on the SD card.
