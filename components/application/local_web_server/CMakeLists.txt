@@ -10,6 +10,7 @@ idf_component_register(
     REQUIRES
         esp_common
         esp_http_server
+        app_gui
     PRIV_REQUIRES
         app_log
         sd_card_manager
