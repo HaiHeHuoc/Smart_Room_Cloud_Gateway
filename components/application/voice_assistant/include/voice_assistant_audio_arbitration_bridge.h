@@ -16,7 +16,11 @@ esp_err_t voice_assistant_audio_stream_begin(void);
 /** Request Xiaozhi PTT capture through the capture arbiter. */
 esp_err_t voice_assistant_audio_capture_start(void);
 
-/** Cancel the active Xiaozhi PTT capture through the capture arbiter. */
+/**
+ * Cancel the active Xiaozhi PTT capture and wait at most one second until the
+ * audio-manager RX channel is no longer active. This does not wait for manual
+ * recording DSP or full arbiter completion.
+ */
 esp_err_t voice_assistant_audio_capture_stop(void);
 
 /**

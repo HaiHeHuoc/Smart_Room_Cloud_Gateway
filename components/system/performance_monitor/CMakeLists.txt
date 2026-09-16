@@ -19,4 +19,5 @@ idf_component_register(
         app_update
         bootloader_support
         log
+        common
 )

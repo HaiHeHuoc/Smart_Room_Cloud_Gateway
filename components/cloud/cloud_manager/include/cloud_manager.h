@@ -195,6 +195,8 @@ typedef struct
     uint32_t network_epoch;
     /** Number of accepted forced ID-token invalidations. */
     uint32_t auth_recovery_count;
+    /** New ordinary periodic uploads deferred during live microphone capture. */
+    uint32_t recording_critical_deferred_periodic_upload_count;
 
     /** Classification of the latest failed attempt. */
     cloud_manager_failure_class_t last_failure_class;

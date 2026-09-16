@@ -25,6 +25,10 @@ typedef struct {
     voice_assistant_ptt_state_t state;
     uint32_t ptt_generation;
     uint32_t session_generation;
+    /** Monotonic debounced GPIO press delivery time, or zero before this intent. */
+    int64_t pressed_at_us;
+    /** Monotonic authorization time, or zero until a real READY path authorizes capture. */
+    int64_t authorized_at_us;
     bool pressed;
     bool capture_authorized;
     esp_err_t last_error;

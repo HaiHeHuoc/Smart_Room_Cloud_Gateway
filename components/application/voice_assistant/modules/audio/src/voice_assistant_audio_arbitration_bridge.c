@@ -15,6 +15,7 @@
 
 #define XIAOZHI_ARB_WAIT_POLL_MS 20U
 #define XIAOZHI_ARB_START_TIMEOUT_MS 3000U
+#define XIAOZHI_ARB_CAPTURE_STOP_TIMEOUT_MS 1000U
 #define XIAOZHI_ARB_TERMINAL_RETRY_MS 20U
 #define XIAOZHI_ARB_TERMINAL_TIMEOUT_MS 1000U
 #define XIAOZHI_CAPTURE_REQUEST_BASE 0x160C0000U
@@ -98,8 +99,32 @@ esp_err_t voice_assistant_audio_capture_stop(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    const esp_err_t ret = audio_manager_capture_arbiter_cancel(request_id);
-    return (ret == ESP_ERR_NOT_FOUND) ? ESP_ERR_INVALID_STATE : ret;
+    esp_err_t ret = audio_manager_capture_arbiter_cancel(request_id);
+    if (ret == ESP_ERR_NOT_FOUND) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    /* The arbiter acknowledges cancellation before the manager has necessarily
+     * disabled RX. Wait only for that live-capture boundary, not for the later
+     * manual-record DSP/arbiter completion, so the caller can end its runtime
+     * critical window exactly after I2S capture stops. */
+    uint32_t waited_ms = 0U;
+    while (waited_ms <= XIAOZHI_ARB_CAPTURE_STOP_TIMEOUT_MS) {
+        audio_manager_status_t status = {0};
+        ret = audio_manager_get_status(&status);
+        if (ret != ESP_OK) {
+            return ret;
+        }
+        if (!status.capture_i2s_active) {
+            return ESP_OK;
+        }
+        vTaskDelay(pdMS_TO_TICKS(XIAOZHI_ARB_WAIT_POLL_MS));
+        waited_ms += XIAOZHI_ARB_WAIT_POLL_MS;
+    }
+    return ESP_ERR_TIMEOUT;
 }
 
 esp_err_t voice_assistant_audio_stream_begin(void)

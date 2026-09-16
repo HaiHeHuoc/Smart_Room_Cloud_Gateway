@@ -16,6 +16,7 @@
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "app_log.h"
+#include "voice_recording_critical.h"
 #include "esp_timer.h"
 #include "esp_attr.h"
 
@@ -49,10 +50,12 @@
 #define CLOUD_MANAGER_NOTIFY_TELEMETRY_AVAILABLE   (1UL << 0)
 #define CLOUD_MANAGER_NOTIFY_NETWORK_CHANGED       (1UL << 1)
 #define CLOUD_MANAGER_NOTIFY_FORCED_PUSH           (1UL << 2)
+#define CLOUD_MANAGER_NOTIFY_RECORDING_CRITICAL    (1UL << 3)
 #define CLOUD_MANAGER_NOTIFY_ALL                    \
     (CLOUD_MANAGER_NOTIFY_TELEMETRY_AVAILABLE |     \
      CLOUD_MANAGER_NOTIFY_NETWORK_CHANGED |         \
-     CLOUD_MANAGER_NOTIFY_FORCED_PUSH)
+     CLOUD_MANAGER_NOTIFY_FORCED_PUSH |             \
+     CLOUD_MANAGER_NOTIFY_RECORDING_CRITICAL)
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "CLOUD_MANAGER";
@@ -173,6 +176,8 @@ static void cloud_manager_set_state(
     cloud_manager_state_t new_state);
 
 static void cloud_manager_record_attempt_start(void);
+
+static void cloud_manager_record_periodic_upload_deferred(void);
 
 static void cloud_manager_record_upload_success(
     int http_status);
@@ -308,6 +313,20 @@ static void cloud_manager_wake_task(
     }
 }
 
+/* The common runtime service invokes listeners from the voice-uplink task.
+ * This callback neither acquires cloud state nor touches HTTP/TLS; the worker
+ * makes its own decision at the next safe loop boundary. */
+static void cloud_manager_recording_critical_listener(
+    bool active,
+    uint32_t transition_sequence,
+    void *context)
+{
+    (void)active;
+    (void)transition_sequence;
+    (void)context;
+    cloud_manager_wake_task(CLOUD_MANAGER_NOTIFY_RECORDING_CRITICAL);
+}
+
 static cloud_network_snapshot_t
 cloud_manager_get_network_snapshot(void)
 {
@@ -418,6 +437,17 @@ static void cloud_manager_record_attempt_start(void)
     s_status.last_attempt_time_ms =
         cloud_manager_get_time_ms();
 
+    xSemaphoreGive(s_status_mutex);
+}
+
+static void cloud_manager_record_periodic_upload_deferred(void)
+{
+    if (xSemaphoreTake(s_status_mutex, portMAX_DELAY) != pdTRUE)
+    {
+        return;
+    }
+
+    ++s_status.recording_critical_deferred_periodic_upload_count;
     xSemaphoreGive(s_status_mutex);
 }
 
@@ -1241,6 +1271,18 @@ static void cloud_manager_task(
             delay_reason = CLOUD_DELAY_NONE;
         }
 
+        /* `cloud.push_latest` was already accepted through its own bounded
+         * Phase-18.4 contract, so it remains eligible. Only a new ordinary
+         * periodic upload waits here. An in-flight HTTP/TLS operation never
+         * reaches this safe point, and the listener wakes this wait on exit. */
+        if (!forced_push_pending &&
+            voice_recording_critical_is_active())
+        {
+            cloud_manager_record_periodic_upload_deferred();
+            cloud_manager_wait_for_notification(portMAX_DELAY);
+            continue;
+        }
+
         cloud_manager_set_state(
             CLOUD_MANAGER_STATE_UPLOADING);
         cloud_manager_record_attempt_start();
@@ -1457,6 +1499,15 @@ esp_err_t cloud_manager_init(
     if (s_is_initialized)
     {
         return ESP_ERR_INVALID_STATE;
+    }
+
+    const esp_err_t listener_ret =
+        voice_recording_critical_register_listener(
+            cloud_manager_recording_critical_listener,
+            NULL);
+    if (listener_ret != ESP_OK)
+    {
+        return listener_ret;
     }
 
     if (config->publish_period_ms <

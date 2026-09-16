@@ -116,6 +116,24 @@ externally override the reserved tag. No `esp_log_set_vprintf()` interception is
 installed. Console retains normal ESP-IDF/UART blocking behavior, independent of
 persistence's non-waiting ring access.
 
+## Live microphone recording policy
+
+While the project-runtime `VOICE_RECORDING_CRITICAL` state is active, producers
+continue their normal bounded RAM-ring and console behavior; ERROR records are
+not filtered or synchronously flushed from the capture path. At the log writer's
+next safe loop boundary, after any current filesystem call has returned, it
+parks an open file (releasing its SD lease) and defers new batch writes, fsync,
+rotation, retention scans, and non-urgent management drain work. It holds no
+logger mutex or SD lease while waiting. A lightweight runtime transition
+notification wakes the writer immediately when capture ends, then it resumes
+the existing retry/durability accounting unchanged. This is not an interruption
+of an already-running VFS call, so it cannot create a half-completed segment.
+
+`log_manager_stats_t.recording_critical_deferred_cycles` exposes safe-point
+deferrals. The bounded ring can still evict old records under a prolonged
+producer overload according to its existing DROP_OLDEST policy; the critical
+window does not introduce a separate silent ERROR drop policy.
+
 ## Files, time transition and retention
 
 Actual paths are under the existing `SD_MOUNT_POINT` (`/sdcard`):

@@ -216,6 +216,27 @@ collecting, a 90-second post-`TTS_STOP` PCM drain watchdog, and a ten-minute
 absolute response ceiling. Finalizing never falls through to either shorter
 watchdog.
 
+## Voice Recording Critical Window
+
+`voice_uplink` is the sole writer of the project-wide
+`VOICE_RECORDING_CRITICAL` runtime signal. GPIO38 press, PTT authorization,
+remote channel setup, or `audio_manager_stream_arm()` alone do not enable it.
+It enters only after `voice_assistant_audio_capture_start()` observes the
+capture arbiter active; that observation follows successful I2S RX enable.
+
+On release, cancellation, Opus/WebSocket failure, unexpected audio-RX loss, or
+transport loss, uplink revokes PTT and follows the normal disarm/capture-stop
+cleanup. It exits the signal after the bounded stop wait sees RX inactive (or
+after that cleanup times out), keyed by session/PTT generation so an old path
+cannot clear a newer turn. Uplink emits one `turn summary` after each started
+turn with debounced GPIO38 PTT-to-authorization/capture timing, first
+PCM/queued/Opus timing, queue/drop deltas, and capture-stop latency; it never
+logs per frame.
+
+The signal is a cooperative workload hint, not a transport control API. It
+does not expose I2S, PTT, provider, task, or audio-buffer handles to background
+components and it does not suspend Wi-Fi, TCP/IP, TLS, Xiaozhi, or audio tasks.
+
 ## GUI contract
 
 `voice_assistant_status_t` is a production UI-safe copied model containing:
@@ -242,6 +263,12 @@ final GUI voice queue/rendering belong to Sprint 15.
 - one public lifecycle command pending at a time;
 - foundation and audio updates coalesced latest-value style, including queue-full deferral;
 - status callbacks run only after releasing the voice status mutex.
+
+Related PTT workers are deliberately unpinned: GPIO debounce is priority 6 in
+PSRAM, PTT policy and bounded uplink/capture-arbiter service are priority 5,
+and `audio_manager` owns I2S at priority 7. The lower-level `voice_assistant`
+session coordinator remains priority 4. Core pinning was not added because no
+current HIL evidence isolates a core-affinity benefit against Wi-Fi/TCPIP.
 
 ## Public API
 

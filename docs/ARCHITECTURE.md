@@ -68,6 +68,12 @@ sync, rotation and retention. `sd_card_manager` retains mount/recovery and lease
 ownership; `time_manager` retains SNTP/clock validity. Neither depends on the
 logger. Early/pre-init logs remain console-only. Hardware acceptance is pending.
 
+`common` also owns the small `VOICE_RECORDING_CRITICAL` runtime contract. Its
+only writer is `voice_uplink` after actual capture admission; background
+components receive only a copied active query and a task-notification edge.
+They defer their own optional work at safe points and never gain PTT, I2S,
+provider, task, or network ownership from this contract.
+
 | Component | Owns | Does not own |
 |---|---|---|
 | `main/main.c` | ESP-IDF entry into product composition | Product callbacks, policy, manager lifecycle, or hardware resources |
@@ -78,14 +84,14 @@ logger. Early/pre-init logs remain console-only. Hardware acceptance is pending.
 | `provisioning_manager` | Temporary BLE provisioning lifecycle and verified credential handoff | Persistent storage, reconnect, GUI |
 | `config_manager` | NVS schema, validation, migration, read/write/erase | Wi-Fi driver or provisioning transport |
 | `app_network_coordinator` | Boot policy, provisioning sessions, persistence/adoption ordering | Driver internals, LVGL rendering |
-| `sensor_manager` | Periodic DHT22 sampling, validation, stale/error state | GUI and cloud ownership |
+| `sensor_manager` | Periodic DHT22 sampling, validation, stale/error state | GUI and cloud ownership; it may skip one bit-timed read during live capture |
 | `firebase_auth` | Sign-in, token cache, refresh, invalidation | Telemetry scheduling |
-| `cloud_manager` | Latest-value telemetry, HTTP client, retry/backoff | Wi-Fi connect/disconnect |
+| `cloud_manager` | Latest-value telemetry, HTTP client, retry/backoff | Wi-Fi connect/disconnect; it never aborts in-flight HTTP for voice capture |
 | `app_gui` | Screens, copied models, queues, UI task, LVGL objects | Network and storage policy |
 | `ui_manager_lvgl` | LVGL initialization, tick, display binding, mutex | Application screen policy |
 | `button_manager` | Polling, debounce, press/release/long-press events | Erase, reboot, LVGL |
 | `app_reset_coordinator` | Ordered reset transaction and verified reboot | Button electrical handling |
-| `performance_monitor` | CPU, heap, task, and stack diagnostics | Runtime policy decisions |
+| `performance_monitor` | CPU, heap, task, and stack diagnostics | Audio/network ownership; it self-defers reports from the common runtime hint |
 
 ## Boot Sequence
 
@@ -146,6 +152,12 @@ cloud_manager task
   -> esp_http_client
   -> copied cloud status callback
   -> app_gui cloud queue
+
+voice_uplink after capture arbiter confirms RX active
+  -> VOICE_RECORDING_CRITICAL enter
+  -> audio_manager stream callback -> bounded PCM queue -> Opus -> Xiaozhi
+  -> release/cancel/error -> disarm + bounded capture-stop -> critical exit
+      -> lightweight wake only: log writer / cloud worker / performance monitor
 ```
 
 Callbacks copy bounded data and return promptly. They do not call LVGL, perform NVS erase, start provisioning, reboot, or execute long network operations.
@@ -200,6 +212,10 @@ stateDiagram-v2
 `wifi_manager` owns reconnect. `cloud_manager` consumes connectivity facts and never calls Wi-Fi connect/disconnect. The cloud task uses a non-zero network epoch to discard stale HTTP client state after network changes.
 
 Telemetry is latest-value only. During an outage, newer sensor data replaces older pending data instead of growing an unbounded history queue.
+
+During a live microphone capture, a new periodic telemetry upload waits at the
+cloud task's pre-attempt boundary. Existing HTTP/TLS work and any already
+accepted `cloud.push_latest` request are not cancelled.
 
 ## Factory Reset Flow
 

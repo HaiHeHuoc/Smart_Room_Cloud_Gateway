@@ -1,6 +1,7 @@
 #include "voice_assistant_uplink.h"
 
 #include <string.h>
+#include <inttypes.h>
 
 #include "audio_manager.h"
 #include "audio_manager_stream.h"
@@ -13,10 +14,12 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "app_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "voice_recording_critical.h"
 
 #define UPLINK_TASK_NAME             "voice_uplink"
 /* The target's failed-turn high-water mark left 11 KiB unused at 36 KiB.
@@ -57,12 +60,79 @@ static uint32_t s_turn_packets = 0U;
 static uint32_t s_turn_opus_bytes = 0U;
 static uint32_t s_turn_pcm_samples = 0U;
 static uint32_t s_turn_ptt_generation = 0U;
+static bool s_turn_critical_active = false;
+/* Avoid repeatedly queuing and logging the same terminal cancellation while
+ * the PTT state-machine task consumes the first request. */
+static bool s_turn_terminal_cancel_pending = false;
+
+typedef struct {
+    int64_t pressed_at_us;
+    int64_t authorized_at_us;
+    int64_t capture_started_at_us;
+    int64_t first_pcm_at_us;
+    int64_t first_queued_at_us;
+    int64_t first_opus_at_us;
+    uint64_t frames_queued_before;
+    uint64_t frames_sent_before;
+    uint64_t queue_drops_before;
+    uint64_t stale_drops_before;
+} uplink_turn_timing_t;
+
+/* The audio-manager callback and uplink task share these few diagnostics under
+ * s_lock. They never retain PCM or touch the network path. */
+static uplink_turn_timing_t s_turn_timing = {0};
 
 static void uplink_set_error(esp_err_t error)
 {
     portENTER_CRITICAL(&s_lock);
     s_status.last_error = error;
     portEXIT_CRITICAL(&s_lock);
+}
+
+static int64_t uplink_elapsed_ms(int64_t start_us, int64_t end_us)
+{
+    if ((start_us <= 0) || (end_us < start_us)) {
+        return -1;
+    }
+    return (end_us - start_us) / 1000;
+}
+
+static void uplink_log_turn_summary(
+    uint32_t session_generation,
+    uint32_t ptt_generation,
+    int64_t capture_stopped_at_us)
+{
+    uplink_turn_timing_t timing = {0};
+    voice_assistant_uplink_status_t status = {0};
+
+    portENTER_CRITICAL(&s_lock);
+    timing = s_turn_timing;
+    status = s_status;
+    portEXIT_CRITICAL(&s_lock);
+
+    APP_LOGI(
+        TAG,
+        TURN_SUMMARY_7E59B72F,
+        "turn summary generation=%u ptt_generation=%u ptt_to_auth_ms=%" PRIi64
+        " ptt_to_capture_ms=%" PRIi64
+        " capture_to_first_pcm_ms=%" PRIi64
+        " capture_to_first_queue_ms=%" PRIi64
+        " capture_to_first_opus_ms=%" PRIi64
+        " capture_to_stop_ms=%" PRIi64
+        " frames_queued=%" PRIu64 " frames_sent=%" PRIu64
+        " queue_drops=%" PRIu64 " stale_drops=%" PRIu64,
+        (unsigned)session_generation,
+        (unsigned)ptt_generation,
+        uplink_elapsed_ms(timing.pressed_at_us, timing.authorized_at_us),
+        uplink_elapsed_ms(timing.pressed_at_us, timing.capture_started_at_us),
+        uplink_elapsed_ms(timing.capture_started_at_us, timing.first_pcm_at_us),
+        uplink_elapsed_ms(timing.capture_started_at_us, timing.first_queued_at_us),
+        uplink_elapsed_ms(timing.capture_started_at_us, timing.first_opus_at_us),
+        uplink_elapsed_ms(timing.capture_started_at_us, capture_stopped_at_us),
+        status.frames_queued - timing.frames_queued_before,
+        status.frames_sent - timing.frames_sent_before,
+        status.frames_dropped_queue_full - timing.queue_drops_before,
+        status.frames_dropped_stale - timing.stale_drops_before);
 }
 
 static void uplink_stream_callback(
@@ -78,9 +148,13 @@ static void uplink_stream_callback(
     }
 
     bool accept = false;
+    const int64_t callback_time_us = esp_timer_get_time();
     portENTER_CRITICAL(&s_lock);
     accept = s_status.turn_active &&
              (s_status.session_generation == frame->stream_generation);
+    if (accept && (s_turn_timing.first_pcm_at_us == 0)) {
+        s_turn_timing.first_pcm_at_us = callback_time_us;
+    }
     portEXIT_CRITICAL(&s_lock);
     if (!accept) {
         portENTER_CRITICAL(&s_lock);
@@ -107,6 +181,9 @@ static void uplink_stream_callback(
 
     portENTER_CRITICAL(&s_lock);
     ++s_status.frames_queued;
+    if (s_turn_timing.first_queued_at_us == 0) {
+        s_turn_timing.first_queued_at_us = callback_time_us;
+    }
     portEXIT_CRITICAL(&s_lock);
 }
 
@@ -215,11 +292,22 @@ static esp_err_t uplink_begin_turn(uint32_t generation)
     s_status.session_generation = generation;
     s_status.last_error = ESP_OK;
     portEXIT_CRITICAL(&s_lock);
+    portENTER_CRITICAL(&s_lock);
+    s_turn_timing = (uplink_turn_timing_t) {
+        .pressed_at_us = ptt.pressed_at_us,
+        .authorized_at_us = ptt.authorized_at_us,
+        .frames_queued_before = s_status.frames_queued,
+        .frames_sent_before = s_status.frames_sent,
+        .queue_drops_before = s_status.frames_dropped_queue_full,
+        .stale_drops_before = s_status.frames_dropped_stale,
+    };
+    portEXIT_CRITICAL(&s_lock);
     s_pcm_frame_samples = 0U;
     s_turn_packets = 0U;
     s_turn_opus_bytes = 0U;
     s_turn_pcm_samples = 0U;
     s_turn_ptt_generation = ptt.ptt_generation;
+    s_turn_terminal_cancel_pending = false;
 
     ret = voice_assistant_audio_capture_start();
     if (ret != ESP_OK) {
@@ -234,7 +322,34 @@ static esp_err_t uplink_begin_turn(uint32_t generation)
         return ret;
     }
 
-    APP_LOGI(TAG, TURN_START_GENERATION_U_2D36C6A2, "turn START generation=%u", (unsigned)generation);
+    const int64_t capture_started_at_us = esp_timer_get_time();
+    portENTER_CRITICAL(&s_lock);
+    s_turn_timing.capture_started_at_us = capture_started_at_us;
+    portEXIT_CRITICAL(&s_lock);
+
+    ret = voice_recording_critical_enter(generation, ptt.ptt_generation);
+    if (ret != ESP_OK) {
+        APP_LOGE(TAG, RECORDING_CRITICAL_ENTRY_FAILED_15C761B9,
+                 "recording critical entry failed generation=%u ptt_generation=%u error=%s",
+                 (unsigned)generation,
+                 (unsigned)ptt.ptt_generation,
+                 esp_err_to_name(ret));
+        portENTER_CRITICAL(&s_lock);
+        s_status.turn_active = false;
+        portEXIT_CRITICAL(&s_lock);
+        (void)voice_assistant_audio_capture_stop();
+        (void)audio_manager_stream_disarm(generation);
+        (void)xiaozhi_foundation_audio_uplink_stop(generation);
+        (void)xiaozhi_foundation_audio_channel_close(generation);
+        (void)voice_assistant_playback_finish_turn(ptt.ptt_generation);
+        s_turn_ptt_generation = 0U;
+        return ret;
+    }
+    s_turn_critical_active = true;
+
+    APP_LOGI(TAG, TURN_START_GENERATION_U_2D36C6A2,
+             "turn START generation=%u recording_critical=1",
+             (unsigned)generation);
     return ESP_OK;
 }
 
@@ -279,6 +394,18 @@ static esp_err_t uplink_end_turn(uint32_t generation)
         first_error = ret;
     }
 
+    const int64_t capture_stopped_at_us = esp_timer_get_time();
+    if (s_turn_critical_active) {
+        const esp_err_t critical_exit_ret = voice_recording_critical_exit(
+            generation, ptt_generation);
+        if ((critical_exit_ret != ESP_OK) && (first_error == ESP_OK)) {
+            first_error = critical_exit_ret;
+        }
+        s_turn_critical_active = false;
+    }
+    uplink_log_turn_summary(
+        generation, ptt_generation, capture_stopped_at_us);
+
     /* Stop listening and retain the channel only while downlink owns the
      * bounded response wait. A zero-packet turn cannot produce a valid
      * response and must not block the next PTT attempt. */
@@ -314,6 +441,7 @@ static esp_err_t uplink_end_turn(uint32_t generation)
         (void)voice_assistant_playback_finish_turn(ptt_generation);
     }
     s_turn_ptt_generation = 0U;
+    s_turn_terminal_cancel_pending = false;
 
     (void)xQueueReset(s_queue);
     s_pcm_frame_samples = 0U;
@@ -354,6 +482,9 @@ static esp_err_t uplink_encode_and_send(
         ++s_status.frames_sent;
         portEXIT_CRITICAL(&s_lock);
         if (s_turn_packets == 1U) {
+            portENTER_CRITICAL(&s_lock);
+            s_turn_timing.first_opus_at_us = esp_timer_get_time();
+            portEXIT_CRITICAL(&s_lock);
             APP_LOGI(TAG, FIRST_OPUS_PACKET_GENERATION_BA47105F,
                      "first Opus packet generation=%u bytes=%u stack_hwm=%u",
                      (unsigned)generation,
@@ -434,6 +565,42 @@ static void uplink_reconcile_ptt(void)
         const esp_err_t ret = uplink_end_turn(generation);
         if (ret != ESP_OK) {
             uplink_set_error(ret);
+        }
+        return;
+    }
+
+    if (active) {
+        audio_manager_status_t audio = {0};
+        xiaozhi_foundation_session_status_t session = {0};
+        const esp_err_t audio_ret = audio_manager_get_status(&audio);
+        const esp_err_t session_ret =
+            xiaozhi_foundation_session_get_status(&session);
+        const bool capture_lost =
+            (audio_ret != ESP_OK) || !audio.capture_i2s_active;
+        const bool transport_lost =
+            (session_ret != ESP_OK) || !session.active ||
+            (session.client_generation != generation);
+
+        /* A terminal audio or transport transition can arrive without a PCM
+         * callback. Revoke the PTT intent so the normal end-turn path closes
+         * the runtime critical window instead of leaving it active until the
+         * physical release. This does not stop Wi-Fi/TCPIP or interrupt an
+         * in-flight background operation. */
+        if ((capture_lost || transport_lost) &&
+            !s_turn_terminal_cancel_pending) {
+            s_turn_terminal_cancel_pending = true;
+            const esp_err_t error =
+                capture_lost
+                    ? ((audio_ret == ESP_OK) ? ESP_ERR_INVALID_STATE : audio_ret)
+                    : ((session_ret == ESP_OK) ? ESP_ERR_INVALID_STATE : session_ret);
+            APP_LOGW(TAG, TURN_CANCELLED_AFTER_CAPTURE_OR_85E29BBA,
+                     "turn cancelled after capture/transport loss generation=%u capture_lost=%s transport_lost=%s error=%s",
+                     (unsigned)generation,
+                     capture_lost ? "yes" : "no",
+                     transport_lost ? "yes" : "no",
+                     esp_err_to_name(error));
+            uplink_set_error(error);
+            (void)voice_assistant_ptt_cancel();
         }
     }
 }

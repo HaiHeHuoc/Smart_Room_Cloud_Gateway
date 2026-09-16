@@ -6,6 +6,7 @@
 #include "board_config.h"
 #include "sd_card_manager.h"
 #include "time_manager.h"
+#include "voice_recording_critical.h"
 #include "sdkconfig.h"
 #include "esp_heap_caps.h"
 #include "esp_memory_utils.h"
@@ -34,6 +35,7 @@
 #define WAKE_ENV 2U
 #define WAKE_URGENT 4U
 #define WAKE_REQUEST 8U
+#define WAKE_RECORDING_CRITICAL 16U
 #define LOCK_TICKS pdMS_TO_TICKS(20)
 #define WRITER_STACK_BYTES 6144
 #define CONSOLE_SINK_TAG "APP_LOG_SINK"
@@ -95,6 +97,28 @@ static void unlock(void) { xSemaphoreGive(s_mutex); }
 static void wake_locked(uint32_t bits)
 {
     if (s.task) xTaskNotify(s.task, bits, eSetBits);
+}
+
+/* The common runtime service invokes listeners from the voice-uplink task only
+ * after releasing its lock. A task notification is the sole side effect here:
+ * no logger mutex, console formatting, allocation, or SD/VFS work occurs on
+ * the capture path. */
+static void log_manager_recording_critical_listener(
+    bool active,
+    uint32_t transition_sequence,
+    void *context)
+{
+    (void)active;
+    (void)transition_sequence;
+    (void)context;
+    TaskHandle_t writer_task = __atomic_load_n(
+        &s.task, __ATOMIC_ACQUIRE);
+    if (writer_task != NULL) {
+        (void)xTaskNotify(
+            writer_task,
+            WAKE_RECORDING_CRITICAL,
+            eSetBits);
+    }
 }
 
 static uint64_t boot_snapshot(void)
@@ -641,6 +665,32 @@ static void writer(void *context)
     int64_t last_write = esp_timer_get_time();
     bool saw_sync = false;
     for (;;) {
+        /* Never interrupt a filesystem transaction. This test is reached only
+         * at the writer loop's safe point, after any write/close operation has
+         * returned. Producer records, including ERROR, remain queued in the
+         * bounded PSRAM ring and console output remains unchanged. */
+        if (voice_recording_critical_is_active()) {
+            bool parked = true;
+            if (s_file != NULL) {
+                parked = park_file();
+            }
+            if (lock(LOCK_TICKS)) {
+                ++s.stats.recording_critical_deferred_cycles;
+                unlock();
+            }
+            if (!parked) {
+                s_durability_failed = true;
+            }
+            uint32_t ignored_bits = 0U;
+            (void)xTaskNotifyWait(
+                0U,
+                UINT32_MAX,
+                &ignored_bits,
+                portMAX_DELAY);
+            bits = ignored_bits;
+            continue;
+        }
+
         bool mounted = storage_ready();
         bool synced = time_manager_is_synced();
         if (mounted && (bits & WAKE_ENV)) s_retry_after = 0;
@@ -824,6 +874,11 @@ esp_err_t log_manager_init(void)
         SemaphoreHandle_t mutex = xSemaphoreCreateMutexStatic(&s_mutex_memory);
         __atomic_store_n(&s_mutex, mutex, __ATOMIC_RELEASE);
     }
+    const esp_err_t listener_ret =
+        voice_recording_critical_register_listener(
+            log_manager_recording_critical_listener,
+            NULL);
+    if (listener_ret != ESP_OK) return listener_ret;
     if (!lock(LOCK_TICKS)) return ESP_ERR_TIMEOUT;
     if (s.initialized) { unlock(); return ESP_OK; }
     const size_t capacity = (size_t)CONFIG_LOG_MANAGER_BUFFER_KIB * 1024;

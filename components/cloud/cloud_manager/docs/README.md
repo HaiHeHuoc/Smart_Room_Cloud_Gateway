@@ -43,6 +43,11 @@ Task 4 time telemetry: build and host-serializer verified; Firebase runtime acce
 - Thread-safe status snapshots and upload counters.
 - Status callbacks invoked after releasing component mutexes.
 - Zeroization of token-bearing URL and request data at the end of ownership.
+- During `VOICE_RECORDING_CRITICAL`, defers only a new ordinary periodic
+  upload at the cloud task's pre-attempt safe point. It never aborts an
+  in-flight HTTP/TLS operation, and an already accepted `cloud.push_latest`
+  request remains eligible under its Phase-18.4 contract. The copied status
+  counter `recording_critical_deferred_periodic_upload_count` records deferrals.
 
 ## Public API
 

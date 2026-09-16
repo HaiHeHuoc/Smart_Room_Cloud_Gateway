@@ -9,6 +9,7 @@
 
 #include "esp_log.h"
 #include "app_log.h"
+#include "voice_recording_critical.h"
 #include "esp_timer.h"
 #include "esp_check.h"
 #include "esp_err.h"
@@ -187,6 +188,23 @@ static void sensor_manager_task(
 
     while (true)
     {
+        /* The AM2301/DHT transaction is a GPIO timing-sensitive read, not a
+         * lightweight cached lookup. Preserve the last coherent sample and
+         * skip only this due read while live voice capture is active; the
+         * existing stable schedule resumes without catch-up bursts. */
+        if (voice_recording_critical_is_active())
+        {
+            if (xSemaphoreTake(s_status_mutex, 0U) == pdTRUE)
+            {
+                ++s_status.recording_critical_deferred_read_count;
+                xSemaphoreGive(s_status_mutex);
+            }
+            vTaskDelayUntil(
+                &last_wake_time,
+                sample_period_ticks);
+            continue;
+        }
+
         dht22_sensor_data_t data = {0};
 
         esp_err_t error =

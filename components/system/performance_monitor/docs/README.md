@@ -24,6 +24,10 @@ performance widgets or expose sampled values to application code.
 - Logs the monitor task's minimum remaining stack.
 - Uses a 5-second measurement period, 6 KB task stack, and priority 2.
 - Prevents a second monitor task from being started.
+- Defers a report cycle when `VOICE_RECORDING_CRITICAL` is active, including a
+  cycle whose 500-ms CPU sample detects capture partway through. The monitor
+  waits for the lightweight transition notification and resumes normally after
+  capture; it is not stopped, deleted, or recreated per turn.
 
 ## Public API
 
@@ -85,6 +89,9 @@ I (...) PERF_MONITOR: [STACK] task=perf_monitor, minimum remaining=... bytes
   together as if they were independent memory pools.
 - Calling `performance_monitor_start()` again returns
   `ESP_ERR_INVALID_STATE`.
+- The recording-window policy avoids task snapshots, task-table output, heap
+  reports, and their console burst while capture is active. It is a diagnostic
+  deferral only and does not change audio, network, or scheduler ownership.
 
 ## Future Attention
 

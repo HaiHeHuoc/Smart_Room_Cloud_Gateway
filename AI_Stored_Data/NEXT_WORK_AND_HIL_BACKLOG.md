@@ -82,6 +82,33 @@ After a clean ESP-IDF build, validate these bounded result and later-state cases
 
 ## Phase 18.2 target HIL — priority matrix
 
+## Voice Recording Critical Window target matrix
+
+This refactor has host state-machine evidence only. On the exact flashed source,
+record a baseline and after-change table for `frames_queued`, `frames_sent`,
+`frames_dropped_queue_full`, `frames_dropped_stale`, I2S RX timeout/overflow,
+Internal/DMA/PSRAM free/min/largest, voice/PTT/uplink/audio/task stack HWM, CPU,
+log backlog/deferred cycles, cloud/sensor deferral counters, and SD active lease
+trend.
+
+Run 20--50 GPIO38 turns covering short and long utterances, rapid press/release,
+the monitor report boundary, an existing log backlog/active SD logging, sensor
+cadence, eligible periodic cloud work, and varied Wi-Fi latency. For each turn,
+retain the single uplink timing summary and check:
+
+- critical enters only after capture start and clears after release, cancel,
+  network/Opus failure, or transport abort;
+- normal workload has `frames_dropped_queue_full=0`, no unexpected I2S timeout
+  or overflow growth, and no crash/WDT/deadlock;
+- logger resumes without a monotonically growing backlog or leaked SD lease;
+- deferred sensor/cloud/monitor work resumes without data-state corruption;
+- an accepted `cloud.push_latest` and any in-flight cloud operation retain their
+  existing behavior; and
+- any remaining drop is classified as I2S, scheduling, uplink queue, Opus, or
+  TLS/WebSocket/network rather than hidden by increasing buffers.
+
+This is cooperative workload prioritization, not a hard-real-time guarantee.
+
 ### P0 — basic owner/state correctness
 
 - WAV PLAY -> PAUSE -> RESUME near the retained committed position.

@@ -96,6 +96,9 @@ typedef struct
     /** Number of failures since the latest successful read. */
     uint32_t consecutive_failure_count;
 
+    /** Due DHT reads skipped during a live microphone capture window. */
+    uint32_t recording_critical_deferred_read_count;
+
     /** esp_timer time of the latest valid sample, in milliseconds. */
     int64_t last_success_time_ms;
 } sensor_manager_status_t;

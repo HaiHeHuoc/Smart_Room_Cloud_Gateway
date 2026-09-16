@@ -157,6 +157,36 @@ ESP-IDF build was attempted but is blocked because this checkout has no
 `IDF_PATH`; CMake cannot find `/tools/cmake/project.cmake`. Target HIL has not
 run and is not claimed.
 
+## Voice Recording Critical Window -- software implemented / target HIL pending
+
+The current refactor branch adds a small project-owned
+`VOICE_RECORDING_CRITICAL` runtime state for the actual Xiaozhi microphone
+capture interval. It enters only after the capture arbiter observes real
+`AUDIO_MANAGER_STATE_RECORDING`/I2S RX activation, and is generation-guarded on
+normal release, cancellation, local capture loss, transport loss, and bounded
+stop cleanup. It is not a GPIO38-press flag and does not suspend arbitrary
+tasks.
+
+The bounded uplink RAM queue and its lifetime counters remain unchanged. One
+post-turn summary provides PTT-to-authorization/capture, first PCM/queued/Opus,
+capture-stop, and queue/drop evidence. `audio_manager` suppresses its
+per-second recorder progress console message only while the state is active.
+
+Cooperative consumers are intentionally narrow:
+
+- `log_manager` parks/releases any file lease at its safe writer boundary and
+  defers batch persistence, fsync, rotation and retention while producers and
+  ERROR console/RAM records continue;
+- `performance_monitor` skips/defer its low-priority report cycle;
+- `sensor_manager` skips one due DHT GPIO-timing read and retains prior state;
+- `cloud_manager` defers a new ordinary periodic attempt only. In-flight HTTP
+  and Phase-18.4 `cloud.push_latest` requests already accepted are unchanged.
+
+No Wi-Fi/TCPIP/TLS/Xiaozhi transport/audio task is suspended. PTT policy moved
+from priority 4 to 5, above cloud/sensor 4 but below audio_manager 7; all voice
+and background tasks remain unpinned pending measured core-affinity evidence.
+Host state-machine tests pass, but this source has no ESP32-S3 HIL evidence.
+
 ## Validation evidence currently recorded
 
 ### 18.2.1

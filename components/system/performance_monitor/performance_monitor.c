@@ -21,6 +21,7 @@
 #include "esp_psram.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "voice_recording_critical.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -166,7 +167,8 @@ static esp_err_t performance_monitor_calculate_cpu(
     performance_monitor_cpu_result_t *result);
 
 static esp_err_t performance_monitor_measure_cpu(
-    performance_monitor_cpu_result_t *result);
+    performance_monitor_cpu_result_t *result,
+    bool *deferred);
 
 static uint32_t performance_monitor_get_task_cpu_x10(
     const TaskStatus_t *start_task,
@@ -200,6 +202,11 @@ static void performance_monitor_log_task_table(
 #endif
 
 static void performance_monitor_task(void *argument);
+
+static void performance_monitor_recording_critical_listener(
+    bool active,
+    uint32_t transition_sequence,
+    void *context);
 
 /* Static Functions --------------------------------------------------------- */
 
@@ -622,14 +629,21 @@ static esp_err_t performance_monitor_calculate_cpu(
 }
 
 static esp_err_t performance_monitor_measure_cpu(
-    performance_monitor_cpu_result_t *result)
+    performance_monitor_cpu_result_t *result,
+    bool *deferred)
 {
     ESP_RETURN_ON_FALSE(
-        result != NULL,
+        (result != NULL) && (deferred != NULL),
         ESP_ERR_INVALID_ARG,
         TAG,
         "CPU result pointer is NULL"
     );
+
+    *deferred = false;
+    if (voice_recording_critical_is_active()) {
+        *deferred = true;
+        return ESP_OK;
+    }
 
     const TickType_t peak_sample_ticks =
         pdMS_TO_TICKS(PERF_MONITOR_CPU_PEAK_SAMPLE_MS);
@@ -671,6 +685,13 @@ static esp_err_t performance_monitor_measure_cpu(
          ++sample_index) {
 
         vTaskDelay(peak_sample_ticks);
+
+        /* Do not take a task snapshot or emit its later report if a voice
+         * capture started during this low-priority CPU sample interval. */
+        if (voice_recording_critical_is_active()) {
+            *deferred = true;
+            return ESP_OK;
+        }
 
         measurement_result =
             performance_monitor_capture_task_snapshot(
@@ -1128,30 +1149,57 @@ static void performance_monitor_task(void *argument)
     (void)argument;
 
     uint32_t report_index = 0U;
-
-    APP_LOGI(
-        TAG, PERFORMANCE_MONITOR_STARTED_A919FB94,
-        "Performance monitor started: period=%u ms, "
-        "full_task_interval=%u reports",
-        (unsigned int)PERF_MONITOR_PERIOD_MS,
-        (unsigned int)PERF_MONITOR_FULL_TASK_INTERVAL
-    );
-
-    /*
-     * Static chip and firmware information is printed only once.
-     */
-    performance_monitor_log_boot_information();
-    performance_monitor_log_app_flash();
+    uint32_t recording_critical_deferred_cycles = 0U;
+    bool startup_information_logged = false;
 
     while (true) {
         performance_monitor_cpu_result_t cpu = {0};
 
+        if (voice_recording_critical_is_active()) {
+            ++recording_critical_deferred_cycles;
+            /* The transition listener wakes this wait when capture ends. */
+            (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            continue;
+        }
+
+        if (!startup_information_logged) {
+            APP_LOGI(
+                TAG, PERFORMANCE_MONITOR_STARTED_A919FB94,
+                "Performance monitor started: period=%u ms, "
+                "full_task_interval=%u reports",
+                (unsigned int)PERF_MONITOR_PERIOD_MS,
+                (unsigned int)PERF_MONITOR_FULL_TASK_INTERVAL
+            );
+
+            /* Static chip and firmware information must not form a console
+             * burst if monitoring happens to start during microphone capture. */
+            performance_monitor_log_boot_information();
+            performance_monitor_log_app_flash();
+            startup_information_logged = true;
+        }
+
+        if (recording_critical_deferred_cycles != 0U) {
+            APP_LOGI(
+                TAG,
+                REPORTING_RESUMED_AFTER_RECORDING_CRITICAL_5B51BA7D,
+                "performance reporting resumed after recording critical deferrals=%u",
+                (unsigned)recording_critical_deferred_cycles);
+            recording_critical_deferred_cycles = 0U;
+        }
+
 #if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
 
+        bool deferred = false;
         const esp_err_t cpu_result =
             performance_monitor_measure_cpu(
-                &cpu
+                &cpu,
+                &deferred
             );
+
+        if (deferred || voice_recording_critical_is_active()) {
+            ++recording_critical_deferred_cycles;
+            continue;
+        }
 
         ++report_index;
 
@@ -1199,6 +1247,13 @@ static void performance_monitor_task(void *argument)
 
 #endif
 
+        /* A capture can begin after a non-CPU diagnostic delay. Do not emit
+         * memory/task console bursts until the next non-critical cycle. */
+        if (voice_recording_critical_is_active()) {
+            ++recording_critical_deferred_cycles;
+            continue;
+        }
+
         performance_monitor_log_memory(
             report_index);
 
@@ -1225,6 +1280,19 @@ static void performance_monitor_task(void *argument)
     }
 }
 
+static void performance_monitor_recording_critical_listener(
+    bool active,
+    uint32_t transition_sequence,
+    void *context)
+{
+    (void)active;
+    (void)transition_sequence;
+    (void)context;
+    if (s_monitor_task_handle != NULL) {
+        xTaskNotifyGive(s_monitor_task_handle);
+    }
+}
+
 /* Functions ---------------------------------------------------------------- */
 
 esp_err_t performance_monitor_start(void)
@@ -1239,6 +1307,14 @@ esp_err_t performance_monitor_start(void)
     return ESP_ERR_NOT_SUPPORTED;
 
 #else
+
+    const esp_err_t listener_ret =
+        voice_recording_critical_register_listener(
+            performance_monitor_recording_critical_listener,
+            NULL);
+    if (listener_ret != ESP_OK) {
+        return listener_ret;
+    }
 
     ESP_RETURN_ON_FALSE(
         s_monitor_task_handle == NULL,

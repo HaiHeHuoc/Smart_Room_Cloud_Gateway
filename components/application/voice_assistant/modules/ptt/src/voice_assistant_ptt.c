@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "app_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -17,7 +18,9 @@
 /* PTT now also handles the bounded post-abort transport-fence path. Keep the
  * policy worker on an 8 KiB Internal-RAM stack so that path retains margin. */
 #define PTT_TASK_STACK_BYTES          8192U
-#define PTT_TASK_PRIORITY             4U
+/* Keep PTT admission/release above periodic cloud and DHT work (both 4), but
+ * below the I2S owner (7) and equal to the bounded uplink/arbiter service. */
+#define PTT_TASK_PRIORITY             5U
 #define PTT_QUEUE_LENGTH              6U
 #define PTT_LOCK_TIMEOUT_MS           100U
 #define PTT_TASK_START_TIMEOUT_MS     2000U
@@ -100,6 +103,9 @@ static void ptt_set_status(
     s_status.pressed = pressed;
     s_status.capture_authorized = capture_authorized;
     s_status.session_generation = session_generation;
+    if (state == VOICE_ASSISTANT_PTT_AUTHORIZED) {
+        s_status.authorized_at_us = esp_timer_get_time();
+    }
     s_status.last_error = error;
     generation = s_status.ptt_generation;
     xSemaphoreGive(s_lock);
@@ -702,6 +708,8 @@ static esp_err_t ptt_queue_command(ptt_command_type_t type)
         command.generation = s_status.ptt_generation;
         s_status.pressed = true;
         s_status.capture_authorized = false;
+        s_status.pressed_at_us = esp_timer_get_time();
+        s_status.authorized_at_us = 0;
     } else {
         if ((type == PTT_COMMAND_RELEASE) && !s_status.pressed) {
             xSemaphoreGive(s_lock);

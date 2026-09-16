@@ -29,6 +29,8 @@ typedef struct {
     uint32_t file_rotations;
     uint32_t truncated_records;
     uint32_t contention_drops;
+    /** Writer safe-point deferrals while live microphone capture was active. */
+    uint32_t recording_critical_deferred_cycles;
     size_t buffered_bytes; /* ring payload plus writer's retry batch */
     size_t peak_buffered_bytes;
     size_t buffer_capacity; /* ring allocation, including record framing */

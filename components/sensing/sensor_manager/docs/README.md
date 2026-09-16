@@ -23,6 +23,10 @@ application callback after each read attempt.
 - Retains the latest successful-sample timestamp for degraded/stale decisions.
 - Reports `READY`, `DEGRADED`, or `ERROR` based on data availability and age.
 - Invokes the application callback after releasing the internal mutex.
+- Defers a due DHT22/AM2301 GPIO timing transaction while
+  `VOICE_RECORDING_CRITICAL` is active, retains the previous coherent status,
+  increments `recording_critical_deferred_read_count`, and returns to the
+  existing `vTaskDelayUntil()` cadence without catch-up reads.
 
 ## State Model
 
@@ -105,6 +109,9 @@ Authentication or TLS from the sensor task.
 - Lifecycle flags assume initialization/start are controlled by one
   application context.
 - The task handle is retained but not yet exposed or used for shutdown.
+- A short live voice turn can skip one scheduled DHT read. This is intentional:
+  the bit-timed hardware transaction is deferred, not sensing state, callbacks,
+  GUI, or cloud ownership. Normal cadence resumes after the recording window.
 - `-1.0f` is also a physically possible temperature. Consumers must use
   `last_error`, `data_valid`, and `data_stale`, not the numeric sentinel alone,
   when deciding whether data is usable.

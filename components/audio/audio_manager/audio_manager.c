@@ -33,6 +33,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "app_log.h"
+#include "voice_recording_critical.h"
 #include "esp_memory_utils.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -1780,11 +1781,18 @@ static esp_err_t record_audio(
         while ((captured >= next_progress) &&
                (next_progress <= target_sample_count))
         {
-            APP_LOGI(
-                TAG, RECORDED_U_U_SECONDS_6D1F33DF,
-                "Recorded %u/%u seconds",
-                (unsigned)(next_progress / AUDIO_MANAGER_SAMPLE_RATE_HZ),
-                (unsigned)(target_sample_count / AUDIO_MANAGER_SAMPLE_RATE_HZ));
+            /* Fixed/manual recorder progress is useful outside live Xiaozhi
+             * turns, but synchronous console output is unnecessary during the
+             * capture-to-uplink path. The turn summary preserves diagnostics
+             * after release without adding one log write per captured second. */
+            if (!voice_recording_critical_is_active())
+            {
+                APP_LOGI(
+                    TAG, RECORDED_U_U_SECONDS_6D1F33DF,
+                    "Recorded %u/%u seconds",
+                    (unsigned)(next_progress / AUDIO_MANAGER_SAMPLE_RATE_HZ),
+                    (unsigned)(target_sample_count / AUDIO_MANAGER_SAMPLE_RATE_HZ));
+            }
             next_progress += AUDIO_MANAGER_SAMPLE_RATE_HZ;
         }
     }
