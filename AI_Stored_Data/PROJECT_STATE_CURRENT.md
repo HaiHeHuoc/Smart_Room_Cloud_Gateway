@@ -1,8 +1,8 @@
 # Smart Room Cloud Gateway — Current Project State
 
-Updated: 2026-09-15
+Updated: 2026-09-16
 Active integration branch: `main_including_Firebase_security`
-Phase-18.3/18.4 base HEAD: `bccd5a0754f393710f123b6bfc2a952cb9d46470` (`main_including_Firebase_security`)
+Voice-recording completion source checkpoint: `3394818578972ed4187192c4a5e22f46dfc09e1f`
 
 > This file is the current-state companion for cross-session AI handoff.
 > Current source, `AGENTS.md`, canonical repository documentation, and explicit
@@ -57,6 +57,8 @@ Phase 18.2  SOFTWARE INTEGRATED / TARGET HIL PENDING
 Phase 18.3  SUPERSEDED / absorbed into 18.2.2 / no duplicate production code
 Phase 18.4  cloud.push_latest / software implemented / host tests verified /
             ESP-IDF build environment blocked / target HIL pending
+Voice Recording Critical Window
+            COMPLETE / USER ACCEPTED BY HẢI ON 2026-09-16
 Sprint 19   Local Web Control V1: SD Card File Manager / PLANNED / NOT STARTED
 Sprint 20   Local Web Control V2: Playback + Volume / PLANNED / NOT STARTED
 Sprint 21   Local Web Control V3: Lights / PLANNED / NOT STARTED
@@ -157,9 +159,14 @@ ESP-IDF build was attempted but is blocked because this checkout has no
 `IDF_PATH`; CMake cannot find `/tools/cmake/project.cmake`. Target HIL has not
 run and is not claimed.
 
-## Voice Recording Critical Window -- software implemented / target HIL pending
+## Voice Recording Critical Window -- COMPLETE / USER ACCEPTED
 
-The current refactor branch adds a small project-owned
+Hải explicitly marked this implementation complete on 2026-09-16 for project
+tracking. This closes the Voice Recording Critical Window work item itself.
+It does **not** automatically close Phase 18.2 or Phase 18.4, and it does not
+invent a target HIL run that was not supplied in the conversation.
+
+The completed implementation adds a small project-owned
 `VOICE_RECORDING_CRITICAL` runtime state for the actual Xiaozhi microphone
 capture interval. It enters only after the capture arbiter observes real
 `AUDIO_MANAGER_STATE_RECORDING`/I2S RX activation, and is generation-guarded on
@@ -185,7 +192,9 @@ Cooperative consumers are intentionally narrow:
 No Wi-Fi/TCPIP/TLS/Xiaozhi transport/audio task is suspended. PTT policy moved
 from priority 4 to 5, above cloud/sensor 4 but below audio_manager 7; all voice
 and background tasks remain unpinned pending measured core-affinity evidence.
-Host state-machine tests pass, but this source has no ESP32-S3 HIL evidence.
+Host state-machine tests are the recorded automated evidence for this source.
+No additional ESP32-S3 HIL log was supplied with the 2026-09-16 completion
+instruction, so future sessions must not relabel this as a measured HIL PASS.
 
 ## Validation evidence currently recorded
 
