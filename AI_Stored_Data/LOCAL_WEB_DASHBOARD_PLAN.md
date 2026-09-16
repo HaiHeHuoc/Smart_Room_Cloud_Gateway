@@ -1,7 +1,7 @@
 # Local Web Dashboard Plan
 
 Updated: 2026-09-13
-Status: **APPROVED ROADMAP / PLANNED / NOT STARTED**
+Status: **APPROVED ROADMAP / Sprint 19 Prompt 1 IN PROGRESS**
 Active integration branch: `main_including_Firebase_security`
 
 ## Purpose
@@ -108,7 +108,7 @@ first. Do not create a shortcut from the web server to a driver.
 
 ## Sprint 19 — Local Web Control V1: SD Card File Manager
 
-Status: **PLANNED / NOT STARTED**
+Status: **PROMPT 1 IN PROGRESS / PROMPT 2+ NOT STARTED**
 
 ### Goal
 
@@ -146,6 +146,25 @@ card before adding other web-control features.
   disconnect during an operation.
 - Do not expose credentials, tokens, private NVS data, or unrelated filesystem
   content.
+
+### Prompt 1 implementation record (2026-09-16)
+
+- Branch: `phase/19-local-web-storage-v1` from integration commit
+  `3394818578972ed4187192c4a5e22f46dfc09e1f`.
+- The Browser -> `local_web_server` -> bounded `sd_card_manager` API path is
+  implemented for status and non-recursive browsing only. Existing SD
+  mount/recovery and lease ownership are unchanged.
+- Web-visible path `/` is the only root. A logical-path policy decodes exactly
+  once and rejects traversal, malformed percent escapes, duplicate separators,
+  empty/dot components, controls, backslashes, and overlong input.
+- Current hard bounds are 192 logical-path bytes, 64 filename bytes, 32 returned
+  entries, and 64 scanned direct children. Results report deterministic
+  `truncated` and unsupported-entry facts.
+- Embedded `web/index.html` provides a responsive PC/mobile storage shell with
+  capacity, current path, parent navigation, loading, error, and empty states.
+  It deliberately has no transfer or mutation control.
+- Host path-policy coverage passes. An ESP-IDF build was attempted but did not
+  complete at a FreeRTOS archive toolchain failure; no target/HIL is claimed.
 
 ### Acceptance direction when implementation starts
 

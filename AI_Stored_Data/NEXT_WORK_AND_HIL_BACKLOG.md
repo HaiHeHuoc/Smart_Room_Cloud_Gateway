@@ -27,7 +27,7 @@ Phase 18.2   SOFTWARE INTEGRATED / TARGET HIL PENDING
 Phase 18.3   SUPERSEDED / absorbed into 18.2.2 / no duplicate production code
 Phase 18.4   cloud.push_latest / software implemented / host tests verified /
              ESP-IDF build environment blocked / target HIL pending
-Sprint 19    Local Web Control V1: SD Card File Manager / PLANNED / NOT STARTED
+Sprint 19    Local Web Control V1: SD Card File Manager / Prompt 1 in progress
 Sprint 20    Local Web Control V2: Playback + Volume / PLANNED / NOT STARTED
 Sprint 21    Local Web Control V3: Lights / PLANNED / NOT STARTED
 Sprint 22    Local Web Control V4: Dashboard + System Status / PLANNED / NOT STARTED
@@ -40,6 +40,11 @@ phase: real SD/I2S/audio/PTT/network timing and resource stability remain target
 acceptance work.
 
 ## Immediate next work
+
+Sprint 19 was explicitly started with Prompt 1 on branch
+`phase/19-local-web-storage-v1`. Finish/validate only its read-only local HTTP
+foundation before considering Prompt 2. Do not treat this as Phase-18 target
+acceptance or mark Sprint 18 closed.
 
 The highest-value next work is now:
 

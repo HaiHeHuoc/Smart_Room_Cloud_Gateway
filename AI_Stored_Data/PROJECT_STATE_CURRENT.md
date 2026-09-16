@@ -57,7 +57,7 @@ Phase 18.2  SOFTWARE INTEGRATED / TARGET HIL PENDING
 Phase 18.3  SUPERSEDED / absorbed into 18.2.2 / no duplicate production code
 Phase 18.4  cloud.push_latest / software implemented / host tests verified /
             ESP-IDF build environment blocked / target HIL pending
-Sprint 19   Local Web Control V1: SD Card File Manager / PLANNED / NOT STARTED
+Sprint 19   Local Web Control V1: SD Card File Manager / PROMPT 1 IN PROGRESS
 Sprint 20   Local Web Control V2: Playback + Volume / PLANNED / NOT STARTED
 Sprint 21   Local Web Control V3: Lights / PLANNED / NOT STARTED
 Sprint 22   Local Web Control V4: Dashboard + System Status / PLANNED / NOT STARTED
@@ -262,6 +262,34 @@ The Web roadmap is SD-card-first. Web UI is for an already-networked device and
 must not configure/control Wi-Fi, provisioning, credentials, reconnect, or
 network lifecycle. Web and LCD remain sibling frontends over existing managers
 and services. Advanced OTA/factory-management remains outside current scope.
+
+## Sprint 19 Prompt 1 checkpoint
+
+Branch: `phase/19-local-web-storage-v1` based on
+`3394818578972ed4187192c4a5e22f46dfc09e1f`.
+
+- `local_web_server` is a presentation-only ESP-IDF HTTP component. It starts
+  only after the existing application network handoff reaches `ONLINE`; it does
+  not own or control Wi-Fi, provisioning, SD mount/recovery, FATFS, LVGL, audio,
+  or hardware resources.
+- Read-only routes are `GET /`, `GET /api/storage/status`, and
+  `GET /api/storage/list?path=<logical-path>`. The UI is a compiled-in asset,
+  so it remains available while the SD card is unavailable.
+- The only Web-visible root is logical `/`, mapped internally by
+  `sd_card_manager` to its existing `/sdcard` mount. Path decoding/normalizing
+  is centralised; traversal, malformed escapes, duplicate separators, empty
+  components, controls, backslashes, and overlong paths are rejected.
+- Lists are non-recursive and bounded to 32 returned entries and 64 scanned
+  direct children. Capacity facts and each directory scan use the existing
+  SD lease contract; no HTTP callback mounts or unmounts the card.
+- Prompt 2 remains responsible for upload, download, delete, rename,
+  mkdir/rmdir, progress/events, and all mutation/transfer behavior. Sprint 20+
+  remain unstarted.
+
+Validation recorded for this checkpoint: host path-policy test PASS. The
+serialized ESP-IDF build was attempted after reconfiguration but did not
+complete because the toolchain could not archive `libfreertos.a`; it is not a
+firmware build PASS. Target/HIL has not run.
 
 ## Deferred work outside Phase 18.2 closure
 
