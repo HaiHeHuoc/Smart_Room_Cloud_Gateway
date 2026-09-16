@@ -261,3 +261,90 @@ Durable constraints:
 `AI_Stored_Data/LOCAL_WEB_DASHBOARD_PLAN.md` is the durable detailed Web scope
 for future sessions and must be consulted before Local Web work to prevent
 drift.
+
+## STATUS OVERRIDE — Phase 18.2–18.4 integrated state
+
+Date: 2026-09-16
+Source checkpoint: `3394818578972ed4187192c4a5e22f46dfc09e1f`
+Active integration branch: `main_including_Firebase_security`
+
+This status override supersedes the older 2026-09-12 `NOT STARTED` values and
+old coarse Phase-18 allocation wherever they conflict with current source and
+Phase-18 records. Historical text remains preserved for traceability.
+
+Current execution state:
+
+```text
+Sprint 18   MCP Controlled Actions                              IN PROGRESS
+Phase 18.1  COMPLETE / BUILD PASS / TARGET HIL ACCEPTED
+Phase 18.2  SOFTWARE INTEGRATED / TARGET HIL PENDING
+18.2.1      Audio Playback Control + PTT Suspension/Auto-Resume
+            SOFTWARE IMPLEMENTED / BUILD + HOST TESTS VERIFIED / HIL PENDING
+18.2.2      Bounded Playback Start + Voice SD Audio Selection
+            SOFTWARE IMPLEMENTED / BUILD + HOST TESTS VERIFIED / HIL PENDING
+Phase 18.3  SUPERSEDED / ABSORBED INTO 18.2.2 / NO DUPLICATE PRODUCTION CODE
+Phase 18.4  cloud.push_latest / SOFTWARE IMPLEMENTED / HOST TESTS VERIFIED /
+            ESP-IDF BUILD ENVIRONMENT BLOCKED / TARGET HIL PENDING
+```
+
+Durable interpretation:
+
+- Phase 18.3 keeps its historical number, but its bounded playback-start scope
+  is already covered by 18.2.2 through `audio.list_tracks`,
+  `audio.play_track`, and `audio.play_recorded`; do not add duplicate production
+  implementation merely to satisfy the old number.
+- Phase 18.4 is the distinct `cloud.push_latest {}` action routed through
+  `smart_room_mcp_adapter -> cloud_manager_request_push_latest() -> existing
+  cloud task/Firebase path`.
+- `accepted=true` for `cloud.push_latest` means request scheduling only, never
+  Firebase upload completion.
+- The recorded Phase-18.4 ESP-IDF build attempt is blocked by the checkout
+  environment because `IDF_PATH` is absent; it is not a build PASS claim.
+- Phase 18.2, Phase 18.4, and the voice-recording prioritization change below
+  still require exact-source target HIL before acceptance may be claimed.
+
+## DECISION — Voice Recording Critical Window
+
+Date: 2026-09-16
+Source checkpoint: `3394818578972ed4187192c4a5e22f46dfc09e1f`
+Status: **SOFTWARE IMPLEMENTED / HOST STATE-MACHINE EVIDENCE / TARGET HIL PENDING**
+
+The project now owns a small board-neutral runtime contract named
+`VOICE_RECORDING_CRITICAL` under `components/system/common`. Preserve these
+semantics unless newer repository evidence or an explicit Hải decision changes
+them:
+
+- `voice_assistant_uplink` is the sole writer of the state;
+- the state enters only after real capture admission observes active
+  `AUDIO_MANAGER_STATE_RECORDING` / I2S RX, not merely GPIO38 press, PTT
+  authorization, remote-channel setup, or stream arm;
+- exit is generation-guarded across normal release, cancellation, capture loss,
+  Opus/WebSocket/network failure, transport loss, and bounded stop cleanup so an
+  old turn cannot clear a newer one;
+- this is a **cooperative workload-priority hint**, not a hard-real-time
+  guarantee and not an API for suspending arbitrary tasks;
+- Wi-Fi/TCPIP/TLS/Xiaozhi transport and core audio tasks are not suspended;
+- the existing bounded uplink RAM queue and queue lifetime counters are not
+  enlarged or replaced to hide timing problems;
+- one post-turn timing summary records PTT-to-authorization/capture, first
+  PCM/queued/Opus timing, capture-stop latency, and queue/drop deltas without
+  per-frame logging;
+- `audio_manager` suppresses only its optional per-second recorder-progress
+  console message during the critical window;
+- `log_manager` defers file persistence/fsync/rotation/retention only at its safe
+  writer boundary while producers and ERROR console/RAM logging continue;
+- `performance_monitor` defers a low-priority report cycle;
+- `sensor_manager` may skip one due DHT GPIO-timing read while preserving prior
+  state;
+- `cloud_manager` defers only a new ordinary periodic upload attempt; already
+  accepted `cloud.push_latest` requests and in-flight cloud operations retain
+  existing behavior;
+- PTT policy priority is 5, above periodic cloud/sensor work at 4 and below the
+  I2S owner at 7; current voice/background tasks remain unpinned until measured
+  core-affinity evidence justifies a change.
+
+Target acceptance must still prove repeated GPIO38 turns, correct critical
+entry/exit, no unexpected I2S timeout/overflow growth, no queue-full drop under
+normal workload, resumed deferred work, stable heap/stack/SD-lease trends, and
+classification of any remaining drop at the actual failing layer. Do not infer
+ESP32-S3 timing/HIL acceptance from host tests.
