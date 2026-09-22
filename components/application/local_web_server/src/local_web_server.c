@@ -2,6 +2,7 @@
 
 #include <inttypes.h>
 #include <stdbool.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -9,9 +10,12 @@
 
 #include "app_log.h"
 #include "app_gui.h"
+#include "audio_manager.h"
 #include "local_web_download.h"
 #include "local_web_path_policy.h"
 #include "sd_card_manager.h"
+#include "smart_room_mcp_adapter.h"
+#include "voice_assistant_playback_control.h"
 
 #define LOCAL_WEB_HTTP_STACK_SIZE_BYTES 6144U
 #define LOCAL_WEB_HTTP_MAX_OPEN_SOCKETS 2U
@@ -52,6 +56,11 @@ static esp_err_t local_web_storage_delete_post(httpd_req_t *request);
 static esp_err_t local_web_storage_mkdir_post(httpd_req_t *request);
 static esp_err_t local_web_storage_rmdir_post(httpd_req_t *request);
 static esp_err_t local_web_storage_rename_post(httpd_req_t *request);
+static esp_err_t local_web_audio_status_get(httpd_req_t *request);
+static esp_err_t local_web_audio_tracks_get(httpd_req_t *request);
+static esp_err_t local_web_audio_play_post(httpd_req_t *request);
+static esp_err_t local_web_audio_control_post(httpd_req_t *request);
+static esp_err_t local_web_audio_volume_post(httpd_req_t *request);
 static esp_err_t local_web_send_error(
     httpd_req_t *request,
     const char *http_status,
@@ -75,6 +84,18 @@ static esp_err_t local_web_send_storage_result(
 static void local_web_publish_storage_status(uint8_t progress_percent,
                                              esp_err_t last_error);
 static esp_err_t local_web_register_routes(httpd_handle_t server);
+
+static const char *local_web_audio_state_name(
+    audio_manager_playback_control_state_t state)
+{
+    return audio_manager_playback_control_state_to_string(state);
+}
+
+static const char *local_web_audio_source_name(
+    audio_manager_playback_source_t source)
+{
+    return audio_manager_playback_source_to_string(source);
+}
 
 esp_err_t local_web_server_init(void)
 {
@@ -103,7 +124,7 @@ esp_err_t local_web_server_start(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = LOCAL_WEB_HTTP_STACK_SIZE_BYTES;
     config.max_open_sockets = LOCAL_WEB_HTTP_MAX_OPEN_SOCKETS;
-    config.max_uri_handlers = 9U;
+    config.max_uri_handlers = 14U;
     config.max_uri_len = LOCAL_WEB_HTTP_MAX_URI_LEN;
     config.recv_wait_timeout = 5U;
     config.send_wait_timeout = 5U;
@@ -179,6 +200,158 @@ static esp_err_t local_web_storage_status_get(httpd_req_t *request)
     httpd_resp_set_type(request, "application/json");
     httpd_resp_set_hdr(request, "Cache-Control", "no-store");
     return httpd_resp_send(request, s_response_chunk, written);
+}
+
+static esp_err_t local_web_audio_status_get(httpd_req_t *request)
+{
+    audio_manager_playback_status_t playback = {0};
+    uint32_t volume = 0U;
+    const esp_err_t playback_ret = voice_assistant_playback_get_status(&playback);
+    const esp_err_t volume_ret = audio_manager_get_playback_volume_percent(&volume);
+    if ((playback_ret == ESP_ERR_INVALID_STATE) ||
+        (volume_ret == ESP_ERR_INVALID_STATE)) {
+        return local_web_send_error(request, "503 Service Unavailable", "audio_unavailable");
+    }
+    if ((playback_ret != ESP_OK) || (volume_ret != ESP_OK)) {
+        return local_web_send_error(request, "500 Internal Server Error", "audio_status_failed");
+    }
+    const int written = snprintf(
+        s_response_chunk, sizeof(s_response_chunk),
+        "{\"ok\":true,\"state\":\"%s\",\"source\":\"%s\","
+        "\"resumable\":%s,\"generation\":%" PRIu32 ","
+        "\"position_frames\":%" PRIu64 ",\"total_frames\":%" PRIu64 ","
+        "\"position_granularity_frames\":%" PRIu32 ",\"volume_percent\":%" PRIu32 "}",
+        local_web_audio_state_name(playback.state),
+        local_web_audio_source_name(playback.source),
+        playback.resumable ? "true" : "false", playback.generation,
+        playback.position_frames, playback.total_frames,
+        playback.position_granularity_frames, volume);
+    if ((written < 0) || (written >= (int)sizeof(s_response_chunk))) {
+        return local_web_send_error(request, "500 Internal Server Error", "response_too_large");
+    }
+    httpd_resp_set_type(request, "application/json");
+    httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+    return httpd_resp_send(request, s_response_chunk, written);
+}
+
+static esp_err_t local_web_audio_tracks_get(httpd_req_t *request)
+{
+    smart_room_audio_catalog_t catalog = {0};
+    const esp_err_t ret = smart_room_mcp_adapter_audio_catalog_get(&catalog);
+    if (ret == ESP_ERR_TIMEOUT) {
+        return local_web_send_error(request, "503 Service Unavailable", "catalog_busy");
+    }
+    if (ret != ESP_OK) {
+        return local_web_send_error(request, "503 Service Unavailable", "catalog_unavailable");
+    }
+    httpd_resp_set_type(request, "application/json");
+    httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+    if (httpd_resp_sendstr_chunk(request, "{\"ok\":true,\"tracks\":[") != ESP_OK) {
+        return ESP_FAIL;
+    }
+    for (uint8_t index = 0U; index < catalog.track_count; ++index) {
+        const char *prefix = (index == 0U) ? "{\"id\":\"" : ",{\"id\":\"";
+        if ((httpd_resp_sendstr_chunk(request, prefix) != ESP_OK) ||
+            (local_web_send_json_escaped(request, catalog.tracks[index].id) != ESP_OK) ||
+            (httpd_resp_sendstr_chunk(request, "\",\"name\":\"") != ESP_OK) ||
+            (local_web_send_json_escaped(request, catalog.tracks[index].name) != ESP_OK)) {
+            return ESP_FAIL;
+        }
+        const int written = snprintf(s_response_chunk, sizeof(s_response_chunk),
+                                     "\",\"size_bytes\":%" PRIu64 "}",
+                                     catalog.tracks[index].size_bytes);
+        if ((written < 0) || (written >= (int)sizeof(s_response_chunk)) ||
+            (httpd_resp_send_chunk(request, s_response_chunk, written) != ESP_OK)) {
+            return ESP_FAIL;
+        }
+    }
+    const int written = snprintf(s_response_chunk, sizeof(s_response_chunk),
+                                 "],\"truncated\":%s}",
+                                 catalog.truncated ? "true" : "false");
+    return ((written < 0) || (written >= (int)sizeof(s_response_chunk)) ||
+            (httpd_resp_send_chunk(request, s_response_chunk, written) != ESP_OK))
+               ? ESP_FAIL : httpd_resp_send_chunk(request, NULL, 0U);
+}
+
+static bool local_web_get_query_value(httpd_req_t *request, const char *key)
+{
+    return (request != NULL) && (key != NULL) &&
+        (httpd_req_get_url_query_len(request) < sizeof(s_query_buffer)) &&
+        (httpd_req_get_url_query_str(request, s_query_buffer,
+                                     sizeof(s_query_buffer)) == ESP_OK) &&
+        (httpd_query_key_value(s_query_buffer, key, s_query_value,
+                               sizeof(s_query_value)) == ESP_OK);
+}
+
+static esp_err_t local_web_audio_play_post(httpd_req_t *request)
+{
+    if (!local_web_get_query_value(request, "track_id")) {
+        return local_web_send_error(request, "400 Bad Request", "invalid_request");
+    }
+    smart_room_audio_catalog_play_result_t result = {0};
+    const esp_err_t ret = smart_room_mcp_adapter_audio_catalog_play(
+        s_query_value, &result);
+    if (ret != ESP_OK) {
+        return local_web_send_error(request, "503 Service Unavailable", "catalog_unavailable");
+    }
+    const char *error = (result.outcome == SMART_ROOM_AUDIO_CATALOG_PLAY_NOT_FOUND)
+                            ? "track_not_found"
+                            : (result.outcome == SMART_ROOM_AUDIO_CATALOG_PLAY_INVALID_REQUEST)
+                                  ? "invalid_request"
+                                  : (result.outcome == SMART_ROOM_AUDIO_CATALOG_PLAY_STORAGE_UNAVAILABLE)
+                                        ? "storage_unavailable"
+                                        : (result.outcome == SMART_ROOM_AUDIO_CATALOG_PLAY_REJECTED)
+                                              ? "playback_busy" : "catalog_unavailable";
+    if (result.outcome != SMART_ROOM_AUDIO_CATALOG_PLAY_SUCCESS) {
+        return local_web_send_error(request, "409 Conflict", error);
+    }
+    return httpd_resp_sendstr(request, "{\"ok\":true,\"accepted\":true,\"scheduled\":true}");
+}
+
+static esp_err_t local_web_audio_control_post(httpd_req_t *request)
+{
+    if (!local_web_get_query_value(request, "action")) {
+        return local_web_send_error(request, "400 Bad Request", "invalid_request");
+    }
+    voice_assistant_playback_action_t action;
+    if (strcmp(s_query_value, "pause") == 0) action = VOICE_ASSISTANT_PLAYBACK_ACTION_PAUSE;
+    else if (strcmp(s_query_value, "resume") == 0) action = VOICE_ASSISTANT_PLAYBACK_ACTION_RESUME;
+    else if (strcmp(s_query_value, "restart") == 0) action = VOICE_ASSISTANT_PLAYBACK_ACTION_RESTART;
+    else if (strcmp(s_query_value, "stop") == 0) action = VOICE_ASSISTANT_PLAYBACK_ACTION_STOP;
+    else return local_web_send_error(request, "400 Bad Request", "unsupported_operation");
+    voice_assistant_playback_control_result_t result = {0};
+    if (voice_assistant_playback_control(action, &result) != ESP_OK) {
+        return local_web_send_error(request, "500 Internal Server Error", "internal_error");
+    }
+    if (!result.accepted) {
+        return local_web_send_error(request, "409 Conflict", "invalid_state");
+    }
+    return httpd_resp_sendstr(request, "{\"ok\":true,\"accepted\":true}");
+}
+
+static esp_err_t local_web_audio_volume_post(httpd_req_t *request)
+{
+    if (!local_web_get_query_value(request, "percent")) {
+        return local_web_send_error(request, "400 Bad Request", "invalid_request");
+    }
+    char *end = NULL;
+    const unsigned long value = strtoul(s_query_value, &end, 10);
+    if ((s_query_value[0] == '\0') || (end == NULL) || (*end != '\0') ||
+        (value > 100U)) {
+        return local_web_send_error(request, "400 Bad Request", "volume_out_of_range");
+    }
+    const esp_err_t ret = audio_manager_set_playback_volume_percent((uint32_t)value);
+    if (ret == ESP_ERR_INVALID_STATE) {
+        return local_web_send_error(request, "503 Service Unavailable", "audio_unavailable");
+    }
+    if (ret != ESP_OK) {
+        return local_web_send_error(request, "400 Bad Request", "volume_out_of_range");
+    }
+    const int written = snprintf(s_response_chunk, sizeof(s_response_chunk),
+                                 "{\"ok\":true,\"volume_percent\":%lu}", value);
+    return ((written < 0) || (written >= (int)sizeof(s_response_chunk)))
+               ? local_web_send_error(request, "500 Internal Server Error", "response_too_large")
+               : httpd_resp_send(request, s_response_chunk, written);
 }
 
 static esp_err_t local_web_storage_list_get(httpd_req_t *request)
@@ -650,6 +823,26 @@ static esp_err_t local_web_register_routes(httpd_handle_t server)
         .uri = "/api/storage/rename", .method = HTTP_POST,
         .handler = local_web_storage_rename_post,
     };
+    static const httpd_uri_t audio_status = {
+        .uri = "/api/audio/status", .method = HTTP_GET,
+        .handler = local_web_audio_status_get,
+    };
+    static const httpd_uri_t audio_tracks = {
+        .uri = "/api/audio/tracks", .method = HTTP_GET,
+        .handler = local_web_audio_tracks_get,
+    };
+    static const httpd_uri_t audio_play = {
+        .uri = "/api/audio/play", .method = HTTP_POST,
+        .handler = local_web_audio_play_post,
+    };
+    static const httpd_uri_t audio_control = {
+        .uri = "/api/audio/control", .method = HTTP_POST,
+        .handler = local_web_audio_control_post,
+    };
+    static const httpd_uri_t audio_volume = {
+        .uri = "/api/audio/volume", .method = HTTP_POST,
+        .handler = local_web_audio_volume_post,
+    };
 
     esp_err_t result = httpd_register_uri_handler(server, &root);
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &storage_status);
@@ -660,5 +853,10 @@ static esp_err_t local_web_register_routes(httpd_handle_t server)
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &storage_mkdir);
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &storage_rmdir);
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &storage_rename);
+    if (result == ESP_OK) result = httpd_register_uri_handler(server, &audio_status);
+    if (result == ESP_OK) result = httpd_register_uri_handler(server, &audio_tracks);
+    if (result == ESP_OK) result = httpd_register_uri_handler(server, &audio_play);
+    if (result == ESP_OK) result = httpd_register_uri_handler(server, &audio_control);
+    if (result == ESP_OK) result = httpd_register_uri_handler(server, &audio_volume);
     return result;
 }

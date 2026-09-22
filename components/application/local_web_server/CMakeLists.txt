@@ -14,5 +14,8 @@ idf_component_register(
         app_gui
     PRIV_REQUIRES
         app_log
+        audio_manager
         sd_card_manager
+        smart_room_mcp_adapter
+        voice_assistant
 )
