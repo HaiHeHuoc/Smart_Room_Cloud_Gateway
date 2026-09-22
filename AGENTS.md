@@ -103,6 +103,70 @@ When asked to modify the repository:
 When progress spans multiple tool operations, briefly tell the user what is
 being inspected or changed. Do not narrate every trivial tool call.
 
+## 4.1 Token-Efficient Documentation And Checkpoint Policy
+
+Minimize documentation churn during multi-prompt implementation work without
+sacrificing repository continuity or evidence quality.
+
+Use three synchronization levels:
+
+### A. Intermediate implementation prompt
+
+For a normal prompt inside an active phase/sprint:
+
+- do not reread or rewrite every roadmap, README, tracker, and
+  `AI_Stored_Data` file;
+- read `AGENTS.md`, the lightweight
+  `AI_Stored_Data/CURRENT_CHECKPOINT.md`, the directly relevant canonical
+  document(s), and the source needed for the task;
+- update code comments only when they explain a non-obvious public contract,
+  ownership/lifetime rule, concurrency requirement, cleanup/error behavior, or
+  hardware/framework constraint changed by the code;
+- do not add comments that merely restate executable code;
+- do not full-sync `PROJECT_STATE_CURRENT.md`, `DECISIONS.md`,
+  `NEXT_WORK_AND_HIL_BACKLOG.md`, root/component READMEs, and roadmaps after
+  every prompt merely to record progress;
+- at a stable checkpoint, overwrite
+  `AI_Stored_Data/CURRENT_CHECKPOINT.md` with a compact handoff containing
+  only the active branch/HEAD, phase/checkpoint, implemented changes,
+  validation actually run, blockers/known risks, and the next action.
+
+Keep the checkpoint concise. Prefer roughly 40-80 lines and remove superseded
+intermediate details rather than appending an unbounded session history.
+
+### B. Immediate durable synchronization
+
+Do not defer documentation when a prompt changes a durable contract that later
+work could otherwise misunderstand. Update the smallest authoritative document
+immediately for:
+
+- roadmap numbering or approved scope;
+- architecture or component ownership;
+- public API semantics or security boundaries;
+- accepted build/HIL evidence that changes a closure gate;
+- an explicit durable decision from Hải;
+- a compatibility or migration rule that future work must obey.
+
+Update one authoritative location per fact when practical; avoid duplicating the
+same prose across several Markdown files.
+
+### C. Full synchronization boundary
+
+Perform the broader documentation reconciliation at:
+
+- the final prompt of a multi-prompt phase/sprint;
+- `END PHASE <phase_id>`;
+- PR-ready/release closure;
+- an explicit user request for full documentation synchronization.
+
+At that boundary, read the relevant canonical documents, fold durable facts from
+`CURRENT_CHECKPOINT.md` into their proper locations, remove stale conflicting
+status, and leave the lightweight checkpoint ready for the next task.
+
+This optimization changes documentation timing only. It never permits stale
+architecture/security contracts, fabricated evidence, skipped validation, or
+loss of information needed to resume work safely.
+
 ## 5. Embedded Engineering Priorities
 
 For ESP32-S3, ESP-IDF, FreeRTOS, LVGL, networking, storage, and future audio
