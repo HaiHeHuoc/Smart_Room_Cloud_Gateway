@@ -1,5 +1,8 @@
 #pragma once
 
+#include <stdbool.h>
+#include <stdint.h>
+
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -20,6 +23,50 @@ extern "C" {
  *         registration error. Registration has no hardware side effects.
  */
 esp_err_t smart_room_mcp_adapter_register_providers(void);
+
+/* Shared bounded audio-catalog seam. It intentionally exposes copied logical
+ * identities only: callers never receive paths, SD handles, or MCP internals. */
+#define SMART_ROOM_AUDIO_CATALOG_MAX_TRACKS 12U
+#define SMART_ROOM_AUDIO_CATALOG_TRACK_ID_MAX_BYTES 48U
+#define SMART_ROOM_AUDIO_CATALOG_TRACK_NAME_MAX_BYTES 48U
+
+typedef struct {
+    char id[SMART_ROOM_AUDIO_CATALOG_TRACK_ID_MAX_BYTES];
+    char name[SMART_ROOM_AUDIO_CATALOG_TRACK_NAME_MAX_BYTES];
+    uint64_t size_bytes;
+} smart_room_audio_catalog_track_t;
+
+typedef struct {
+    bool available;
+    bool truncated;
+    uint8_t track_count;
+    smart_room_audio_catalog_track_t tracks[SMART_ROOM_AUDIO_CATALOG_MAX_TRACKS];
+} smart_room_audio_catalog_t;
+
+typedef enum {
+    SMART_ROOM_AUDIO_CATALOG_PLAY_SUCCESS = 0,
+    SMART_ROOM_AUDIO_CATALOG_PLAY_INVALID_REQUEST,
+    SMART_ROOM_AUDIO_CATALOG_PLAY_STORAGE_UNAVAILABLE,
+    SMART_ROOM_AUDIO_CATALOG_PLAY_UNAVAILABLE,
+    SMART_ROOM_AUDIO_CATALOG_PLAY_NOT_FOUND,
+    SMART_ROOM_AUDIO_CATALOG_PLAY_REJECTED,
+    SMART_ROOM_AUDIO_CATALOG_PLAY_INTERNAL_ERROR,
+} smart_room_audio_catalog_play_outcome_t;
+
+typedef struct {
+    smart_room_audio_catalog_play_outcome_t outcome;
+    bool accepted;
+    bool scheduled;
+} smart_room_audio_catalog_play_result_t;
+
+/** Copy the shared cached `/sdcard/audio` catalog without filesystem I/O. */
+esp_err_t smart_room_mcp_adapter_audio_catalog_get(
+    smart_room_audio_catalog_t *catalog);
+
+/** Resolve one approved logical ID internally and submit it to voice policy. */
+esp_err_t smart_room_mcp_adapter_audio_catalog_play(
+    const char *track_id,
+    smart_room_audio_catalog_play_result_t *result);
 
 #ifdef __cplusplus
 }

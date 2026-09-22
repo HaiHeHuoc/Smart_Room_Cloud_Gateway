@@ -139,6 +139,9 @@ typedef struct
     /** Current lifecycle or active audio pipeline state. */
     audio_manager_state_t state;
 
+    /** Current runtime playback gain in the inclusive range 0..100. */
+    uint32_t playback_volume_percent;
+
     /** True while the manager has successfully enabled the I2S RX channel. */
     bool capture_i2s_active;
 
@@ -453,6 +456,18 @@ esp_err_t audio_manager_restart_playback_at_generation(
  */
 esp_err_t audio_manager_get_playback_status(
     audio_manager_playback_status_t *status);
+
+/**
+ * Set the runtime playback gain in the inclusive range 0..100.
+ *
+ * The update is lock-free for the sample path: the manager observes the new
+ * aligned 32-bit value on a later bounded PCM block. It never restarts I2S or
+ * changes playback ownership. Task context only.
+ */
+esp_err_t audio_manager_set_playback_volume_percent(uint32_t percent);
+
+/** Copy the current runtime playback gain without exposing manager internals. */
+esp_err_t audio_manager_get_playback_volume_percent(uint32_t *percent);
 
 /** @brief Convert one playback-control state into stable diagnostic text. */
 const char *audio_manager_playback_control_state_to_string(

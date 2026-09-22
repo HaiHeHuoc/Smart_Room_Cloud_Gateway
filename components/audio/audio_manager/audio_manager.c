@@ -304,6 +304,9 @@ typedef struct
     bool tx_enabled;
 
     audio_manager_config_t config;
+    /* A naturally aligned 32-bit gain is atomically loaded per bounded PCM
+     * block. The Web setter never takes a mutex on the sample processing path. */
+    volatile uint32_t playback_volume_percent;
 
     /* One manager-owned source slot; only this task/lifecycle owns it. */
     audio_playback_source_t playback_source;
@@ -2034,7 +2037,8 @@ static esp_err_t write_controlled_silence_blocks(
 static int32_t apply_playback_volume_percent(int32_t sample_pcm24)
 {
     return (int32_t)(
-        ((int64_t)sample_pcm24 * s_runtime.config.playback_volume_percent) /
+        ((int64_t)sample_pcm24 * __atomic_load_n(
+            &s_runtime.playback_volume_percent, __ATOMIC_RELAXED)) /
         AUDIO_DSP_VOLUME_PERCENT_MAX);
 }
 
@@ -2054,7 +2058,8 @@ static int16_t apply_wav_volume_percent(int16_t sample_pcm16)
 {
     const int32_t scaled =
         ((int32_t)sample_pcm16 *
-         (int32_t)s_runtime.config.playback_volume_percent) /
+         (int32_t)__atomic_load_n(
+             &s_runtime.playback_volume_percent, __ATOMIC_RELAXED)) /
         (int32_t)AUDIO_DSP_VOLUME_PERCENT_MAX;
 
     if (scaled > (int32_t)AUDIO_DSP_OUTPUT_PEAK_CEILING_PCM16)
@@ -4822,6 +4827,7 @@ esp_err_t audio_manager_init(const audio_manager_config_t *config)
 
     memset(&s_runtime, 0, sizeof(s_runtime));
     s_runtime.config = *config;
+    s_runtime.playback_volume_percent = config->playback_volume_percent;
     s_runtime.sample_capacity = sample_capacity;
     s_runtime.fixed_record_sample_count = fixed_record_sample_count;
     s_runtime.manual_record_sample_limit = manual_record_sample_limit;
@@ -4949,6 +4955,7 @@ esp_err_t audio_manager_init(const audio_manager_config_t *config)
     s_runtime.recorded_sample_count = 0U;
     s_runtime.status = (audio_manager_status_t) {
         .state = AUDIO_MANAGER_STATE_INITIALIZED,
+        .playback_volume_percent = config->playback_volume_percent,
         .recorded_audio_available = false,
         .last_error = ESP_OK,
     };
@@ -5646,6 +5653,37 @@ esp_err_t audio_manager_get_playback_status(
     portENTER_CRITICAL(&s_control_lock);
     *status = s_control.playback_status;
     portEXIT_CRITICAL(&s_control_lock);
+    return ESP_OK;
+}
+
+esp_err_t audio_manager_set_playback_volume_percent(uint32_t percent)
+{
+    if (percent > AUDIO_DSP_VOLUME_PERCENT_MAX) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_runtime.initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    __atomic_store_n(
+        &s_runtime.playback_volume_percent, percent, __ATOMIC_RELAXED);
+    if (s_runtime.status_mutex != NULL &&
+        xSemaphoreTake(s_runtime.status_mutex, 0U) == pdTRUE) {
+        s_runtime.status.playback_volume_percent = percent;
+        xSemaphoreGive(s_runtime.status_mutex);
+    }
+    return ESP_OK;
+}
+
+esp_err_t audio_manager_get_playback_volume_percent(uint32_t *percent)
+{
+    if (percent == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_runtime.initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    *percent = __atomic_load_n(
+        &s_runtime.playback_volume_percent, __ATOMIC_RELAXED);
     return ESP_OK;
 }
 

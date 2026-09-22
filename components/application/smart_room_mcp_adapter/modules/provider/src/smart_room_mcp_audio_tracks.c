@@ -1,4 +1,5 @@
 #include "smart_room_mcp_adapter_internal.h"
+#include "smart_room_mcp_adapter.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -444,6 +445,75 @@ static esp_err_t play_recorded(
         result->scheduled = true;
     } else if (ret == ESP_ERR_INVALID_STATE) {
         result->outcome = XIAOZHI_FOUNDATION_AUDIO_TRACK_PLAYBACK_REJECTED;
+    }
+    return ESP_OK;
+}
+
+esp_err_t smart_room_mcp_adapter_audio_catalog_get(
+    smart_room_audio_catalog_t *catalog)
+{
+    if (catalog == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    xiaozhi_foundation_audio_track_list_t tracks = {0};
+    const esp_err_t ret = copy_track_list(&tracks, NULL);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+    *catalog = (smart_room_audio_catalog_t){
+        .available = tracks.available,
+        .truncated = tracks.truncated,
+        .track_count = tracks.track_count,
+    };
+    for (uint8_t index = 0U; index < tracks.track_count; ++index) {
+        memcpy(catalog->tracks[index].id, tracks.tracks[index].id,
+               sizeof(catalog->tracks[index].id));
+        memcpy(catalog->tracks[index].name, tracks.tracks[index].name,
+               sizeof(catalog->tracks[index].name));
+        catalog->tracks[index].size_bytes = tracks.tracks[index].size_bytes;
+    }
+    return ESP_OK;
+}
+
+esp_err_t smart_room_mcp_adapter_audio_catalog_play(
+    const char *track_id,
+    smart_room_audio_catalog_play_result_t *result)
+{
+    if (result == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    xiaozhi_foundation_audio_track_play_result_t play = {0};
+    const esp_err_t ret = play_track(track_id, &play, NULL);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+    *result = (smart_room_audio_catalog_play_result_t){
+        .accepted = play.accepted,
+        .scheduled = play.scheduled,
+        .outcome = SMART_ROOM_AUDIO_CATALOG_PLAY_INTERNAL_ERROR,
+    };
+    switch (play.outcome) {
+        case XIAOZHI_FOUNDATION_AUDIO_TRACK_SUCCESS:
+            result->outcome = SMART_ROOM_AUDIO_CATALOG_PLAY_SUCCESS;
+            break;
+        case XIAOZHI_FOUNDATION_AUDIO_TRACK_INVALID_REQUEST:
+            result->outcome = SMART_ROOM_AUDIO_CATALOG_PLAY_INVALID_REQUEST;
+            break;
+        case XIAOZHI_FOUNDATION_AUDIO_TRACK_STORAGE_UNAVAILABLE:
+            result->outcome = SMART_ROOM_AUDIO_CATALOG_PLAY_STORAGE_UNAVAILABLE;
+            break;
+        case XIAOZHI_FOUNDATION_AUDIO_TRACK_CATALOG_UNAVAILABLE:
+            result->outcome = SMART_ROOM_AUDIO_CATALOG_PLAY_UNAVAILABLE;
+            break;
+        case XIAOZHI_FOUNDATION_AUDIO_TRACK_NOT_FOUND:
+            result->outcome = SMART_ROOM_AUDIO_CATALOG_PLAY_NOT_FOUND;
+            break;
+        case XIAOZHI_FOUNDATION_AUDIO_TRACK_PLAYBACK_REJECTED:
+            result->outcome = SMART_ROOM_AUDIO_CATALOG_PLAY_REJECTED;
+            break;
+        case XIAOZHI_FOUNDATION_AUDIO_TRACK_INTERNAL_ERROR:
+        default:
+            break;
     }
     return ESP_OK;
 }
