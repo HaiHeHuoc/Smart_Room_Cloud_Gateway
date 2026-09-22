@@ -1,44 +1,41 @@
 # Current Working Checkpoint
 
 Purpose: compact, overwriteable handoff for in-progress multi-prompt work.
-This file is intentionally short to reduce AI read/write token cost.
-
-Authority:
-- current source, `AGENTS.md`, and canonical repository documentation remain
-  higher authority;
-- durable roadmap/architecture/security decisions belong in their canonical
-  documents, not only here;
-- overwrite superseded intermediate details instead of growing session history.
+Current source, `AGENTS.md`, and canonical documentation remain authoritative.
 
 ## Active work
 
-Branch: phase/20-local-web-playback-volume
-HEAD: 424b87451c72594834161ef8173e626cb222e156 (base before local changes)
-Phase/Sprint: Sprint 20 — Local Web Control V2: Playback + Volume
-Checkpoint: Prompt 20.1 implementation
+Branch: `phase/20-local-web-playback-volume`
+HEAD: `17bc390` (Prompt 20.1 delivery commit)
+Base: `424b87451c72594834161ef8173e626cb222e156`
+Phase/Sprint: Sprint 20 - Local Web Control V2: Playback + Volume
+Checkpoint: Prompt 20.1 implemented; target HIL pending.
 
-## Implemented since last durable sync
+## Delivered
 
-- Added a public copied audio-catalog seam in smart_room_mcp_adapter; Web never
-  includes MCP-private headers or resolves physical SD paths.
-- Added runtime audio_manager playback volume 0..100 with lock-free aligned
-  block-path reads, no I2S restart, and copied getter/status fact.
-- Added bounded local Web audio tracks/status/play/control/volume routes and
-  lightweight browser polling UI.
+- Public copied catalog seam shares the existing `/sdcard/audio` catalog cache;
+  Web has no MCP-private-header dependency, filesystem scanner, or physical path.
+- Local REST provides catalog, playback status, catalog-ID play, controls, and
+  runtime volume 0..100. Voice-assistant arbitration remains the playback owner.
+- Storage `/audio` shows `Play` only for an exact catalog-approved filename.
+- Browser Playback UI has bounded status facts, one in-flight poll (750 ms
+  active, 2.5 s inactive), and stops polling while the document is hidden.
 
 ## Validation actually run
 
-- local_web_server host path-policy test: PASS.
-- smart_room_mcp_adapter host catalog-entry test: PASS.
-- git diff --check: PASS.
-- ESP-IDF 6.0.1 serialized build: PASS (firmware 0x27d500; 38% app partition free).
+- `local_web_server` host path and audio-policy test: PASS.
+- `smart_room_mcp_adapter` host catalog-entry test: PASS.
+- `audio_manager` host playback-control and WAV-lease tests: PASS.
+- `git diff --check`: PASS before commit.
+- ESP-IDF 6.0.1 serialized build: PASS; firmware `0x27e220`, app free 38%.
 
-## Blockers / known risks
+## HIL required
 
-- Target HIL is required for Web/PPT/Xiaozhi arbitration, live volume response,
-  progress behavior, large SD files, and current SD-SPI CRC/recovery behavior.
+- Browser control during PTT/Xiaozhi, pause/resume/restart/stop, live 0/100
+  volume, progress behavior, PC/mobile layout, large WAV, and SD-SPI CRC
+  recovery during storage and playback contention.
 
-## Next action
+## Scope boundary
 
-- Flash this branch and execute Sprint-20 browser/board HIL; do not start
-  Prompt 20.2 or Sprint 21 automatically.
+- Do not start Prompt 20.2 or Sprint 21 automatically.
+- No push or merge was performed.
