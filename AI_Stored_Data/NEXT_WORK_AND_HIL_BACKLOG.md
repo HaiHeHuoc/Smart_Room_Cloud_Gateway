@@ -66,7 +66,9 @@ current priority order:
 1. Run the pending Sprint-19 browser/board/SD HIL matrix from
    LOCAL_WEB_DASHBOARD_PLAN.md. First flash the capacity fix and verify
    `/api/storage/status` has non-zero total capacity, free <= total, and
-   used + free equals total before transfer interruption and SD remount tests.
+   used + free equals total. Then verify that a 2-4 GiB FAT32 file reports a
+   plausible size and downloads with its requested filename before transfer
+   interruption and SD remount tests.
 2. Run the combined Phase-18.2.1 + 18.2.2 target HIL matrix.
 3. Capture equivalent-checkpoint Internal/DMA/PSRAM and task-stack/resource trends.
 4. Record failures/fixes against the exact tested source revision.

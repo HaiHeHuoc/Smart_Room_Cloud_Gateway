@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "sd_card_manager.c"
+        "sd_card_manager_file_size.c"
         "sd_card_manager_usage.c"
     INCLUDE_DIRS "include"
     REQUIRES

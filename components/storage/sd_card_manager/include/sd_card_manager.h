@@ -21,7 +21,13 @@ typedef enum
     SD_CARD_MANAGER_DIRECTORY_ENTRY_OTHER,
 } sd_card_manager_directory_entry_type_t;
 
-/** Bounded metadata copied from one direct child of a logical SD directory. */
+/**
+ * Bounded metadata copied from one direct child of a logical SD directory.
+ *
+ * `size_bytes` is the unsigned FATFS byte count. On this FAT32 ESP-IDF VFS,
+ * it remains correct for files in the 2-4 GiB range even though `off_t` is
+ * signed 32-bit internally.
+ */
 typedef struct
 {
     char name[SD_CARD_MANAGER_DIRECTORY_ENTRY_NAME_MAX_LEN + 1U];

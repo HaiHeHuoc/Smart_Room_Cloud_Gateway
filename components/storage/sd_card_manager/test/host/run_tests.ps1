@@ -10,6 +10,7 @@ New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
 
 & $gcc -std=c11 -Wall -Wextra -Werror `
     -I $componentRoot `
+    (Join-Path $componentRoot 'sd_card_manager_file_size.c') `
     (Join-Path $componentRoot 'sd_card_manager_usage.c') `
     (Join-Path $testRoot 'test_sd_card_manager_usage.c') `
     -o (Join-Path $outputRoot 'sd_card_manager_usage_tests.exe')

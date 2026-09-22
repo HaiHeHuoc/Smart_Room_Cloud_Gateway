@@ -206,7 +206,7 @@ card before adding other web-control features.
   `uint64_t` KiB values. The ESP-IDF embed-file symbol now matches the actual
   generated `_binary_index_html_*` symbol.
 - Validation: host path-policy test PASS, `git diff --check` PASS, and clean
-  serialized ESP-IDF 6.0.1 build PASS. The application binary is 2,601,152
+  serialized ESP-IDF 6.0.1 build PASS. The application binary is 2,601,776
   bytes, leaving 38% free in the smallest 4 MiB app partition.
 - The host exposed only `COM1`; no ESP32-S3 target, browser session, or SD-card
   HIL evidence was available. Sprint 20+ remains unstarted.
@@ -231,12 +231,31 @@ card before adding other web-control features.
 - Host capacity-invariant and path-policy tests pass; a clean ESP-IDF 6.0.1
   build passes. The fixed firmware has not yet been flashed or target-verified.
 
+### Large-file metadata and download-name HIL defects (2026-09-22)
+
+- Target screenshots show `input_long_3.wav` as about 17.18 billion GiB and
+  downloads named `download`, despite the download byte count matching the
+  requested file.
+- Root cause 1: ESP-IDF 6.0.1 FAT VFS copies FAT32's unsigned 32-bit
+  `FILINFO.fsize` to signed 32-bit `struct stat::st_size`; directly casting a
+  2-4 GiB negative `st_size` to `uint64_t` produces a near-`UINT64_MAX` JSON
+  `size_bytes`. The SD manager now restores the original 32-bit unsigned value
+  before returning copied directory metadata.
+- Root cause 2: the download route sent `Content-Disposition: attachment`
+  without a filename. It now supplies a bounded ASCII fallback plus RFC 5987
+  `filename*` UTF-8 value. No change was made to the SD transfer/lease model.
+- New host tests cover the 2 GiB sign boundary, FAT32 4 GiB maximum, ordinary
+  filename, escaped spaces, and root rejection. Clean ESP-IDF 6.0.1 build
+  passes; generated binary is 2,601,776 bytes with 38% smallest-app-partition
+  space free. Target redeploy and HIL remain required.
+
 ### Target HIL matrix (pending)
 
 1. Open `/` from a phone and PC on the existing local LAN; verify the LCD
    Web Storage status, browsing, parent navigation, and unavailable-card state.
 2. Exercise upload, download, delete, rename, mkdir, and empty/non-empty rmdir
-   with normal files, 8 MiB boundary files, duplicate names, and invalid paths.
+   with normal files, 8 MiB boundary files, duplicate names, invalid paths,
+   a 2-4 GiB FAT32 file whose displayed/downloaded name must remain correct.
 3. Disconnect the browser during upload/download; verify no published partial
    file, server recovery, and subsequent transfer capability.
 4. Remove/reinsert the SD card during browse and transfer; verify lease drain,

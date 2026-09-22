@@ -2,6 +2,19 @@
 #include <string.h>
 
 #include "local_web_path_policy.h"
+#include "local_web_download.h"
+
+static int expect_content_disposition(const char *path, const char *expected)
+{
+    char output[LOCAL_WEB_DOWNLOAD_CONTENT_DISPOSITION_MAX_LEN] = {0};
+    if (!local_web_download_content_disposition(path, output, sizeof(output)) ||
+        (strcmp(output, expected) != 0))
+    {
+        fprintf(stderr, "unexpected Content-Disposition for %s\n", path);
+        return 1;
+    }
+    return 0;
+}
 
 static int expect_ok(const char *input, const char *expected)
 {
@@ -56,5 +69,16 @@ int main(void)
     memset(long_component, 'a', sizeof(long_component) - 1U);
     long_component[sizeof(long_component) - 1U] = '\0';
     failures += expect_rejected(long_component);
+
+    failures += expect_content_disposition(
+        "/audio/input_long_3.wav",
+        "attachment; filename=\"input_long_3.wav\"; "
+        "filename*=UTF-8''input_long_3.wav");
+    failures += expect_content_disposition(
+        "/audio/report 1.wav",
+        "attachment; filename=\"report_1.wav\"; "
+        "filename*=UTF-8''report%201.wav");
+    failures += local_web_download_content_disposition(
+        "/", long_path, sizeof(long_path));
     return failures == 0 ? 0 : 1;
 }

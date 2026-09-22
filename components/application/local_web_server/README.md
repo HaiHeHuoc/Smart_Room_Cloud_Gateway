@@ -10,7 +10,8 @@ Routes:
 - `GET /api/storage/status` — SD availability and copied total/used/free bytes;
 - `GET /api/storage/list?path=<logical-path>` — bounded direct-child metadata.
 
-Additional routes are `GET /api/storage/download?path=<logical-path>`, raw-body
+Additional routes are `GET /api/storage/download?path=<logical-path>` (with a
+browser download filename through `Content-Disposition`), raw-body
 `POST /api/storage/upload?path=<logical-path>` (at most 8 MiB), and bounded
 `POST` delete, rename, mkdir, and rmdir operations.
 

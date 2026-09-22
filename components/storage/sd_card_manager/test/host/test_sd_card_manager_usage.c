@@ -2,6 +2,7 @@
 #include <stdio.h>
 
 #include "sd_card_manager_usage.h"
+#include "sd_card_manager_file_size.h"
 
 static int expect_usage(
     uint64_t total_bytes,
@@ -48,5 +49,12 @@ int main(void)
         2147483648ULL * 4096ULL);
     failures += expect_rejected(0U, 0U);
     failures += expect_rejected(1024U, 1025U);
+
+    failures += sd_card_manager_fatfs_vfs_file_size_bytes(2147483647) !=
+                2147483647ULL;
+    failures += sd_card_manager_fatfs_vfs_file_size_bytes((int32_t)0x80000000U) !=
+                2147483648ULL;
+    failures += sd_card_manager_fatfs_vfs_file_size_bytes((int32_t)0xFFFFFFFFU) !=
+                4294967295ULL;
     return failures == 0 ? 0 : 1;
 }

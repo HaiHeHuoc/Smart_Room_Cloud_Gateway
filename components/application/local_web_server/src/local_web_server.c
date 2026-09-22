@@ -9,6 +9,7 @@
 
 #include "app_log.h"
 #include "app_gui.h"
+#include "local_web_download.h"
 #include "local_web_path_policy.h"
 #include "sd_card_manager.h"
 
@@ -37,6 +38,8 @@ static bool s_initialized;
 static sd_card_manager_directory_listing_t s_listing;
 static char s_response_chunk[LOCAL_WEB_RESPONSE_CHUNK_SIZE];
 static uint8_t s_transfer_chunk[LOCAL_WEB_TRANSFER_CHUNK_SIZE];
+static char s_download_content_disposition[
+    LOCAL_WEB_DOWNLOAD_CONTENT_DISPOSITION_MAX_LEN];
 static char s_query_buffer[LOCAL_WEB_QUERY_BUFFER_SIZE];
 static char s_query_value[LOCAL_WEB_QUERY_VALUE_SIZE];
 
@@ -227,9 +230,19 @@ static esp_err_t local_web_storage_download_get(httpd_req_t *request)
         return local_web_send_storage_result(request, begin_result, "file_not_found");
     }
 
+    if (!local_web_download_content_disposition(
+            logical_path, s_download_content_disposition,
+            sizeof(s_download_content_disposition)))
+    {
+        (void)sd_card_manager_download_end(transfer.transfer_id);
+        return local_web_send_error(
+            request, "500 Internal Server Error", "download_filename_invalid");
+    }
+
     httpd_resp_set_type(request, "application/octet-stream");
     httpd_resp_set_hdr(request, "Cache-Control", "no-store");
-    httpd_resp_set_hdr(request, "Content-Disposition", "attachment");
+    httpd_resp_set_hdr(
+        request, "Content-Disposition", s_download_content_disposition);
     esp_err_t result = ESP_OK;
     for (;;)
     {

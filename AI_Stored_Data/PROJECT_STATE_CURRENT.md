@@ -300,7 +300,7 @@ Branch: `phase/19-local-web-storage-v1` based on
 
 Validation recorded for this checkpoint: host path-policy test PASS, source
 syntax checks PASS, `git diff --check` PASS, and a clean serialized ESP-IDF
-6.0.1 build PASS. The 2,601,152-byte application binary leaves 38% free in the
+6.0.1 build PASS. The 2,601,776-byte application binary leaves 38% free in the
 smallest 4 MiB app partition. The host exposed only COM1, not a target board;
 browser/SD target HIL has not run.
 
@@ -318,6 +318,27 @@ browser/SD target HIL has not run.
   `storage_usage_unavailable`, rather than a successful zero-capacity JSON.
   Mount/recovery/VFS lease ownership remains in `sd_card_manager`.
 - New host capacity-invariant coverage passes, as do the path-policy suite,
+
+### Sprint 19 large-file metadata and download-name HIL defects -- source fixed / redeploy verification pending
+
+- Target screenshots exposed two independent HTTP presentation defects. A
+  normal file was downloaded as `download` because the response had only
+  `Content-Disposition: attachment`, without a filename. Separately,
+  `input_long_3.wav` rendered as approximately 17.18 billion GiB while a
+  neighbouring 1.3 GiB file rendered normally.
+- ESP-IDF 6.0.1 FAT VFS assigns the unsigned FAT32 `FILINFO.fsize` (`DWORD`)
+  to signed 32-bit `struct stat::st_size`. The old `(uint64_t)st_size` cast
+  widened values at or above 2 GiB into near-`UINT64_MAX` metadata. The SD
+  manager now restores the original unsigned 32-bit FatFs size before copying
+  it into the public 64-bit metadata field. Mount, VFS, and lease ownership do
+  not change.
+- Downloads now send a bounded `Content-Disposition` with an ASCII fallback
+  and RFC 5987 `filename*` UTF-8 encoding. The existing chunked download,
+  transfer gate, and cleanup path are unchanged.
+- Host coverage verifies the 2 GiB sign boundary, FAT32 4 GiB maximum, normal
+  filename, space escaping, and root-path rejection. A clean serialized
+  ESP-IDF 6.0.1 build passes with a 2,601,776-byte binary and 38% app-partition
+  headroom. The fixed firmware has not been flashed or target-verified.
   `git diff --check`, and a clean ESP-IDF 6.0.1 build. The new firmware has not
   been flashed to the target, so real capacity numbers remain pending.
 

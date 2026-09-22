@@ -1,5 +1,6 @@
 /* Includes ----------------------------------------------------------------- */
 #include "sd_card_manager.h"
+#include "sd_card_manager_file_size.h"
 #include "sd_card_manager_usage.h"
 
 #include <dirent.h>
@@ -1562,8 +1563,15 @@ esp_err_t sd_card_manager_list_directory(
             &listing->entries[listing->entry_count++];
         memcpy(output->name, entry->d_name, name_length);
         output->name[name_length] = '\0';
+        /* ESP-IDF 6.0.1 FAT VFS copies the unsigned FAT32 fsize into signed
+         * off_t. Preserve its 32-bit value instead of widening a negative
+         * st_size to nearly UINT64_MAX for files at or above 2 GiB. */
+        _Static_assert(
+            sizeof(entry_stat.st_size) == sizeof(int32_t),
+            "FATFS VFS file size conversion expects 32-bit off_t");
         output->size_bytes = S_ISREG(entry_stat.st_mode)
-                                 ? (uint64_t)entry_stat.st_size
+                                 ? sd_card_manager_fatfs_vfs_file_size_bytes(
+                                       (int32_t)entry_stat.st_size)
                                  : 0U;
         output->type = S_ISDIR(entry_stat.st_mode)
                            ? SD_CARD_MANAGER_DIRECTORY_ENTRY_DIRECTORY
