@@ -6,7 +6,7 @@ Current source, `AGENTS.md`, and canonical documentation remain authoritative.
 ## Active work
 
 Branch: `phase/20-local-web-tabs`
-Implementation commits: `17bc390`, `2c57634` (Prompt 20.1 delivery)
+Implementation commits: `17bc390`, `2c57634`, `6f11169` (Prompt 20.1 delivery)
 Base: `424b87451c72594834161ef8173e626cb222e156`
 Phase/Sprint: Sprint 20 - Local Web Control V2: Playback + Volume
 Checkpoint: Prompt 20.1 implemented; target HIL pending.
@@ -22,6 +22,8 @@ Checkpoint: Prompt 20.1 implemented; target HIL pending.
   active, 2.5 s inactive), and stops polling while the document is hidden.
 - Local Web content is separated into accessible Storage and Playback tabs;
   keyboard tab selection uses Left/Right/Home/End and the active panel only.
+- A committed mutation affecting `/audio` invalidates the shared catalog by
+  epoch; Web clears stale tracks and retries the worker-published snapshot.
 
 ## Validation actually run
 
@@ -29,7 +31,7 @@ Checkpoint: Prompt 20.1 implemented; target HIL pending.
 - `smart_room_mcp_adapter` host catalog-entry test: PASS.
 - `audio_manager` host playback-control and WAV-lease tests: PASS.
 - `git diff --check`: PASS before commit.
-- ESP-IDF 6.0.1 serialized build: PASS; firmware `0x27ea60`, app free 38%.
+- ESP-IDF 6.0.1 serialized build: PASS; firmware `0x27eee0`, app free 38%.
 
 ## HIL required
 
