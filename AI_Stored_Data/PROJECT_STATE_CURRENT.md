@@ -221,9 +221,14 @@ Only a concrete regression or explicit Hải instruction should reopen Sprint 18
   runs at a time; uploads use a temporary file then atomic publication.
 - FATFS capacity, signed FAT32 file sizes at or above 2 GiB, and browser
   download filenames are corrected. The maximum Web upload is 20 MiB.
-- Host tests and a serialized ESP-IDF 6.0.1 build pass. The merged firmware
-  still needs browser/ESP32-S3/SD target HIL, including large-file metadata,
-  download naming, upload up to 20 MiB, and SD recovery.
+- Host tests and a serialized ESP-IDF 6.0.1 build pass.
+- Target HIL update (user-confirmed on 2026-09-22): the previously observed
+  Web Storage capacity reporting defect and browser download defect are fixed
+  on the deployed main revision. Capacity/status and download are therefore
+  accepted for this HIL checkpoint.
+- Remaining Sprint-19 target HIL still includes upload up to 20 MiB,
+  interruption/partial-file cleanup, file/folder mutations, and SD
+  removal/remount/recovery before full Sprint-19 acceptance.
 
 ## Security invariants
 
