@@ -2,7 +2,6 @@
 
 #include <inttypes.h>
 #include <stdbool.h>
-#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -12,6 +11,7 @@
 #include "app_gui.h"
 #include "audio_manager.h"
 #include "local_web_download.h"
+#include "local_web_audio_policy.h"
 #include "local_web_path_policy.h"
 #include "sd_card_manager.h"
 #include "smart_room_mcp_adapter.h"
@@ -88,7 +88,17 @@ static esp_err_t local_web_register_routes(httpd_handle_t server);
 static const char *local_web_audio_state_name(
     audio_manager_playback_control_state_t state)
 {
-    return audio_manager_playback_control_state_to_string(state);
+    switch (state) {
+        case AUDIO_MANAGER_PLAYBACK_CONTROL_IDLE: return "idle";
+        case AUDIO_MANAGER_PLAYBACK_CONTROL_STARTING: return "starting";
+        case AUDIO_MANAGER_PLAYBACK_CONTROL_PLAYING: return "playing";
+        case AUDIO_MANAGER_PLAYBACK_CONTROL_PAUSING: return "pausing";
+        case AUDIO_MANAGER_PLAYBACK_CONTROL_PAUSED: return "paused";
+        case AUDIO_MANAGER_PLAYBACK_CONTROL_RESUMING: return "resuming";
+        case AUDIO_MANAGER_PLAYBACK_CONTROL_STOPPING: return "stopping";
+        case AUDIO_MANAGER_PLAYBACK_CONTROL_ERROR: return "error";
+        default: return "unknown";
+    }
 }
 
 static const char *local_web_audio_source_name(
@@ -257,6 +267,10 @@ static esp_err_t local_web_audio_tracks_get(httpd_req_t *request)
             (local_web_send_json_escaped(request, catalog.tracks[index].name) != ESP_OK)) {
             return ESP_FAIL;
         }
+        if ((httpd_resp_sendstr_chunk(request, "\",\"filename\":\"") != ESP_OK) ||
+            (local_web_send_json_escaped(request, catalog.tracks[index].filename) != ESP_OK)) {
+            return ESP_FAIL;
+        }
         const int written = snprintf(s_response_chunk, sizeof(s_response_chunk),
                                      "\",\"size_bytes\":%" PRIu64 "}",
                                      catalog.tracks[index].size_bytes);
@@ -313,12 +327,18 @@ static esp_err_t local_web_audio_control_post(httpd_req_t *request)
     if (!local_web_get_query_value(request, "action")) {
         return local_web_send_error(request, "400 Bad Request", "invalid_request");
     }
-    voice_assistant_playback_action_t action;
-    if (strcmp(s_query_value, "pause") == 0) action = VOICE_ASSISTANT_PLAYBACK_ACTION_PAUSE;
-    else if (strcmp(s_query_value, "resume") == 0) action = VOICE_ASSISTANT_PLAYBACK_ACTION_RESUME;
-    else if (strcmp(s_query_value, "restart") == 0) action = VOICE_ASSISTANT_PLAYBACK_ACTION_RESTART;
-    else if (strcmp(s_query_value, "stop") == 0) action = VOICE_ASSISTANT_PLAYBACK_ACTION_STOP;
-    else return local_web_send_error(request, "400 Bad Request", "unsupported_operation");
+    local_web_audio_action_t parsed_action;
+    if (!local_web_audio_action_parse(s_query_value, &parsed_action)) {
+        return local_web_send_error(request, "400 Bad Request", "unsupported_operation");
+    }
+    const voice_assistant_playback_action_t action =
+        (parsed_action == LOCAL_WEB_AUDIO_ACTION_PAUSE)
+            ? VOICE_ASSISTANT_PLAYBACK_ACTION_PAUSE
+            : (parsed_action == LOCAL_WEB_AUDIO_ACTION_RESUME)
+                  ? VOICE_ASSISTANT_PLAYBACK_ACTION_RESUME
+                  : (parsed_action == LOCAL_WEB_AUDIO_ACTION_RESTART)
+                        ? VOICE_ASSISTANT_PLAYBACK_ACTION_RESTART
+                        : VOICE_ASSISTANT_PLAYBACK_ACTION_STOP;
     voice_assistant_playback_control_result_t result = {0};
     if (voice_assistant_playback_control(action, &result) != ESP_OK) {
         return local_web_send_error(request, "500 Internal Server Error", "internal_error");
@@ -334,13 +354,11 @@ static esp_err_t local_web_audio_volume_post(httpd_req_t *request)
     if (!local_web_get_query_value(request, "percent")) {
         return local_web_send_error(request, "400 Bad Request", "invalid_request");
     }
-    char *end = NULL;
-    const unsigned long value = strtoul(s_query_value, &end, 10);
-    if ((s_query_value[0] == '\0') || (end == NULL) || (*end != '\0') ||
-        (value > 100U)) {
+    uint32_t value = 0U;
+    if (!local_web_audio_volume_percent_parse(s_query_value, &value)) {
         return local_web_send_error(request, "400 Bad Request", "volume_out_of_range");
     }
-    const esp_err_t ret = audio_manager_set_playback_volume_percent((uint32_t)value);
+    const esp_err_t ret = audio_manager_set_playback_volume_percent(value);
     if (ret == ESP_ERR_INVALID_STATE) {
         return local_web_send_error(request, "503 Service Unavailable", "audio_unavailable");
     }
@@ -348,7 +366,7 @@ static esp_err_t local_web_audio_volume_post(httpd_req_t *request)
         return local_web_send_error(request, "400 Bad Request", "volume_out_of_range");
     }
     const int written = snprintf(s_response_chunk, sizeof(s_response_chunk),
-                                 "{\"ok\":true,\"volume_percent\":%lu}", value);
+                                 "{\"ok\":true,\"volume_percent\":%" PRIu32 "}", value);
     return ((written < 0) || (written >= (int)sizeof(s_response_chunk)))
                ? local_web_send_error(request, "500 Internal Server Error", "response_too_large")
                : httpd_resp_send(request, s_response_chunk, written);

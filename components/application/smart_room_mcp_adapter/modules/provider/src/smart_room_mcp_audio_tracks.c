@@ -455,23 +455,31 @@ esp_err_t smart_room_mcp_adapter_audio_catalog_get(
     if (catalog == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
-    xiaozhi_foundation_audio_track_list_t tracks = {0};
-    const esp_err_t ret = copy_track_list(&tracks, NULL);
-    if (ret != ESP_OK) {
-        return ret;
+    *catalog = (smart_room_audio_catalog_t){0};
+    catalog_request_refresh();
+    if (!sd_card_manager_is_mounted()) {
+        return ESP_ERR_INVALID_STATE;
     }
-    *catalog = (smart_room_audio_catalog_t){
-        .available = tracks.available,
-        .truncated = tracks.truncated,
-        .track_count = tracks.track_count,
-    };
-    for (uint8_t index = 0U; index < tracks.track_count; ++index) {
-        memcpy(catalog->tracks[index].id, tracks.tracks[index].id,
+    if (!catalog_lock(0U)) {
+        return ESP_ERR_TIMEOUT;
+    }
+    if (!s_catalog.available) {
+        xSemaphoreGive(s_catalog_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+    catalog->available = true;
+    catalog->truncated = s_catalog.truncated;
+    catalog->track_count = s_catalog.count;
+    for (uint8_t index = 0U; index < s_catalog.count; ++index) {
+        memcpy(catalog->tracks[index].id, s_catalog.entries[index].public_track.id,
                sizeof(catalog->tracks[index].id));
-        memcpy(catalog->tracks[index].name, tracks.tracks[index].name,
+        memcpy(catalog->tracks[index].name, s_catalog.entries[index].public_track.name,
                sizeof(catalog->tracks[index].name));
-        catalog->tracks[index].size_bytes = tracks.tracks[index].size_bytes;
+        memcpy(catalog->tracks[index].filename, s_catalog.entries[index].filename,
+               sizeof(catalog->tracks[index].filename));
+        catalog->tracks[index].size_bytes = s_catalog.entries[index].public_track.size_bytes;
     }
+    xSemaphoreGive(s_catalog_lock);
     return ESP_OK;
 }
 

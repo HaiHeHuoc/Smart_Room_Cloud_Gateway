@@ -29,10 +29,13 @@ esp_err_t smart_room_mcp_adapter_register_providers(void);
 #define SMART_ROOM_AUDIO_CATALOG_MAX_TRACKS 12U
 #define SMART_ROOM_AUDIO_CATALOG_TRACK_ID_MAX_BYTES 48U
 #define SMART_ROOM_AUDIO_CATALOG_TRACK_NAME_MAX_BYTES 48U
+#define SMART_ROOM_AUDIO_CATALOG_FILENAME_MAX_BYTES 65U
 
 typedef struct {
     char id[SMART_ROOM_AUDIO_CATALOG_TRACK_ID_MAX_BYTES];
     char name[SMART_ROOM_AUDIO_CATALOG_TRACK_NAME_MAX_BYTES];
+    /** Approved basename only; never an absolute filesystem path. */
+    char filename[SMART_ROOM_AUDIO_CATALOG_FILENAME_MAX_BYTES];
     uint64_t size_bytes;
 } smart_room_audio_catalog_track_t;
 

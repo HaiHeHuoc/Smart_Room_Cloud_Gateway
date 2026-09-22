@@ -11,6 +11,7 @@ New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
 & $gcc -std=c11 -Wall -Wextra -Werror `
     -I (Join-Path $testRoot 'include') `
     -I (Join-Path $componentRoot 'src') `
+    (Join-Path $componentRoot 'src\local_web_audio_policy.c') `
     (Join-Path $componentRoot 'src\local_web_download.c') `
     (Join-Path $componentRoot 'src\local_web_path_policy.c') `
     (Join-Path $testRoot 'test_local_web_path_policy.c') `
