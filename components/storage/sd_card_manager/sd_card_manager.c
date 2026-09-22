@@ -1,12 +1,12 @@
 /* Includes ----------------------------------------------------------------- */
 #include "sd_card_manager.h"
+#include "sd_card_manager_usage.h"
 
 #include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <sys/statvfs.h>
 #include <unistd.h>
 
 #include "board_config.h"
@@ -1420,22 +1420,39 @@ esp_err_t sd_card_manager_get_filesystem_usage(
         return lease_result;
     }
 
-    struct statvfs filesystem = {0};
-    const int stat_result = statvfs(SD_MOUNT_POINT, &filesystem);
-    const int stat_errno = errno;
+    uint64_t total_bytes = 0U;
+    uint64_t free_bytes = 0U;
+    const esp_err_t info_result = esp_vfs_fat_info(
+        SD_MOUNT_POINT, &total_bytes, &free_bytes);
+    const int info_errno = errno;
     sd_card_manager_release();
 
-    if (stat_result != 0)
+    if (info_result != ESP_OK)
     {
-        sd_card_manager_report_errno_io_error(stat_errno);
-        return sd_card_manager_error_from_errno(stat_errno);
+        if (info_result == ESP_FAIL)
+        {
+            sd_card_manager_report_errno_io_error(info_errno);
+        }
+        return info_result;
     }
 
-    const uint64_t block_size =
-        (filesystem.f_frsize != 0U) ? filesystem.f_frsize : filesystem.f_bsize;
-    usage->total_bytes = (uint64_t)filesystem.f_blocks * block_size;
-    usage->free_bytes = (uint64_t)filesystem.f_bavail * block_size;
-    usage->used_bytes = usage->total_bytes - usage->free_bytes;
+    sd_card_manager_usage_values_t values = {0};
+    if (!sd_card_manager_usage_from_capacity(
+            total_bytes, free_bytes, &values))
+    {
+        APP_LOGW(
+            TAG, INVALID_FATFS_CAPACITY_TOTAL_FREE_2ED53074,
+            "Invalid FATFS capacity total=%llu free=%llu",
+            (unsigned long long)total_bytes,
+            (unsigned long long)free_bytes);
+        return ESP_FAIL;
+    }
+
+    *usage = (sd_card_manager_filesystem_usage_t){
+        .total_bytes = values.total_bytes,
+        .used_bytes = values.used_bytes,
+        .free_bytes = values.free_bytes,
+    };
     return ESP_OK;
 }
 

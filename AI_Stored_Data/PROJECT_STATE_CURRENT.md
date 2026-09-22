@@ -57,7 +57,7 @@ Phase 18.2  SOFTWARE INTEGRATED / TARGET HIL PENDING
 Phase 18.3  SUPERSEDED / absorbed into 18.2.2 / no duplicate production code
 Phase 18.4  cloud.push_latest / software implemented / host tests verified /
             ESP-IDF build environment blocked / target HIL pending
-Sprint 19   Local Web Control V1: SD Card File Manager / SOFTWARE HARDENED / BUILD PASS / TARGET HIL PENDING
+Sprint 19   Local Web Control V1: SD Card File Manager / CAPACITY FIX BUILT / TARGET REDEPLOY AND HIL PENDING
 Sprint 20   Local Web Control V2: Playback + Volume / PLANNED / NOT STARTED
 Sprint 21   Local Web Control V3: Lights / PLANNED / NOT STARTED
 Sprint 22   Local Web Control V4: Dashboard + System Status / PLANNED / NOT STARTED
@@ -300,9 +300,26 @@ Branch: `phase/19-local-web-storage-v1` based on
 
 Validation recorded for this checkpoint: host path-policy test PASS, source
 syntax checks PASS, `git diff --check` PASS, and a clean serialized ESP-IDF
-6.0.1 build PASS. The 2,600,464-byte application binary leaves 38% free in the
+6.0.1 build PASS. The 2,601,152-byte application binary leaves 38% free in the
 smallest 4 MiB app partition. The host exposed only COM1, not a target board;
 browser/SD target HIL has not run.
+
+### Sprint 19 capacity HIL defect -- source fixed / redeploy verification pending
+
+- The target endpoint reported `state:"ready"`, `available:false`, and zero
+  capacity values while directory browse succeeded. This proves the browser did
+  not create the first zero value: the old Web handler emitted its zeroed usage
+  structure when `sd_card_manager_get_filesystem_usage()` failed.
+- The old manager used `statvfs()`, which is not the ESP-IDF FAT VFS capacity
+  API. It now calls the public 64-bit `esp_vfs_fat_info()` for the registered
+  `/sdcard` FATFS volume, validates total/free invariants, and calculates used
+  bytes without unsigned underflow.
+- A READY card whose capacity lookup fails now yields HTTP 503
+  `storage_usage_unavailable`, rather than a successful zero-capacity JSON.
+  Mount/recovery/VFS lease ownership remains in `sd_card_manager`.
+- New host capacity-invariant coverage passes, as do the path-policy suite,
+  `git diff --check`, and a clean ESP-IDF 6.0.1 build. The new firmware has not
+  been flashed to the target, so real capacity numbers remain pending.
 
 ## Deferred work outside Phase 18.2 closure
 

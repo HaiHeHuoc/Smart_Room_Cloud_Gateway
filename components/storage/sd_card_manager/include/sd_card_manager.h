@@ -227,11 +227,13 @@ bool sd_card_manager_is_vfs_media_error(int error_number);
 /**
  * @brief Copy capacity facts for the mounted SD filesystem.
  *
- * The function holds a managed lease only while `statvfs()` reads FATFS
- * metadata. It never exposes the mount path, raw FATFS state, or card handle.
+ * The function holds a managed lease only while `esp_vfs_fat_info()` reads the
+ * mounted FATFS geometry. It never exposes the mount path, raw FATFS state, or
+ * card handle. A zero-total or inconsistent capacity result is rejected.
  *
- * @return ESP_OK on success, ESP_ERR_INVALID_ARG for NULL, or
- *         ESP_ERR_INVALID_STATE when the VFS cannot accept a new lease.
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG for NULL,
+ *         ESP_ERR_INVALID_STATE when the VFS cannot accept a new lease, or
+ *         ESP_FAIL when FATFS cannot provide consistent capacity facts.
  */
 esp_err_t sd_card_manager_get_filesystem_usage(
     sd_card_manager_filesystem_usage_t *usage);

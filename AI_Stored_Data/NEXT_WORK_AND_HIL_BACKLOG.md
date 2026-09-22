@@ -27,7 +27,7 @@ Phase 18.2   SOFTWARE INTEGRATED / TARGET HIL PENDING
 Phase 18.3   SUPERSEDED / absorbed into 18.2.2 / no duplicate production code
 Phase 18.4   cloud.push_latest / software implemented / host tests verified /
              ESP-IDF build environment blocked / target HIL pending
-Sprint 19    Local Web Control V1: SD Card File Manager / software hardened / build PASS / target HIL pending
+Sprint 19    Local Web Control V1: SD Card File Manager / capacity fix built / target redeploy and HIL pending
 Sprint 20    Local Web Control V2: Playback + Volume / PLANNED / NOT STARTED
 Sprint 21    Local Web Control V3: Lights / PLANNED / NOT STARTED
 Sprint 22    Local Web Control V4: Dashboard + System Status / PLANNED / NOT STARTED
@@ -64,7 +64,9 @@ current priority order:
 
 ```text
 1. Run the pending Sprint-19 browser/board/SD HIL matrix from
-   LOCAL_WEB_DASHBOARD_PLAN.md, including transfer interruption and SD remount.
+   LOCAL_WEB_DASHBOARD_PLAN.md. First flash the capacity fix and verify
+   `/api/storage/status` has non-zero total capacity, free <= total, and
+   used + free equals total before transfer interruption and SD remount tests.
 2. Run the combined Phase-18.2.1 + 18.2.2 target HIL matrix.
 3. Capture equivalent-checkpoint Internal/DMA/PSRAM and task-stack/resource trends.
 4. Record failures/fixes against the exact tested source revision.

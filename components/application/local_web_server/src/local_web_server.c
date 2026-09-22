@@ -152,16 +152,21 @@ static esp_err_t local_web_storage_status_get(httpd_req_t *request)
     }
 
     sd_card_manager_filesystem_usage_t usage = {0};
-    const bool available =
-        (sd_status.state == SD_CARD_MANAGER_STATE_READY) &&
-        (sd_card_manager_get_filesystem_usage(&usage) == ESP_OK);
+    const bool storage_ready =
+        sd_status.state == SD_CARD_MANAGER_STATE_READY;
+    if (storage_ready &&
+        (sd_card_manager_get_filesystem_usage(&usage) != ESP_OK))
+    {
+        return local_web_send_error(
+            request, "503 Service Unavailable", "storage_usage_unavailable");
+    }
 
     const int written = snprintf(
         s_response_chunk, sizeof(s_response_chunk),
         "{\"ok\":true,\"available\":%s,\"state\":\"%s\","
         "\"total_bytes\":%" PRIu64 ",\"used_bytes\":%" PRIu64
         ",\"free_bytes\":%" PRIu64 "}",
-        available ? "true" : "false", local_web_sd_state_name(sd_status.state),
+        storage_ready ? "true" : "false", local_web_sd_state_name(sd_status.state),
         usage.total_bytes, usage.used_bytes, usage.free_bytes);
     if ((written < 0) || (written >= (int)sizeof(s_response_chunk)))
     {

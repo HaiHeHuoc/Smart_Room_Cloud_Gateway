@@ -1,7 +1,7 @@
 # Local Web Dashboard Plan
 
 Updated: 2026-09-13
-Status: **SPRINT 19 SOFTWARE HARDENED / BUILD PASS / TARGET HIL PENDING**
+Status: **SPRINT 19 CAPACITY FIX BUILT / TARGET REDEPLOY AND HIL PENDING**
 Active integration branch: `main_including_Firebase_security`
 
 ## Purpose
@@ -108,7 +108,7 @@ first. Do not create a shortcut from the web server to a driver.
 
 ## Sprint 19 — Local Web Control V1: SD Card File Manager
 
-Status: **PROMPTS 1-3 SOFTWARE HARDENED / BUILD PASS / TARGET HIL PENDING**
+Status: **PROMPTS 1-3 PLUS CAPACITY FIX BUILT / TARGET REDEPLOY AND HIL PENDING**
 
 ### Goal
 
@@ -206,10 +206,30 @@ card before adding other web-control features.
   `uint64_t` KiB values. The ESP-IDF embed-file symbol now matches the actual
   generated `_binary_index_html_*` symbol.
 - Validation: host path-policy test PASS, `git diff --check` PASS, and clean
-  serialized ESP-IDF 6.0.1 build PASS. The application binary is 2,600,464
+  serialized ESP-IDF 6.0.1 build PASS. The application binary is 2,601,152
   bytes, leaving 38% free in the smallest 4 MiB app partition.
 - The host exposed only `COM1`; no ESP32-S3 target, browser session, or SD-card
   HIL evidence was available. Sprint 20+ remains unstarted.
+
+### Capacity HIL defect and source fix (2026-09-16)
+
+- Target observation: SD browsing worked while `GET /api/storage/status`
+  reported `state:"ready"`, `available:false`, and zero total/used/free bytes.
+  Thus the first invalid value was below the browser formatter: the old HTTP
+  handler collapsed an SD usage-query failure into an otherwise successful JSON
+  response with zero-initialized capacity fields.
+- Root cause: `sd_card_manager_get_filesystem_usage()` used POSIX `statvfs()`.
+  ESP-IDF's FAT VFS does not provide FAT capacity through that path, while
+  browse uses ordinary VFS directory operations and remains functional.
+- The manager now uses ESP-IDF 6.0.1 public `esp_vfs_fat_info(SD_MOUNT_POINT,
+  ...)`, which calls FatFs `f_getfree()` using the registered FATFS drive and
+  returns 64-bit total/free byte values. A narrow invariant helper rejects zero
+  total capacity and free space above total before calculating used bytes.
+- If capacity lookup fails while the card is READY, the Web API now returns
+  `503 storage_usage_unavailable` instead of a misleading successful zero-byte
+  response. SD mount/VFS/lease ownership remains unchanged.
+- Host capacity-invariant and path-policy tests pass; a clean ESP-IDF 6.0.1
+  build passes. The fixed firmware has not yet been flashed or target-verified.
 
 ### Target HIL matrix (pending)
 
