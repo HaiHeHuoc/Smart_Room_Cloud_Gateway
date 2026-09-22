@@ -80,7 +80,9 @@ static esp_err_t local_web_get_normalized_query_path(
 static esp_err_t local_web_send_storage_result(
     httpd_req_t *request,
     esp_err_t result,
-    const char *not_found_error);
+    const char *not_found_error,
+    bool audio_catalog_changed);
+static bool local_web_path_affects_audio_catalog(const char *logical_path);
 static void local_web_publish_storage_status(uint8_t progress_percent,
                                              esp_err_t last_error);
 static esp_err_t local_web_register_routes(httpd_handle_t server);
@@ -418,7 +420,8 @@ static esp_err_t local_web_storage_download_get(httpd_req_t *request)
         sd_card_manager_download_begin(logical_path, &transfer);
     if (begin_result != ESP_OK)
     {
-        return local_web_send_storage_result(request, begin_result, "file_not_found");
+        return local_web_send_storage_result(
+            request, begin_result, "file_not_found", false);
     }
 
     if (!local_web_download_content_disposition(
@@ -484,7 +487,8 @@ static esp_err_t local_web_storage_upload_post(httpd_req_t *request)
         logical_path, (uint64_t)request->content_len, &transfer);
     if (begin_result != ESP_OK)
     {
-        return local_web_send_storage_result(request, begin_result, "upload_failed");
+        return local_web_send_storage_result(
+            request, begin_result, "upload_failed", false);
     }
 
     size_t remaining = (size_t)request->content_len;
@@ -517,7 +521,12 @@ static esp_err_t local_web_storage_upload_post(httpd_req_t *request)
     result = sd_card_manager_upload_finish(transfer.transfer_id);
     if (result != ESP_OK)
     {
-        return local_web_send_storage_result(request, result, "upload_failed");
+        return local_web_send_storage_result(
+            request, result, "upload_failed", false);
+    }
+    if (local_web_path_affects_audio_catalog(logical_path))
+    {
+        smart_room_mcp_adapter_audio_catalog_invalidate();
     }
     local_web_publish_storage_status(100U, ESP_OK);
     return httpd_resp_sendstr(request, "{\"ok\":true}");
@@ -532,8 +541,9 @@ static esp_err_t local_web_storage_delete_post(httpd_req_t *request)
     {
         return local_web_send_error(request, "400 Bad Request", "invalid_path");
     }
-    return local_web_send_storage_result(request,
-        sd_card_manager_delete_file(logical_path), "file_not_found");
+    return local_web_send_storage_result(
+        request, sd_card_manager_delete_file(logical_path), "file_not_found",
+        local_web_path_affects_audio_catalog(logical_path));
 }
 
 static esp_err_t local_web_storage_mkdir_post(httpd_req_t *request)
@@ -545,8 +555,9 @@ static esp_err_t local_web_storage_mkdir_post(httpd_req_t *request)
     {
         return local_web_send_error(request, "400 Bad Request", "invalid_path");
     }
-    return local_web_send_storage_result(request,
-        sd_card_manager_make_directory(logical_path), "parent_not_found");
+    return local_web_send_storage_result(
+        request, sd_card_manager_make_directory(logical_path), "parent_not_found",
+        local_web_path_affects_audio_catalog(logical_path));
 }
 
 static esp_err_t local_web_storage_rmdir_post(httpd_req_t *request)
@@ -558,8 +569,9 @@ static esp_err_t local_web_storage_rmdir_post(httpd_req_t *request)
     {
         return local_web_send_error(request, "400 Bad Request", "invalid_path");
     }
-    return local_web_send_storage_result(request,
-        sd_card_manager_remove_empty_directory(logical_path), "directory_not_found");
+    return local_web_send_storage_result(
+        request, sd_card_manager_remove_empty_directory(logical_path), "directory_not_found",
+        local_web_path_affects_audio_catalog(logical_path));
 }
 
 static esp_err_t local_web_storage_rename_post(httpd_req_t *request)
@@ -574,8 +586,10 @@ static esp_err_t local_web_storage_rename_post(httpd_req_t *request)
     {
         return local_web_send_error(request, "400 Bad Request", "invalid_path");
     }
-    return local_web_send_storage_result(request,
-        sd_card_manager_rename_path(source, destination), "source_not_found");
+    return local_web_send_storage_result(
+        request, sd_card_manager_rename_path(source, destination), "source_not_found",
+        local_web_path_affects_audio_catalog(source) ||
+            local_web_path_affects_audio_catalog(destination));
 }
 
 static esp_err_t local_web_get_normalized_query_path(
@@ -605,10 +619,15 @@ static esp_err_t local_web_get_normalized_query_path(
 static esp_err_t local_web_send_storage_result(
     httpd_req_t *request,
     esp_err_t result,
-    const char *not_found_error)
+    const char *not_found_error,
+    bool audio_catalog_changed)
 {
     if (result == ESP_OK)
     {
+        if (audio_catalog_changed)
+        {
+            smart_room_mcp_adapter_audio_catalog_invalidate();
+        }
         local_web_publish_storage_status(0U, ESP_OK);
         return httpd_resp_sendstr(request, "{\"ok\":true}");
     }
@@ -641,6 +660,16 @@ static esp_err_t local_web_send_storage_result(
         return local_web_send_error(request, "400 Bad Request", "unsupported_operation");
     }
     return local_web_send_error(request, "500 Internal Server Error", "storage_io_failed");
+}
+
+static bool local_web_path_affects_audio_catalog(const char *logical_path)
+{
+    static const char audio_root[] = "/audio";
+    const size_t root_length = sizeof(audio_root) - 1U;
+    return (logical_path != NULL) &&
+           (strncmp(logical_path, audio_root, root_length) == 0) &&
+           ((logical_path[root_length] == '\0') ||
+            (logical_path[root_length] == '/'));
 }
 
 static void local_web_publish_storage_status(uint8_t progress_percent,

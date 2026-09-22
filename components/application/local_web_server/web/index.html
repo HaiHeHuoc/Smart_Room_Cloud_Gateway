@@ -41,7 +41,7 @@
       const bytes = value => { const units = ['B','KB','MB','GB']; let unit = 0; while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++; } return `${value.toFixed(unit ? 1 : 0)} ${units[unit]}`; };
       const join = (parent, name) => `${parent === '/' ? '' : parent}/${name}`;
       const parent = value => value === '/' ? '/' : (value.slice(0, value.lastIndexOf('/')) || '/');
-      let path = '/', busy = false, catalogIds = new Map(), polling = false, pollTimer = 0, activeTab = 'storage';
+      let path = '/', busy = false, catalogIds = new Map(), polling = false, pollTimer = 0, catalogRetryTimer = 0, catalogLoadGeneration = 0, activeTab = 'storage';
       const setState = (text, error = false) => { state.textContent = text; state.className = `state${error ? ' error' : ''}`; };
       const setBusy = value => { busy = value; q('#upload').disabled = value; q('#mkdir').disabled = value; };
       const post = async url => { const response = await fetch(url, {method:'POST',cache:'no-store'}); const body = await response.json(); if (!response.ok) throw Error(body.error); return body; };
@@ -61,9 +61,11 @@
         if (path !== '/audio') return;
         list.querySelectorAll('li').forEach(row => {
           const entry = row.querySelector('.entry:not(.dir)'), actions = row.querySelector('.actions');
-          if (!entry || !actions || actions.querySelector('[data-audio-play]')) return;
+          if (!entry || !actions) return;
           const trackId = catalogIds.get(entry.textContent);
-          if (!trackId) return;
+          const existing = actions.querySelector('[data-audio-play]');
+          if (!trackId) { existing?.remove(); return; }
+          if (existing) return;
           const button = document.createElement('button');
           button.dataset.audioPlay = '1'; button.textContent = 'Play';
           button.onclick = async () => { button.disabled = true; try { await playTrack(trackId); } catch (error) { setState(`Play rejected (${error.message}).`, true); } finally { button.disabled = false; } };
@@ -99,13 +101,14 @@
         } catch (error) { setState(`Unable to browse (${error.message}).`, true); }
       }
 
-      async function removeItem(name, directory) { if (!confirm(`Remove ${name}?`)) return; setBusy(true); try { await post(`/api/storage/${directory ? 'rmdir' : 'delete'}?path=${encodeURIComponent(join(path,name))}`); await browse(); await storageStatus(); } catch (error) { setState(`Operation failed (${error.message}).`, true); } finally { setBusy(false); } }
-      async function renameItem(name) { const next = prompt('New name:',name); if (!next || next === name) return; setBusy(true); try { await post(`/api/storage/rename?src=${encodeURIComponent(join(path,name))}&dest=${encodeURIComponent(join(path,next))}`); await browse(); } catch (error) { setState(`Rename failed (${error.message}).`, true); } finally { setBusy(false); } }
-      async function makeDir() { const name = prompt('Folder name:'); if (!name) return; setBusy(true); try { await post(`/api/storage/mkdir?path=${encodeURIComponent(join(path,name))}`); await browse(); } catch (error) { setState(`Create failed (${error.message}).`, true); } finally { setBusy(false); } }
-      function upload(file) { if (!file || busy) return; setBusy(true); const progress = q('#progress'); progress.hidden = false; progress.value = 0; setState(`Uploading ${file.name}...`); const xhr = new XMLHttpRequest(); xhr.open('POST',`/api/storage/upload?path=${encodeURIComponent(join(path,file.name))}`); xhr.upload.onprogress = event => { if (event.lengthComputable) progress.value = 100 * event.loaded / event.total; }; xhr.onload = async () => { try { const data = JSON.parse(xhr.responseText || '{}'); if (xhr.status < 200 || xhr.status >= 300) throw Error(data.error || 'upload_failed'); setState('Upload complete.'); await browse(); await storageStatus(); } catch (error) { setState(`Upload failed (${error.message}).`, true); } finally { progress.hidden = true; setBusy(false); } }; xhr.onerror = () => { progress.hidden = true; setBusy(false); setState('Upload interrupted; temporary file removed.', true); }; xhr.send(file); }
+      async function removeItem(name, directory) { if (!confirm(`Remove ${name}?`)) return; setBusy(true); try { await post(`/api/storage/${directory ? 'rmdir' : 'delete'}?path=${encodeURIComponent(join(path,name))}`); await browse(); await storageStatus(); await loadTracks(); } catch (error) { setState(`Operation failed (${error.message}).`, true); } finally { setBusy(false); } }
+      async function renameItem(name) { const next = prompt('New name:',name); if (!next || next === name) return; setBusy(true); try { await post(`/api/storage/rename?src=${encodeURIComponent(join(path,name))}&dest=${encodeURIComponent(join(path,next))}`); await browse(); await loadTracks(); } catch (error) { setState(`Rename failed (${error.message}).`, true); } finally { setBusy(false); } }
+      async function makeDir() { const name = prompt('Folder name:'); if (!name) return; setBusy(true); try { await post(`/api/storage/mkdir?path=${encodeURIComponent(join(path,name))}`); await browse(); await loadTracks(); } catch (error) { setState(`Create failed (${error.message}).`, true); } finally { setBusy(false); } }
+      function upload(file) { if (!file || busy) return; setBusy(true); const progress = q('#progress'); progress.hidden = false; progress.value = 0; setState(`Uploading ${file.name}...`); const xhr = new XMLHttpRequest(); xhr.open('POST',`/api/storage/upload?path=${encodeURIComponent(join(path,file.name))}`); xhr.upload.onprogress = event => { if (event.lengthComputable) progress.value = 100 * event.loaded / event.total; }; xhr.onload = async () => { try { const data = JSON.parse(xhr.responseText || '{}'); if (xhr.status < 200 || xhr.status >= 300) throw Error(data.error || 'upload_failed'); setState('Upload complete.'); await browse(); await storageStatus(); await loadTracks(); } catch (error) { setState(`Upload failed (${error.message}).`, true); } finally { progress.hidden = true; setBusy(false); } }; xhr.onerror = () => { progress.hidden = true; setBusy(false); setState('Upload interrupted; temporary file removed.', true); }; xhr.send(file); }
 
       async function playTrack(trackId) { await post(`/api/audio/play?track_id=${encodeURIComponent(trackId)}`); tickPlayback(); }
-      async function loadTracks() { try { const response = await fetch('/api/audio/tracks',{cache:'no-store'}), data = await response.json(); if (!response.ok) throw Error(data.error); const select = q('#pb-track'); select.replaceChildren(); catalogIds = new Map(data.tracks.map(track => [track.filename, track.id])); for (const track of data.tracks) { const option = document.createElement('option'); option.value = track.id; option.textContent = track.name; select.append(option); } q('#pb-play').disabled = !data.tracks.length; renderStoragePlayButtons(); } catch (_) { q('#pb-state').textContent = 'Catalog unavailable'; } }
+      function clearTracks(message) { catalogIds = new Map(); const select = q('#pb-track'); select.replaceChildren(); const option = document.createElement('option'); option.textContent = message; select.append(option); q('#pb-play').disabled = true; renderStoragePlayButtons(); }
+      async function loadTracks(attempt = 0, requestGeneration = ++catalogLoadGeneration) { clearTimeout(catalogRetryTimer); try { const response = await fetch('/api/audio/tracks',{cache:'no-store'}), data = await response.json(); if (!response.ok) throw Error(data.error); if (requestGeneration !== catalogLoadGeneration) return; const select = q('#pb-track'); select.replaceChildren(); catalogIds = new Map(data.tracks.map(track => [track.filename, track.id])); for (const track of data.tracks) { const option = document.createElement('option'); option.value = track.id; option.textContent = track.name; select.append(option); } q('#pb-play').disabled = !data.tracks.length; renderStoragePlayButtons(); } catch (_) { if (requestGeneration !== catalogLoadGeneration) return; clearTracks('Catalog updating...'); q('#pb-state').textContent = 'Catalog updating...'; if (attempt < 4) catalogRetryTimer = setTimeout(() => loadTracks(attempt + 1, requestGeneration), 250); } }
       async function tickPlayback() {
         if (polling || document.hidden) return;
         polling = true;

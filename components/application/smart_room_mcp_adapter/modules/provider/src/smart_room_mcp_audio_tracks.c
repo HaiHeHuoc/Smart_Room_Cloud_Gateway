@@ -49,6 +49,10 @@ static const char *const TAG = "MCP_AUDIO_TRACKS";
  * Xiaozhi WebSocket dispatch stack. */
 static SemaphoreHandle_t s_catalog_lock = NULL;
 static TaskHandle_t s_catalog_task = NULL;
+/* A committed storage mutation increments requested. Readers must never copy
+ * a snapshot until the worker has scanned and published that same epoch. */
+static volatile uint32_t s_catalog_requested_epoch;
+static volatile uint32_t s_catalog_published_epoch;
 /* The snapshot is neither DMA/ISR-visible nor used while flash cache is
  * disabled. Keeping it in PSRAM preserves Internal RAM for TLS, I2S, and
  * transport control paths. */
@@ -273,8 +277,16 @@ static bool catalog_lock(TickType_t wait_ticks)
            (xSemaphoreTake(s_catalog_lock, wait_ticks) == pdTRUE);
 }
 
+static bool catalog_snapshot_is_current(void)
+{
+    return __atomic_load_n(&s_catalog_requested_epoch, __ATOMIC_RELAXED) ==
+           __atomic_load_n(&s_catalog_published_epoch, __ATOMIC_RELAXED);
+}
+
 static bool catalog_refresh_once(void)
 {
+    const uint32_t requested_epoch =
+        __atomic_load_n(&s_catalog_requested_epoch, __ATOMIC_RELAXED);
     if (!catalog_lock(pdMS_TO_TICKS(SMART_ROOM_AUDIO_CATALOG_LOCK_MS))) {
         return false;
     }
@@ -284,6 +296,8 @@ static bool catalog_refresh_once(void)
     if (!available) {
         s_catalog = (smart_room_catalog_t){0};
     }
+    __atomic_store_n(&s_catalog_published_epoch, requested_epoch,
+                     __ATOMIC_RELAXED);
     xSemaphoreGive(s_catalog_lock);
     return available;
 }
@@ -341,7 +355,7 @@ static esp_err_t copy_track_list(xiaozhi_foundation_audio_track_list_t *tracks,
     /* Never wait on the WebSocket dispatch path. A concurrent scan is
      * reported as temporarily unavailable and the caller can retry. */
     if (!catalog_lock(0U)) return ESP_ERR_TIMEOUT;
-    if (!s_catalog.available) {
+    if (!s_catalog.available || !catalog_snapshot_is_current()) {
         xSemaphoreGive(s_catalog_lock);
         return ESP_ERR_INVALID_STATE;
     }
@@ -386,7 +400,7 @@ static esp_err_t play_track(const char *track_id,
 
     char path[SD_CARD_MANAGER_PATH_MAX_LEN] = {0};
     bool found = false;
-    if (s_catalog.available) {
+    if (s_catalog.available && catalog_snapshot_is_current()) {
         for (uint8_t i = 0U; i < s_catalog.count; ++i) {
             if (strcmp(track_id, s_catalog.entries[i].public_track.id) != 0) {
                 continue;
@@ -398,7 +412,8 @@ static esp_err_t play_track(const char *track_id,
             break;
         }
     }
-    const bool catalog_available = s_catalog.available;
+    const bool catalog_available =
+        s_catalog.available && catalog_snapshot_is_current();
     xSemaphoreGive(s_catalog_lock);
 
     if (!catalog_available) {
@@ -463,7 +478,7 @@ esp_err_t smart_room_mcp_adapter_audio_catalog_get(
     if (!catalog_lock(0U)) {
         return ESP_ERR_TIMEOUT;
     }
-    if (!s_catalog.available) {
+    if (!s_catalog.available || !catalog_snapshot_is_current()) {
         xSemaphoreGive(s_catalog_lock);
         return ESP_ERR_INVALID_STATE;
     }
@@ -481,6 +496,16 @@ esp_err_t smart_room_mcp_adapter_audio_catalog_get(
     }
     xSemaphoreGive(s_catalog_lock);
     return ESP_OK;
+}
+
+void smart_room_mcp_adapter_audio_catalog_invalidate(void)
+{
+    uint32_t next_epoch = __atomic_add_fetch(
+        &s_catalog_requested_epoch, 1U, __ATOMIC_RELAXED);
+    if (next_epoch == 0U) {
+        __atomic_store_n(&s_catalog_requested_epoch, 1U, __ATOMIC_RELAXED);
+    }
+    catalog_request_refresh();
 }
 
 esp_err_t smart_room_mcp_adapter_audio_catalog_play(

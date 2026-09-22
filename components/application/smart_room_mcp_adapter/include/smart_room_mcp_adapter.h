@@ -66,6 +66,15 @@ typedef struct {
 esp_err_t smart_room_mcp_adapter_audio_catalog_get(
     smart_room_audio_catalog_t *catalog);
 
+/**
+ * @brief Invalidate the copied audio catalog after a committed storage write.
+ *
+ * This is non-blocking and performs no filesystem I/O. The catalog worker
+ * rebuilds its approved `/sdcard/audio` snapshot asynchronously; readers see
+ * it as unavailable rather than receiving the previous snapshot meanwhile.
+ */
+void smart_room_mcp_adapter_audio_catalog_invalidate(void);
+
 /** Resolve one approved logical ID internally and submit it to voice policy. */
 esp_err_t smart_room_mcp_adapter_audio_catalog_play(
     const char *track_id,
