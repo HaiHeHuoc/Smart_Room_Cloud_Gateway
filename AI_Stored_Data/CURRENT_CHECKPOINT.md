@@ -6,7 +6,7 @@ Current source, `AGENTS.md`, and canonical documentation remain authoritative.
 ## Active work
 
 Branch: `phase/20-local-web-playback-volume`
-HEAD: `17bc390` (Prompt 20.1 delivery commit)
+Implementation commit: `17bc390` (Prompt 20.1 delivery)
 Base: `424b87451c72594834161ef8173e626cb222e156`
 Phase/Sprint: Sprint 20 - Local Web Control V2: Playback + Volume
 Checkpoint: Prompt 20.1 implemented; target HIL pending.
