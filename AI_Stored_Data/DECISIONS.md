@@ -368,3 +368,35 @@ Closure semantics:
 - A concrete regression may be fixed narrowly without changing the historical
   fact that Sprint 18 was closed on 2026-09-16, unless Hải explicitly reopens it.
 - Sprint 19 remains **PLANNED / NOT STARTED** until Hải explicitly starts it.
+
+
+## DECISION — Token-efficient AI documentation workflow
+
+Date: 2026-09-22
+Applies to: multi-prompt implementation and review work on this repository
+
+To reduce Codex/AI token and effort spent repeatedly reading and rewriting long
+Markdown files, repository work now uses a tiered documentation policy defined
+in `AGENTS.md`.
+
+Durable rules:
+
+- intermediate prompts should keep source work, testing, and reasoning as the
+  priority and should not full-sync every README/roadmap/state file;
+- `AI_Stored_Data/CURRENT_CHECKPOINT.md` is the compact overwriteable handoff
+  for in-progress work;
+- comments are added or updated only for non-obvious contracts, ownership,
+  concurrency/lifetime, cleanup/error, or framework/hardware reasoning; avoid
+  comments that merely narrate the code;
+- roadmap, architecture, security, public-contract, accepted-evidence, and
+  explicit durable user decisions must still be synchronized immediately in
+  the smallest authoritative document;
+- the final prompt, `END PHASE`, PR-ready checkpoint, release closure, or an
+  explicit full-sync request remains the point for broad documentation
+  reconciliation;
+- one authoritative location per fact is preferred over duplicating the same
+  progress prose across multiple Markdown files.
+
+This is a workflow/token-efficiency decision only. It does not weaken build,
+test, HIL, security, architecture, or evidence requirements and does not allow
+important resume context to be dropped.
