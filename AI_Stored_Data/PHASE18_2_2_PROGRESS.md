@@ -1,6 +1,6 @@
 # Phase 18.2.2 — Bounded Playback Start + Voice SD Audio Selection
 
-Updated: 2026-09-14
+Updated: 2026-09-22
 
 ```text
 Base:       main_including_Firebase_security @ f2597fd8fc60be54a66dc75dc6a7f718b9901c88
@@ -41,8 +41,10 @@ speaker output.
   buffer are allocated in PSRAM to preserve Internal RAM headroom for TLS,
   I2S, and transport paths. A cache snapshot is boundedly stale between scans;
   it is not an instantaneous view of the card.
-- Maximum: 12 tracks; track ID/name: 47 bytes plus terminator; filename: 51
-  bytes plus terminator.
+- Maximum: 12 tracks; track ID/name: 47 bytes plus terminator; retained
+  filename: 64 bytes plus terminator. A display name longer than 47 bytes is
+  UTF-8-safe truncated for the public MCP result while its complete validated
+  filename remains internal for playback.
 - Eligible file is a direct bounded `.wav` entry with no separators, dot
   components, control bytes, JSON quote, or backslash. An ASCII token stem
   remains its deterministic ID; a safe display stem containing spaces or UTF-8
@@ -56,6 +58,10 @@ speaker output.
 - VFS media errors from `readdir`, `stat`, or `closedir` invalidate the whole
   snapshot and are reported to `sd_card_manager`; a partial catalog is not
   published after a media error.
+- On this ESP-IDF FATFS VFS, a file size at or above 2 GiB reaches POSIX
+  `stat` through signed 32-bit `off_t`. The catalog restores that valid FAT32
+  unsigned byte count before publishing `size_bytes`; it does not reject the
+  entry merely because the signed representation is negative.
 - Final WAV validation remains the existing `audio_manager` parser.
 
 ## Playback flow
