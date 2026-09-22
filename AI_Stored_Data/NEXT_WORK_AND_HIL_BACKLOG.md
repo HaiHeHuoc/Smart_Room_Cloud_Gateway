@@ -3,6 +3,7 @@
 Updated: 2026-09-16
 Active branch: `main_including_Firebase_security`
 Sprint-18 closure authority: explicit user acceptance by Hải on 2026-09-16
+Sprint-19 Local Web Storage V1 source is integrated; target HIL remains pending.
 
 Purpose: route future sessions to the highest-value next work without reopening
 accepted phases or inventing validation evidence.
@@ -24,7 +25,8 @@ Phase 18.2   COMPLETE / USER ACCEPTED
 18.2.2       COMPLETE / bounded playback start + voice SD audio selection
 Phase 18.3   COMPLETE / superseded + absorbed into 18.2.2 / no duplicate code
 Phase 18.4   COMPLETE / cloud.push_latest / USER ACCEPTED
-Sprint 19    Local Web Control V1: SD Card File Manager / PLANNED / NOT STARTED
+Sprint 19    Local Web Control V1: SD Card File Manager / SOURCE INTEGRATED /
+             BUILD VERIFIED / TARGET REDEPLOY AND HIL PENDING
 Sprint 20    Local Web Control V2: Playback + Volume / PLANNED / NOT STARTED
 Sprint 21    Local Web Control V3: Lights / PLANNED / NOT STARTED
 Sprint 22    Local Web Control V4: Dashboard + System Status / PLANNED / NOT STARTED
@@ -56,18 +58,27 @@ not as evidence that Sprint 18 is still open.
 
 ## Immediate next work
 
-There is no active implementation sprint after Sprint 18 until Hải explicitly
-starts one.
-
-Approved next roadmap item:
+Sprint 19 Local Web Storage V1 is integrated. It provides browse, streamed
+transfer, file/folder mutations, path hardening, LCD status routing, correct
+FAT32 capacity/large-file metadata, download filenames, and a 20 MiB upload
+limit. It does not alter Sprint-18 acceptance.
 
 ```text
 Sprint 19 — Local Web Control V1: SD Card File Manager
 ```
 
-Do **not** start Sprint 19 automatically. When Hải starts it, consult
-`AI_Stored_Data/LOCAL_WEB_DASHBOARD_PLAN.md` and preserve the SD-card-first Web
-scope and existing manager/service ownership boundaries.
+Run the pending browser/board/SD HIL against the merged revision:
+
+```text
+1. Flash the merged firmware and verify `/api/storage/status` reports coherent
+   non-zero capacity values.
+2. Verify a 2-4 GiB FAT32 file reports a plausible size and downloads with the
+   requested filename.
+3. Verify upload of a non-empty file up to 20 MiB, transfer interruption, and
+   SD remount/recovery behavior.
+4. Record target results against the exact merged revision before starting
+   Sprint 20.
+```
 
 ## Deferred regression backlog — non-blocking
 

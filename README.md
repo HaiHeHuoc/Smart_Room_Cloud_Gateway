@@ -7,8 +7,8 @@ configuration, recovery services, and runtime diagnostics.
 
 ```text
 Version 1: v1.0.0 / hardware accepted baseline
-Version 2: active development through Sprint 18
-Current Phase 18 state: 18.1 complete; 18.2-18.4 not started
+Version 2: active development through Sprint 19
+Current Phase 18 state: 18.1 complete; 18.2 software integrated/HIL pending
 Target: ESP32-S3 N16R8
 Framework: ESP-IDF 6.0.1 + FreeRTOS
 ```
@@ -280,10 +280,10 @@ AI_Stored_Data/          AI handoff/support metadata; never a runtime dependency
 Sprint 17   COMPLETE / read-only MCP voice HIL accepted
 Sprint 18   IN PROGRESS
 Phase 18.1  COMPLETE / build PASS / target HIL accepted by Hải on 2026-09-13
-Phase 18.2  NOT STARTED
-Phase 18.3  NOT STARTED
-Phase 18.4  NOT STARTED
-Sprint 19   NOT STARTED
+Phase 18.2  SOFTWARE INTEGRATED / target HIL pending
+Phase 18.3  SUPERSEDED / absorbed into 18.2.2
+Phase 18.4  SOFTWARE IMPLEMENTED / target HIL pending
+Sprint 19   SOFTWARE HARDENED / build PASS / target HIL pending
 ```
 
 Historical phase documents remain historical evidence; current source and

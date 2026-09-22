@@ -1,11 +1,70 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "esp_err.h"
 
 #define SD_CARD_MANAGER_PATH_MAX_LEN 256U
+#define SD_CARD_MANAGER_LOGICAL_PATH_MAX_LEN 192U
+#define SD_CARD_MANAGER_DIRECTORY_ENTRY_NAME_MAX_LEN 64U
+#define SD_CARD_MANAGER_DIRECTORY_LIST_MAX_ENTRIES 32U
+#define SD_CARD_MANAGER_TRANSFER_CHUNK_SIZE 4096U
+#define SD_CARD_MANAGER_TRANSFER_MAX_BYTES (20U * 1024U * 1024U)
+
+/** A bounded metadata type for a direct directory entry. */
+typedef enum
+{
+    SD_CARD_MANAGER_DIRECTORY_ENTRY_FILE = 0,
+    SD_CARD_MANAGER_DIRECTORY_ENTRY_DIRECTORY,
+    SD_CARD_MANAGER_DIRECTORY_ENTRY_OTHER,
+} sd_card_manager_directory_entry_type_t;
+
+/**
+ * Bounded metadata copied from one direct child of a logical SD directory.
+ *
+ * `size_bytes` is the unsigned FATFS byte count. On this FAT32 ESP-IDF VFS,
+ * it remains correct for files in the 2-4 GiB range even though `off_t` is
+ * signed 32-bit internally.
+ */
+typedef struct
+{
+    char name[SD_CARD_MANAGER_DIRECTORY_ENTRY_NAME_MAX_LEN + 1U];
+    sd_card_manager_directory_entry_type_t type;
+    uint64_t size_bytes;
+} sd_card_manager_directory_entry_t;
+
+/**
+ * @brief Bounded non-recursive directory-list result.
+ *
+ * `path` is a Web-safe logical path rooted at `/`, never the mounted VFS path.
+ * `truncated` is true when the scan/list cap prevented a complete result.
+ */
+typedef struct
+{
+    char path[SD_CARD_MANAGER_LOGICAL_PATH_MAX_LEN + 1U];
+    uint16_t entry_count;
+    uint16_t unsupported_entry_count;
+    bool truncated;
+    sd_card_manager_directory_entry_t
+        entries[SD_CARD_MANAGER_DIRECTORY_LIST_MAX_ENTRIES];
+} sd_card_manager_directory_listing_t;
+
+/** Copied FATFS capacity facts for the approved mounted storage root. */
+typedef struct
+{
+    uint64_t total_bytes;
+    uint64_t used_bytes;
+    uint64_t free_bytes;
+} sd_card_manager_filesystem_usage_t;
+
+/** Opaque-by-ID, single active Web storage transfer metadata. */
+typedef struct
+{
+    uint32_t transfer_id;
+    uint64_t size_bytes;
+} sd_card_manager_transfer_info_t;
 
 /**
  * @brief Observable lifecycle state of the SD recovery service.
@@ -170,6 +229,110 @@ void sd_card_manager_report_io_error(esp_err_t error);
  * @return true when the error indicates a recoverable SD VFS/media failure.
  */
 bool sd_card_manager_is_vfs_media_error(int error_number);
+
+/**
+ * @brief Copy capacity facts for the mounted SD filesystem.
+ *
+ * The function holds a managed lease only while `esp_vfs_fat_info()` reads the
+ * mounted FATFS geometry. It never exposes the mount path, raw FATFS state, or
+ * card handle. A zero-total or inconsistent capacity result is rejected.
+ *
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG for NULL,
+ *         ESP_ERR_INVALID_STATE when the VFS cannot accept a new lease, or
+ *         ESP_FAIL when FATFS cannot provide consistent capacity facts.
+ */
+esp_err_t sd_card_manager_get_filesystem_usage(
+    sd_card_manager_filesystem_usage_t *usage);
+
+/**
+ * @brief Copy a bounded, non-recursive list below the approved SD root.
+ *
+ * `logical_path` must be `/` or a normalized slash-separated path below that
+ * root. It must not contain empty, `.`, or `..` components. The caller never
+ * receives a VFS mount path or directory handle. The manager holds one lease
+ * from `opendir()` through `closedir()` and reports a confirmed media error to
+ * recovery before returning.
+ *
+ * At most `SD_CARD_MANAGER_DIRECTORY_LIST_MAX_ENTRIES` entries are returned;
+ * scanning is also capped so a hostile or very large directory cannot turn one
+ * request into an unbounded SD operation.
+ *
+ * @return ESP_OK, ESP_ERR_INVALID_ARG for an unsafe argument/path,
+ *         ESP_ERR_INVALID_STATE while SD is unavailable, ESP_ERR_NOT_FOUND
+ *         for a missing directory, ESP_ERR_NOT_SUPPORTED for a non-directory,
+ *         or ESP_FAIL for a VFS/media failure.
+ */
+esp_err_t sd_card_manager_list_directory(
+    const char *logical_path,
+    sd_card_manager_directory_listing_t *listing);
+
+/**
+ * @brief Start one bounded Web download and copy its opaque transfer ID.
+ *
+ * Logical paths are rooted at `/`, at most
+ * `SD_CARD_MANAGER_LOGICAL_PATH_MAX_LEN`, and use components of at most
+ * `SD_CARD_MANAGER_DIRECTORY_ENTRY_NAME_MAX_LEN`; root and reserved temporary
+ * suffixes are rejected. FILE handles remain private to this manager. Exactly
+ * one Web upload, download, or mutation may run globally; a conflict returns
+ * `ESP_ERR_TIMEOUT`. All Web transfer APIs are task-context only and must be
+ * called sequentially by the owner of `transfer_id`; they may block for SD I/O
+ * and must never be used from an ISR.
+ *
+ * @return ESP_OK, validation/state/not-found/type errors, ESP_ERR_TIMEOUT when
+ *         another Web operation owns the transfer slot, or ESP_FAIL on VFS I/O.
+ */
+esp_err_t sd_card_manager_download_begin(
+    const char *logical_path,
+    sd_card_manager_transfer_info_t *info);
+
+/** @brief Read one caller-owned buffer from an active download; EOF has `read_size` zero. */
+esp_err_t sd_card_manager_download_read(
+    uint32_t transfer_id,
+    void *buffer,
+    size_t buffer_size,
+    size_t *read_size);
+
+/** @brief Close an active download and release its managed SD lease. */
+esp_err_t sd_card_manager_download_end(uint32_t transfer_id);
+
+/**
+ * @brief Start an upload of 1 through `SD_CARD_MANAGER_TRANSFER_MAX_BYTES`.
+ *
+ * The manager writes a hidden `.webupload-partial` sibling and publishes it
+ * only after a successful close and rename. Existing destinations are
+ * rejected; callers must finish the exact declared byte count or abort.
+ */
+esp_err_t sd_card_manager_upload_begin(
+    const char *logical_path,
+    uint64_t content_length,
+    sd_card_manager_transfer_info_t *info);
+
+/** @brief Write one non-empty caller-owned chunk to an active upload. */
+esp_err_t sd_card_manager_upload_write(
+    uint32_t transfer_id,
+    const void *data,
+    size_t data_size);
+
+/** @brief Close and atomically publish an active upload with its declared size. */
+esp_err_t sd_card_manager_upload_finish(uint32_t transfer_id);
+
+/** @brief Best-effort remove an active upload temporary file and release its lease. */
+void sd_card_manager_upload_abort(uint32_t transfer_id);
+
+/**
+ * @brief Delete a regular file, rename a non-root path without overwrite,
+ * create a directory, or remove an empty directory.
+ *
+ * These task-context, SD-I/O operations share the same global Web-operation
+ * slot as transfers. They accept the same logical-path policy as downloads;
+ * the root is never mutable.
+ */
+esp_err_t sd_card_manager_delete_file(const char *logical_path);
+esp_err_t sd_card_manager_rename_path(
+    const char *source_logical_path,
+    const char *destination_logical_path);
+esp_err_t sd_card_manager_make_directory(const char *logical_path);
+esp_err_t sd_card_manager_remove_empty_directory(const char *logical_path);
 
 /**
  * @brief Create or overwrite a small test file on the SD card.

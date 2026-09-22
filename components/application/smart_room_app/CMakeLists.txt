@@ -19,6 +19,7 @@ idf_component_register(
         firebase_auth
         freertos
         light_manager
+        local_web_server
         log_manager
         lvgl_image_handler
         lvgl_sd_fs

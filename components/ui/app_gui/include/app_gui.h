@@ -37,6 +37,9 @@ typedef enum
     /** Factory-reset success or failure result. */
     APP_GUI_SCREEN_RESET_RESULT,
 
+    /** Local Web Storage status view. */
+    APP_GUI_SCREEN_WEB_STORAGE,
+
     /** Exclusive upper bound for screen-ID validation and iteration. */
     APP_GUI_SCREEN_MAX
 } app_gui_screen_id_t;
@@ -300,6 +303,19 @@ typedef struct
     int64_t last_success_time_ms;
 } ui_cloud_status_t;
 
+/* Local Web Storage UI Types --------------------------------------------- */
+
+/** Bounded, non-sensitive snapshot rendered by the Local Web Storage view. */
+typedef struct
+{
+    bool server_running;
+    bool storage_available;
+    uint8_t progress_percent;
+    uint64_t used_bytes;
+    uint64_t total_bytes;
+    esp_err_t last_error;
+} ui_web_storage_status_t;
+
 /* Lifecycle API ----------------------------------------------------------- */
 
 /**
@@ -457,6 +473,15 @@ esp_err_t app_gui_post_xiaozhi_status(
  */
 esp_err_t app_gui_post_cloud_status(
     const ui_cloud_status_t *status);
+
+/**
+ * @brief Replace the pending Local Web Storage snapshot without calling LVGL.
+ *
+ * This task-context API copies a bounded status into a length-one queue. The
+ * app_gui task is the only context that renders the corresponding LCD view.
+ */
+esp_err_t app_gui_post_web_storage_status(
+    const ui_web_storage_status_t *status);
 
 /* Reset Result API -------------------------------------------------------- */
 

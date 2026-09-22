@@ -1,6 +1,5 @@
 #include "smart_room_mcp_adapter_internal.h"
 
-#include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
 #include <stdint.h>
@@ -12,6 +11,7 @@
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "sd_card_manager.h"
+#include "smart_room_mcp_audio_catalog_entry.h"
 #include "voice_assistant_playback_control.h"
 #include "xiaozhi_foundation.h"
 
@@ -21,7 +21,8 @@
 #include "freertos/task.h"
 
 #define SMART_ROOM_AUDIO_ROOT "/sdcard/audio"
-#define SMART_ROOM_AUDIO_FILENAME_MAX_BYTES 52U
+#define SMART_ROOM_AUDIO_FILENAME_MAX_BYTES \
+    (SD_CARD_MANAGER_DIRECTORY_ENTRY_NAME_MAX_LEN + 1U)
 #define SMART_ROOM_AUDIO_CATALOG_TASK_NAME "mcp_audio_catalog"
 #define SMART_ROOM_AUDIO_CATALOG_TASK_STACK 4096U
 #define SMART_ROOM_AUDIO_CATALOG_TASK_PRIORITY 3U
@@ -52,115 +53,20 @@ static TaskHandle_t s_catalog_task = NULL;
  * transport control paths. */
 EXT_RAM_BSS_ATTR static smart_room_catalog_t s_catalog;
 
-static bool is_track_char(unsigned char value)
-{
-    return isalnum(value) || (value == '_') || (value == '-');
-}
-
-static bool is_display_name_byte_safe(unsigned char value)
-{
-    /* JSON quotes/backslashes and controls are never retained. UTF-8 bytes
-     * are preserved verbatim as a display-only name; playback still uses the
-     * independently generated ASCII logical ID. */
-    return ((value >= 0x20U) && (value != '"') && (value != '\\'));
-}
-
-static bool utf8_is_valid(const char *value, size_t length)
-{
-    if (value == NULL) {
-        return false;
-    }
-    for (size_t index = 0U; index < length;) {
-        const unsigned char first = (unsigned char)value[index++];
-        if (first < 0x80U) {
-            continue;
-        }
-
-        size_t continuation_count = 0U;
-        if ((first >= 0xC2U) && (first <= 0xDFU)) {
-            continuation_count = 1U;
-        } else if ((first >= 0xE0U) && (first <= 0xEFU)) {
-            continuation_count = 2U;
-        } else if ((first >= 0xF0U) && (first <= 0xF4U)) {
-            continuation_count = 3U;
-        } else {
-            return false;
-        }
-        if ((length - index) < continuation_count) {
-            return false;
-        }
-        for (size_t offset = 0U; offset < continuation_count; ++offset) {
-            const unsigned char next = (unsigned char)value[index + offset];
-            if ((next & 0xC0U) != 0x80U) {
-                return false;
-            }
-        }
-        /* Reject overlong sequences, UTF-16 surrogate encodings, and values
-         * beyond Unicode's maximum scalar value. */
-        if (((first == 0xE0U) && ((unsigned char)value[index] < 0xA0U)) ||
-            ((first == 0xEDU) && ((unsigned char)value[index] > 0x9FU)) ||
-            ((first == 0xF0U) && ((unsigned char)value[index] < 0x90U)) ||
-            ((first == 0xF4U) && ((unsigned char)value[index] > 0x8FU))) {
-            return false;
-        }
-        index += continuation_count;
-    }
-    return true;
-}
-
-static bool extension_is_wav(const char *filename, size_t length)
-{
-    return (length >= 4U) &&
-        (tolower((unsigned char)filename[length - 4U]) == '.') &&
-        (tolower((unsigned char)filename[length - 3U]) == 'w') &&
-        (tolower((unsigned char)filename[length - 2U]) == 'a') &&
-        (tolower((unsigned char)filename[length - 1U]) == 'v');
-}
-
-static uint64_t filename_hash(const char *filename, size_t length)
-{
-    uint64_t value = UINT64_C(14695981039346656037);
-    for (size_t i = 0U; i < length; ++i) {
-        value ^= (uint8_t)filename[i];
-        value *= UINT64_C(1099511628211);
-    }
-    return value;
-}
-
 static bool make_entry(const char *filename, smart_room_catalog_entry_t *entry)
 {
-    if ((filename == NULL) || (entry == NULL)) return false;
-    const size_t length = strnlen(filename, SMART_ROOM_AUDIO_FILENAME_MAX_BYTES);
-    if ((length < 6U) || (length >= SMART_ROOM_AUDIO_FILENAME_MAX_BYTES) ||
-        !extension_is_wav(filename, length)) return false;
-    const size_t stem_length = length - 4U;
-    if ((stem_length == 0U) ||
-        (stem_length >= XIAOZHI_FOUNDATION_AUDIO_TRACK_NAME_MAX_BYTES)) {
+    if ((filename == NULL) || (entry == NULL)) {
         return false;
     }
-    if (!utf8_is_valid(filename, stem_length)) return false;
-    bool stem_is_token = true;
-    for (size_t i = 0U; i < stem_length; ++i) {
-        const unsigned char byte = (unsigned char)filename[i];
-        if (!is_display_name_byte_safe(byte) || (byte == '/') || (byte == '\\') ||
-            (byte == '.')) return false;
-        if (!is_track_char(byte)) stem_is_token = false;
-    }
     *entry = (smart_room_catalog_entry_t){0};
-    if (stem_is_token) {
-        memcpy(entry->public_track.id, filename, stem_length);
-    } else {
-        const int id_length = snprintf(entry->public_track.id,
-                                       sizeof(entry->public_track.id),
-                                       "track_%016llx",
-                                       (unsigned long long)filename_hash(
-                                           filename, length));
-        if ((id_length < 0) || ((size_t)id_length >= sizeof(entry->public_track.id)))
-            return false;
-    }
-    memcpy(entry->public_track.name, filename, stem_length);
-    memcpy(entry->filename, filename, length + 1U);
-    return true;
+    return smart_room_mcp_audio_catalog_entry_prepare(
+        filename,
+        entry->public_track.id,
+        sizeof(entry->public_track.id),
+        entry->public_track.name,
+        sizeof(entry->public_track.name),
+        entry->filename,
+        sizeof(entry->filename));
 }
 
 static bool catalog_contains_track_id(const smart_room_catalog_t *catalog,
@@ -196,20 +102,6 @@ static bool make_catalog_track_id_unique(smart_room_catalog_t *catalog,
         return false;
     }
     memcpy(base_id, entry->public_track.id, initial_length + 1U);
-
-    /* A full-length ASCII filename stem has no room for a suffix. Switch it
-     * to the same bounded hash form used for non-token display names before
-     * appending a collision suffix. */
-    if (initial_length > (sizeof(base_id) - 4U)) {
-        const size_t filename_length = strnlen(
-            entry->filename, sizeof(entry->filename));
-        const int base_result = snprintf(
-            base_id, sizeof(base_id), "track_%016llx",
-            (unsigned long long)filename_hash(entry->filename, filename_length));
-        if ((base_result < 0) || ((size_t)base_result >= sizeof(base_id))) {
-            return false;
-        }
-    }
 
     for (uint8_t suffix = 2U;
          suffix <= XIAOZHI_FOUNDATION_AUDIO_TRACK_MAX_COUNT;
@@ -340,8 +232,11 @@ static esp_err_t scan_catalog(smart_room_catalog_t *catalog)
             }
             continue;
         }
-        if (!S_ISREG(info.st_mode) || (info.st_size < 0)) continue;
-        entry.public_track.size_bytes = (uint64_t)info.st_size;
+        if (!S_ISREG(info.st_mode)) continue;
+        _Static_assert(sizeof(info.st_size) == sizeof(int32_t),
+                       "FATFS VFS file size conversion expects 32-bit off_t");
+        entry.public_track.size_bytes =
+            smart_room_mcp_audio_catalog_fatfs_size_bytes((int32_t)info.st_size);
         insert_entry(catalog, &entry);
     }
     const int close_result = closedir(directory);

@@ -24,6 +24,9 @@
 /* SD Management components ------------------------------------------------- */
 #include "sd_card_manager.h"
 
+/* Local Web presentation --------------------------------------------------- */
+#include "local_web_server.h"
+
 /* LVGL SD Management ------------------------------------------------------- */
 #include "lvgl_sd_fs.h"
 
@@ -479,6 +482,17 @@ void smart_room_app_start(void)
         }
     }
 
+#if CONFIG_LOCAL_WEB_SERVER_ENABLE
+    const esp_err_t local_web_init_ret = local_web_server_init();
+    if (local_web_init_ret != ESP_OK)
+    {
+        APP_LOGW(
+            TAG, LOCAL_WEB_SERVER_INIT_DEFERRED_6EA6CD33,
+            "Local Web server unavailable: %s",
+            esp_err_to_name(local_web_init_ret));
+    }
+#endif
+
     /*
      * Phase 7.2 reset-input path.
      *
@@ -744,11 +758,16 @@ void smart_room_app_start(void)
 
     bool cloud_started = false;
     bool audio_start_attempted = false;
+    bool local_web_started = false;
     bool network_failure_screen_requested = false;
 
     while (1)
     {
-        if (!cloud_started || !audio_start_attempted)
+        if (!cloud_started || !audio_start_attempted
+#if CONFIG_LOCAL_WEB_SERVER_ENABLE
+            || !local_web_started
+#endif
+            )
         {
             app_network_coordinator_state_t network_state =
                 APP_NETWORK_COORDINATOR_STATE_UNINITIALIZED;
@@ -862,11 +881,36 @@ void smart_room_app_start(void)
                         esp_err_to_name(service_ret));
                 }
             }
+#if CONFIG_LOCAL_WEB_SERVER_ENABLE
+            else if (!local_web_started &&
+                     app_network_state_allows_audio_start(network_state))
+            {
+                const esp_err_t local_web_ret = local_web_server_start();
+                if (local_web_ret == ESP_OK)
+                {
+                    local_web_started = true;
+                    APP_LOGI(
+                        TAG, LOCAL_WEB_SERVER_STARTED_AFTER_1C29D76D,
+                        "Local Web server started after network handoff");
+                }
+                else
+                {
+                    APP_LOGW(
+                        TAG, LOCAL_WEB_SERVER_START_DEFERRED_62A1227E,
+                        "Local Web server start deferred: %s",
+                        esp_err_to_name(local_web_ret));
+                }
+            }
+#endif
         }
 
         vTaskDelay(
             pdMS_TO_TICKS(
-                (cloud_started && audio_start_attempted)
+                (cloud_started && audio_start_attempted
+#if CONFIG_LOCAL_WEB_SERVER_ENABLE
+                 && local_web_started
+#endif
+                 )
                     ? 5000U
                     : 500U));
     }

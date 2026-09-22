@@ -59,7 +59,8 @@ Phase 18.3  COMPLETE / SUPERSEDED AND ABSORBED INTO 18.2.2 / NO DUPLICATE CODE
 Phase 18.4  COMPLETE / cloud.push_latest / USER ACCEPTED BY HẢI ON 2026-09-16
 Voice Recording Critical Window
             COMPLETE / USER ACCEPTED BY HẢI ON 2026-09-16
-Sprint 19   Local Web Control V1: SD Card File Manager / PLANNED / NOT STARTED
+Sprint 19   Local Web Control V1: SD Card File Manager / SOURCE INTEGRATED /
+            BUILD VERIFIED / TARGET REDEPLOY AND HIL PENDING
 Sprint 20   Local Web Control V2: Playback + Volume / PLANNED / NOT STARTED
 Sprint 21   Local Web Control V3: Lights / PLANNED / NOT STARTED
 Sprint 22   Local Web Control V4: Dashboard + System Status / PLANNED / NOT STARTED
@@ -209,6 +210,20 @@ because they are pending**:
 - release-level target smoke before a future tagged release if desired.
 
 Only a concrete regression or explicit Hải instruction should reopen Sprint 18.
+
+## Sprint 19 Local Web Storage V1 — source integrated / target HIL pending
+
+- `local_web_server` is a presentation-only HTTP component over the existing
+  SD manager; it does not own Wi-Fi, provisioning, SD mount/recovery, FATFS,
+  LVGL, audio, or hardware resources.
+- The Web surface has bounded browse, download, upload, file/folder mutations,
+  centralized path validation, and copied LCD status routing. One Web operation
+  runs at a time; uploads use a temporary file then atomic publication.
+- FATFS capacity, signed FAT32 file sizes at or above 2 GiB, and browser
+  download filenames are corrected. The maximum Web upload is 20 MiB.
+- Host tests and a serialized ESP-IDF 6.0.1 build pass. The merged firmware
+  still needs browser/ESP32-S3/SD target HIL, including large-file metadata,
+  download naming, upload up to 20 MiB, and SD recovery.
 
 ## Security invariants
 

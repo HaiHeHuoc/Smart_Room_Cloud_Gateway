@@ -1,7 +1,7 @@
 # Local Web Dashboard Plan
 
 Updated: 2026-09-13
-Status: **APPROVED ROADMAP / PLANNED / NOT STARTED**
+Status: **SPRINT 19 CAPACITY FIX BUILT / TARGET REDEPLOY AND HIL PENDING**
 Active integration branch: `main_including_Firebase_security`
 
 ## Purpose
@@ -108,7 +108,7 @@ first. Do not create a shortcut from the web server to a driver.
 
 ## Sprint 19 — Local Web Control V1: SD Card File Manager
 
-Status: **PLANNED / NOT STARTED**
+Status: **PROMPTS 1-3 PLUS CAPACITY FIX BUILT / TARGET REDEPLOY AND HIL PENDING**
 
 ### Goal
 
@@ -146,6 +146,121 @@ card before adding other web-control features.
   disconnect during an operation.
 - Do not expose credentials, tokens, private NVS data, or unrelated filesystem
   content.
+
+### Prompt 1 implementation record (2026-09-16)
+
+- Branch: `phase/19-local-web-storage-v1` from integration commit
+  `3394818578972ed4187192c4a5e22f46dfc09e1f`.
+- The Browser -> `local_web_server` -> bounded `sd_card_manager` API path is
+  implemented for status and non-recursive browsing only. Existing SD
+  mount/recovery and lease ownership are unchanged.
+- Web-visible path `/` is the only root. A logical-path policy decodes exactly
+  once and rejects traversal, malformed percent escapes, duplicate separators,
+  empty/dot components, controls, backslashes, and overlong input.
+- Current hard bounds are 192 logical-path bytes, 64 filename bytes, 32 returned
+  entries, and 64 scanned direct children. Results report deterministic
+  `truncated` and unsupported-entry facts.
+- Embedded `web/index.html` provides a responsive PC/mobile storage shell with
+  capacity, current path, parent navigation, loading, error, and empty states.
+  It deliberately has no transfer or mutation control.
+- Host path-policy coverage passes. An ESP-IDF build was attempted but did not
+  complete at a FreeRTOS archive toolchain failure; no target/HIL is claimed.
+
+### Prompt 2 implementation record (2026-09-16)
+
+- `sd_card_manager` remains the sole SD/VFS/lease owner and now exposes only
+  bounded, opaque-ID transfers plus narrow file/folder mutations. It keeps
+  `FILE` handles private, permits one Web transfer or mutation at a time, and
+  returns a deterministic busy result to concurrent clients.
+- Downloads stream in 4 KiB chunks. Uploads accept at most 8 MiB, write a
+  hidden sibling ending in `.webupload-partial`, remove it on interrupted or
+  failed requests, and publish only after `fclose()` then `rename()` succeeds.
+  Existing destination names are rejected; overwrite is never implicit.
+- The Web routes now cover download, raw-body upload, delete, rename,
+  mkdir, and empty-directory removal. Path policy remains central for every
+  source and destination. HTTP responses distinguish unavailable storage,
+  not-found, conflict, busy, invalid-path, and I/O failures.
+- The compiled-in UI adds file picker/drag-drop upload with browser XHR byte
+  progress, download, confirmation before deletion, rename, and folder
+  creation/removal. No WebSocket was added: the bounded request-response
+  model gives exact upload progress without a second persistent connection.
+- `app_gui` adds a routed `WEB_STORAGE` LCD sub-view. HTTP never calls LVGL;
+  it posts a copied status snapshot to the app_gui latest-value queue.
+- Prompt 3 supersedes the earlier build-environment note with a clean ESP-IDF
+  6.0.1 build. Target/browser/SD HIL remains unclaimed.
+
+### Prompt 3 hardening and validation record (2026-09-16)
+
+- Final review tightened the shared logical-path contract: trailing separators,
+  components over 64 bytes, and names ending in the reserved
+  `.webupload-partial` suffix are rejected. The suffix comparison is
+  case-insensitive to match FATFS behavior, so a completed user file cannot be
+  accidentally hidden as a temporary upload.
+- Upload abort cleanup now reports failed close or temporary-file removal to
+  the existing SD recovery owner. `rmdir` of a non-empty directory is reported
+  as a deterministic conflict rather than a generic server error.
+- The HTTP query buffer now covers two fully percent-encoded 192-byte logical
+  paths, instead of relying on a smaller server-stack buffer. The server has a
+  1,280-byte URI limit and rejects upload bodies over 8 MiB before SD work.
+- `app_gui`'s Web Storage capacity text now has enough space for two full
+  `uint64_t` KiB values. The ESP-IDF embed-file symbol now matches the actual
+  generated `_binary_index_html_*` symbol.
+- Validation: host path-policy test PASS, `git diff --check` PASS, and clean
+  serialized ESP-IDF 6.0.1 build PASS. The application binary is 2,601,776
+  bytes, leaving 38% free in the smallest 4 MiB app partition.
+- The host exposed only `COM1`; no ESP32-S3 target, browser session, or SD-card
+  HIL evidence was available. Sprint 20+ remains unstarted.
+
+### Capacity HIL defect and source fix (2026-09-16)
+
+- Target observation: SD browsing worked while `GET /api/storage/status`
+  reported `state:"ready"`, `available:false`, and zero total/used/free bytes.
+  Thus the first invalid value was below the browser formatter: the old HTTP
+  handler collapsed an SD usage-query failure into an otherwise successful JSON
+  response with zero-initialized capacity fields.
+- Root cause: `sd_card_manager_get_filesystem_usage()` used POSIX `statvfs()`.
+  ESP-IDF's FAT VFS does not provide FAT capacity through that path, while
+  browse uses ordinary VFS directory operations and remains functional.
+- The manager now uses ESP-IDF 6.0.1 public `esp_vfs_fat_info(SD_MOUNT_POINT,
+  ...)`, which calls FatFs `f_getfree()` using the registered FATFS drive and
+  returns 64-bit total/free byte values. A narrow invariant helper rejects zero
+  total capacity and free space above total before calculating used bytes.
+- If capacity lookup fails while the card is READY, the Web API now returns
+  `503 storage_usage_unavailable` instead of a misleading successful zero-byte
+  response. SD mount/VFS/lease ownership remains unchanged.
+- Host capacity-invariant and path-policy tests pass; a clean ESP-IDF 6.0.1
+  build passes. The fixed firmware has not yet been flashed or target-verified.
+
+### Large-file metadata and download-name HIL defects (2026-09-22)
+
+- Target screenshots show `input_long_3.wav` as about 17.18 billion GiB and
+  downloads named `download`, despite the download byte count matching the
+  requested file.
+- Root cause 1: ESP-IDF 6.0.1 FAT VFS copies FAT32's unsigned 32-bit
+  `FILINFO.fsize` to signed 32-bit `struct stat::st_size`; directly casting a
+  2-4 GiB negative `st_size` to `uint64_t` produces a near-`UINT64_MAX` JSON
+  `size_bytes`. The SD manager now restores the original 32-bit unsigned value
+  before returning copied directory metadata.
+- Root cause 2: the download route sent `Content-Disposition: attachment`
+  without a filename. It now supplies a bounded ASCII fallback plus RFC 5987
+  `filename*` UTF-8 value. No change was made to the SD transfer/lease model.
+- New host tests cover the 2 GiB sign boundary, FAT32 4 GiB maximum, ordinary
+  filename, escaped spaces, and root rejection. Clean ESP-IDF 6.0.1 build
+  passes; generated binary is 2,601,776 bytes with 38% smallest-app-partition
+  space free. Target redeploy and HIL remain required.
+
+### Target HIL matrix (pending)
+
+1. Open `/` from a phone and PC on the existing local LAN; verify the LCD
+   Web Storage status, browsing, parent navigation, and unavailable-card state.
+2. Exercise upload, download, delete, rename, mkdir, and empty/non-empty rmdir
+   with normal files, 8 MiB boundary files, duplicate names, invalid paths,
+   a 2-4 GiB FAT32 file whose displayed/downloaded name must remain correct.
+3. Disconnect the browser during upload/download; verify no published partial
+   file, server recovery, and subsequent transfer capability.
+4. Remove/reinsert the SD card during browse and transfer; verify lease drain,
+   recovery/remount, sensible HTTP errors, and no impact on normal Gateway
+   audio/voice behavior.
 
 ### Acceptance direction when implementation starts
 
