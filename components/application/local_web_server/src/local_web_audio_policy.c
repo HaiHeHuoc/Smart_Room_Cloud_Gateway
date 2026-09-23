@@ -1,5 +1,6 @@
 #include "local_web_audio_policy.h"
 
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -33,5 +34,21 @@ bool local_web_audio_volume_percent_parse(const char *value, uint32_t *percent)
         return false;
     }
     *percent = (uint32_t)parsed;
+    return true;
+}
+
+bool local_web_audio_uint64_parse(const char *value, uint64_t *parsed)
+{
+    if ((value == NULL) || (parsed == NULL) || (value[0] < '0') ||
+        (value[0] > '9')) {
+        return false;
+    }
+    char *end = NULL;
+    errno = 0;
+    const unsigned long long value_parsed = strtoull(value, &end, 10);
+    if ((errno == ERANGE) || (end == NULL) || (*end != '\0')) {
+        return false;
+    }
+    *parsed = (uint64_t)value_parsed;
     return true;
 }

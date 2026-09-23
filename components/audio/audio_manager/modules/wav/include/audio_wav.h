@@ -27,6 +27,14 @@
 /** @brief Canonical PCM16 mono source byte rate: 16 kHz * 2 bytes. */
 #define AUDIO_WAV_CANONICAL_BYTE_RATE  32000U
 
+/**
+ * Current ESP-IDF FAT VFS/C stdio playback limit on the ESP32 target.
+ *
+ * `FILE *` seek/tell positions are signed 32-bit in this path, even though
+ * FAT32 directory metadata can describe files above this size.
+ */
+#define AUDIO_WAV_MAX_FILE_SIZE_BYTES  UINT32_C(2147483647)
+
 /** Maximum absolute magnitude representable by signed PCM16. */
 #define AUDIO_WAV_PCM16_ABSOLUTE_MAX   32768U
 
@@ -79,6 +87,13 @@ typedef struct
 
 /** Reset a closed stream before first use or reuse. */
 void audio_wav_stream_reset(audio_wav_stream_t *stream);
+
+/**
+ * @brief Return whether a file size is representable by this reader's stdio path.
+ *
+ * This is a target playback capability check, not a PSRAM/prefetch limit.
+ */
+bool audio_wav_file_size_is_supported(uint64_t file_size);
 
 /**
  * @brief Validate that a path names a file below the SD VFS mount.

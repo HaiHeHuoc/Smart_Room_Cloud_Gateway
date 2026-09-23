@@ -234,6 +234,7 @@ typedef enum
     AUDIO_PLAYBACK_FLOW_CONTINUE = 0,
     AUDIO_PLAYBACK_FLOW_PAUSE,
     AUDIO_PLAYBACK_FLOW_RESTART,
+    AUDIO_PLAYBACK_FLOW_SEEK,
     AUDIO_PLAYBACK_FLOW_CANCEL,
 } audio_playback_flow_t;
 
@@ -291,6 +292,8 @@ typedef struct
     bool pause_requested;
     bool resume_requested;
     bool restart_requested;
+    bool seek_requested;
+    uint64_t seek_target_frames;
     audio_manager_playback_pause_reason_t requested_pause_reason;
     audio_manager_operation_t operation;
     uint32_t next_playback_generation;
@@ -406,6 +409,7 @@ static void audio_manager_clear_resume_context(void);
 static void audio_manager_restore_retained_playback_status(void);
 static void audio_manager_suspend_operation(void);
 static bool audio_manager_consume_resume_requested(void);
+static bool audio_manager_consume_seek_target(uint64_t *target_frames);
 static esp_err_t audio_manager_queue_retained_playback(
     uint32_t expected_generation,
     bool restart_from_beginning);
@@ -891,6 +895,10 @@ static audio_playback_flow_t audio_manager_playback_flow_requested(void)
     {
         flow = AUDIO_PLAYBACK_FLOW_RESTART;
     }
+    else if (s_control.seek_requested)
+    {
+        flow = AUDIO_PLAYBACK_FLOW_SEEK;
+    }
     else if (s_control.pause_requested)
     {
         flow = AUDIO_PLAYBACK_FLOW_PAUSE;
@@ -913,6 +921,8 @@ static void audio_manager_begin_playback_control_locked(
     s_control.pause_requested = false;
     s_control.resume_requested = false;
     s_control.restart_requested = false;
+    s_control.seek_requested = false;
+    s_control.seek_target_frames = 0U;
     s_control.requested_pause_reason = AUDIO_MANAGER_PLAYBACK_PAUSE_NONE;
     s_control.playback_status = (audio_manager_playback_status_t) {
         .state = AUDIO_MANAGER_PLAYBACK_CONTROL_STARTING,
@@ -923,6 +933,11 @@ static void audio_manager_begin_playback_control_locked(
         .generation = generation,
         .position_frames = 0U,
         .total_frames = total_frames,
+        .sample_rate_hz =
+            ((source == AUDIO_MANAGER_PLAYBACK_SOURCE_WAV) ||
+             (source == AUDIO_MANAGER_PLAYBACK_SOURCE_RECORDED))
+                ? AUDIO_MANAGER_SAMPLE_RATE_HZ
+                : 0U,
         .position_granularity_frames =
             AUDIO_MANAGER_PLAYBACK_POSITION_GRANULARITY_FRAMES,
         .last_control_result = ESP_OK,
@@ -1057,9 +1072,12 @@ static void audio_manager_complete_playback_control(esp_err_t result)
     s_control.playback_status.generation = 0U;
     s_control.playback_status.position_frames = 0U;
     s_control.playback_status.total_frames = 0U;
+    s_control.playback_status.sample_rate_hz = 0U;
     s_control.pause_requested = false;
     s_control.resume_requested = false;
     s_control.restart_requested = false;
+    s_control.seek_requested = false;
+    s_control.seek_target_frames = 0U;
     s_control.requested_pause_reason = AUDIO_MANAGER_PLAYBACK_PAUSE_NONE;
     portEXIT_CRITICAL(&s_control_lock);
 }
@@ -1090,6 +1108,7 @@ static void audio_manager_restore_retained_playback_status(void)
         .generation = s_runtime.playback_resume.generation,
         .position_frames = s_runtime.playback_resume.position_frames,
         .total_frames = s_runtime.playback_resume.total_frames,
+        .sample_rate_hz = AUDIO_MANAGER_SAMPLE_RATE_HZ,
         .position_granularity_frames =
             AUDIO_MANAGER_PLAYBACK_POSITION_GRANULARITY_FRAMES,
         .last_control_result = ESP_OK,
@@ -1160,6 +1179,8 @@ static void audio_manager_finish_operation(void)
     s_control.pause_requested = false;
     s_control.resume_requested = false;
     s_control.restart_requested = false;
+    s_control.seek_requested = false;
+    s_control.seek_target_frames = 0U;
     s_control.requested_pause_reason = AUDIO_MANAGER_PLAYBACK_PAUSE_NONE;
     portEXIT_CRITICAL(&s_control_lock);
 }
@@ -1184,6 +1205,24 @@ static bool audio_manager_consume_resume_requested(void)
     portENTER_CRITICAL(&s_control_lock);
     requested = s_control.resume_requested;
     s_control.resume_requested = false;
+    portEXIT_CRITICAL(&s_control_lock);
+    return requested;
+}
+
+static bool audio_manager_consume_seek_target(uint64_t *target_frames)
+{
+    bool requested = false;
+    portENTER_CRITICAL(&s_control_lock);
+    requested = s_control.seek_requested;
+    if (requested)
+    {
+        if (target_frames != NULL)
+        {
+            *target_frames = s_control.seek_target_frames;
+        }
+        s_control.seek_requested = false;
+        s_control.seek_target_frames = 0U;
+    }
     portEXIT_CRITICAL(&s_control_lock);
     return requested;
 }
@@ -3737,6 +3776,19 @@ static void audio_manager_handle_recorded_playback_command(
             portEXIT_CRITICAL(&s_control_lock);
         }
 
+        if (flow == AUDIO_PLAYBACK_FLOW_SEEK)
+        {
+            uint64_t target_frames = 0U;
+            if (!audio_manager_consume_seek_target(&target_frames))
+            {
+                result = ESP_ERR_INVALID_STATE;
+                break;
+            }
+            sample_index = (size_t)target_frames;
+            audio_manager_update_playback_position(target_frames);
+            flow = AUDIO_PLAYBACK_FLOW_CONTINUE;
+        }
+
         bool tx_started = false;
         if (flow != AUDIO_PLAYBACK_FLOW_PAUSE)
         {
@@ -3793,6 +3845,7 @@ static void audio_manager_handle_recorded_playback_command(
                 audio_manager_playback_flow_requested();
             if ((late_flow == AUDIO_PLAYBACK_FLOW_CANCEL) ||
                 (late_flow == AUDIO_PLAYBACK_FLOW_RESTART) ||
+                (late_flow == AUDIO_PLAYBACK_FLOW_SEEK) ||
                 ((late_flow == AUDIO_PLAYBACK_FLOW_PAUSE) &&
                  (sample_index < sample_count)))
             {
@@ -3816,6 +3869,18 @@ static void audio_manager_handle_recorded_playback_command(
             portENTER_CRITICAL(&s_control_lock);
             s_control.restart_requested = false;
             portEXIT_CRITICAL(&s_control_lock);
+            continue;
+        }
+        if (flow == AUDIO_PLAYBACK_FLOW_SEEK)
+        {
+            uint64_t target_frames = 0U;
+            if (!audio_manager_consume_seek_target(&target_frames))
+            {
+                result = ESP_ERR_INVALID_STATE;
+                break;
+            }
+            sample_index = (size_t)target_frames;
+            audio_manager_update_playback_position(target_frames);
             continue;
         }
         if (flow == AUDIO_PLAYBACK_FLOW_PAUSE)
@@ -3999,6 +4064,18 @@ static void audio_manager_handle_wav_command(
             s_control.restart_requested = false;
             portEXIT_CRITICAL(&s_control_lock);
         }
+        if (flow == AUDIO_PLAYBACK_FLOW_SEEK)
+        {
+            uint64_t target_frames = 0U;
+            if (!audio_manager_consume_seek_target(&target_frames))
+            {
+                result = ESP_ERR_INVALID_STATE;
+                break;
+            }
+            data_offset = target_frames * sizeof(int16_t);
+            audio_manager_update_playback_position(target_frames);
+            flow = AUDIO_PLAYBACK_FLOW_CONTINUE;
+        }
 
         if (flow != AUDIO_PLAYBACK_FLOW_PAUSE)
         {
@@ -4071,6 +4148,7 @@ static void audio_manager_handle_wav_command(
                 audio_manager_playback_flow_requested();
             if ((late_flow == AUDIO_PLAYBACK_FLOW_CANCEL) ||
                 (late_flow == AUDIO_PLAYBACK_FLOW_RESTART) ||
+                (late_flow == AUDIO_PLAYBACK_FLOW_SEEK) ||
                 ((late_flow == AUDIO_PLAYBACK_FLOW_PAUSE) &&
                  (!retained_info_valid ||
                   (data_offset < retained_info.data_size_bytes))))
@@ -4095,6 +4173,18 @@ static void audio_manager_handle_wav_command(
             portENTER_CRITICAL(&s_control_lock);
             s_control.restart_requested = false;
             portEXIT_CRITICAL(&s_control_lock);
+            continue;
+        }
+        if (flow == AUDIO_PLAYBACK_FLOW_SEEK)
+        {
+            uint64_t target_frames = 0U;
+            if (!audio_manager_consume_seek_target(&target_frames))
+            {
+                result = ESP_ERR_INVALID_STATE;
+                break;
+            }
+            data_offset = target_frames * sizeof(int16_t);
+            audio_manager_update_playback_position(target_frames);
             continue;
         }
         if (flow == AUDIO_PLAYBACK_FLOW_PAUSE)
@@ -5369,6 +5459,8 @@ esp_err_t audio_manager_stop_playback(void)
         s_control.pause_requested = false;
         s_control.resume_requested = false;
         s_control.restart_requested = false;
+        s_control.seek_requested = false;
+        s_control.seek_target_frames = 0U;
         audio_manager_playback_control_state_t next =
             s_control.playback_status.state;
         if (audio_manager_playback_control_transition(
@@ -5635,6 +5727,75 @@ esp_err_t audio_manager_restart_playback_at_generation(
         AUDIO_MANAGER_PLAYBACK_ACTION_RESTART;
     s_control.playback_status.last_control_result = result;
     portEXIT_CRITICAL(&s_control_lock);
+    return result;
+}
+
+esp_err_t audio_manager_seek_playback_at_generation(
+    uint32_t expected_generation,
+    uint64_t target_frames)
+{
+    if (!s_runtime.initialized || (s_runtime.status_mutex == NULL))
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!audio_manager_take_status_mutex("seeking playback"))
+    {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    esp_err_t result = ESP_ERR_INVALID_STATE;
+    portENTER_CRITICAL(&s_control_lock);
+    const audio_manager_playback_status_t status = s_control.playback_status;
+    const bool local_wav_or_recording =
+        (status.source == AUDIO_MANAGER_PLAYBACK_SOURCE_WAV) ||
+        (status.source == AUDIO_MANAGER_PLAYBACK_SOURCE_RECORDED);
+    if (!s_control.task_running || s_control.shutdown_requested)
+    {
+        result = ESP_ERR_INVALID_STATE;
+    }
+    else if (status.source == AUDIO_MANAGER_PLAYBACK_SOURCE_PCM16_STREAM)
+    {
+        result = ESP_ERR_NOT_SUPPORTED;
+    }
+    else if (!local_wav_or_recording || !status.resumable ||
+             (status.generation == 0U) ||
+             ((expected_generation != 0U) &&
+              (expected_generation != status.generation)) ||
+             ((target_frames %
+               AUDIO_MANAGER_PLAYBACK_POSITION_GRANULARITY_FRAMES) != 0U) ||
+             (target_frames >= status.total_frames))
+    {
+        result = ESP_ERR_INVALID_ARG;
+    }
+    else if (status.state == AUDIO_MANAGER_PLAYBACK_CONTROL_PAUSED)
+    {
+        if ((status.pause_reason != AUDIO_MANAGER_PLAYBACK_PAUSE_USER) ||
+            !s_runtime.playback_resume.valid ||
+            (s_runtime.playback_resume.generation != status.generation))
+        {
+            result = ESP_ERR_INVALID_STATE;
+        }
+        else
+        {
+            s_runtime.playback_resume.position_frames = target_frames;
+            s_control.playback_status.position_frames = target_frames;
+            result = ESP_OK;
+        }
+    }
+    else if (((s_control.operation == AUDIO_MANAGER_OPERATION_WAV) ||
+              (s_control.operation == AUDIO_MANAGER_OPERATION_RECORDED_PLAYBACK)) &&
+             (status.state == AUDIO_MANAGER_PLAYBACK_CONTROL_PLAYING) &&
+             !s_control.pause_requested && !s_control.restart_requested)
+    {
+        s_control.seek_target_frames = target_frames;
+        s_control.seek_requested = true;
+        s_control.playback_status.position_frames = target_frames;
+        result = ESP_OK;
+    }
+    s_control.playback_status.last_action = AUDIO_MANAGER_PLAYBACK_ACTION_SEEK;
+    s_control.playback_status.last_control_result = result;
+    portEXIT_CRITICAL(&s_control_lock);
+    xSemaphoreGive(s_runtime.status_mutex);
     return result;
 }
 

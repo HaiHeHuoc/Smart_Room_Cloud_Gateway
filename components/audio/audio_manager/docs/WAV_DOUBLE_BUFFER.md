@@ -65,7 +65,8 @@ The current WAV playback reader supports files smaller than 2 GiB (maximum
 `2,147,483,647` bytes). Although the PSRAM cache is bounded and does not load
 the complete file, the reader uses the ESP-IDF FAT VFS/C stdio `FILE *` path
 and its signed 32-bit seek/tell position. A 2 GiB-or-larger WAV can therefore
-fail while parsing or seeking, before audio data is streamed.
+not be read through this implementation. The reader rejects it from VFS
+metadata before opening/parsing and does not trigger SD recovery.
 
 This is not an SD capacity or PSRAM limit. Split or re-encode files at or
 above 2 GiB. Playback of larger files needs a separately validated migration

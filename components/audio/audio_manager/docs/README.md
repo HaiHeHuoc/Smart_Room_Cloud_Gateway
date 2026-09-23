@@ -72,9 +72,18 @@ configured retained recording (five seconds by default).
 - `audio_manager_restart_playback()` restarts that same local source at frame
   zero; `audio_manager_restart_playback_at_generation()` is the stale-safe
   deferred form. Neither selects a path or restarts the manager/device.
+- `audio_manager_seek_playback_at_generation()` accepts a target strictly
+  before the end of a matching local WAV/retained-recording generation. While
+  playing it is consumed at an existing cooperative boundary; WAV joins and
+  releases its reader/SD lease before reopening at the new offset. A
+  USER-paused source keeps its `PAUSED` state and updates only its retained
+  cursor. Targets must align to the published 256-frame committed-position
+  granularity. Live PCM/Xiaozhi, PTT-paused, stale, and invalid/end targets
+  reject.
 - `audio_manager_get_playback_status()` copies state, bounded source kind,
-  resumability, generation, committed/total mono frames, pause reason, and the
-  last control result. It exposes no path, pointer, or driver handle.
+  resumability, generation, committed/total mono frames, authoritative sample
+  rate (or zero when unavailable), pause reason, and the last control result.
+  It exposes no path, pointer, or driver handle.
 - `audio_manager_stop()` requests cooperative shutdown and waits up to five
   seconds; success returns the lifecycle to `INITIALIZED`.
 - `audio_manager_get_status()` copies the latest manager state and diagnostics under a bounded mutex wait.
@@ -136,7 +145,7 @@ media. Manager shutdown waits five seconds, returns `ESP_ERR_TIMEOUT` if the
 task is still cleaning up, leaves shutdown requested, and never force-deletes
 the resource-owning task. A later `audio_manager_stop()` may observe completion.
 
-Pause/restart use the same cooperative boundary. Recorded PCM and WAV commit
+Pause/restart/seek use the same cooperative boundary. Recorded PCM and WAV commit
 position after each complete 256-frame TX block (16 ms at 16 kHz); the copied
 cursor is submitted-to-I2S, not a sample-perfect audible position. Repeated
 pause is idempotent. Resume from IDLE/PLAYING is invalid. Live PCM16/Xiaozhi is
@@ -272,6 +281,9 @@ FAT32 may list a 2--4 GiB file correctly, but that does not make it playable
 through this API. Split or re-encode larger audio before playback. Supporting
 larger files requires a deliberate migration of the WAV reader and recovery
 path to a 64-bit-safe/native FatFS seek contract; it is not enabled today.
+`audio_wav_stream_open()` checks this limit from FAT VFS metadata before it
+opens/parses the file and returns `ESP_ERR_NOT_SUPPORTED`; it does not report
+an oversized file as an SD I/O failure.
 
 ### Parser, memory, and error contract
 

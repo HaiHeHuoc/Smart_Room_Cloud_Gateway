@@ -64,6 +64,12 @@ esp_err_t voice_assistant_playback_control(
     voice_assistant_playback_action_t action,
     voice_assistant_playback_control_result_t *result);
 
+/** Submit one generation-guarded local-playback seek without exposing audio internals. */
+esp_err_t voice_assistant_playback_seek(
+    uint32_t generation,
+    uint64_t target_frames,
+    voice_assistant_playback_control_result_t *result);
+
 /** Copy the exact owner status without side effects. */
 esp_err_t voice_assistant_playback_get_status(
     audio_manager_playback_status_t *status);

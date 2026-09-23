@@ -13,6 +13,7 @@
 #include <limits.h>
 #include <stdbool.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "board_config.h"
 #include "sd_card_manager.h"
@@ -53,6 +54,7 @@ static esp_err_t audio_wav_open_error_from_errno(int error_number);
 static void audio_wav_report_media_error_if_needed(
     esp_err_t result,
     int error_number);
+static uint64_t audio_wav_vfs_stat_size_bytes(off_t reported_size);
 
 /* Static Functions --------------------------------------------------------- */
 static uint16_t audio_wav_read_le16(const uint8_t *bytes)
@@ -193,6 +195,14 @@ static void audio_wav_report_media_error_if_needed(
     }
 }
 
+/** Recover the unsigned FAT32 size that FAT VFS stores in signed off_t. */
+static uint64_t audio_wav_vfs_stat_size_bytes(off_t reported_size)
+{
+    return (reported_size < 0)
+               ? (uint64_t)(uint32_t)reported_size
+               : (uint64_t)reported_size;
+}
+
 /* Functions ---------------------------------------------------------------- */
 void audio_wav_stream_reset(audio_wav_stream_t *stream)
 {
@@ -200,6 +210,11 @@ void audio_wav_stream_reset(audio_wav_stream_t *stream)
     {
         memset(stream, 0, sizeof(*stream));
     }
+}
+
+bool audio_wav_file_size_is_supported(uint64_t file_size)
+{
+    return file_size <= AUDIO_WAV_MAX_FILE_SIZE_BYTES;
 }
 
 bool audio_wav_path_is_valid(const char *path)
@@ -407,6 +422,34 @@ esp_err_t audio_wav_stream_open(
             path,
             esp_err_to_name(lease_result));
         return lease_result;
+    }
+
+    struct stat path_stat = {0};
+    errno = 0;
+    if (stat(path, &path_stat) != 0)
+    {
+        const int stat_errno = errno;
+        APP_LOGW(TAG, FAILED_TO_STAT_WAV_S_5F22B0D4,
+                 "Failed to stat WAV %s: errno=%d", path, stat_errno);
+        if (sd_card_manager_is_vfs_media_error(stat_errno))
+        {
+            sd_card_manager_report_io_error(ESP_FAIL);
+        }
+        sd_card_manager_release();
+        return audio_wav_open_error_from_errno(stat_errno);
+    }
+
+    const uint64_t file_size =
+        audio_wav_vfs_stat_size_bytes(path_stat.st_size);
+    if (!audio_wav_file_size_is_supported(file_size))
+    {
+        APP_LOGW(TAG, WAV_FILE_SIZE_EXCEEDS_STDI_7AA5E3C2,
+                 "Rejected WAV %s: file_bytes=%llu exceeds stdio_limit=%u",
+                 path,
+                 (unsigned long long)file_size,
+                 (unsigned)AUDIO_WAV_MAX_FILE_SIZE_BYTES);
+        sd_card_manager_release();
+        return ESP_ERR_NOT_SUPPORTED;
     }
 
     FILE *file = fopen(path, "rb");

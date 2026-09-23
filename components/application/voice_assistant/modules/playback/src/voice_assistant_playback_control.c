@@ -496,6 +496,28 @@ esp_err_t voice_assistant_playback_get_status(
     return audio_manager_get_playback_status(status);
 }
 
+esp_err_t voice_assistant_playback_seek(
+    uint32_t generation,
+    uint64_t target_frames,
+    voice_assistant_playback_control_result_t *result)
+{
+    if (result == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *result = (voice_assistant_playback_control_result_t){0};
+    const esp_err_t ret = audio_manager_seek_playback_at_generation(
+        generation, target_frames);
+    result->outcome = (ret == ESP_OK)
+        ? VOICE_ASSISTANT_PLAYBACK_OUTCOME_SUCCESS
+        : playback_outcome_from_error(ret);
+    result->accepted = (ret == ESP_OK);
+    (void)audio_manager_get_playback_status(&result->playback);
+    result->physically_applied =
+        result->accepted &&
+        (result->playback.position_frames == target_frames);
+    return ESP_OK;
+}
+
 esp_err_t voice_assistant_playback_start_catalog_wav(const char *resolved_path)
 {
     if ((resolved_path == NULL) || (resolved_path[0] == '\0')) {

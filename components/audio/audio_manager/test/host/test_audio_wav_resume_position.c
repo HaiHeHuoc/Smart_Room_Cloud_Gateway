@@ -20,6 +20,10 @@ bool sd_card_manager_is_vfs_media_error(int error_number)
 int main(void)
 {
     enum { DATA_BYTES = 2048U, COMMITTED_BLOCK_BYTES = 512U };
+    bool ok =
+        audio_wav_file_size_is_supported(AUDIO_WAV_MAX_FILE_SIZE_BYTES) &&
+        !audio_wav_file_size_is_supported(
+            (uint64_t)AUDIO_WAV_MAX_FILE_SIZE_BYTES + 1U);
     FILE *file = tmpfile();
     uint8_t *buffer = malloc(AUDIO_WAV_STREAM_BUFFER_BYTES);
     if ((file == NULL) || (buffer == NULL))
@@ -46,7 +50,7 @@ int main(void)
         .sd_lease_held = true,
     };
 
-    bool ok =
+    ok = ok &&
         (audio_wav_stream_seek_data(&stream, COMMITTED_BLOCK_BYTES) == ESP_OK) &&
         (stream.data_bytes_read == COMMITTED_BLOCK_BYTES) &&
         (stream.data_bytes_remaining == DATA_BYTES - COMMITTED_BLOCK_BYTES) &&

@@ -7,30 +7,33 @@
   <style>
     :root{color-scheme:dark;--bg:#101827;--card:#1d293a;--text:#eef5ff;--muted:#9badc3;--line:#33435a;--accent:#62b7ff;--err:#ff9696}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px system-ui,sans-serif}main{max-width:900px;margin:auto;padding:18px}header,nav,.tools{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap}h1{font-size:1.35rem;margin:0}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;margin-top:16px;padding:14px}#capacity{display:grid;grid-template-columns:repeat(3,minmax(110px,1fr));gap:10px}.metric{color:var(--muted);font-size:.82rem}.metric b{display:block;color:var(--text);font-size:1.05rem;margin-top:3px}button,select{background:#263a53;color:var(--text);border:1px solid #4e6d90;border-radius:7px;padding:8px 11px;font:inherit}button{cursor:pointer}button:disabled{opacity:.5;cursor:wait}#path{font-family:ui-monospace,monospace;overflow-wrap:anywhere}.state{color:var(--muted);margin:12px 0 0}.error{color:var(--err)}#drop{border:1px dashed #5b789d;border-radius:8px;padding:12px;margin-top:12px;color:var(--muted);text-align:center}progress{width:100%;margin-top:8px}ul{list-style:none;padding:0;margin:12px 0 0;border-top:1px solid var(--line)}li{display:grid;grid-template-columns:1fr auto;gap:12px;padding:10px 3px;border-bottom:1px solid var(--line);align-items:center}.entry{background:none;border:0;padding:0;text-align:left;color:var(--text);min-width:0;overflow-wrap:anywhere}.entry.dir{color:var(--accent)}.meta{color:var(--muted);font-variant-numeric:tabular-nums;font-size:.9rem}.actions{display:flex;gap:5px;flex-wrap:wrap}.actions button{padding:5px 8px;font-size:.85rem}.playback-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.playback-row select{flex:1;min-width:180px}@media(max-width:480px){main{padding:12px}#capacity{grid-template-columns:1fr}li{grid-template-columns:1fr}}
     .tab-list{display:flex;justify-content:flex-start;gap:8px;margin-top:16px;border-bottom:1px solid var(--line)}.tab{border-radius:7px 7px 0 0;border-bottom:0;color:var(--muted)}.tab[aria-selected="true"]{background:var(--card);color:var(--text);border-color:var(--accent);box-shadow:inset 0 -2px var(--accent)}.tab-panel[hidden]{display:none}
+    #playback{max-width:620px}#playback input[type="range"]{accent-color:var(--accent);min-height:30px;flex:1;min-width:150px}#pb-progress{display:block;width:100%;margin:14px 0 0;cursor:pointer}.playback-row button{min-height:40px}.playback-row.meta{justify-content:space-between;margin:5px 0 10px}@media(max-width:480px){.playback-row button{flex:1}.playback-row select{min-width:100%}}
+    .icon{width:1.15em;height:1.15em;vertical-align:-.2em;margin-right:.35em;filter:invert(82%) sepia(28%) saturate(571%) hue-rotate(174deg)}.tab .icon{margin-right:.25em}.card>nav strong .icon{width:1.3em;height:1.3em}
   </style>
 </head>
 <body>
   <main>
-    <header><h1>Smart Room Control</h1><span id="availability">Checking SD...</span></header>
+    <header><h1><img class="icon" src="/api/assets/icon?name=storage" alt="">Smart Room Control</h1><span id="availability">Checking SD...</span></header>
     <nav class="tab-list" role="tablist" aria-label="Local Web controls">
-      <button class="tab" id="tab-storage" type="button" role="tab" aria-selected="true" aria-controls="panel-storage" data-tab="storage">Storage</button>
-      <button class="tab" id="tab-playback" type="button" role="tab" aria-selected="false" aria-controls="panel-playback" data-tab="playback" tabindex="-1">Playback</button>
+      <button class="tab" id="tab-storage" type="button" role="tab" aria-selected="true" aria-controls="panel-storage" data-tab="storage"><img class="icon" src="/api/assets/icon?name=folder" alt="">Storage</button>
+      <button class="tab" id="tab-playback" type="button" role="tab" aria-selected="false" aria-controls="panel-playback" data-tab="playback" tabindex="-1"><img class="icon" src="/api/assets/icon?name=playback" alt="">Playback</button>
     </nav>
     <section class="tab-panel" id="panel-storage" role="tabpanel" aria-labelledby="tab-storage">
       <section class="card" id="capacity"><div class="metric">Total<b id="total">-</b></div><div class="metric">Used<b id="used">-</b></div><div class="metric">Free<b id="free">-</b></div></section>
       <section class="card">
         <nav><button id="up" type="button">Up</button><strong id="path">/</strong><button id="mkdir" type="button">New folder</button></nav>
-        <div id="drop">Drop one file here, or <input id="file" type="file"><button id="upload" type="button">Upload</button><progress id="progress" max="100" value="0" hidden></progress></div>
+        <div id="drop">Drop one file here, or <input id="file" type="file"><button id="upload" type="button"><img class="icon" src="/api/assets/icon?name=upload" alt="">Upload</button><progress id="progress" max="100" value="0" hidden></progress></div>
         <p class="state" id="state" role="status">Loading...</p><ul id="entries"></ul>
       </section>
     </section>
     <section class="tab-panel" id="panel-playback" role="tabpanel" aria-labelledby="tab-playback" hidden>
       <section class="card" id="playback">
-        <nav><strong>Playback</strong><span id="pb-state">Loading...</span></nav>
+        <nav><strong><img class="icon" src="/api/assets/icon?name=playback" alt="">Playback</strong><span id="pb-state" class="meta" role="status">Loading...</span></nav>
         <p class="playback-row"><select id="pb-track"><option>Loading tracks...</option></select><button id="pb-play" type="button" disabled>Play</button></p>
         <p class="playback-row"><button id="pb-pause" type="button">Pause</button><button id="pb-resume" type="button">Resume</button><button id="pb-restart" type="button">Restart</button><button id="pb-stop" type="button">Stop</button></p>
-        <progress id="pb-progress" max="1" value="0"></progress><p id="pb-position" class="state">-</p>
-        <label>Volume <input id="pb-volume" type="range" min="0" max="100" value="100"> <span id="pb-volume-value">100%</span></label>
+        <input id="pb-progress" type="range" min="0" max="1" value="0" step="1" aria-label="Playback position" disabled>
+        <p class="playback-row meta"><span id="pb-position">--:--</span><span aria-hidden="true">/</span><span id="pb-duration">--:--</span></p>
+        <label class="playback-row"><img class="icon" src="/api/assets/icon?name=volume" alt="">Volume <input id="pb-volume" type="range" min="0" max="100" value="100" aria-label="Playback volume"> <span id="pb-volume-value">100%</span></label>
       </section>
     </section>
   </main>
@@ -41,10 +44,11 @@
       const bytes = value => { const units = ['B','KB','MB','GB']; let unit = 0; while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++; } return `${value.toFixed(unit ? 1 : 0)} ${units[unit]}`; };
       const join = (parent, name) => `${parent === '/' ? '' : parent}/${name}`;
       const parent = value => value === '/' ? '/' : (value.slice(0, value.lastIndexOf('/')) || '/');
-      let path = '/', busy = false, catalogIds = new Map(), polling = false, pollTimer = 0, catalogRetryTimer = 0, catalogLoadGeneration = 0, activeTab = 'storage';
+      let path = '/', busy = false, catalogIds = new Map(), polling = false, pollTimer = 0, catalogRetryTimer = 0, catalogLoadGeneration = 0, activeTab = 'storage', scrubbing = false, playbackGeneration = 0, playbackRate = 0;
       const setState = (text, error = false) => { state.textContent = text; state.className = `state${error ? ' error' : ''}`; };
       const setBusy = value => { busy = value; q('#upload').disabled = value; q('#mkdir').disabled = value; };
       const post = async url => { const response = await fetch(url, {method:'POST',cache:'no-store'}); const body = await response.json(); if (!response.ok) throw Error(body.error); return body; };
+      const time = ms => { const seconds = Math.max(0, Math.floor(Number(ms) / 1000)); if (!Number.isFinite(seconds)) return '--:--'; const h = Math.floor(seconds / 3600), m = Math.floor((seconds % 3600) / 60), s = seconds % 60; return h ? `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}` : `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`; };
 
       function selectTab(nextTab) {
         activeTab = nextTab;
@@ -114,11 +118,12 @@
         polling = true;
         try {
           const response = await fetch('/api/audio/status',{cache:'no-store'}), data = await response.json(); if (!response.ok) throw Error(data.error);
-          q('#pb-state').textContent = `${data.state} (${data.source})`; q('#pb-volume').value = data.volume_percent; q('#pb-volume-value').textContent = `${data.volume_percent}%`;
+          q('#pb-state').textContent = `${data.state} (${data.source})`; q('#pb-volume').value = data.volume_percent; q('#pb-volume-value').textContent = `${data.volume_percent}%`; playbackGeneration = data.generation; playbackRate = data.sample_rate_hz || 0;
           const active = activeTab === 'playback' &&
               ['playing','starting','pausing','resuming'].includes(data.state);
           q('#pb-pause').disabled = data.state !== 'playing'; q('#pb-resume').disabled = data.state !== 'paused'; q('#pb-stop').disabled = !active && data.state !== 'paused'; q('#pb-restart').disabled = !data.resumable;
-          if (data.total_frames) { q('#pb-progress').max = data.total_frames; q('#pb-progress').value = Math.min(data.position_frames, data.total_frames); q('#pb-position').textContent = `${data.position_frames} / ${data.total_frames} frames`; } else q('#pb-position').textContent = 'Progress unavailable';
+          const seekable = data.resumable && data.total_frames && playbackRate && ['playing','paused'].includes(data.state); q('#pb-progress').disabled = !seekable;
+          if (data.total_frames && playbackRate) { const step = Math.max(1, data.position_granularity_frames || 1), lastFrame = Math.floor((data.total_frames - 1) / step) * step; q('#pb-progress').step = step; q('#pb-progress').max = lastFrame; if (!scrubbing) q('#pb-progress').value = Math.floor(Math.min(data.position_frames, lastFrame) / step) * step; q('#pb-position').textContent = time(1000 * q('#pb-progress').value / playbackRate); q('#pb-duration').textContent = time(1000 * data.total_frames / playbackRate); } else { q('#pb-position').textContent = '--:--'; q('#pb-duration').textContent = '--:--'; }
           clearTimeout(pollTimer); pollTimer = setTimeout(tickPlayback, active ? 750 : 2500);
         } catch (error) { q('#pb-state').textContent = `Playback unavailable (${error.message})`; clearTimeout(pollTimer); pollTimer = setTimeout(tickPlayback, 2500); }
         finally { polling = false; }
@@ -140,6 +145,8 @@
       q('#pb-play').onclick = async () => { try { await playTrack(q('#pb-track').value); } catch (error) { q('#pb-state').textContent = `Play rejected (${error.message})`; } };
       for (const action of ['pause','resume','restart','stop']) q(`#pb-${action}`).onclick = async () => { try { await post(`/api/audio/control?action=${action}`); tickPlayback(); } catch (error) { q('#pb-state').textContent = `Control rejected (${error.message})`; } };
       q('#pb-volume').onchange = async event => { try { const data = await post(`/api/audio/volume?percent=${event.target.value}`); q('#pb-volume-value').textContent = `${data.volume_percent}%`; } catch (error) { q('#pb-state').textContent = `Volume rejected (${error.message})`; } };
+      q('#pb-progress').oninput = event => { scrubbing = true; if (playbackRate) q('#pb-position').textContent = time(1000 * event.target.value / playbackRate); };
+      q('#pb-progress').onchange = async event => { try { await post(`/api/audio/seek?frames=${encodeURIComponent(event.target.value)}&generation=${encodeURIComponent(playbackGeneration)}`); } catch (error) { q('#pb-state').textContent = `Seek rejected (${error.message})`; } finally { scrubbing = false; tickPlayback(); } };
       document.addEventListener('visibilitychange', () => { if (!document.hidden) tickPlayback(); });
       storageStatus(); browse(); loadTracks(); tickPlayback();
     })();

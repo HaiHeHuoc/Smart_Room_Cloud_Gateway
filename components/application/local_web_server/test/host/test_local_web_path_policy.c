@@ -4,6 +4,7 @@
 #include "local_web_path_policy.h"
 #include "local_web_audio_policy.h"
 #include "local_web_download.h"
+#include "local_web_icon_policy.h"
 
 static int expect_content_disposition(const char *path, const char *expected)
 {
@@ -45,6 +46,7 @@ static int expect_audio_policy(void)
     int failures = 0;
     local_web_audio_action_t action = LOCAL_WEB_AUDIO_ACTION_PAUSE;
     uint32_t volume = 0U;
+    uint64_t frame = 0U;
     failures += !local_web_audio_action_parse("pause", &action) ||
                 (action != LOCAL_WEB_AUDIO_ACTION_PAUSE);
     failures += !local_web_audio_action_parse("resume", &action) ||
@@ -55,7 +57,23 @@ static int expect_audio_policy(void)
     failures += local_web_audio_volume_percent_parse("101", &volume);
     failures += local_web_audio_volume_percent_parse("50x", &volume);
     failures += local_web_audio_volume_percent_parse("", &volume);
+    failures += !local_web_audio_uint64_parse("4294967296", &frame) ||
+                (frame != UINT64_C(4294967296));
+    failures += local_web_audio_uint64_parse("12x", &frame);
+    failures += local_web_audio_uint64_parse("-1", &frame);
+    failures += local_web_audio_uint64_parse("", &frame);
+    failures += local_web_audio_uint64_parse("18446744073709551616", &frame);
     return failures;
+}
+
+static int expect_icon_policy(void)
+{
+    return (strcmp(local_web_icon_logical_path("storage"),
+                   "/web-icons/hard-drive.svg") != 0) ||
+           (strcmp(local_web_icon_logical_path("playback"),
+                   "/web-icons/music-2.svg") != 0) ||
+           (local_web_icon_logical_path("../audio/Input_1.wav") != NULL) ||
+           (local_web_icon_logical_path("") != NULL);
 }
 
 int main(void)
@@ -100,5 +118,6 @@ int main(void)
     failures += local_web_download_content_disposition(
         "/", long_path, sizeof(long_path));
     failures += expect_audio_policy();
+    failures += expect_icon_policy();
     return failures == 0 ? 0 : 1;
 }

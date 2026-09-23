@@ -12,6 +12,7 @@
 #include "audio_manager.h"
 #include "local_web_download.h"
 #include "local_web_audio_policy.h"
+#include "local_web_icon_policy.h"
 #include "local_web_path_policy.h"
 #include "sd_card_manager.h"
 #include "smart_room_mcp_adapter.h"
@@ -19,6 +20,7 @@
 
 #define LOCAL_WEB_HTTP_STACK_SIZE_BYTES 6144U
 #define LOCAL_WEB_HTTP_MAX_OPEN_SOCKETS 2U
+#define LOCAL_WEB_HTTP_ROUTE_COUNT 16U
 #define LOCAL_WEB_HTTP_MAX_URI_LEN 1280U
 #define LOCAL_WEB_RESPONSE_CHUNK_SIZE 512U
 #define LOCAL_WEB_TRANSFER_CHUNK_SIZE SD_CARD_MANAGER_TRANSFER_CHUNK_SIZE
@@ -51,6 +53,7 @@ static esp_err_t local_web_root_get(httpd_req_t *request);
 static esp_err_t local_web_storage_status_get(httpd_req_t *request);
 static esp_err_t local_web_storage_list_get(httpd_req_t *request);
 static esp_err_t local_web_storage_download_get(httpd_req_t *request);
+static esp_err_t local_web_icon_get(httpd_req_t *request);
 static esp_err_t local_web_storage_upload_post(httpd_req_t *request);
 static esp_err_t local_web_storage_delete_post(httpd_req_t *request);
 static esp_err_t local_web_storage_mkdir_post(httpd_req_t *request);
@@ -61,6 +64,7 @@ static esp_err_t local_web_audio_tracks_get(httpd_req_t *request);
 static esp_err_t local_web_audio_play_post(httpd_req_t *request);
 static esp_err_t local_web_audio_control_post(httpd_req_t *request);
 static esp_err_t local_web_audio_volume_post(httpd_req_t *request);
+static esp_err_t local_web_audio_seek_post(httpd_req_t *request);
 static esp_err_t local_web_send_error(
     httpd_req_t *request,
     const char *http_status,
@@ -136,7 +140,9 @@ esp_err_t local_web_server_start(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = LOCAL_WEB_HTTP_STACK_SIZE_BYTES;
     config.max_open_sockets = LOCAL_WEB_HTTP_MAX_OPEN_SOCKETS;
-    config.max_uri_handlers = 14U;
+    /* Keep this in sync with local_web_register_routes(): HTTPD rejects the
+     * whole startup when a new route has no registration slot. */
+    config.max_uri_handlers = LOCAL_WEB_HTTP_ROUTE_COUNT;
     config.max_uri_len = LOCAL_WEB_HTTP_MAX_URI_LEN;
     config.recv_wait_timeout = 5U;
     config.send_wait_timeout = 5U;
@@ -232,12 +238,12 @@ static esp_err_t local_web_audio_status_get(httpd_req_t *request)
         "{\"ok\":true,\"state\":\"%s\",\"source\":\"%s\","
         "\"resumable\":%s,\"generation\":%" PRIu32 ","
         "\"position_frames\":%" PRIu64 ",\"total_frames\":%" PRIu64 ","
-        "\"position_granularity_frames\":%" PRIu32 ",\"volume_percent\":%" PRIu32 "}",
+        "\"sample_rate_hz\":%" PRIu32 ",\"position_granularity_frames\":%" PRIu32 ",\"volume_percent\":%" PRIu32 "}",
         local_web_audio_state_name(playback.state),
         local_web_audio_source_name(playback.source),
         playback.resumable ? "true" : "false", playback.generation,
         playback.position_frames, playback.total_frames,
-        playback.position_granularity_frames, volume);
+        playback.sample_rate_hz, playback.position_granularity_frames, volume);
     if ((written < 0) || (written >= (int)sizeof(s_response_chunk))) {
         return local_web_send_error(request, "500 Internal Server Error", "response_too_large");
     }
@@ -374,6 +380,44 @@ static esp_err_t local_web_audio_volume_post(httpd_req_t *request)
                : httpd_resp_send(request, s_response_chunk, written);
 }
 
+static esp_err_t local_web_audio_seek_post(httpd_req_t *request)
+{
+    if (!local_web_get_query_value(request, "frames")) {
+        return local_web_send_error(request, "400 Bad Request", "invalid_target");
+    }
+    uint64_t target_frames = 0U;
+    if (!local_web_audio_uint64_parse(s_query_value, &target_frames)) {
+        return local_web_send_error(request, "400 Bad Request", "invalid_target");
+    }
+    uint64_t generation = 0U;
+    if (!local_web_get_query_value(request, "generation") ||
+        !local_web_audio_uint64_parse(s_query_value, &generation)) {
+        return local_web_send_error(request, "400 Bad Request", "invalid_generation");
+    }
+    if ((generation == 0U) || (generation > UINT32_MAX)) {
+        return local_web_send_error(request, "400 Bad Request", "invalid_generation");
+    }
+    voice_assistant_playback_control_result_t result = {0};
+    if (voice_assistant_playback_seek((uint32_t)generation,
+                                      target_frames, &result) != ESP_OK) {
+        return local_web_send_error(request, "500 Internal Server Error", "internal_error");
+    }
+    if (!result.accepted) {
+        const char *error =
+            (result.playback.generation != (uint32_t)generation) ? "invalid_state" :
+            ((result.playback.total_frames > 0U) &&
+             (target_frames >= result.playback.total_frames)) ? "invalid_target" :
+            ((result.playback.position_granularity_frames > 0U) &&
+             ((target_frames % result.playback.position_granularity_frames) != 0U))
+                ? "invalid_target" :
+            ((result.outcome == VOICE_ASSISTANT_PLAYBACK_OUTCOME_NON_RESUMABLE_SOURCE) ||
+             (result.outcome == VOICE_ASSISTANT_PLAYBACK_OUTCOME_NO_CURRENT_SOURCE))
+                ? "playback_not_seekable" : "invalid_state";
+        return local_web_send_error(request, "409 Conflict", error);
+    }
+    return httpd_resp_sendstr(request, "{\"ok\":true,\"accepted\":true}");
+}
+
 static esp_err_t local_web_storage_list_get(httpd_req_t *request)
 {
     char logical_path[LOCAL_WEB_LOGICAL_PATH_MAX_LEN + 1U] = {0};
@@ -449,6 +493,58 @@ static esp_err_t local_web_storage_download_get(httpd_req_t *request)
             break;
         }
         if (read_size == 0U)
+        {
+            break;
+        }
+        if (httpd_resp_send_chunk(
+                request, (const char *)s_transfer_chunk, read_size) != ESP_OK)
+        {
+            result = ESP_FAIL;
+            break;
+        }
+    }
+
+    const esp_err_t end_result = sd_card_manager_download_end(transfer.transfer_id);
+    if ((result != ESP_OK) || (end_result != ESP_OK))
+    {
+        return ESP_FAIL;
+    }
+    return httpd_resp_send_chunk(request, NULL, 0U);
+}
+
+static esp_err_t local_web_icon_get(httpd_req_t *request)
+{
+    if (!local_web_get_query_value(request, "name"))
+    {
+        return local_web_send_error(request, "400 Bad Request", "invalid_icon");
+    }
+
+    const char *const logical_path =
+        local_web_icon_logical_path(s_query_value);
+    if (logical_path == NULL)
+    {
+        return local_web_send_error(request, "404 Not Found", "icon_not_found");
+    }
+
+    sd_card_manager_transfer_info_t transfer = {0};
+    const esp_err_t begin_result =
+        sd_card_manager_download_begin(logical_path, &transfer);
+    if (begin_result != ESP_OK)
+    {
+        return local_web_send_storage_result(
+            request, begin_result, "icon_not_found", false);
+    }
+
+    httpd_resp_set_type(request, "image/svg+xml");
+    httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+    esp_err_t result = ESP_OK;
+    for (;;)
+    {
+        size_t read_size = 0U;
+        result = sd_card_manager_download_read(
+            transfer.transfer_id, s_transfer_chunk, sizeof(s_transfer_chunk),
+            &read_size);
+        if ((result != ESP_OK) || (read_size == 0U))
         {
             break;
         }
@@ -850,6 +946,10 @@ static esp_err_t local_web_register_routes(httpd_handle_t server)
         .uri = "/api/storage/download", .method = HTTP_GET,
         .handler = local_web_storage_download_get,
     };
+    static const httpd_uri_t icon = {
+        .uri = "/api/assets/icon", .method = HTTP_GET,
+        .handler = local_web_icon_get,
+    };
     static const httpd_uri_t storage_upload = {
         .uri = "/api/storage/upload", .method = HTTP_POST,
         .handler = local_web_storage_upload_post,
@@ -890,11 +990,16 @@ static esp_err_t local_web_register_routes(httpd_handle_t server)
         .uri = "/api/audio/volume", .method = HTTP_POST,
         .handler = local_web_audio_volume_post,
     };
+    static const httpd_uri_t audio_seek = {
+        .uri = "/api/audio/seek", .method = HTTP_POST,
+        .handler = local_web_audio_seek_post,
+    };
 
     esp_err_t result = httpd_register_uri_handler(server, &root);
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &storage_status);
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &storage_list);
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &storage_download);
+    if (result == ESP_OK) result = httpd_register_uri_handler(server, &icon);
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &storage_upload);
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &storage_delete);
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &storage_mkdir);
@@ -905,5 +1010,6 @@ static esp_err_t local_web_register_routes(httpd_handle_t server)
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &audio_play);
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &audio_control);
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &audio_volume);
+    if (result == ESP_OK) result = httpd_register_uri_handler(server, &audio_seek);
     return result;
 }

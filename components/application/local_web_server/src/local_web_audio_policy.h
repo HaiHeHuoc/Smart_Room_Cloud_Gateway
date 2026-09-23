@@ -15,3 +15,6 @@ bool local_web_audio_action_parse(const char *value, local_web_audio_action_t *a
 
 /** Parse an unsigned decimal playback volume in the inclusive range 0..100. */
 bool local_web_audio_volume_percent_parse(const char *value, uint32_t *percent);
+
+/** Parse one bounded unsigned decimal frame position or generation. */
+bool local_web_audio_uint64_parse(const char *value, uint64_t *parsed);

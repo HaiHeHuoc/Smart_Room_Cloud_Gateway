@@ -3,6 +3,7 @@ idf_component_register(
         "src/local_web_server.c"
         "src/local_web_audio_policy.c"
         "src/local_web_download.c"
+        "src/local_web_icon_policy.c"
         "src/local_web_path_policy.c"
     INCLUDE_DIRS
         "include"

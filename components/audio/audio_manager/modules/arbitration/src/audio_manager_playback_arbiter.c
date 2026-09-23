@@ -365,6 +365,23 @@ static bool pcm_manager_cleanup_complete(
            (playback->source != AUDIO_MANAGER_PLAYBACK_SOURCE_PCM16_STREAM);
 }
 
+/**
+ * A WAV can fail while its manager command is still logically STARTING, before
+ * I2S ever enters PLAYBACK. The manager then resets the copied source to NONE.
+ * That terminal snapshot distinguishes this case from an unconsumed command,
+ * which still reports source=WAV and STARTING while it waits in the queue.
+ */
+static bool wav_manager_cleanup_complete(
+    const audio_manager_status_t *manager,
+    const audio_manager_playback_status_t *playback)
+{
+    return (manager != NULL) &&
+           (playback != NULL) &&
+           (manager->state == AUDIO_MANAGER_STATE_IDLE) &&
+           (playback->state == AUDIO_MANAGER_PLAYBACK_CONTROL_IDLE) &&
+           (playback->source == AUDIO_MANAGER_PLAYBACK_SOURCE_NONE);
+}
+
 static void playback_arbiter_task(void *arg)
 {
     (void)arg;
@@ -498,9 +515,11 @@ static void playback_arbiter_task(void *arg)
                             pcm_manager_cleanup_complete(&playback)) {
                             finish_current_locked(manager.last_error);
                         }
-                    } else if ((manager.state == AUDIO_MANAGER_STATE_IDLE) &&
-                               (s_current.stream.state !=
-                                AUDIO_MANAGER_PLAYBACK_REQUEST_STARTING)) {
+                    } else if (wav_manager_cleanup_complete(
+                                   &manager, &playback) ||
+                               ((manager.state == AUDIO_MANAGER_STATE_IDLE) &&
+                                (s_current.stream.state !=
+                                 AUDIO_MANAGER_PLAYBACK_REQUEST_STARTING))) {
                         finish_current_locked(manager.last_error);
                     }
                 }

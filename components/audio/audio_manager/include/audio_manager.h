@@ -94,6 +94,7 @@ typedef enum
     AUDIO_MANAGER_PLAYBACK_ACTION_RESUME,
     AUDIO_MANAGER_PLAYBACK_ACTION_STOP,
     AUDIO_MANAGER_PLAYBACK_ACTION_RESTART,
+    AUDIO_MANAGER_PLAYBACK_ACTION_SEEK,
 } audio_manager_playback_action_t;
 
 /**
@@ -114,6 +115,8 @@ typedef struct
     uint32_t generation;
     uint64_t position_frames;
     uint64_t total_frames;
+    /** Authoritative source rate for time conversion; zero when unavailable. */
+    uint32_t sample_rate_hz;
     uint32_t position_granularity_frames;
     esp_err_t last_control_result;
 } audio_manager_playback_status_t;
@@ -446,6 +449,19 @@ esp_err_t audio_manager_restart_playback(void);
  */
 esp_err_t audio_manager_restart_playback_at_generation(
     uint32_t expected_generation);
+
+/**
+ * Seek a local WAV or retained recording to a generation-guarded mono-frame
+ * position. The manager task stops/joins its current WAV prefetch reader
+ * before reopening at the new frame. A USER-paused source retains PAUSED;
+ * playing playback continues. PCM streams, PTT-suspended sources, stale
+ * generations, positions not aligned to
+ * AUDIO_MANAGER_PLAYBACK_POSITION_GRANULARITY_FRAMES, and positions at/beyond
+ * the final frame reject.
+ */
+esp_err_t audio_manager_seek_playback_at_generation(
+    uint32_t expected_generation,
+    uint64_t target_frames);
 
 /**
  * @brief Copy the current playback-control snapshot without exposing handles.

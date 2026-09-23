@@ -44,9 +44,19 @@ if (($arbiterSource -notmatch 'audio_manager_get_playback_status\(&playback\)') 
 if ($arbiterSource -notmatch 'cancel_unstarted_wav_for_client') {
     throw 'PTT cannot atomically cancel an unstarted local WAV request'
 }
+if (($arbiterSource -notmatch 'wav_manager_cleanup_complete') -or
+    ($arbiterSource -notmatch 'AUDIO_MANAGER_PLAYBACK_SOURCE_NONE')) {
+    throw 'WAV open failure cannot release a STARTING arbiter slot'
+}
 $managerSource = Get-Content (Join-Path $componentRoot 'audio_manager.c') -Raw
 if (($managerSource -notmatch 'audio_manager_consume_resume_requested') -or
     ($managerSource -notmatch 'handoff_pending')) {
     throw 'Rapid pause-resume intent is not consumed after retained playback suspension'
+}
+if (($managerSource -notmatch 'audio_manager_seek_playback_at_generation') -or
+    ($managerSource -notmatch 'AUDIO_PLAYBACK_FLOW_SEEK') -or
+    ($managerSource -notmatch 'audio_manager_consume_seek_target') -or
+    ($managerSource -notmatch 'target_frames %\s*\r?\n?\s*AUDIO_MANAGER_PLAYBACK_POSITION_GRANULARITY_FRAMES')) {
+    throw 'Seek lacks the generation-guarded manager-owned cleanup path'
 }
 Write-Output 'audio arbiter lifecycle ownership boundary: PASS'
