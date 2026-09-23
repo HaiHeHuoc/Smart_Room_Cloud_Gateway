@@ -259,6 +259,20 @@ deterministic unsupported-format error. There is no resampling or channel
 mixing beyond duplicating the accepted mono sample into left and right TX
 slots.
 
+### WAV file-size limit
+
+The current target playback path accepts WAV files **smaller than 2 GiB**
+(at most `2,147,483,647` bytes). This is an implementation limit of the
+ESP-IDF 6.0.1 FAT VFS/C stdio path: `audio_wav` uses `FILE *`, `fseek()`, and
+`ftell()` with a signed 32-bit file position. It is independent of the 4 KiB
+raw reader and two-slot PSRAM prefetch cache; increasing those buffers does
+not permit a larger file.
+
+FAT32 may list a 2--4 GiB file correctly, but that does not make it playable
+through this API. Split or re-encode larger audio before playback. Supporting
+larger files requires a deliberate migration of the WAV reader and recovery
+path to a 64-bit-safe/native FatFS seek contract; it is not enabled today.
+
 ### Parser, memory, and error contract
 
 The parser reads the RIFF header then iterates every chunk. It locates `fmt `
@@ -310,7 +324,8 @@ lengths without requiring a mounted SD card.
 | --- | --- |
 | PCM16 mono 16-kHz, including `JUNK`/`LIST` chunks | Accepted; data offset and payload length reported |
 | Odd-sized unknown metadata chunk | Accepted after one-byte RIFF padding skip |
-| Large canonical WAV | Accepted with the same 4 KiB raw reader and bounded two-slot PSRAM cache |
+| Canonical WAV smaller than 2 GiB | Accepted with the same 4 KiB raw reader and bounded two-slot PSRAM cache |
+| WAV at or above 2 GiB | Not supported by the current FAT VFS/C stdio playback path |
 | Random file, truncated RIFF, missing `fmt ` or `data` | Deterministic malformed/missing error |
 | Stereo, 44.1-kHz, 8/24/32-bit, float, ADPCM | Deterministic unsupported-format error |
 | Declared data/chunk length beyond file bounds | Deterministic invalid-size error |

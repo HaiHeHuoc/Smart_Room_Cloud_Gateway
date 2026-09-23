@@ -59,6 +59,19 @@ WAV reaches its final partial block. There is no pre-playback scan or rewind:
 once the first slot is READY, `audio_manager` maps each PCM16 sample with
 `round(sample * 9000 / 32768)`, then applies user volume and writes I2S.
 
+## File-Size Limit
+
+The current WAV playback reader supports files smaller than 2 GiB (maximum
+`2,147,483,647` bytes). Although the PSRAM cache is bounded and does not load
+the complete file, the reader uses the ESP-IDF FAT VFS/C stdio `FILE *` path
+and its signed 32-bit seek/tell position. A 2 GiB-or-larger WAV can therefore
+fail while parsing or seeking, before audio data is streamed.
+
+This is not an SD capacity or PSRAM limit. Split or re-encode files at or
+above 2 GiB. Playback of larger files needs a separately validated migration
+to a 64-bit-safe/native FatFS reader while preserving the current lease and
+fresh-file recovery ownership.
+
 ## Ownership Invariants
 
 - `sd_card_manager` owns mount/unmount/recovery and rejects new VFS leases while

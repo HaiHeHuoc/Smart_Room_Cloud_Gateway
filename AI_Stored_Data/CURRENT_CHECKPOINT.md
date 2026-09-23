@@ -36,7 +36,7 @@ Checkpoint: Prompt 20.1 implemented; target HIL pending.
 ## HIL required
 
 - Browser control during PTT/Xiaozhi, pause/resume/restart/stop, live 0/100
-  volume, progress behavior, PC/mobile layout, large WAV, and SD-SPI CRC
+  volume, progress behavior, PC/mobile layout, WAV files below 2 GiB, and SD-SPI CRC
   recovery during storage and playback contention.
 
 ## Scope boundary
