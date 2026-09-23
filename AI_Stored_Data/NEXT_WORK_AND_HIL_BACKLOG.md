@@ -1,9 +1,9 @@
 # Next Work + Deferred HIL Backlog
 
-Updated: 2026-09-16
+Updated: 2026-09-23
 Active branch: `main_including_Firebase_security`
 Sprint-18 closure authority: explicit user acceptance by Hải on 2026-09-16
-Sprint-19 Local Web Storage V1 source is integrated; target HIL remains pending.
+Sprint-19 Local Web Storage V1 source is integrated with partial target HIL; Sprint-20 Prompt 20.1 is integrated and target HIL remains pending.
 
 Purpose: route future sessions to the highest-value next work without reopening
 accepted phases or inventing validation evidence.
@@ -26,8 +26,9 @@ Phase 18.2   COMPLETE / USER ACCEPTED
 Phase 18.3   COMPLETE / superseded + absorbed into 18.2.2 / no duplicate code
 Phase 18.4   COMPLETE / cloud.push_latest / USER ACCEPTED
 Sprint 19    Local Web Control V1: SD Card File Manager / SOURCE INTEGRATED /
-             BUILD VERIFIED / TARGET REDEPLOY AND HIL PENDING
-Sprint 20    Local Web Control V2: Playback + Volume / PLANNED / NOT STARTED
+             BUILD VERIFIED / TARGET HIL PARTIAL
+Sprint 20    Local Web Control V2: Playback + Volume / IN PROGRESS /
+             PROMPT 20.1 INTEGRATED / RECORDED HOST+BUILD PASS / TARGET HIL PENDING
 Sprint 21    Local Web Control V3: Lights / PLANNED / NOT STARTED
 Sprint 22    Local Web Control V4: Dashboard + System Status / PLANNED / NOT STARTED
 Sprint 23    Local Web Control V5: Scenes + Logs + Diagnostics / PLANNED / NOT STARTED
@@ -58,27 +59,39 @@ not as evidence that Sprint 18 is still open.
 
 ## Immediate next work
 
-Sprint 19 Local Web Storage V1 is integrated. It provides browse, streamed
-transfer, file/folder mutations, path hardening, LCD status routing, correct
-FAT32 capacity/large-file metadata, download filenames, and a 20 MiB upload
-limit. It does not alter Sprint-18 acceptance.
+The main integration branch already contains Sprint-20 Prompt 20.1. Do not
+describe Sprint 20 as not started.
+
+### A. Finish remaining Sprint-19 storage HIL
+
+Capacity/status and browser download were accepted on target on 2026-09-22.
+Still verify:
 
 ```text
-Sprint 19 — Local Web Control V1: SD Card File Manager
+1. Upload a non-empty file through the approved 20 MiB limit.
+2. Interrupt upload/download and verify no published partial file remains.
+3. Exercise delete, rename, mkdir, and empty/non-empty rmdir behavior.
+4. Remove/reinsert the SD card during normal use and transfer; verify lease
+   drain, remount/recovery, bounded HTTP errors, and normal Gateway recovery.
 ```
 
-Run the pending browser/board/SD HIL against the merged revision:
+### B. Run Sprint-20 Prompt-20.1 target HIL
+
+Verify the integrated Local Web playback/volume implementation:
 
 ```text
-1. Flash the merged firmware and verify `/api/storage/status` reports coherent
-   non-zero capacity values.
-2. Verify a 2-4 GiB FAT32 file reports a plausible size and downloads with the
-   requested filename.
-3. Verify upload of a non-empty file up to 20 MiB, transfer interruption, and
-   SD remount/recovery behavior.
-4. Record target results against the exact merged revision before starting
-   Sprint 20.
+1. GET status/tracks and play exact catalog-approved IDs.
+2. Pause/resume/restart/stop during normal playback.
+3. Verify control/arbitration during GPIO38 PTT and Xiaozhi response activity.
+4. Verify runtime volume at 0, representative middle values, and 100.
+5. Verify bounded progress/status facts and PC/mobile Storage + Playback tabs.
+6. Exercise storage mutation under /audio and confirm catalog refresh.
+7. Exercise simultaneous storage/playback pressure and SD-SPI CRC recovery.
+8. Use supported WAV files below 2 GiB. Treat WAV >= 2 GiB as unsupported by
+   the current playback reader even though FAT32 storage may list/download it.
 ```
+
+Do not start Prompt 20.2 or Sprint 21 automatically.
 
 ## Deferred regression backlog — non-blocking
 
