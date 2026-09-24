@@ -42,6 +42,7 @@ assistant, microphone, speaker, or independent GUI task.
 | `APP_GUI_SCREEN_SENSOR_DASHBOARD` | Sensor dashboard with synchronized local time/date in its left header, temperature/humidity below, and Wi-Fi, cloud, sensor, and audio summaries in the right status column. |
 | `APP_GUI_SCREEN_XIAOZHI` | Project-owned Xiaozhi voice presentation: connection state, actual-microphone recording duration, and bounded USER/ASSISTANT transcript. It is entered through the existing explicit screen-request API. |
 | `APP_GUI_SCREEN_RESET_RESULT` | Factory-reset success or failure result; entered only through `app_gui_show_reset_result()`. |
+| `APP_GUI_SCREEN_WEB_LIGHT` | Read-only Local Web light state: power, logical RGB, brightness, and effect. |
 
 The old `APP_GUI_SCREEN_WIFI` and `APP_GUI_SCREEN_SENSOR` identifiers were
 renamed directly. No compatibility aliases are retained.
@@ -60,6 +61,8 @@ renamed directly. No compatibility aliases are retained.
 - Sensor status queue: length 1, newest snapshot overwrites the pending value.
 - Audio status queue: length 1, newest state snapshot overwrites the pending value.
 - Cloud status queue: length 1, newest snapshot overwrites the pending value.
+- Local Web Storage and Light status queues: each length 1; copied HTTP-facing
+  snapshots overwrite the pending value and are rendered only by the GUI task.
 - Xiaozhi status queue: length 1, newest copied temporary-validation snapshot
   overwrites the pending value.
 
@@ -95,6 +98,8 @@ the manager is otherwise `IDLE` is rendered as `Audio: ERR`.
 | `app_gui_post_sensor_status()` | Replace the pending sensor model without calling LVGL. |
 | `app_gui_post_audio_status()` | Replace the pending non-sensitive audio state without calling LVGL. |
 | `app_gui_post_cloud_status()` | Replace the pending cloud model without calling LVGL. |
+| `app_gui_post_web_storage_status()` | Replace copied Local Web Storage status without calling LVGL. |
+| `app_gui_post_web_light_status()` | Replace copied Local Web Light status without calling LVGL. |
 | `app_gui_post_xiaozhi_status()` | Replace the pending bounded Xiaozhi validation model without calling LVGL or routing a screen. |
 | `app_gui_show_reset_result()` | Validate, copy, and enqueue one reset result without calling LVGL. |
 | `app_gui_is_reset_result_presented()` | Non-blockingly inspect whether the exact transaction completed a GUI presentation cycle. |

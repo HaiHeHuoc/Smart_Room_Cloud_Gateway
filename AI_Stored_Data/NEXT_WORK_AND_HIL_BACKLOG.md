@@ -1,9 +1,9 @@
 # Next Work + Deferred HIL Backlog
 
-Updated: 2026-09-16
+Updated: 2026-09-24
 Active branch: `main_including_Firebase_security`
 Sprint-18 closure authority: explicit user acceptance by Hải on 2026-09-16
-Sprint-19 Local Web Storage V1 source is integrated; target HIL remains pending.
+Sprint 19-21 Local Web source is integrated and build verified; target HIL remains pending.
 
 Purpose: route future sessions to the highest-value next work without reopening
 accepted phases or inventing validation evidence.
@@ -27,8 +27,10 @@ Phase 18.3   COMPLETE / superseded + absorbed into 18.2.2 / no duplicate code
 Phase 18.4   COMPLETE / cloud.push_latest / USER ACCEPTED
 Sprint 19    Local Web Control V1: SD Card File Manager / SOURCE INTEGRATED /
              BUILD VERIFIED / TARGET REDEPLOY AND HIL PENDING
-Sprint 20    Local Web Control V2: Playback + Volume / PLANNED / NOT STARTED
-Sprint 21    Local Web Control V3: Lights / PLANNED / NOT STARTED
+Sprint 20    Local Web Control V2: Playback + Volume / IMPLEMENTED /
+             BUILD VERIFIED / TARGET HIL PENDING
+Sprint 21    Local Web Control V3: Lights / IMPLEMENTED / BUILD VERIFIED /
+             TARGET HIL PENDING
 Sprint 22    Local Web Control V4: Dashboard + System Status / PLANNED / NOT STARTED
 Sprint 23    Local Web Control V5: Scenes + Logs + Diagnostics / PLANNED / NOT STARTED
 Sprint 24    Wake Word + Advanced Voice UX / PLANNED / NOT STARTED
@@ -56,7 +58,7 @@ Do not rewrite missing historical evidence:
 Future sessions must treat a regression checklist as optional/deferred work,
 not as evidence that Sprint 18 is still open.
 
-## Immediate next work
+## Superseded pre-Sprint-20 HIL note
 
 Sprint 19 Local Web Storage V1 is integrated. It provides browse, streamed
 transfer, file/folder mutations, path hardening, LCD status routing, correct
@@ -81,6 +83,21 @@ Run the pending browser/board/SD HIL against the merged revision:
 ```
 
 ## Deferred regression backlog — non-blocking
+
+## Immediate next work
+
+Run the integrated Sprint 19-21 browser/board HIL against the exact future
+commit. This is a cross-frontend checkpoint, not authority to start Sprint 22.
+
+```text
+1. Re-run remaining Sprint-19 SD upload/interruption/mutation/remount cases.
+2. Verify Sprint-20 playback/volume/seek and coexistence with PTT/Xiaozhi.
+3. Run Sprint-21 Lights: ON/OFF restore; RGB including black; brightness
+   0/low/mid/100 and rapid input; all effects/transitions; Web/MCP
+   last-writer-wins; reconnect; and WEB_LIGHT LCD updates.
+4. Record serial/resource evidence: no HTTP-to-LVGL access, no stuck effect
+   worker, no task/memory regression, and expected unavailable/busy recovery.
+```
 
 ### Former Phase 18.2 audio/PTT/SD matrix
 

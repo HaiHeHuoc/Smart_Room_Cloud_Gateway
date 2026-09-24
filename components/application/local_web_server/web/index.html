@@ -9,6 +9,7 @@
     .tab-list{display:flex;justify-content:flex-start;gap:8px;margin-top:16px;border-bottom:1px solid var(--line)}.tab{border-radius:7px 7px 0 0;border-bottom:0;color:var(--muted)}.tab[aria-selected="true"]{background:var(--card);color:var(--text);border-color:var(--accent);box-shadow:inset 0 -2px var(--accent)}.tab-panel[hidden]{display:none}
     #playback{max-width:620px}#playback input[type="range"]{accent-color:var(--accent);min-height:30px;flex:1;min-width:150px}#pb-progress{display:block;width:100%;margin:14px 0 0;cursor:pointer}.playback-row button{min-height:40px}.playback-row.meta{justify-content:space-between;margin:5px 0 10px}@media(max-width:480px){.playback-row button{flex:1}.playback-row select{min-width:100%}}
     .icon{width:1.15em;height:1.15em;vertical-align:-.2em;margin-right:.35em;filter:invert(82%) sepia(28%) saturate(571%) hue-rotate(174deg)}.tab .icon{margin-right:.25em}.card>nav strong .icon{width:1.3em;height:1.3em}
+    button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.light-grid{display:grid;gap:12px;margin-top:14px}.light-row{display:grid;grid-template-columns:minmax(88px,1fr) minmax(44px,2fr) auto;gap:10px;align-items:center}.light-row input,.light-row select{min-width:0}.light-row input[type="color"]{height:42px;width:52px;padding:2px;background:#263a53;border:1px solid #4e6d90;border-radius:7px}.light-row input[type="range"]{accent-color:var(--accent);min-height:34px;width:100%}.light-row output{font-variant-numeric:tabular-nums;white-space:nowrap}.light-summary{display:flex;gap:10px;align-items:center;color:var(--muted);margin:0}.light-swatch{width:44px;height:44px;border:1px solid var(--line);border-radius:50%;background:#000;flex:none}.light-power{min-height:42px;accent-color:var(--accent)}@media(max-width:480px){.light-row{grid-template-columns:1fr auto}.light-row input[type="range"],.light-row select{grid-column:1/-1}.light-row input[type="color"]{justify-self:end}}
   </style>
 </head>
 <body>
@@ -17,6 +18,7 @@
     <nav class="tab-list" role="tablist" aria-label="Local Web controls">
       <button class="tab" id="tab-storage" type="button" role="tab" aria-selected="true" aria-controls="panel-storage" data-tab="storage"><img class="icon" src="/api/assets/icon?name=folder" alt="">Storage</button>
       <button class="tab" id="tab-playback" type="button" role="tab" aria-selected="false" aria-controls="panel-playback" data-tab="playback" tabindex="-1"><img class="icon" src="/api/assets/icon?name=playback" alt="">Playback</button>
+      <button class="tab" id="tab-lights" type="button" role="tab" aria-selected="false" aria-controls="panel-lights" data-tab="lights" tabindex="-1">Lights</button>
     </nav>
     <section class="tab-panel" id="panel-storage" role="tabpanel" aria-labelledby="tab-storage">
       <section class="card" id="capacity"><div class="metric">Total<b id="total">-</b></div><div class="metric">Used<b id="used">-</b></div><div class="metric">Free<b id="free">-</b></div></section>
@@ -36,6 +38,19 @@
         <label class="playback-row"><img class="icon" src="/api/assets/icon?name=volume" alt="">Volume <input id="pb-volume" type="range" min="0" max="100" value="100" aria-label="Playback volume"> <span id="pb-volume-value">100%</span></label>
       </section>
     </section>
+    <section class="tab-panel" id="panel-lights" role="tabpanel" aria-labelledby="tab-lights" hidden>
+      <section class="card" id="lights">
+        <nav><strong>Lights</strong><span id="light-status" class="meta" role="status">Open Lights to check status.</span></nav>
+        <div class="light-grid">
+          <p class="light-summary"><span id="light-swatch" class="light-swatch" aria-hidden="true"></span><span id="light-summary">Logical state unavailable.</span></p>
+          <label class="light-row" for="light-power"><span>Power</span><input id="light-power" class="light-power" type="checkbox" role="switch" aria-checked="false" aria-describedby="light-feedback" disabled><output id="light-power-value" for="light-power">-</output></label>
+          <label class="light-row" for="light-color"><span>Color</span><input id="light-color" type="color" value="#ffffff" aria-describedby="light-rgb light-feedback" disabled><output id="light-rgb" for="light-color">-</output></label>
+          <label class="light-row" for="light-brightness"><span>Brightness</span><input id="light-brightness" type="range" min="0" max="100" value="100" aria-describedby="light-brightness-value light-feedback" disabled><output id="light-brightness-value" for="light-brightness">-</output></label>
+          <label class="light-row" for="light-effect"><span>Effect</span><select id="light-effect" aria-describedby="light-feedback" disabled><option value="solid">Solid</option><option value="blink">Blink</option><option value="breath">Breath</option><option value="pulse">Pulse</option><option value="rainbow">Rainbow</option><option value="strobe">Strobe</option><option value="heartbeat">Heartbeat</option><option value="candle">Candle</option></select><output id="light-effect-value" for="light-effect">-</output></label>
+        </div>
+        <p class="state" id="light-feedback" role="status">Open Lights to load the current state.</p>
+      </section>
+    </section>
   </main>
   <script>
     (() => {
@@ -44,9 +59,11 @@
       const bytes = value => { const units = ['B','KB','MB','GB']; let unit = 0; while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++; } return `${value.toFixed(unit ? 1 : 0)} ${units[unit]}`; };
       const join = (parent, name) => `${parent === '/' ? '' : parent}/${name}`;
       const parent = value => value === '/' ? '/' : (value.slice(0, value.lastIndexOf('/')) || '/');
-      let path = '/', busy = false, catalogIds = new Map(), polling = false, pollTimer = 0, catalogRetryTimer = 0, catalogLoadGeneration = 0, activeTab = 'storage', scrubbing = false, playbackGeneration = 0, playbackRate = 0;
+      const STORAGE_POLL_INTERVAL_MS = 2000, LIGHT_POLL_INTERVAL_MS = 2000, LIGHT_WRITE_DEBOUNCE_MS = 250;
+      let path = '/', busy = false, catalogIds = new Map(), polling = false, pollTimer = 0, storagePolling = false, storagePollTimer = 0, storageAvailable = null, catalogRetryTimer = 0, catalogLoadGeneration = 0, activeTab = 'storage', scrubbing = false, playbackGeneration = 0, playbackRate = 0, lightPolling = false, lightPollTimer = 0, lightCommitTimer = 0, lightCommitActive = false, lightAvailable = null, lightGeneration = 0, lightPending = {}, lightModel = null;
       const setState = (text, error = false) => { state.textContent = text; state.className = `state${error ? ' error' : ''}`; };
-      const setBusy = value => { busy = value; q('#upload').disabled = value; q('#mkdir').disabled = value; };
+      const setStorageControls = () => { const enabled = storageAvailable === true && !busy; q('#file').disabled = !enabled; q('#upload').disabled = !enabled; q('#mkdir').disabled = !enabled; q('#up').disabled = !enabled || path === '/'; };
+      const setBusy = value => { busy = value; setStorageControls(); };
       const post = async url => { const response = await fetch(url, {method:'POST',cache:'no-store'}); const body = await response.json(); if (!response.ok) throw Error(body.error); return body; };
       const time = ms => { const seconds = Math.max(0, Math.floor(Number(ms) / 1000)); if (!Number.isFinite(seconds)) return '--:--'; const h = Math.floor(seconds / 3600), m = Math.floor((seconds % 3600) / 60), s = seconds % 60; return h ? `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}` : `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`; };
 
@@ -58,7 +75,7 @@
           tab.tabIndex = selected ? 0 : -1;
           q(`#panel-${tab.dataset.tab}`).hidden = !selected;
         });
-        if (nextTab === 'playback') tickPlayback();
+        if (nextTab === 'playback') tickPlayback(); else if (nextTab === 'lights') tickLights(); else tickStorage();
       }
 
       function renderStoragePlayButtons() {
@@ -77,16 +94,47 @@
         });
       }
 
+      function applyStorageAvailability(available, stateName = '') {
+        const changed = storageAvailable !== available;
+        storageAvailable = available;
+        if (available) {
+          q('#availability').textContent = 'SD ready';
+        } else {
+          q('#availability').textContent = stateName ? `SD unavailable (${stateName})` : 'SD unavailable';
+          q('#total').textContent = '-'; q('#used').textContent = '-'; q('#free').textContent = '-';
+          if (changed) { clearTimeout(catalogRetryTimer); catalogLoadGeneration++; list.replaceChildren(); setState('Storage unavailable. Reinsert the SD card to continue.', true); clearTracks('Storage unavailable.'); }
+        }
+        setStorageControls();
+        return changed;
+      }
+
       async function storageStatus() {
-        try { const response = await fetch('/api/storage/status',{cache:'no-store'}), data = await response.json(); if (!response.ok) throw Error(data.error); q('#availability').textContent = data.available ? 'SD ready' : `SD ${data.state}`; q('#total').textContent = bytes(data.total_bytes); q('#used').textContent = bytes(data.used_bytes); q('#free').textContent = bytes(data.free_bytes); }
-        catch (_) { q('#availability').textContent = 'SD unavailable'; }
+        try {
+          const response = await fetch('/api/storage/status',{cache:'no-store'}), data = await response.json();
+          if (!response.ok) throw Error(data.error);
+          const changed = applyStorageAvailability(data.available === true, data.state || 'unavailable');
+          if (data.available) { q('#total').textContent = bytes(data.total_bytes); q('#used').textContent = bytes(data.used_bytes); q('#free').textContent = bytes(data.free_bytes); }
+          return {available: data.available === true, changed};
+        } catch (_) { return {available: false, changed: applyStorageAvailability(false)}; }
+      }
+
+      async function tickStorage() {
+        if (storagePolling || document.hidden) return;
+        storagePolling = true;
+        try {
+          const result = await storageStatus();
+          if (result.available && result.changed && !busy) { await browse(path); await loadTracks(); }
+        } finally { storagePolling = false; clearTimeout(storagePollTimer); storagePollTimer = setTimeout(tickStorage, STORAGE_POLL_INTERVAL_MS); }
       }
 
       async function browse(nextPath = path) {
-        path = nextPath; q('#path').textContent = path; q('#up').disabled = path === '/' || busy; list.replaceChildren(); setState('Loading...');
+        path = nextPath; q('#path').textContent = path; setStorageControls();
+        if (storageAvailable === false) return;
+        list.replaceChildren(); setState('Loading...');
         try {
           const response = await fetch(`/api/storage/list?path=${encodeURIComponent(path)}`,{cache:'no-store'}), data = await response.json();
           if (!response.ok) throw Error(data.error);
+          if (storageAvailable === false) return;
           path = data.path; q('#path').textContent = path;
           if (!data.entries.length) setState('This directory is empty.'); else {
             setState(data.truncated ? 'Showing a bounded result.' : '');
@@ -108,7 +156,93 @@
       async function removeItem(name, directory) { if (!confirm(`Remove ${name}?`)) return; setBusy(true); try { await post(`/api/storage/${directory ? 'rmdir' : 'delete'}?path=${encodeURIComponent(join(path,name))}`); await browse(); await storageStatus(); await loadTracks(); } catch (error) { setState(`Operation failed (${error.message}).`, true); } finally { setBusy(false); } }
       async function renameItem(name) { const next = prompt('New name:',name); if (!next || next === name) return; setBusy(true); try { await post(`/api/storage/rename?src=${encodeURIComponent(join(path,name))}&dest=${encodeURIComponent(join(path,next))}`); await browse(); await loadTracks(); } catch (error) { setState(`Rename failed (${error.message}).`, true); } finally { setBusy(false); } }
       async function makeDir() { const name = prompt('Folder name:'); if (!name) return; setBusy(true); try { await post(`/api/storage/mkdir?path=${encodeURIComponent(join(path,name))}`); await browse(); await loadTracks(); } catch (error) { setState(`Create failed (${error.message}).`, true); } finally { setBusy(false); } }
-      function upload(file) { if (!file || busy) return; setBusy(true); const progress = q('#progress'); progress.hidden = false; progress.value = 0; setState(`Uploading ${file.name}...`); const xhr = new XMLHttpRequest(); xhr.open('POST',`/api/storage/upload?path=${encodeURIComponent(join(path,file.name))}`); xhr.upload.onprogress = event => { if (event.lengthComputable) progress.value = 100 * event.loaded / event.total; }; xhr.onload = async () => { try { const data = JSON.parse(xhr.responseText || '{}'); if (xhr.status < 200 || xhr.status >= 300) throw Error(data.error || 'upload_failed'); setState('Upload complete.'); await browse(); await storageStatus(); await loadTracks(); } catch (error) { setState(`Upload failed (${error.message}).`, true); } finally { progress.hidden = true; setBusy(false); } }; xhr.onerror = () => { progress.hidden = true; setBusy(false); setState('Upload interrupted; temporary file removed.', true); }; xhr.send(file); }
+      function upload(file) { if (!file || busy || storageAvailable !== true) return; setBusy(true); const progress = q('#progress'); progress.hidden = false; progress.value = 0; setState(`Uploading ${file.name}...`); const xhr = new XMLHttpRequest(); xhr.open('POST',`/api/storage/upload?path=${encodeURIComponent(join(path,file.name))}`); xhr.upload.onprogress = event => { if (event.lengthComputable) progress.value = 100 * event.loaded / event.total; }; xhr.onload = async () => { try { const data = JSON.parse(xhr.responseText || '{}'); if (xhr.status < 200 || xhr.status >= 300) throw Error(data.error || 'upload_failed'); setState('Upload complete.'); await browse(); await storageStatus(); await loadTracks(); } catch (error) { setState(`Upload failed (${error.message}).`, true); } finally { progress.hidden = true; setBusy(false); } }; xhr.onerror = () => { progress.hidden = true; setBusy(false); setState('Upload interrupted; temporary file removed.', true); }; xhr.send(file); }
+
+      const lightHasPending = () => Object.keys(lightPending).length !== 0;
+      const lightErrorIsBusy = error => error && error.message === 'light_busy';
+      const lightHex = ({red, green, blue}) => `#${[red, green, blue].map(value => Number(value).toString(16).padStart(2, '0')).join('')}`;
+      const lightColor = value => ({red: parseInt(value.slice(1, 3), 16), green: parseInt(value.slice(3, 5), 16), blue: parseInt(value.slice(5, 7), 16)});
+      const setLightFeedback = (text, error = false) => { const feedback = q('#light-feedback'); feedback.textContent = text; feedback.className = `state${error ? ' error' : ''}`; };
+      function setLightsAvailable(available, message) {
+        lightAvailable = available;
+        for (const selector of ['#light-power','#light-color','#light-brightness','#light-effect']) q(selector).disabled = !available;
+        q('#light-status').textContent = available ? 'Light ready' : 'Light unavailable';
+        if (!available) {
+          q('#light-power').checked = false; q('#light-power').setAttribute('aria-checked', 'false'); q('#light-power-value').textContent = '-';
+          q('#light-rgb').textContent = '-'; q('#light-brightness-value').textContent = '-'; q('#light-effect-value').textContent = '-'; q('#light-summary').textContent = 'Logical state unavailable.'; q('#light-swatch').style.background = '#000';
+          if (message) setLightFeedback(message, true);
+        }
+      }
+      function renderLightModel(message = '') {
+        if (!lightModel) return;
+        const rgb = lightHex(lightModel), effect = String(lightModel.effect || 'solid');
+        q('#light-power').checked = lightModel.power === true; q('#light-power').setAttribute('aria-checked', String(lightModel.power === true)); q('#light-power-value').textContent = lightModel.power ? 'On' : 'Off';
+        q('#light-color').value = rgb; q('#light-rgb').textContent = rgb.toUpperCase(); q('#light-brightness').value = lightModel.brightness_percent; q('#light-brightness-value').textContent = `${lightModel.brightness_percent}%`;
+        q('#light-effect').value = effect; q('#light-effect-value').textContent = effect; q('#light-swatch').style.background = rgb;
+        q('#light-summary').textContent = `Logical ${rgb.toUpperCase()} · ${effect}${effect === 'rainbow' ? ' (dynamic)' : ''}`;
+        if (message) setLightFeedback(message);
+      }
+      function applyLightState(data, generation, message = '') {
+        if (generation !== lightGeneration || lightHasPending() || lightCommitActive) return;
+        if (!data || data.available !== true) { setLightsAvailable(false, 'Light manager is unavailable.'); return; }
+        lightModel = {power: data.power === true, red: Number(data.red), green: Number(data.green), blue: Number(data.blue), brightness_percent: Number(data.brightness_percent), effect: data.effect};
+        setLightsAvailable(true); renderLightModel(message);
+      }
+      async function readLightState(generation = lightGeneration, message = '') {
+        const response = await fetch('/api/light/status',{cache:'no-store'}), data = await response.json();
+        if (!response.ok) throw Error(data.error || 'light_status_failed');
+        applyLightState(data, generation, message);
+      }
+      async function tickLights() {
+        if (lightPolling || document.hidden || activeTab !== 'lights') return;
+        lightPolling = true;
+        try { await readLightState(lightGeneration, lightAvailable === null ? 'Current state synchronized.' : ''); }
+        catch (error) {
+          if (!lightCommitActive && !lightHasPending()) {
+            if (lightErrorIsBusy(error)) setLightFeedback('Light manager is busy; state will refresh.', true);
+            else setLightsAvailable(false, `Light status unavailable (${error.message}).`);
+          }
+        }
+        finally { lightPolling = false; clearTimeout(lightPollTimer); if (!document.hidden && activeTab === 'lights') lightPollTimer = setTimeout(tickLights, LIGHT_POLL_INTERVAL_MS); }
+      }
+      function scheduleLightCommit(immediate = false) {
+        clearTimeout(lightCommitTimer);
+        if (!lightHasPending() || lightCommitActive || !lightAvailable) return;
+        lightCommitTimer = setTimeout(commitLightState, immediate ? 0 : LIGHT_WRITE_DEBOUNCE_MS);
+      }
+      function editLight(update, immediate = false) {
+        if (!lightAvailable || !lightModel) return;
+        Object.assign(lightModel, update); Object.assign(lightPending, update); lightGeneration++;
+        renderLightModel('Changes pending…'); scheduleLightCommit(immediate);
+      }
+      async function commitLightState() {
+        if (lightCommitActive || !lightHasPending() || !lightAvailable) return;
+        const update = lightPending; lightPending = {}; const generation = lightGeneration; lightCommitActive = true;
+        try {
+          const requestUpdate = {...update};
+          if (Object.prototype.hasOwnProperty.call(requestUpdate, 'brightness_percent')) {
+            requestUpdate.brightness = requestUpdate.brightness_percent;
+            delete requestUpdate.brightness_percent;
+          }
+          const query = new URLSearchParams(requestUpdate); await post(`/api/light/state?${query.toString()}`);
+          lightCommitActive = false;
+          await readLightState(generation, 'Changes saved and synchronized.');
+        } catch (error) {
+          lightCommitActive = false;
+          if (generation === lightGeneration) {
+            setLightFeedback(lightErrorIsBusy(error) ? 'Light manager is busy; state will refresh.' : `Light update rejected (${error.message}).`, true);
+          }
+          try { await readLightState(generation); }
+          catch (refreshError) {
+            if ((generation === lightGeneration) && !lightErrorIsBusy(refreshError)) {
+              setLightsAvailable(false, 'Light manager is unavailable.');
+            }
+          }
+        } finally {
+          lightCommitActive = false;
+          if (lightHasPending()) scheduleLightCommit();
+        }
+      }
 
       async function playTrack(trackId) { await post(`/api/audio/play?track_id=${encodeURIComponent(trackId)}`); tickPlayback(); }
       function clearTracks(message) { catalogIds = new Map(); const select = q('#pb-track'); select.replaceChildren(); const option = document.createElement('option'); option.textContent = message; select.append(option); q('#pb-play').disabled = true; renderStoragePlayButtons(); }
@@ -130,7 +264,7 @@
       }
 
       q('#up').onclick = () => browse(parent(path)); q('#mkdir').onclick = makeDir; q('#upload').onclick = () => upload(q('#file').files[0]);
-      const drop = q('#drop'); drop.ondragover = event => { event.preventDefault(); drop.style.borderColor = '#62b7ff'; }; drop.ondragleave = () => { drop.style.borderColor = ''; }; drop.ondrop = event => { event.preventDefault(); drop.style.borderColor = ''; upload(event.dataTransfer.files[0]); };
+      const drop = q('#drop'); drop.ondragover = event => { if (storageAvailable !== true || busy) return; event.preventDefault(); drop.style.borderColor = '#62b7ff'; }; drop.ondragleave = () => { drop.style.borderColor = ''; }; drop.ondrop = event => { event.preventDefault(); drop.style.borderColor = ''; if (storageAvailable === true && !busy) upload(event.dataTransfer.files[0]); };
       const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
       tabs.forEach((tab, index) => {
         tab.onclick = () => selectTab(tab.dataset.tab);
@@ -147,8 +281,14 @@
       q('#pb-volume').onchange = async event => { try { const data = await post(`/api/audio/volume?percent=${event.target.value}`); q('#pb-volume-value').textContent = `${data.volume_percent}%`; } catch (error) { q('#pb-state').textContent = `Volume rejected (${error.message})`; } };
       q('#pb-progress').oninput = event => { scrubbing = true; if (playbackRate) q('#pb-position').textContent = time(1000 * event.target.value / playbackRate); };
       q('#pb-progress').onchange = async event => { try { await post(`/api/audio/seek?frames=${encodeURIComponent(event.target.value)}&generation=${encodeURIComponent(playbackGeneration)}`); } catch (error) { q('#pb-state').textContent = `Seek rejected (${error.message})`; } finally { scrubbing = false; tickPlayback(); } };
-      document.addEventListener('visibilitychange', () => { if (!document.hidden) tickPlayback(); });
-      storageStatus(); browse(); loadTracks(); tickPlayback();
+      q('#light-power').onchange = event => editLight({power: event.target.checked}, true);
+      q('#light-color').oninput = event => editLight(lightColor(event.target.value));
+      q('#light-color').onchange = () => scheduleLightCommit(true);
+      q('#light-brightness').oninput = event => editLight({brightness_percent: Number(event.target.value)});
+      q('#light-brightness').onchange = () => scheduleLightCommit(true);
+      q('#light-effect').onchange = event => editLight({effect: event.target.value}, true);
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) { tickStorage(); tickPlayback(); tickLights(); } });
+      tickStorage(); tickPlayback();
     })();
   </script>
 </body>

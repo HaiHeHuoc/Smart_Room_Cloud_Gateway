@@ -66,13 +66,21 @@ ESP_ERROR_CHECK(light_manager_set_state(&magenta));
   `solid` stops that effect and restores the logical static output.
 - `blink` uses fixed 500 ms ON / 500 ms OFF timing; `breath` uses a fixed
   2000 ms period; `pulse` repeats a fixed 1200 ms triangular pulse; `rainbow`
-  uses the lower-layer single-LED rainbow-cycle behavior. No public API accepts
+  uses the lower-layer single-LED rainbow-cycle behavior. `strobe` uses 80 ms
+  ON / 120 ms OFF, `heartbeat` produces a fixed 1000 ms double pulse, and
+  `candle` uses a fixed 2200 ms continuous flicker wave. No public API accepts
   arbitrary effect timing or raw NeoPixel configuration.
 - `light_manager_off()` preserves RGB, brightness, and effect while darkening
   the LED. A following `light_manager_on()` resumes the same effect when one
   was active, or restores the stored solid state.
 - Brightness is an inclusive `0..100` percentage. `0` is valid and produces
   zero light output while preserving RGB and the ON logical state.
+- RGB in the public state is sRGB (the same encoding used by the Web color
+  picker). Before static colors and color-based effects reach the NeoPixel
+  driver, the manager applies a fixed sRGB-to-linear PWM lookup. This improves
+  perceptual agreement with the Web swatch without changing the API, saved
+  logical state, or GRB/RGB physical byte-order configuration. Full primary
+  values remain unchanged (`#FF0000`, `#00FF00`, and `#0000FF`).
 - Brightness above `100` and NULL state/output pointers return
   `ESP_ERR_INVALID_ARG`; values are never silently clamped.
 - `light_manager_get_state()` copies only the logical state. It exposes no
@@ -92,7 +100,7 @@ object remains valid across deinit/reinit; all NeoPixel resources are released
 by the underlying component.
 
 The lower NeoPixel library also serializes its own state and owns its optional
-effect worker. `light_manager` translates only the five product effects above
+effect worker. `light_manager` translates only the eight product effects above
 to lower-layer operations; MCP and other application components do not access
 that worker or lower-level effects directly.
 
@@ -104,7 +112,7 @@ successful `light_manager_init()`. It writes `LIGHT_TEST` serial markers and
 waits `CONFIG_LIGHT_MANAGER_TEST_STEP_DELAY_MS` (default: 8000 ms) after every
 operation.
 
-One loop exercises the five public product effects through
+One loop exercises the eight public product effects through
 `light_manager_set_state()` and logs the copied state after each request. It
 then verifies the product transition from an effect to `solid` and the
 OFF/ON preservation and resumption path for `blink`. The loop does not expose
@@ -121,8 +129,9 @@ not proof of a multi-LED pattern.
 
 - One singleton strip is supported because the reused `neopixel` component is
   singleton-based.
-- RGB and GRB three-channel LEDs are supported; RGBW/GRBW, calibration, gamma
-  correction, and named-color parsing are intentionally out of scope.
+- RGB and GRB three-channel LEDs are supported; RGBW/GRBW, per-device
+  color-channel calibration, and named-color parsing are intentionally out of
+  scope.
 - Natural-language color mapping and MCP registration belong to the product
   command layer, not this manager.
 - Hardware confirmation still requires the target-board HIL sequence.

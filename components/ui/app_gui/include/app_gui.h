@@ -40,6 +40,9 @@ typedef enum
     /** Local Web Storage status view. */
     APP_GUI_SCREEN_WEB_STORAGE,
 
+    /** Local Web Light status view. */
+    APP_GUI_SCREEN_WEB_LIGHT,
+
     /** Exclusive upper bound for screen-ID validation and iteration. */
     APP_GUI_SCREEN_MAX
 } app_gui_screen_id_t;
@@ -316,6 +319,34 @@ typedef struct
     esp_err_t last_error;
 } ui_web_storage_status_t;
 
+/** @brief UI-only copy of the light effect selected by Local Web. */
+typedef enum
+{
+    UI_WEB_LIGHT_EFFECT_SOLID = 0,
+    UI_WEB_LIGHT_EFFECT_BLINK,
+    UI_WEB_LIGHT_EFFECT_BREATH,
+    UI_WEB_LIGHT_EFFECT_PULSE,
+    UI_WEB_LIGHT_EFFECT_RAINBOW,
+    UI_WEB_LIGHT_EFFECT_STROBE,
+    UI_WEB_LIGHT_EFFECT_HEARTBEAT,
+    UI_WEB_LIGHT_EFFECT_CANDLE,
+    UI_WEB_LIGHT_EFFECT_UNKNOWN,
+} ui_web_light_effect_t;
+
+/** Bounded, non-sensitive snapshot rendered by the Local Web Light view. */
+typedef struct
+{
+    bool server_running;
+    bool light_available;
+    bool power_on;
+    uint8_t red;
+    uint8_t green;
+    uint8_t blue;
+    uint8_t brightness_percent;
+    ui_web_light_effect_t effect;
+    esp_err_t last_error;
+} ui_web_light_status_t;
+
 /* Lifecycle API ----------------------------------------------------------- */
 
 /**
@@ -482,6 +513,15 @@ esp_err_t app_gui_post_cloud_status(
  */
 esp_err_t app_gui_post_web_storage_status(
     const ui_web_storage_status_t *status);
+
+/**
+ * @brief Replace the pending Local Web Light snapshot without calling LVGL.
+ *
+ * This task-context API copies a bounded status into a length-one queue. The
+ * app_gui task is the only context that renders the corresponding LCD view.
+ */
+esp_err_t app_gui_post_web_light_status(
+    const ui_web_light_status_t *status);
 
 /* Reset Result API -------------------------------------------------------- */
 

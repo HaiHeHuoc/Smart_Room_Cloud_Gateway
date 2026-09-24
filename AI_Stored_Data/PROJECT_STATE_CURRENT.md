@@ -1,6 +1,6 @@
 # Smart Room Cloud Gateway — Current Project State
 
-Updated: 2026-09-16
+Updated: 2026-09-24
 Active integration branch: `main_including_Firebase_security`
 Sprint-18 closure authority: explicit user acceptance by Hải on 2026-09-16
 
@@ -61,8 +61,10 @@ Voice Recording Critical Window
             COMPLETE / USER ACCEPTED BY HẢI ON 2026-09-16
 Sprint 19   Local Web Control V1: SD Card File Manager / SOURCE INTEGRATED /
             BUILD VERIFIED / TARGET REDEPLOY AND HIL PENDING
-Sprint 20   Local Web Control V2: Playback + Volume / PLANNED / NOT STARTED
-Sprint 21   Local Web Control V3: Lights / PLANNED / NOT STARTED
+Sprint 20   Local Web Control V2: Playback + Volume / IMPLEMENTED /
+            BUILD VERIFIED / TARGET HIL PENDING
+Sprint 21   Local Web Control V3: Lights / IMPLEMENTED / BUILD VERIFIED /
+            TARGET HIL PENDING
 Sprint 22   Local Web Control V4: Dashboard + System Status / PLANNED / NOT STARTED
 Sprint 23   Local Web Control V5: Scenes + Logs + Diagnostics / PLANNED / NOT STARTED
 Sprint 24   Wake Word + Advanced Voice UX / PLANNED / NOT STARTED
@@ -229,6 +231,20 @@ Only a concrete regression or explicit Hải instruction should reopen Sprint 18
 - Remaining Sprint-19 target HIL still includes upload up to 20 MiB,
   interruption/partial-file cleanup, file/folder mutations, and SD
   removal/remount/recovery before full Sprint-19 acceptance.
+
+## Sprint 20-21 Local Web controls — implemented / build verified / target HIL pending
+
+- Sprint 20 extends the Storage frontend with owner-published audio catalog and
+  playback state, catalog-ID playback, bounded volume, and generation-guarded
+  seek. HTTP remains outside I2S, WAV-reader, and SD-lease ownership.
+- Sprint 21 exposes the same product light state used by MCP through bounded
+  Light REST routes and an accessible browser tab. Web and MCP both call only
+  `light_manager`; no Web code accesses NeoPixel, RMT, or GPIO.
+- Browser writes reconcile against read-back state. `app_gui` receives copied
+  Local Web Light snapshots in a length-one queue and renders `WEB_LIGHT` only
+  in its UI task. The status screen is read-only.
+- Relevant host tests and ESP-IDF 6.0.1 serialized build passed. No browser,
+  target-board, LCD, or multi-frontend HIL acceptance has yet been recorded.
 
 ## Security invariants
 

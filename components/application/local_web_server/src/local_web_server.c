@@ -13,14 +13,16 @@
 #include "local_web_download.h"
 #include "local_web_audio_policy.h"
 #include "local_web_icon_policy.h"
+#include "local_web_light_policy.h"
 #include "local_web_path_policy.h"
+#include "light_manager.h"
 #include "sd_card_manager.h"
 #include "smart_room_mcp_adapter.h"
 #include "voice_assistant_playback_control.h"
 
 #define LOCAL_WEB_HTTP_STACK_SIZE_BYTES 6144U
 #define LOCAL_WEB_HTTP_MAX_OPEN_SOCKETS 2U
-#define LOCAL_WEB_HTTP_ROUTE_COUNT 16U
+#define LOCAL_WEB_HTTP_ROUTE_COUNT 18U
 #define LOCAL_WEB_HTTP_MAX_URI_LEN 1280U
 #define LOCAL_WEB_RESPONSE_CHUNK_SIZE 512U
 #define LOCAL_WEB_TRANSFER_CHUNK_SIZE SD_CARD_MANAGER_TRANSFER_CHUNK_SIZE
@@ -28,6 +30,7 @@
     ((LOCAL_WEB_LOGICAL_PATH_MAX_LEN * 3U) + 1U)
 #define LOCAL_WEB_QUERY_BUFFER_SIZE \
     ((LOCAL_WEB_LOGICAL_PATH_MAX_LEN * 3U * 2U) + 24U)
+#define LOCAL_WEB_LIGHT_QUERY_MAX_LEN 160U
 
 static const char *const TAG = "local_web_server";
 
@@ -65,6 +68,8 @@ static esp_err_t local_web_audio_play_post(httpd_req_t *request);
 static esp_err_t local_web_audio_control_post(httpd_req_t *request);
 static esp_err_t local_web_audio_volume_post(httpd_req_t *request);
 static esp_err_t local_web_audio_seek_post(httpd_req_t *request);
+static esp_err_t local_web_light_status_get(httpd_req_t *request);
+static esp_err_t local_web_light_state_post(httpd_req_t *request);
 static esp_err_t local_web_send_error(
     httpd_req_t *request,
     const char *http_status,
@@ -89,6 +94,15 @@ static esp_err_t local_web_send_storage_result(
 static bool local_web_path_affects_audio_catalog(const char *logical_path);
 static void local_web_publish_storage_status(uint8_t progress_percent,
                                              esp_err_t last_error);
+static void local_web_publish_light_status(const light_manager_state_t *state,
+                                           esp_err_t last_error);
+static bool local_web_light_parse_state_query(httpd_req_t *request,
+                                              local_web_light_update_t *update);
+static esp_err_t local_web_light_send_state(httpd_req_t *request,
+                                            const light_manager_state_t *state);
+static esp_err_t local_web_light_send_manager_error(httpd_req_t *request,
+                                                     esp_err_t result,
+                                                     const char *failure_error);
 static esp_err_t local_web_register_routes(httpd_handle_t server);
 
 static const char *local_web_audio_state_name(
@@ -171,6 +185,11 @@ esp_err_t local_web_server_start(void)
              "Local Storage Web UI started on HTTP port %u",
              (unsigned)config.server_port);
     local_web_publish_storage_status(0U, ESP_OK);
+    light_manager_state_t light_state = {0};
+    const esp_err_t light_result = light_manager_get_state(&light_state);
+    local_web_publish_light_status(
+        light_result == ESP_OK ? &light_state : NULL,
+        light_result);
     return ESP_OK;
 }
 
@@ -250,6 +269,133 @@ static esp_err_t local_web_audio_status_get(httpd_req_t *request)
     httpd_resp_set_type(request, "application/json");
     httpd_resp_set_hdr(request, "Cache-Control", "no-store");
     return httpd_resp_send(request, s_response_chunk, written);
+}
+
+static esp_err_t local_web_light_send_state(httpd_req_t *request,
+                                            const light_manager_state_t *state)
+{
+    const char *const effect =
+        (state == NULL) ? NULL : local_web_light_effect_name(state->effect);
+    if (effect == NULL) {
+        return local_web_send_error(request, "500 Internal Server Error",
+                                    "light_status_failed");
+    }
+    httpd_resp_set_type(request, "application/json");
+    httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+    const int written = snprintf(
+        s_response_chunk, sizeof(s_response_chunk),
+        "{\"ok\":true,\"available\":true,\"power\":%s,"
+        "\"red\":%u,\"green\":%u,\"blue\":%u,"
+        "\"brightness_percent\":%u,\"effect\":\"%s\"}",
+        state->power_on ? "true" : "false", (unsigned)state->red,
+        (unsigned)state->green, (unsigned)state->blue,
+        (unsigned)state->brightness_percent, effect);
+    return ((written < 0) || (written >= (int)sizeof(s_response_chunk)))
+               ? local_web_send_error(request, "500 Internal Server Error",
+                                      "response_too_large")
+               : httpd_resp_send(request, s_response_chunk, written);
+}
+
+static esp_err_t local_web_light_send_manager_error(httpd_req_t *request,
+                                                     esp_err_t result,
+                                                     const char *failure_error)
+{
+    switch (local_web_light_manager_result_from_error(result)) {
+    case LOCAL_WEB_LIGHT_MANAGER_RESULT_UNAVAILABLE:
+        return local_web_send_error(request, "503 Service Unavailable",
+                                    "light_unavailable");
+    case LOCAL_WEB_LIGHT_MANAGER_RESULT_BUSY:
+        return local_web_send_error(request, "503 Service Unavailable", "light_busy");
+    case LOCAL_WEB_LIGHT_MANAGER_RESULT_FAILED:
+    case LOCAL_WEB_LIGHT_MANAGER_RESULT_OK:
+    default:
+        return local_web_send_error(request, "500 Internal Server Error", failure_error);
+    }
+}
+
+static esp_err_t local_web_light_status_get(httpd_req_t *request)
+{
+    light_manager_state_t state = {0};
+    const esp_err_t result = light_manager_get_state(&state);
+    if (local_web_light_manager_result_from_error(result) ==
+        LOCAL_WEB_LIGHT_MANAGER_RESULT_UNAVAILABLE) {
+        local_web_publish_light_status(NULL, result);
+        httpd_resp_set_type(request, "application/json");
+        httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+        return httpd_resp_sendstr(request, "{\"ok\":true,\"available\":false}");
+    }
+    if (result != ESP_OK) {
+        local_web_publish_light_status(NULL, result);
+        return local_web_light_send_manager_error(request, result, "light_status_failed");
+    }
+    local_web_publish_light_status(&state, ESP_OK);
+    return local_web_light_send_state(request, &state);
+}
+
+static bool local_web_light_parse_state_query(httpd_req_t *request,
+                                              local_web_light_update_t *update)
+{
+    if ((request == NULL) || (update == NULL) ||
+        (httpd_req_get_url_query_len(request) == 0U) ||
+        (httpd_req_get_url_query_len(request) >= LOCAL_WEB_LIGHT_QUERY_MAX_LEN) ||
+        (httpd_req_get_url_query_len(request) >= sizeof(s_query_buffer)) ||
+        (httpd_req_get_url_query_str(request, s_query_buffer,
+                                     sizeof(s_query_buffer)) != ESP_OK)) {
+        return false;
+    }
+    char *field = s_query_buffer;
+    while (field[0] != '\0') {
+        char *const separator = strchr(field, '&');
+        if (separator != NULL) *separator = '\0';
+        char *const equals = strchr(field, '=');
+        if ((equals == NULL) || (equals == field) || (equals[1] == '\0')) {
+            return false;
+        }
+        *equals = '\0';
+        if (!local_web_light_update_set_field(update, field, equals + 1U)) {
+            return false;
+        }
+        if (separator == NULL) break;
+        field = separator + 1U;
+        if (field[0] == '\0') return false;
+    }
+    return local_web_light_update_is_valid(update);
+}
+
+static esp_err_t local_web_light_state_post(httpd_req_t *request)
+{
+    local_web_light_update_t update = {0};
+    if (!local_web_light_parse_state_query(request, &update)) {
+        return local_web_send_error(request, "400 Bad Request", "invalid_light_request");
+    }
+
+    light_manager_state_t requested = {0};
+    esp_err_t result = light_manager_get_state(&requested);
+    if (result != ESP_OK) {
+        local_web_publish_light_status(NULL, result);
+        return local_web_light_send_manager_error(request, result, "light_status_failed");
+    }
+    if (!local_web_light_apply_update(&update, &requested)) {
+        return local_web_send_error(request, "400 Bad Request", "invalid_light_request");
+    }
+
+    result = light_manager_set_state(&requested);
+    if (result != ESP_OK) {
+        if (local_web_light_manager_result_from_error(result) ==
+            LOCAL_WEB_LIGHT_MANAGER_RESULT_UNAVAILABLE) {
+            local_web_publish_light_status(NULL, result);
+        }
+        return local_web_light_send_manager_error(request, result, "light_apply_failed");
+    }
+
+    light_manager_state_t confirmed = {0};
+    result = light_manager_get_state(&confirmed);
+    if (result != ESP_OK) {
+        local_web_publish_light_status(NULL, result);
+        return local_web_light_send_manager_error(request, result, "light_status_failed");
+    }
+    local_web_publish_light_status(&confirmed, ESP_OK);
+    return local_web_light_send_state(request, &confirmed);
 }
 
 static esp_err_t local_web_audio_tracks_get(httpd_req_t *request)
@@ -788,6 +934,41 @@ static void local_web_publish_storage_status(uint8_t progress_percent,
     (void)app_gui_post_web_storage_status(&status);
 }
 
+static ui_web_light_effect_t local_web_light_effect_to_ui(
+    light_manager_effect_t effect)
+{
+    switch (effect) {
+        case LIGHT_MANAGER_EFFECT_SOLID: return UI_WEB_LIGHT_EFFECT_SOLID;
+        case LIGHT_MANAGER_EFFECT_BLINK: return UI_WEB_LIGHT_EFFECT_BLINK;
+        case LIGHT_MANAGER_EFFECT_BREATH: return UI_WEB_LIGHT_EFFECT_BREATH;
+        case LIGHT_MANAGER_EFFECT_PULSE: return UI_WEB_LIGHT_EFFECT_PULSE;
+        case LIGHT_MANAGER_EFFECT_RAINBOW: return UI_WEB_LIGHT_EFFECT_RAINBOW;
+        case LIGHT_MANAGER_EFFECT_STROBE: return UI_WEB_LIGHT_EFFECT_STROBE;
+        case LIGHT_MANAGER_EFFECT_HEARTBEAT: return UI_WEB_LIGHT_EFFECT_HEARTBEAT;
+        case LIGHT_MANAGER_EFFECT_CANDLE: return UI_WEB_LIGHT_EFFECT_CANDLE;
+        default: return UI_WEB_LIGHT_EFFECT_UNKNOWN;
+    }
+}
+
+static void local_web_publish_light_status(const light_manager_state_t *state,
+                                           esp_err_t last_error)
+{
+    const ui_web_light_status_t status = {
+        .server_running = s_server != NULL,
+        .light_available = (state != NULL) && (last_error == ESP_OK),
+        .power_on = state != NULL ? state->power_on : false,
+        .red = state != NULL ? state->red : 0U,
+        .green = state != NULL ? state->green : 0U,
+        .blue = state != NULL ? state->blue : 0U,
+        .brightness_percent = state != NULL ? state->brightness_percent : 0U,
+        .effect = state != NULL
+                      ? local_web_light_effect_to_ui(state->effect)
+                      : UI_WEB_LIGHT_EFFECT_UNKNOWN,
+        .last_error = last_error,
+    };
+    (void)app_gui_post_web_light_status(&status);
+}
+
 static esp_err_t local_web_send_list_result(httpd_req_t *request)
 {
     httpd_resp_set_type(request, "application/json");
@@ -994,6 +1175,14 @@ static esp_err_t local_web_register_routes(httpd_handle_t server)
         .uri = "/api/audio/seek", .method = HTTP_POST,
         .handler = local_web_audio_seek_post,
     };
+    static const httpd_uri_t light_status = {
+        .uri = "/api/light/status", .method = HTTP_GET,
+        .handler = local_web_light_status_get,
+    };
+    static const httpd_uri_t light_state = {
+        .uri = "/api/light/state", .method = HTTP_POST,
+        .handler = local_web_light_state_post,
+    };
 
     esp_err_t result = httpd_register_uri_handler(server, &root);
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &storage_status);
@@ -1011,5 +1200,7 @@ static esp_err_t local_web_register_routes(httpd_handle_t server)
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &audio_control);
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &audio_volume);
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &audio_seek);
+    if (result == ESP_OK) result = httpd_register_uri_handler(server, &light_status);
+    if (result == ESP_OK) result = httpd_register_uri_handler(server, &light_state);
     return result;
 }

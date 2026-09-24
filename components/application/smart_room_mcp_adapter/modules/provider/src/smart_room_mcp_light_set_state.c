@@ -46,6 +46,15 @@ static bool app_xiaozhi_light_effect_to_manager(
     case XIAOZHI_FOUNDATION_LIGHT_EFFECT_RAINBOW:
         *manager_effect = LIGHT_MANAGER_EFFECT_RAINBOW;
         return true;
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_STROBE:
+        *manager_effect = LIGHT_MANAGER_EFFECT_STROBE;
+        return true;
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_HEARTBEAT:
+        *manager_effect = LIGHT_MANAGER_EFFECT_HEARTBEAT;
+        return true;
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_CANDLE:
+        *manager_effect = LIGHT_MANAGER_EFFECT_CANDLE;
+        return true;
     default:
         return false;
     }
@@ -144,6 +153,15 @@ static esp_err_t app_xiaozhi_apply_light_set_state(
         break;
     case LIGHT_MANAGER_EFFECT_RAINBOW:
         result->effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_RAINBOW;
+        break;
+    case LIGHT_MANAGER_EFFECT_STROBE:
+        result->effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_STROBE;
+        break;
+    case LIGHT_MANAGER_EFFECT_HEARTBEAT:
+        result->effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_HEARTBEAT;
+        break;
+    case LIGHT_MANAGER_EFFECT_CANDLE:
+        result->effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_CANDLE;
         break;
     default:
         result->outcome = XIAOZHI_FOUNDATION_LIGHT_SET_STATE_SNAPSHOT_FAILED;

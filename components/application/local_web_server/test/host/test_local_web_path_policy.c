@@ -5,6 +5,7 @@
 #include "local_web_audio_policy.h"
 #include "local_web_download.h"
 #include "local_web_icon_policy.h"
+#include "local_web_light_policy.h"
 
 static int expect_content_disposition(const char *path, const char *expected)
 {
@@ -76,6 +77,76 @@ static int expect_icon_policy(void)
            (local_web_icon_logical_path("") != NULL);
 }
 
+static int expect_light_policy(void)
+{
+    int failures = 0;
+    local_web_light_update_t full = {0};
+    failures += !local_web_light_update_set_field(&full, "power", "true");
+    failures += !local_web_light_update_set_field(&full, "red", "255");
+    failures += !local_web_light_update_set_field(&full, "green", "0");
+    failures += !local_web_light_update_set_field(&full, "blue", "128");
+    failures += !local_web_light_update_set_field(&full, "brightness", "100");
+    failures += !local_web_light_update_set_field(&full, "effect", "solid");
+    failures += !local_web_light_update_is_valid(&full);
+
+    light_manager_state_t state = {
+        .power_on = false, .red = 1U, .green = 2U, .blue = 3U,
+        .brightness_percent = 0U, .effect = LIGHT_MANAGER_EFFECT_BLINK,
+    };
+    failures += !local_web_light_apply_update(&full, &state) ||
+                !state.power_on || (state.red != 255U) || (state.green != 0U) ||
+                (state.blue != 128U) || (state.brightness_percent != 100U) ||
+                (state.effect != LIGHT_MANAGER_EFFECT_SOLID);
+
+    local_web_light_update_t partial = {0};
+    failures += !local_web_light_update_set_field(&partial, "brightness", "0") ||
+                !local_web_light_apply_update(&partial, &state) ||
+                (state.brightness_percent != 0U) || (state.red != 255U) ||
+                (state.effect != LIGHT_MANAGER_EFFECT_SOLID);
+
+    const char *const effects[] = {
+        "solid", "blink", "breath", "pulse", "rainbow", "strobe",
+        "heartbeat", "candle",
+    };
+    for (size_t index = 0U; index < sizeof(effects) / sizeof(effects[0]); ++index) {
+        local_web_light_update_t effect_update = {0};
+        light_manager_state_t black_off = {0};
+        failures += !local_web_light_update_set_field(&effect_update, "effect", effects[index]) ||
+                    !local_web_light_apply_update(&effect_update, &black_off) ||
+                    !black_off.power_on || (black_off.red != 255U) ||
+                    (black_off.green != 255U) || (black_off.blue != 255U) ||
+                    (black_off.effect != (light_manager_effect_t)index);
+    }
+
+    local_web_light_update_t off = {0};
+    failures += !local_web_light_update_set_field(&off, "power", "false");
+    state.effect = LIGHT_MANAGER_EFFECT_PULSE;
+    state.red = 7U; state.green = 8U; state.blue = 9U; state.brightness_percent = 60U;
+    failures += !local_web_light_apply_update(&off, &state) || state.power_on ||
+                (state.red != 7U) || (state.green != 8U) || (state.blue != 9U) ||
+                (state.brightness_percent != 60U) ||
+                (state.effect != LIGHT_MANAGER_EFFECT_PULSE);
+
+    local_web_light_update_t invalid = {0};
+    failures += local_web_light_update_set_field(&invalid, "brightness", "101");
+    failures += local_web_light_update_set_field(&invalid, "red", "256");
+    failures += local_web_light_update_set_field(&invalid, "effect", "unknown");
+    failures += local_web_light_update_set_field(&invalid, "power", "TRUE");
+    failures += local_web_light_update_set_field(&invalid, "other", "1");
+    failures += local_web_light_update_set_field(&invalid, "red", "0") == false;
+    failures += local_web_light_update_set_field(&invalid, "red", "255");
+
+    local_web_light_update_t effect_off = {0};
+    failures += !local_web_light_update_set_field(&effect_off, "effect", "blink") ||
+                !local_web_light_update_set_field(&effect_off, "power", "false") ||
+                local_web_light_update_is_valid(&effect_off);
+    failures += local_web_light_manager_result_from_error(ESP_ERR_INVALID_STATE) !=
+                LOCAL_WEB_LIGHT_MANAGER_RESULT_UNAVAILABLE;
+    failures += local_web_light_manager_result_from_error(ESP_ERR_TIMEOUT) !=
+                LOCAL_WEB_LIGHT_MANAGER_RESULT_BUSY;
+    return failures;
+}
+
 int main(void)
 {
     int failures = 0;
@@ -119,5 +190,6 @@ int main(void)
         "/", long_path, sizeof(long_path));
     failures += expect_audio_policy();
     failures += expect_icon_policy();
+    failures += expect_light_policy();
     return failures == 0 ? 0 : 1;
 }

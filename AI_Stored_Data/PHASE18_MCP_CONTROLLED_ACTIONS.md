@@ -111,7 +111,7 @@ power               "on" | "off"
 color               red | green | blue | white | yellow | cyan |
                     magenta | pink | purple | orange
 brightness_percent  integer 0..100
-effect              solid | blink | breath | pulse | rainbow
+effect              solid | blink | breath | pulse | rainbow | strobe | heartbeat | candle
 ```
 
 Accepted partial-update semantics:

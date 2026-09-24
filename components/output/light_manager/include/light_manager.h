@@ -26,6 +26,9 @@ typedef enum
     LIGHT_MANAGER_EFFECT_BREATH,
     LIGHT_MANAGER_EFFECT_PULSE,
     LIGHT_MANAGER_EFFECT_RAINBOW,
+    LIGHT_MANAGER_EFFECT_STROBE,
+    LIGHT_MANAGER_EFFECT_HEARTBEAT,
+    LIGHT_MANAGER_EFFECT_CANDLE,
 } light_manager_effect_t;
 
 /**
@@ -45,8 +48,10 @@ typedef struct
 /**
  * @brief Copyable product-level state for Smart Room light control.
  *
- * RGB remains logical color data when @c power_on is false. Brightness zero is
- * valid and means a zero-output ON state; it does not alter the stored RGB.
+ * RGB is logical sRGB color data, including when @c power_on is false. The
+ * manager converts this logical color to linear LED PWM only at its private
+ * driver boundary. Brightness zero is valid and means a zero-output ON state;
+ * it does not alter the stored RGB.
  */
 typedef struct
 {
@@ -122,7 +127,7 @@ esp_err_t light_manager_get_state(light_manager_state_t *state);
  * @brief Start the Kconfig-gated infinite target-hardware test loop.
  *
  * When @c CONFIG_LIGHT_MANAGER_TEST_LOOP is enabled, the task exercises all
- * five public product effects, state snapshots, a solid restore, and blink
+ * eight public product effects, state snapshots, a solid restore, and blink
  * OFF/ON resumption. It waits the configured interval after every action and
  * logs each result. It is for explicit hardware validation only, not
  * production behavior.

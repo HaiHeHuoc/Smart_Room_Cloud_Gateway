@@ -15,7 +15,7 @@ browser download filename through `Content-Disposition`), raw-body
 `POST /api/storage/upload?path=<logical-path>` (at most 8 MiB), and bounded
 `POST` delete, rename, mkdir, and rmdir operations.
 
-The HTTP server reserves 16 URI-handler slots, exactly matching the routes
+The HTTP server reserves 18 URI-handler slots, exactly matching the routes
 registered by this component. A route addition must update that bounded count;
 otherwise ESP-IDF returns `ESP_ERR_HTTPD_HANDLERS_FULL` and startup rolls back.
 
@@ -39,9 +39,17 @@ VFS or `FILE` handles.
 
 No WebSocket is used in V1: request/response plus XHR provides exact browser
 upload progress without another persistent connection. `app_gui` owns the LCD
-`WEB_STORAGE` surface; this component posts only copied status updates and
-never calls LVGL. Audio, lights, dashboard/system control, Wi-Fi/provisioning,
-credentials remain out of scope.
+`WEB_STORAGE` and `WEB_LIGHT` surfaces; this component posts only copied
+status updates and never calls LVGL. Audio, dashboard/system control,
+Wi-Fi/provisioning, and credentials remain out of scope.
+
+While the browser document is visible, the Storage presentation polls its
+copied status endpoint every two seconds. A transition to unavailable clears
+the stale listing and capacity facts, disables Storage mutation controls, and
+shows an SD-unavailable state without a page reload. A later transition to
+ready reloads the current directory and audio catalog once. This remains
+browser polling only: it does not add a WebSocket or give the Web component SD
+mount/recovery ownership.
 
 ## Playback presentation edge
 
@@ -64,6 +72,53 @@ and SD-lease owner. No Web handler opens a WAV, seeks a `FILE *`, or changes
 I2S configuration. Playback speed control is intentionally deferred: a
 rate-change feature would require an explicit DSP/resampling design rather
 than changing the global I2S rate from the UI.
+
+## Light REST edge
+
+`GET /api/light/status` returns a copied `light_manager` product state. An
+uninitialized manager returns `{ "ok": true, "available": false }`; a lock
+timeout or lower-layer failure returns a deterministic `503 light_busy` or
+`500 light_status_failed` error.
+
+`POST /api/light/state` accepts a bounded query (under 160 bytes) with one or
+more optional exact fields: `power=true|false`, `red=0..255`, `green=0..255`,
+`blue=0..255`, `brightness=0..100`, and one of the eight effect tokens
+`solid|blink|breath|pulse|rainbow|strobe|heartbeat|candle`. Unknown, duplicate, malformed, or empty
+requests are rejected before reading or changing product state. The handler
+copies the current state, applies only provided fields, calls exactly one
+`light_manager_set_state()`, then returns a read-back snapshot.
+
+An effect request follows existing MCP semantics: it activates power when
+power is omitted, and a black state with no supplied RGB gets neutral white so
+the effect is visible. Combining an effect with `power=false` is rejected.
+OFF otherwise preserves RGB, brightness, and the selected effect; brightness
+zero remains a valid logical ON state. The Web component never includes or
+calls NeoPixel, LED-strip, RMT, GPIO, or effect-worker APIs.
+
+## Light presentation edge
+
+The third accessible tab, `Lights`, retains the dark compact layout and uses
+native color, range, checkbox, and select controls for logical power, RGB,
+brightness, and effect. Color and brightness input is coalesced for 250 ms;
+power and effect commit immediately. Every successful commit then reads the
+authoritative status. A local generation prevents an older poll or response
+from overwriting a newer edit, and only one Light poll is active. The
+two-second Light poll runs only while the visible document has the Lights tab
+open. Unavailable status clears and disables controls without a browser alert.
+The transient `light_busy` response instead preserves the last copied controls
+and reports that state will refresh, so a lock timeout is not misrepresented as
+manager deinitialization. Lower-layer apply failures retain their rejection
+feedback while a read-only reconciliation occurs.
+OFF preserves the server-owned RGB/brightness/effect values; Rainbow displays
+the retained logical RGB while noting that physical output is dynamic. The
+single-LED additions are Strobe (fast flash), Heartbeat (double pulse), and
+Candle (continuous brightness flicker); strip-only chase/wipe patterns remain
+intentionally unavailable.
+
+`local_web_server` maps a read-back `light_manager_state_t` into a copied
+`ui_web_light_status_t` queue payload. `app_gui` renders that payload on the
+`WEB_LIGHT` LCD view; the HTTP task never accesses LVGL and the LCD is not an
+interactive controller.
 
 ## SD-backed presentation icons
 

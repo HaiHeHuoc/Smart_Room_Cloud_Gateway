@@ -16,6 +16,10 @@
 #define LIGHT_MANAGER_PULSE_DURATION_MS 1200U
 #define LIGHT_MANAGER_PULSE_REPEAT_COUNT UINT32_MAX
 #define LIGHT_MANAGER_RAINBOW_STEP_MS 10U
+#define LIGHT_MANAGER_STROBE_ON_TIME_MS 80U
+#define LIGHT_MANAGER_STROBE_OFF_TIME_MS 120U
+#define LIGHT_MANAGER_HEARTBEAT_PERIOD_MS 1000U
+#define LIGHT_MANAGER_CANDLE_PERIOD_MS 2200U
 
 #if CONFIG_LIGHT_MANAGER_TEST_LOOP
 #define LIGHT_MANAGER_TEST_TASK_STACK_SIZE 4096U
@@ -84,16 +88,40 @@ static bool light_manager_config_is_valid(const light_manager_config_t *config)
            GPIO_IS_VALID_OUTPUT_GPIO(config->gpio_num);
 }
 
+/*
+ * CSS/HTML color inputs are sRGB-encoded, whereas a WS2812 PWM value is
+ * approximately linear light output.  Keep s_context in the public logical
+ * sRGB domain and translate only at the product-to-driver boundary.
+ */
+static const uint8_t s_srgb_to_linear_pwm[256] = {
+      0,   0,   0,   0,   0,   0,   0,   1,   1,   1,   1,   1,   1,   1,   1,   1,
+      1,   1,   2,   2,   2,   2,   2,   2,   2,   2,   3,   3,   3,   3,   3,   3,
+      4,   4,   4,   4,   4,   5,   5,   5,   5,   6,   6,   6,   6,   7,   7,   7,
+      8,   8,   8,   8,   9,   9,   9,  10,  10,  10,  11,  11,  12,  12,  12,  13,
+     13,  13,  14,  14,  15,  15,  16,  16,  17,  17,  17,  18,  18,  19,  19,  20,
+     20,  21,  22,  22,  23,  23,  24,  24,  25,  25,  26,  27,  27,  28,  29,  29,
+     30,  30,  31,  32,  32,  33,  34,  35,  35,  36,  37,  37,  38,  39,  40,  41,
+     41,  42,  43,  44,  45,  45,  46,  47,  48,  49,  50,  51,  51,  52,  53,  54,
+     55,  56,  57,  58,  59,  60,  61,  62,  63,  64,  65,  66,  67,  68,  69,  70,
+     71,  72,  73,  74,  76,  77,  78,  79,  80,  81,  82,  84,  85,  86,  87,  88,
+     90,  91,  92,  93,  95,  96,  97,  99, 100, 101, 103, 104, 105, 107, 108, 109,
+    111, 112, 114, 115, 116, 118, 119, 121, 122, 124, 125, 127, 128, 130, 131, 133,
+    134, 136, 138, 139, 141, 142, 144, 146, 147, 149, 151, 152, 154, 156, 157, 159,
+    161, 163, 164, 166, 168, 170, 171, 173, 175, 177, 179, 181, 183, 184, 186, 188,
+    190, 192, 194, 196, 198, 200, 202, 204, 206, 208, 210, 212, 214, 216, 218, 220,
+    222, 224, 226, 229, 231, 233, 235, 237, 239, 242, 244, 246, 248, 250, 253, 255,
+};
+
 static uint32_t light_manager_state_to_rgb(const light_manager_state_t *state)
 {
-    return ((uint32_t)state->red << 16U) |
-           ((uint32_t)state->green << 8U) |
-           (uint32_t)state->blue;
+    return ((uint32_t)s_srgb_to_linear_pwm[state->red] << 16U) |
+           ((uint32_t)s_srgb_to_linear_pwm[state->green] << 8U) |
+           (uint32_t)s_srgb_to_linear_pwm[state->blue];
 }
 
 static bool light_manager_effect_is_valid(light_manager_effect_t effect)
 {
-    return effect <= LIGHT_MANAGER_EFFECT_RAINBOW;
+    return effect <= LIGHT_MANAGER_EFFECT_CANDLE;
 }
 
 static esp_err_t light_manager_start_effect_locked(
@@ -121,6 +149,19 @@ static esp_err_t light_manager_start_effect_locked(
         break;
     case LIGHT_MANAGER_EFFECT_RAINBOW:
         ret = neopixel_rainbow_cycle(LIGHT_MANAGER_RAINBOW_STEP_MS);
+        break;
+    case LIGHT_MANAGER_EFFECT_STROBE:
+        ret = neopixel_blink(color, state->brightness_percent,
+                             LIGHT_MANAGER_STROBE_ON_TIME_MS,
+                             LIGHT_MANAGER_STROBE_OFF_TIME_MS);
+        break;
+    case LIGHT_MANAGER_EFFECT_HEARTBEAT:
+        ret = neopixel_heartbeat(color, state->brightness_percent,
+                                 LIGHT_MANAGER_HEARTBEAT_PERIOD_MS);
+        break;
+    case LIGHT_MANAGER_EFFECT_CANDLE:
+        ret = neopixel_candle(color, state->brightness_percent,
+                              LIGHT_MANAGER_CANDLE_PERIOD_MS);
         break;
     case LIGHT_MANAGER_EFFECT_SOLID:
     default:
@@ -185,6 +226,9 @@ static const char *const s_test_effect_names[] =
     "breath",
     "pulse",
     "rainbow",
+    "strobe",
+    "heartbeat",
+    "candle",
 };
 
 static void light_manager_test_wait(void)
@@ -234,7 +278,7 @@ static void light_manager_test_log_state(void)
             (unsigned)state.green,
             (unsigned)state.blue,
             (unsigned)state.brightness_percent,
-            state.effect <= LIGHT_MANAGER_EFFECT_RAINBOW
+            state.effect <= LIGHT_MANAGER_EFFECT_CANDLE
                 ? s_test_effect_names[state.effect]
                 : "invalid");
     }
@@ -264,7 +308,7 @@ static void light_manager_test_task(void *context)
     {
         ESP_LOGI(TAG, "LIGHT_TEST: starting a new complete test cycle");
 
-        for (size_t index = 0U; index < LIGHT_MANAGER_EFFECT_RAINBOW + 1U; ++index) {
+        for (size_t index = 0U; index < LIGHT_MANAGER_EFFECT_CANDLE + 1U; ++index) {
             light_manager_state_t state = magenta;
             state.effect = (light_manager_effect_t)index;
             light_manager_test_run_action(s_test_effect_names[index],

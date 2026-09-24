@@ -338,7 +338,7 @@ static esp_err_t validate_effect_config(neopixel_effect_t effect,
 {
     if (!cfg ||
         effect <= NEOPIXEL_EFFECT_NONE ||
-        effect > NEOPIXEL_EFFECT_THEATER_CHASE ||
+        effect > NEOPIXEL_EFFECT_CANDLE ||
         cfg->brightness > 100 ||
         cfg->brightness_from > 100 ||
         cfg->brightness_to > 100) {
@@ -461,6 +461,40 @@ static bool update_strip_effect_locked(uint32_t dt_ms)
             set_all_output_brightness_locked(0);
             stop_strip_effect_locked();
         }
+        return true;
+    }
+
+    case NEOPIXEL_EFFECT_HEARTBEAT: {
+        const uint64_t period = cfg->duration_ms ? cfg->duration_ms : 1000u;
+        const float phase = (float)(elapsed % period) / (float)period;
+        float wave = 0.0f;
+
+        if (phase < 0.16f) {
+            wave = phase / 0.16f;
+        } else if (phase < 0.30f) {
+            wave = 1.0f - ((phase - 0.16f) / 0.14f);
+        } else if (phase < 0.42f) {
+            wave = 0.70f * ((phase - 0.30f) / 0.12f);
+        } else if (phase < 0.56f) {
+            wave = 0.70f * (1.0f - ((phase - 0.42f) / 0.14f));
+        }
+
+        fill_logical_locked(cfg->color);
+        set_all_output_brightness_locked((uint8_t)(cfg->brightness * wave));
+        return true;
+    }
+
+    case NEOPIXEL_EFFECT_CANDLE: {
+        const uint64_t period = cfg->duration_ms ? cfg->duration_ms : 2200u;
+        const float phase = (float)(elapsed % period) / (float)period;
+        float flicker = 0.72f +
+                        0.16f * sinf(phase * 6.0f * NEOPIXEL_PI_F) +
+                        0.10f * sinf(phase * 17.0f * NEOPIXEL_PI_F);
+
+        if (flicker < 0.40f) flicker = 0.40f;
+        if (flicker > 1.00f) flicker = 1.00f;
+        fill_logical_locked(cfg->color);
+        set_all_output_brightness_locked((uint8_t)(cfg->brightness * flicker));
         return true;
     }
 
@@ -673,6 +707,8 @@ static bool update_pixel_effect_locked(size_t index, uint32_t dt_ms)
     case NEOPIXEL_EFFECT_CHASE:
     case NEOPIXEL_EFFECT_GRADIENT:
     case NEOPIXEL_EFFECT_THEATER_CHASE:
+    case NEOPIXEL_EFFECT_HEARTBEAT:
+    case NEOPIXEL_EFFECT_CANDLE:
     case NEOPIXEL_EFFECT_NONE:
     default:
         stop_pixel_effect_state_locked(pixel);
@@ -1521,6 +1557,30 @@ esp_err_t neopixel_pulse(uint32_t color, uint8_t brightness,
         .count = count,
     };
     return neopixel_start_effect(NEOPIXEL_EFFECT_PULSE, &cfg);
+}
+
+esp_err_t neopixel_heartbeat(uint32_t color, uint8_t brightness,
+                             uint32_t period_ms)
+{
+    neopixel_effect_config_t cfg = {
+        .color = color,
+        .brightness = brightness,
+        .duration_ms = period_ms,
+        .step_ms = 20u,
+    };
+    return neopixel_start_effect(NEOPIXEL_EFFECT_HEARTBEAT, &cfg);
+}
+
+esp_err_t neopixel_candle(uint32_t color, uint8_t brightness,
+                          uint32_t period_ms)
+{
+    neopixel_effect_config_t cfg = {
+        .color = color,
+        .brightness = brightness,
+        .duration_ms = period_ms,
+        .step_ms = 40u,
+    };
+    return neopixel_start_effect(NEOPIXEL_EFFECT_CANDLE, &cfg);
 }
 
 esp_err_t neopixel_chase(uint32_t color, uint32_t speed_ms)

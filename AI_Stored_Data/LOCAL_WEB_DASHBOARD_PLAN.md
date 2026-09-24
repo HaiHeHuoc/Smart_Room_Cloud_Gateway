@@ -1,7 +1,7 @@
 # Local Web Dashboard Plan
 
-Updated: 2026-09-13
-Status: **SPRINT 19 CAPACITY FIX BUILT / TARGET REDEPLOY AND HIL PENDING**
+Updated: 2026-09-24
+Status: **SPRINTS 19-21 IMPLEMENTED / BUILD VERIFIED / TARGET HIL PENDING**
 Active integration branch: `main_including_Firebase_security`
 
 ## Purpose
@@ -10,8 +10,8 @@ This document is the durable cross-session plan for the Local Web Control
 Dashboard. Future ChatGPT/Codex/AI sessions must use it to avoid roadmap drift
 unless Hải explicitly approves a later roadmap change.
 
-This is planning documentation only. It does not claim that any web-dashboard
-implementation, build, target run, or HIL evidence exists.
+Sprint 19-21 source and build facts below are recorded implementation evidence.
+Target HIL remains required and is not implied by this planning document.
 
 ## Roadmap position
 
@@ -21,9 +21,9 @@ numbering, scope, history, and acceptance evidence unchanged.
 The approved post-Sprint-18 sequence is:
 
 ```text
-Sprint 19  Local Web Control V1: SD Card File Manager     PLANNED / NOT STARTED
-Sprint 20  Local Web Control V2: Playback + Volume       PLANNED / NOT STARTED
-Sprint 21  Local Web Control V3: Lights                  PLANNED / NOT STARTED
+Sprint 19  Local Web Control V1: SD Card File Manager     IMPLEMENTED / BUILD VERIFIED / HIL PENDING
+Sprint 20  Local Web Control V2: Playback + Volume       IMPLEMENTED / BUILD VERIFIED / HIL PENDING
+Sprint 21  Local Web Control V3: Lights                  IMPLEMENTED / BUILD VERIFIED / HIL PENDING
 Sprint 22  Local Web Control V4: Dashboard + System Status
                                                          PLANNED / NOT STARTED
 Sprint 23  Local Web Control V5: Scenes + Logs + Diagnostics
@@ -209,7 +209,8 @@ card before adding other web-control features.
   serialized ESP-IDF 6.0.1 build PASS. The application binary is 2,601,776
   bytes, leaving 38% free in the smallest 4 MiB app partition.
 - The host exposed only `COM1`; no ESP32-S3 target, browser session, or SD-card
-  HIL evidence was available. Sprint 20+ remains unstarted.
+  HIL evidence was available at that checkpoint. Sprint 20-21 were later
+  implemented and build verified; their target HIL remains pending.
 
 ### Capacity HIL defect and source fix (2026-09-16)
 
@@ -273,7 +274,7 @@ and coexistence with existing Gateway services.
 
 ## Sprint 20 — Local Web Control V2: Playback + Volume
 
-Status: **PLANNED / NOT STARTED**
+Status: **IMPLEMENTED / BUILD VERIFIED / TARGET HIL PENDING**
 
 ### Goal
 
@@ -290,6 +291,15 @@ a second audio owner.
 - show copied playback state/error/result;
 - add/update the LCD Web Remote playback sub-view as appropriate.
 
+### Delivered implementation
+
+- Accessible Storage/Playback tabs provide catalog-ID play, copied playback
+  state, volume, and generation-guarded seek without HTTP ownership of I2S,
+  WAV readers, or SD leases.
+- The browser derives time from the manager-published sample rate and performs
+  one seek only after a drag commit; live PCM/Xiaozhi and stale/non-seekable
+  requests remain rejected by the owner.
+
 ### Boundaries
 
 - no direct I2S/DMA access from HTTP/WebSocket handlers;
@@ -299,7 +309,7 @@ a second audio owner.
 
 ## Sprint 21 — Local Web Control V3: Lights
 
-Status: **PLANNED / NOT STARTED**
+Status: **IMPLEMENTED / BUILD VERIFIED / TARGET HIL PENDING**
 
 ### Goal
 
@@ -320,6 +330,18 @@ Expose the already project-owned light contract through a local web frontend.
 Route mutations through `light_manager` and the same validated product semantics
 used by other frontends. The web layer must not own NeoPixel/RMT/GPIO or create
 a conflicting light-state model.
+
+### Delivered implementation
+
+- `GET /api/light/status` and atomic partial `POST /api/light/state` use only
+  public `light_manager` state APIs. Effects follow the existing MCP activation
+  and black-to-neutral-white semantics; OFF retains logical RGB, brightness,
+  and effect.
+- The accessible Lights tab coalesces color/brightness writes, applies
+  power/effect promptly, reconciles from authoritative state, and ignores stale
+  browser responses. Visible-tab polling is bounded and stops when hidden.
+- `app_gui` renders copied `WEB_LIGHT` power/RGB/brightness/effect snapshots.
+  Local Web never calls LVGL; the LCD remains read-only.
 
 ## Sprint 22 — Local Web Control V4: Dashboard + System Status
 
@@ -410,6 +432,10 @@ For Sprints 19-23:
    is actually executed and recorded.
 
 ## Scope-change rule
+
+The implemented Sprint 19-21 statuses above override the older generic
+planning language in this section. Sprints 22+ remain planned until explicitly
+started and documented.
 
 This file records the approved roadmap, not permission to implement every item
 immediately. Each sprint remains **PLANNED / NOT STARTED** until Hải explicitly

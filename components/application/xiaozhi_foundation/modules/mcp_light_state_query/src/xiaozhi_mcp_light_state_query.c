@@ -57,6 +57,9 @@ static const char *xiaozhi_mcp_light_state_effect_name(
     case XIAOZHI_FOUNDATION_LIGHT_EFFECT_BREATH: return "breath";
     case XIAOZHI_FOUNDATION_LIGHT_EFFECT_PULSE: return "pulse";
     case XIAOZHI_FOUNDATION_LIGHT_EFFECT_RAINBOW: return "rainbow";
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_STROBE: return "strobe";
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_HEARTBEAT: return "heartbeat";
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_CANDLE: return "candle";
     default: return NULL;
     }
 }
@@ -186,7 +189,7 @@ esp_err_t xiaozhi_mcp_light_state_query_attach(esp_mcp_t *mcp)
 
     esp_err_t ret = esp_mcp_tool_set_output_schema_json(
         tool,
-        "{\"type\":\"object\",\"properties\":{\"state_available\":{\"type\":\"boolean\"},\"power\":{\"type\":[\"string\",\"null\"],\"enum\":[\"on\",\"off\",null]},\"color\":{\"type\":[\"string\",\"null\"]},\"red\":{\"type\":[\"integer\",\"null\"],\"minimum\":0,\"maximum\":255},\"green\":{\"type\":[\"integer\",\"null\"],\"minimum\":0,\"maximum\":255},\"blue\":{\"type\":[\"integer\",\"null\"],\"minimum\":0,\"maximum\":255},\"brightness_percent\":{\"type\":[\"integer\",\"null\"],\"minimum\":0,\"maximum\":100},\"effect\":{\"type\":[\"string\",\"null\"],\"enum\":[\"solid\",\"blink\",\"breath\",\"pulse\",\"rainbow\",null]}},\"required\":[\"state_available\",\"power\",\"color\",\"red\",\"green\",\"blue\",\"brightness_percent\",\"effect\"]}");
+        "{\"type\":\"object\",\"properties\":{\"state_available\":{\"type\":\"boolean\"},\"power\":{\"type\":[\"string\",\"null\"],\"enum\":[\"on\",\"off\",null]},\"color\":{\"type\":[\"string\",\"null\"]},\"red\":{\"type\":[\"integer\",\"null\"],\"minimum\":0,\"maximum\":255},\"green\":{\"type\":[\"integer\",\"null\"],\"minimum\":0,\"maximum\":255},\"blue\":{\"type\":[\"integer\",\"null\"],\"minimum\":0,\"maximum\":255},\"brightness_percent\":{\"type\":[\"integer\",\"null\"],\"minimum\":0,\"maximum\":100},\"effect\":{\"type\":[\"string\",\"null\"],\"enum\":[\"solid\",\"blink\",\"breath\",\"pulse\",\"rainbow\",\"strobe\",\"heartbeat\",\"candle\",null]}},\"required\":[\"state_available\",\"power\",\"color\",\"red\",\"green\",\"blue\",\"brightness_percent\",\"effect\"]}");
     if (ret == ESP_OK) {
         ret = esp_mcp_tool_set_annotations_json(
             tool,

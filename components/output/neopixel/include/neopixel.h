@@ -47,6 +47,8 @@ typedef enum {
     NEOPIXEL_EFFECT_CHASE,
     NEOPIXEL_EFFECT_GRADIENT,
     NEOPIXEL_EFFECT_THEATER_CHASE,
+    NEOPIXEL_EFFECT_HEARTBEAT,
+    NEOPIXEL_EFFECT_CANDLE,
 } neopixel_effect_t;
 
 typedef struct {
@@ -171,6 +173,10 @@ esp_err_t neopixel_rainbow_cycle(uint32_t speed_ms);
 esp_err_t neopixel_breath(uint32_t color, uint32_t period_ms);
 esp_err_t neopixel_pulse(uint32_t color, uint8_t brightness,
                          uint32_t duration_ms, uint32_t count);
+esp_err_t neopixel_heartbeat(uint32_t color, uint8_t brightness,
+                             uint32_t period_ms);
+esp_err_t neopixel_candle(uint32_t color, uint8_t brightness,
+                          uint32_t period_ms);
 esp_err_t neopixel_chase(uint32_t color, uint32_t speed_ms);
 esp_err_t neopixel_color_wipe(uint32_t color, uint32_t speed_ms);
 esp_err_t neopixel_theater_chase(uint32_t color, uint32_t speed_ms);

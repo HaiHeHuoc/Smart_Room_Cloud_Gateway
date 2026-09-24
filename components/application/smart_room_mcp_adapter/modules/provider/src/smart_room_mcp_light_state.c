@@ -27,6 +27,15 @@ static bool app_xiaozhi_light_effect_from_manager(
     case LIGHT_MANAGER_EFFECT_RAINBOW:
         *foundation_effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_RAINBOW;
         return true;
+    case LIGHT_MANAGER_EFFECT_STROBE:
+        *foundation_effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_STROBE;
+        return true;
+    case LIGHT_MANAGER_EFFECT_HEARTBEAT:
+        *foundation_effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_HEARTBEAT;
+        return true;
+    case LIGHT_MANAGER_EFFECT_CANDLE:
+        *foundation_effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_CANDLE;
+        return true;
     default:
         return false;
     }

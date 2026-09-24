@@ -41,6 +41,7 @@
 #define APP_GUI_AUDIO_STATUS_QUEUE_LENGTH 1U
 #define APP_GUI_CLOUD_STATUS_QUEUE_LENGTH 1U
 #define APP_GUI_WEB_STORAGE_STATUS_QUEUE_LENGTH 1U
+#define APP_GUI_WEB_LIGHT_STATUS_QUEUE_LENGTH 1U
 #define APP_GUI_XIAOZHI_STATUS_QUEUE_LENGTH 1U
 #define APP_GUI_UI_TASK_STACK_SIZE_BYTES   (24U * 1024U)
 #define APP_GUI_TASK_PRIORITY              5U
@@ -169,6 +170,10 @@ typedef struct
     lv_obj_t *web_storage_usage_label;
     lv_obj_t *web_storage_progress_label;
     lv_obj_t *web_storage_error_label;
+    lv_obj_t *web_light_power_label;
+    lv_obj_t *web_light_color_label;
+    lv_obj_t *web_light_brightness_label;
+    lv_obj_t *web_light_effect_label;
     lv_obj_t *sensor_time_label;
     lv_obj_t *sensor_date_label;
     lv_obj_t *sensor_temperature_label;
@@ -208,6 +213,7 @@ static QueueHandle_t s_sensor_status_queue = NULL;
 static QueueHandle_t s_audio_status_queue = NULL;
 static QueueHandle_t s_cloud_status_queue = NULL;
 static QueueHandle_t s_web_storage_status_queue = NULL;
+static QueueHandle_t s_web_light_status_queue = NULL;
 static QueueHandle_t s_xiaozhi_status_queue = NULL;
 static TaskHandle_t s_ui_task_handle = NULL;
 static app_gui_screen_id_t s_current_screen_id = APP_GUI_SCREEN_NONE;
@@ -239,6 +245,11 @@ static bool s_latest_cloud_status_available = false;
 static ui_cloud_status_t s_latest_cloud_status = {0};
 static bool s_latest_web_storage_status_available = false;
 static ui_web_storage_status_t s_latest_web_storage_status = {
+    .last_error = ESP_OK,
+};
+static bool s_latest_web_light_status_available = false;
+static ui_web_light_status_t s_latest_web_light_status = {
+    .effect = UI_WEB_LIGHT_EFFECT_UNKNOWN,
     .last_error = ESP_OK,
 };
 static bool s_latest_xiaozhi_status_available = false;
@@ -281,6 +292,10 @@ static lv_obj_t *s_web_storage_state_label = NULL;
 static lv_obj_t *s_web_storage_usage_label = NULL;
 static lv_obj_t *s_web_storage_progress_label = NULL;
 static lv_obj_t *s_web_storage_error_label = NULL;
+static lv_obj_t *s_web_light_power_label = NULL;
+static lv_obj_t *s_web_light_color_label = NULL;
+static lv_obj_t *s_web_light_brightness_label = NULL;
+static lv_obj_t *s_web_light_effect_label = NULL;
 
 /* Sensor object references are valid only while the sensor screen is active. */
 static lv_obj_t *s_sensor_time_label = NULL;
@@ -405,6 +420,8 @@ static esp_err_t app_gui_create_cloud_detail_screen(
     lv_obj_t *screen);
 static esp_err_t app_gui_create_web_storage_screen(
     lv_obj_t *screen);
+static esp_err_t app_gui_create_web_light_screen(
+    lv_obj_t *screen);
 static esp_err_t app_gui_create_sensor_screen(
     lv_obj_t *screen);
 static esp_err_t app_gui_create_xiaozhi_screen(
@@ -472,6 +489,8 @@ static void app_gui_render_cloud_detail(
     const ui_cloud_status_t *status);
 static void app_gui_render_web_storage_status(
     const ui_web_storage_status_t *status);
+static void app_gui_render_web_light_status(
+    const ui_web_light_status_t *status);
 static void app_gui_render_xiaozhi_status(
     const ui_xiaozhi_status_t *status);
 static bool app_gui_xiaozhi_text_exceeds_viewport(
@@ -506,6 +525,7 @@ static void app_gui_process_audio_status(void);
 static void app_gui_process_wifi_status(void);
 static void app_gui_process_cloud_status(void);
 static void app_gui_process_web_storage_status(void);
+static void app_gui_process_web_light_status(void);
 static void app_gui_process_xiaozhi_status(void);
 static void app_gui_log_stack_usage(const char *task_name);
 static void app_gui_process_lvgl(void);
@@ -528,7 +548,8 @@ static bool app_gui_is_valid_screen_id(
          (screen_id == APP_GUI_SCREEN_SENSOR_DASHBOARD) ||
          (screen_id == APP_GUI_SCREEN_XIAOZHI) ||
          (screen_id == APP_GUI_SCREEN_RESET_RESULT) ||
-         (screen_id == APP_GUI_SCREEN_WEB_STORAGE));
+         (screen_id == APP_GUI_SCREEN_WEB_STORAGE) ||
+         (screen_id == APP_GUI_SCREEN_WEB_LIGHT));
 }
 
 static bool app_gui_is_valid_reset_status(
@@ -780,6 +801,9 @@ static const char *app_gui_screen_id_to_string(
 
         case APP_GUI_SCREEN_WEB_STORAGE:
             return "WEB_STORAGE";
+
+        case APP_GUI_SCREEN_WEB_LIGHT:
+            return "WEB_LIGHT";
 
         default:
             return "UNKNOWN";
@@ -1054,6 +1078,11 @@ static void app_gui_cleanup_queues(void)
         s_web_storage_status_queue = NULL;
     }
 
+    if (s_web_light_status_queue != NULL) {
+        vQueueDeleteWithCaps(s_web_light_status_queue);
+        s_web_light_status_queue = NULL;
+    }
+
     if (s_xiaozhi_status_queue != NULL) {
         vQueueDeleteWithCaps(s_xiaozhi_status_queue);
         s_xiaozhi_status_queue = NULL;
@@ -1120,6 +1149,10 @@ static void app_gui_capture_widget_refs(
     refs->web_storage_usage_label = s_web_storage_usage_label;
     refs->web_storage_progress_label = s_web_storage_progress_label;
     refs->web_storage_error_label = s_web_storage_error_label;
+    refs->web_light_power_label = s_web_light_power_label;
+    refs->web_light_color_label = s_web_light_color_label;
+    refs->web_light_brightness_label = s_web_light_brightness_label;
+    refs->web_light_effect_label = s_web_light_effect_label;
     refs->sensor_time_label = s_sensor_time_label;
     refs->sensor_date_label = s_sensor_date_label;
     refs->sensor_temperature_label = s_sensor_temperature_label;
@@ -1177,6 +1210,10 @@ static void app_gui_clear_widget_refs(void)
     s_web_storage_usage_label = NULL;
     s_web_storage_progress_label = NULL;
     s_web_storage_error_label = NULL;
+    s_web_light_power_label = NULL;
+    s_web_light_color_label = NULL;
+    s_web_light_brightness_label = NULL;
+    s_web_light_effect_label = NULL;
     s_sensor_time_label = NULL;
     s_sensor_date_label = NULL;
     s_sensor_temperature_label = NULL;
@@ -1241,6 +1278,10 @@ static void app_gui_apply_widget_refs(
     s_web_storage_usage_label = refs->web_storage_usage_label;
     s_web_storage_progress_label = refs->web_storage_progress_label;
     s_web_storage_error_label = refs->web_storage_error_label;
+    s_web_light_power_label = refs->web_light_power_label;
+    s_web_light_color_label = refs->web_light_color_label;
+    s_web_light_brightness_label = refs->web_light_brightness_label;
+    s_web_light_effect_label = refs->web_light_effect_label;
     s_sensor_time_label = refs->sensor_time_label;
     s_sensor_date_label = refs->sensor_date_label;
     s_sensor_temperature_label = refs->sensor_temperature_label;
@@ -2544,6 +2585,39 @@ static esp_err_t app_gui_create_web_storage_screen(
             (s_web_storage_usage_label != NULL) &&
             (s_web_storage_progress_label != NULL) &&
             (s_web_storage_error_label != NULL)) ? ESP_OK : ESP_ERR_NO_MEM;
+}
+
+static esp_err_t app_gui_create_web_light_screen(
+    lv_obj_t *screen)
+{
+    static const char *const row_titles[] = {
+        "POWER", "COLOR", "BRIGHT", "EFFECT",
+    };
+    static const int32_t row_y[] = {42, 65, 88, 111};
+
+    if (screen == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    app_gui_clear_widget_refs();
+    const esp_err_t ret = app_gui_create_detail_screen_chrome(
+        screen,
+        "WEB LIGHT",
+        row_titles,
+        sizeof(row_titles) / sizeof(row_titles[0]),
+        row_y);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    s_web_light_power_label = app_gui_create_detail_value_label(screen, row_y[0]);
+    s_web_light_color_label = app_gui_create_detail_value_label(screen, row_y[1]);
+    s_web_light_brightness_label = app_gui_create_detail_value_label(screen, row_y[2]);
+    s_web_light_effect_label = app_gui_create_detail_value_label(screen, row_y[3]);
+    return ((s_web_light_power_label != NULL) &&
+            (s_web_light_color_label != NULL) &&
+            (s_web_light_brightness_label != NULL) &&
+            (s_web_light_effect_label != NULL)) ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
 /* Sensor Screen Construction ---------------------------------------------- */
@@ -4003,6 +4077,55 @@ static void app_gui_render_web_storage_status(
         status->last_error == ESP_OK ? "-" : esp_err_to_name(status->last_error));
 }
 
+static const char *app_gui_web_light_effect_to_string(
+    ui_web_light_effect_t effect)
+{
+    switch (effect) {
+        case UI_WEB_LIGHT_EFFECT_SOLID: return "SOLID";
+        case UI_WEB_LIGHT_EFFECT_BLINK: return "BLINK";
+        case UI_WEB_LIGHT_EFFECT_BREATH: return "BREATH";
+        case UI_WEB_LIGHT_EFFECT_PULSE: return "PULSE";
+        case UI_WEB_LIGHT_EFFECT_RAINBOW: return "RAINBOW";
+        case UI_WEB_LIGHT_EFFECT_STROBE: return "STROBE";
+        case UI_WEB_LIGHT_EFFECT_HEARTBEAT: return "HEARTBEAT";
+        case UI_WEB_LIGHT_EFFECT_CANDLE: return "CANDLE";
+        default: return "-";
+    }
+}
+
+static void app_gui_render_web_light_status(
+    const ui_web_light_status_t *status)
+{
+    if ((status == NULL) || (s_web_light_power_label == NULL) ||
+        (s_web_light_color_label == NULL) ||
+        (s_web_light_brightness_label == NULL) ||
+        (s_web_light_effect_label == NULL)) {
+        return;
+    }
+
+    if (!status->server_running || !status->light_available) {
+        app_gui_set_label_text_if_changed(s_web_light_power_label,
+            status->server_running ? "UNAVAILABLE" : "OFFLINE");
+        app_gui_set_label_text_if_changed(s_web_light_color_label, "-");
+        app_gui_set_label_text_if_changed(s_web_light_brightness_label, "-");
+        app_gui_set_label_text_if_changed(s_web_light_effect_label, "-");
+        return;
+    }
+
+    char color[8] = {0};
+    char brightness[8] = {0};
+    (void)snprintf(color, sizeof(color), "#%02X%02X%02X",
+                   status->red, status->green, status->blue);
+    (void)snprintf(brightness, sizeof(brightness), "%u%%",
+                   (unsigned)status->brightness_percent);
+    app_gui_set_label_text_if_changed(s_web_light_power_label,
+        status->power_on ? "ON" : "OFF");
+    app_gui_set_label_text_if_changed(s_web_light_color_label, color);
+    app_gui_set_label_text_if_changed(s_web_light_brightness_label, brightness);
+    app_gui_set_label_text_if_changed(s_web_light_effect_label,
+        app_gui_web_light_effect_to_string(status->effect));
+}
+
 static bool app_gui_render_cached_status(
     app_gui_screen_id_t screen_id)
 {
@@ -4023,6 +4146,7 @@ static bool app_gui_render_cached_status(
     bool audio_available = false;
     bool cloud_available = false;
     bool web_storage_available = false;
+    bool web_light_available = false;
     bool xiaozhi_available = false;
     ui_provisioning_status_t provisioning_status = {
         .session_generation = 0U,
@@ -4041,6 +4165,10 @@ static bool app_gui_render_cached_status(
     };
     ui_cloud_status_t cloud_status = {0};
     ui_web_storage_status_t web_storage_status = {
+        .last_error = ESP_OK,
+    };
+    ui_web_light_status_t web_light_status = {
+        .effect = UI_WEB_LIGHT_EFFECT_UNKNOWN,
         .last_error = ESP_OK,
     };
     ui_xiaozhi_status_t xiaozhi_status = {
@@ -4082,6 +4210,8 @@ static bool app_gui_render_cached_status(
         cloud_status = s_latest_cloud_status;
         web_storage_available = s_latest_web_storage_status_available;
         web_storage_status = s_latest_web_storage_status;
+        web_light_available = s_latest_web_light_status_available;
+        web_light_status = s_latest_web_light_status;
         xiaozhi_available = s_latest_xiaozhi_status_available;
         xiaozhi_status = s_latest_xiaozhi_status;
     }
@@ -4148,6 +4278,13 @@ static bool app_gui_render_cached_status(
             app_gui_render_web_storage_status(&web_storage_status);
         }
         return true;
+    }
+
+    if (screen_id == APP_GUI_SCREEN_WEB_LIGHT) {
+        if (web_light_available) {
+            app_gui_render_web_light_status(&web_light_status);
+        }
+        return web_light_available;
     }
 
     if (screen_id == APP_GUI_SCREEN_XIAOZHI) {
@@ -4279,6 +4416,10 @@ static esp_err_t app_gui_activate_screen(
 
         case APP_GUI_SCREEN_WEB_STORAGE:
             ret = app_gui_create_web_storage_screen(target_root);
+            break;
+
+        case APP_GUI_SCREEN_WEB_LIGHT:
+            ret = app_gui_create_web_light_screen(target_root);
             break;
 
         case APP_GUI_SCREEN_NONE:
@@ -4835,6 +4976,31 @@ static void app_gui_process_web_storage_status(void)
     }
 }
 
+static void app_gui_process_web_light_status(void)
+{
+    ui_web_light_status_t status = {
+        .effect = UI_WEB_LIGHT_EFFECT_UNKNOWN,
+        .last_error = ESP_OK,
+    };
+    if ((s_web_light_status_queue == NULL) ||
+        (xQueueReceive(s_web_light_status_queue, &status, 0) != pdTRUE)) {
+        return;
+    }
+
+    taskENTER_CRITICAL(&s_screen_id_lock);
+    s_latest_web_light_status_available = true;
+    s_latest_web_light_status = status;
+    taskEXIT_CRITICAL(&s_screen_id_lock);
+
+    app_gui_screen_id_t screen_id = APP_GUI_SCREEN_NONE;
+    if ((app_gui_get_screen_id(&screen_id) == ESP_OK) &&
+        (screen_id == APP_GUI_SCREEN_WEB_LIGHT)) {
+        ui_manager_lvgl_wait_for_mutex();
+        app_gui_render_web_light_status(&status);
+        ui_manager_lvgl_release_mutex();
+    }
+}
+
 /* Xiaozhi Queue Processing ------------------------------------------------ */
 static void app_gui_process_xiaozhi_status(void)
 {
@@ -4978,6 +5144,8 @@ static void app_gui_process_lvgl(void)
 
     app_gui_process_web_storage_status();
 
+    app_gui_process_web_light_status();
+
     app_gui_process_xiaozhi_status();
 
     app_gui_process_wifi_status();
@@ -5023,6 +5191,7 @@ esp_err_t app_gui_init(void)
         (s_audio_status_queue != NULL) ||
         (s_cloud_status_queue != NULL) ||
         (s_web_storage_status_queue != NULL) ||
+        (s_web_light_status_queue != NULL) ||
         (s_xiaozhi_status_queue != NULL)) {
         APP_LOGW(TAG, APPLICATION_GUI_IS_ALREADY_I_393F848B, "Application GUI is already initialized");
         return ESP_ERR_INVALID_STATE;
@@ -5131,6 +5300,19 @@ esp_err_t app_gui_init(void)
         return ESP_ERR_NO_MEM;
     }
 
+    s_web_light_status_queue =
+        xQueueCreateWithCaps(
+            APP_GUI_WEB_LIGHT_STATUS_QUEUE_LENGTH,
+            sizeof(ui_web_light_status_t),
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+    if (s_web_light_status_queue == NULL) {
+        APP_LOGE(TAG, FAILED_TO_CREATE_WEB_LIGHT_95B2B378,
+                 "Failed to create Web Light GUI status queue");
+        app_gui_cleanup_queues();
+        return ESP_ERR_NO_MEM;
+    }
+
     s_xiaozhi_status_queue =
         xQueueCreateWithCaps(
             APP_GUI_XIAOZHI_STATUS_QUEUE_LENGTH,
@@ -5159,6 +5341,7 @@ esp_err_t app_gui_start_ui_task(void)
         (s_audio_status_queue == NULL) ||
         (s_cloud_status_queue == NULL) ||
         (s_web_storage_status_queue == NULL) ||
+        (s_web_light_status_queue == NULL) ||
         (s_xiaozhi_status_queue == NULL)) {
         APP_LOGE(TAG, APPLICATION_GUI_IS_NOT_INITI_D1288C6B, "Application GUI is not initialized");
         return ESP_ERR_INVALID_STATE;
@@ -5445,6 +5628,23 @@ esp_err_t app_gui_post_web_storage_status(
     if (xQueueOverwrite(s_web_storage_status_queue, status) != pdTRUE) {
         APP_LOGW(TAG, FAILED_TO_POST_WEB_STORAGE_ST_87A89FF1,
                  "Failed to post Web Storage status to UI");
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
+esp_err_t app_gui_post_web_light_status(
+    const ui_web_light_status_t *status)
+{
+    if (status == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_web_light_status_queue == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (xQueueOverwrite(s_web_light_status_queue, status) != pdTRUE) {
+        APP_LOGW(TAG, FAILED_TO_POST_WEB_LIGHT_ST_38D78A9C,
+                 "Failed to post Web Light status to UI");
         return ESP_FAIL;
     }
     return ESP_OK;

@@ -24,12 +24,12 @@ static esp_err_t xiaozhi_mcp_light_capabilities_callback(
         "{\"features\":[\"power\",\"color\",\"brightness\",\"effect\"],"
         "\"colors\":[\"red\",\"green\",\"blue\",\"white\",\"yellow\",\"cyan\","
         "\"magenta\",\"pink\",\"purple\",\"orange\"],"
-        "\"effects\":[\"solid\",\"blink\",\"breath\",\"pulse\",\"rainbow\"],"
+        "\"effects\":[\"solid\",\"blink\",\"breath\",\"pulse\",\"rainbow\",\"strobe\",\"heartbeat\",\"candle\"],"
         "\"brightness_percent\":{\"min\":0,\"max\":100}}";
     static const char text[] =
         "SMART_ROOM_LIGHT_CAPABILITIES: features=power,color,brightness,effect; "
         "colors=red,green,blue,white,yellow,cyan,magenta,pink,purple,orange; "
-        "effects=solid,blink,breath,pulse,rainbow; brightness_percent=0..100. "
+        "effects=solid,blink,breath,pulse,rainbow,strobe,heartbeat,candle; brightness_percent=0..100. "
         "Use only these values when controlling the light.";
 
     APP_LOGI(TAG, LIGHT_CAPABILITIES_CALLED_8EA65E1B,
