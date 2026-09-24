@@ -36,6 +36,21 @@ static bool app_xiaozhi_light_effect_from_manager(
     case LIGHT_MANAGER_EFFECT_CANDLE:
         *foundation_effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_CANDLE;
         return true;
+    case LIGHT_MANAGER_EFFECT_SOS:
+        *foundation_effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_SOS;
+        return true;
+    case LIGHT_MANAGER_EFFECT_LIGHTNING:
+        *foundation_effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_LIGHTNING;
+        return true;
+    case LIGHT_MANAGER_EFFECT_WAKE_UP:
+        *foundation_effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_WAKE_UP;
+        return true;
+    case LIGHT_MANAGER_EFFECT_SLEEP_FADE:
+        *foundation_effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_SLEEP_FADE;
+        return true;
+    case LIGHT_MANAGER_EFFECT_NOTIFICATION:
+        *foundation_effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_NOTIFICATION;
+        return true;
     default:
         return false;
     }

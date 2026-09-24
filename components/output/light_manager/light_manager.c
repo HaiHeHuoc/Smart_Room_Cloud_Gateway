@@ -20,6 +20,8 @@
 #define LIGHT_MANAGER_STROBE_OFF_TIME_MS 120U
 #define LIGHT_MANAGER_HEARTBEAT_PERIOD_MS 1000U
 #define LIGHT_MANAGER_CANDLE_PERIOD_MS 2200U
+#define LIGHT_MANAGER_WAKE_UP_DURATION_MS 4000U
+#define LIGHT_MANAGER_SLEEP_FADE_DURATION_MS 3500U
 
 #if CONFIG_LIGHT_MANAGER_TEST_LOOP
 #define LIGHT_MANAGER_TEST_TASK_STACK_SIZE 4096U
@@ -121,7 +123,7 @@ static uint32_t light_manager_state_to_rgb(const light_manager_state_t *state)
 
 static bool light_manager_effect_is_valid(light_manager_effect_t effect)
 {
-    return effect <= LIGHT_MANAGER_EFFECT_CANDLE;
+    return effect <= LIGHT_MANAGER_EFFECT_NOTIFICATION;
 }
 
 static esp_err_t light_manager_start_effect_locked(
@@ -162,6 +164,23 @@ static esp_err_t light_manager_start_effect_locked(
     case LIGHT_MANAGER_EFFECT_CANDLE:
         ret = neopixel_candle(color, state->brightness_percent,
                               LIGHT_MANAGER_CANDLE_PERIOD_MS);
+        break;
+    case LIGHT_MANAGER_EFFECT_SOS:
+        ret = neopixel_sos(color, state->brightness_percent);
+        break;
+    case LIGHT_MANAGER_EFFECT_LIGHTNING:
+        ret = neopixel_lightning(color, state->brightness_percent);
+        break;
+    case LIGHT_MANAGER_EFFECT_WAKE_UP:
+        ret = neopixel_wake_up(color, state->brightness_percent,
+                               LIGHT_MANAGER_WAKE_UP_DURATION_MS);
+        break;
+    case LIGHT_MANAGER_EFFECT_SLEEP_FADE:
+        ret = neopixel_sleep_fade(color, state->brightness_percent,
+                                  LIGHT_MANAGER_SLEEP_FADE_DURATION_MS);
+        break;
+    case LIGHT_MANAGER_EFFECT_NOTIFICATION:
+        ret = neopixel_notification(color, state->brightness_percent);
         break;
     case LIGHT_MANAGER_EFFECT_SOLID:
     default:
@@ -229,6 +248,11 @@ static const char *const s_test_effect_names[] =
     "strobe",
     "heartbeat",
     "candle",
+    "sos",
+    "lightning",
+    "wake_up",
+    "sleep_fade",
+    "notification",
 };
 
 static void light_manager_test_wait(void)
@@ -278,7 +302,7 @@ static void light_manager_test_log_state(void)
             (unsigned)state.green,
             (unsigned)state.blue,
             (unsigned)state.brightness_percent,
-            state.effect <= LIGHT_MANAGER_EFFECT_CANDLE
+            state.effect <= LIGHT_MANAGER_EFFECT_NOTIFICATION
                 ? s_test_effect_names[state.effect]
                 : "invalid");
     }
@@ -308,7 +332,7 @@ static void light_manager_test_task(void *context)
     {
         ESP_LOGI(TAG, "LIGHT_TEST: starting a new complete test cycle");
 
-        for (size_t index = 0U; index < LIGHT_MANAGER_EFFECT_CANDLE + 1U; ++index) {
+        for (size_t index = 0U; index < LIGHT_MANAGER_EFFECT_NOTIFICATION + 1U; ++index) {
             light_manager_state_t state = magenta;
             state.effect = (light_manager_effect_t)index;
             light_manager_test_run_action(s_test_effect_names[index],

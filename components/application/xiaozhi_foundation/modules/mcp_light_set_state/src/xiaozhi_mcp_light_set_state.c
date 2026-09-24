@@ -100,6 +100,16 @@ static bool xiaozhi_mcp_light_copy_effect(
         request->effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_HEARTBEAT;
     } else if (strcmp(effect_name, "candle") == 0) {
         request->effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_CANDLE;
+    } else if (strcmp(effect_name, "sos") == 0) {
+        request->effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_SOS;
+    } else if (strcmp(effect_name, "lightning") == 0) {
+        request->effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_LIGHTNING;
+    } else if (strcmp(effect_name, "wake_up") == 0) {
+        request->effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_WAKE_UP;
+    } else if (strcmp(effect_name, "sleep_fade") == 0) {
+        request->effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_SLEEP_FADE;
+    } else if (strcmp(effect_name, "notification") == 0) {
+        request->effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_NOTIFICATION;
     } else {
         return false;
     }
@@ -120,6 +130,11 @@ static const char *xiaozhi_mcp_light_effect_name(
     case XIAOZHI_FOUNDATION_LIGHT_EFFECT_STROBE: return "strobe";
     case XIAOZHI_FOUNDATION_LIGHT_EFFECT_HEARTBEAT: return "heartbeat";
     case XIAOZHI_FOUNDATION_LIGHT_EFFECT_CANDLE: return "candle";
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_SOS: return "sos";
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_LIGHTNING: return "lightning";
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_WAKE_UP: return "wake_up";
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_SLEEP_FADE: return "sleep_fade";
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_NOTIFICATION: return "notification";
     default: return NULL;
     }
 }
@@ -386,7 +401,7 @@ esp_err_t xiaozhi_mcp_light_set_state_attach(esp_mcp_t *mcp)
     esp_mcp_tool_t *tool = esp_mcp_tool_create_ex(
         "light.set_state",
         "Smart Room: Dieu khien den",
-        "Set the Smart Room NeoPixel logical state. Arguments must be {state:{...}}. Inside state, allow only power ('on' or 'off'), color (red, green, blue, white, yellow, cyan, magenta, pink, purple, or orange), brightness_percent (integer 0..100), and effect (solid, blink, breath, pulse, rainbow, strobe, heartbeat, or candle). Provide at least one field. power='off' cannot be combined with color, brightness, or effect. An effect without power automatically turns the light on; if its preserved color is black, it uses white. Other omitted fields preserve their current logical value. This is a controlled device action; report the returned state exactly.",
+        "Set the Smart Room NeoPixel logical state. Arguments must be {state:{...}}. Inside state, allow only power ('on' or 'off'), color (red, green, blue, white, yellow, cyan, magenta, pink, purple, or orange), brightness_percent (integer 0..100), and effect (solid, blink, breath, pulse, rainbow, strobe, heartbeat, candle, sos, lightning, wake_up, sleep_fade, or notification). Provide at least one field. power='off' cannot be combined with color, brightness, or effect. An effect without power automatically turns the light on; if its preserved color is black, it uses white. Other omitted fields preserve their current logical value. This is a controlled device action; report the returned state exactly.",
         xiaozhi_mcp_light_set_state_callback);
     if (tool == NULL) {
         return ESP_ERR_NO_MEM;
@@ -404,7 +419,7 @@ esp_err_t xiaozhi_mcp_light_set_state_attach(esp_mcp_t *mcp)
     if (ret == ESP_OK) {
         ret = esp_mcp_tool_set_output_schema_json(
             tool,
-            "{\"type\":\"object\",\"properties\":{\"success\":{\"type\":\"boolean\"},\"error_code\":{\"type\":\"string\"},\"power\":{\"type\":\"string\",\"enum\":[\"on\",\"off\"]},\"red\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":255},\"green\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":255},\"blue\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":255},\"brightness_percent\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100},\"effect\":{\"type\":\"string\",\"enum\":[\"solid\",\"blink\",\"breath\",\"pulse\",\"rainbow\",\"strobe\",\"heartbeat\",\"candle\"]}},\"required\":[\"success\"]}");
+            "{\"type\":\"object\",\"properties\":{\"success\":{\"type\":\"boolean\"},\"error_code\":{\"type\":\"string\"},\"power\":{\"type\":\"string\",\"enum\":[\"on\",\"off\"]},\"red\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":255},\"green\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":255},\"blue\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":255},\"brightness_percent\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100},\"effect\":{\"type\":\"string\",\"enum\":[\"solid\",\"blink\",\"breath\",\"pulse\",\"rainbow\",\"strobe\",\"heartbeat\",\"candle\",\"sos\",\"lightning\",\"wake_up\",\"sleep_fade\",\"notification\"]}},\"required\":[\"success\"]}");
     }
     if (ret == ESP_OK) {
         ret = esp_mcp_tool_set_annotations_json(

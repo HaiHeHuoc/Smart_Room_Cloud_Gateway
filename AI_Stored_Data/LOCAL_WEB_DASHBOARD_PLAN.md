@@ -367,6 +367,10 @@ a conflicting light-state model.
 - The accessible Lights tab coalesces color/brightness writes, applies
   power/effect promptly, reconciles from authoritative state, and ignores stale
   browser responses. Visible-tab polling is bounded and stops when hidden.
+- Its bounded single-LED effect contract contains thirteen names: `solid`,
+  `blink`, `breath`, `pulse`, `rainbow`, `strobe`, `heartbeat`, `candle`,
+  `sos`, `lightning`, `wake_up`, `sleep_fade`, and `notification`. No spatial
+  multi-LED patterns or user-editable timing controls are exposed.
 - `app_gui` renders copied `WEB_LIGHT` power/RGB/brightness/effect snapshots.
   Local Web never calls LVGL; the LCD remains read-only.
 

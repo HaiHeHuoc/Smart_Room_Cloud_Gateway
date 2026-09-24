@@ -44,9 +44,11 @@ or a runtime control API before init returns `ESP_ERR_INVALID_STATE`.
 ## Product API and state semantics
 
 `light_manager_set_state()` applies power, RGB, brightness, and one bounded
-product effect as one logical operation. The public effect set is deliberately
-small: `solid`, `blink`, `breath`, `pulse`, and `rainbow`; it never exposes the
-lower-level NeoPixel effect enum or timing/configuration knobs.
+product effect as one logical operation. The public set contains thirteen
+single-LED effects: `solid`, `blink`, `breath`, `pulse`, `rainbow`, `strobe`,
+`heartbeat`, `candle`, `sos`, `lightning`, `wake_up`, `sleep_fade`, and
+`notification`. It never exposes lower-level NeoPixel timing/configuration
+knobs.
 
 ```c
 const light_manager_state_t magenta = {
@@ -68,11 +70,19 @@ ESP_ERROR_CHECK(light_manager_set_state(&magenta));
   2000 ms period; `pulse` repeats a fixed 1200 ms triangular pulse; `rainbow`
   uses the lower-layer single-LED rainbow-cycle behavior. `strobe` uses 80 ms
   ON / 120 ms OFF, `heartbeat` produces a fixed 1000 ms double pulse, and
-  `candle` uses a fixed 2200 ms continuous flicker wave. No public API accepts
-  arbitrary effect timing or raw NeoPixel configuration.
+  `candle` uses a fixed 2200 ms continuous flicker wave. `sos` repeats a
+  deterministic dot-dash pattern; `lightning` repeats a bounded irregular
+  flash table; and `notification` repeats two flashes followed by a long gap.
+  `wake_up` rises to the configured brightness over 4000 ms, then stops its
+  worker animation while retaining stable light output. `sleep_fade` drops to
+  dark over 3500 ms, stops its worker animation, and deliberately latches the
+  selected logical `sleep_fade` state dark until a later light command wins.
+  No public API accepts arbitrary effect timing or raw NeoPixel configuration.
 - `light_manager_off()` preserves RGB, brightness, and effect while darkening
-  the LED. A following `light_manager_on()` resumes the same effect when one
-  was active, or restores the stored solid state.
+  the LED. A following `light_manager_on()` resumes a paused continuous effect
+  or restores stored solid output. A completed `wake_up` remains steadily lit;
+  a completed `sleep_fade` remains intentionally dark until another explicit
+  product command replaces it.
 - Brightness is an inclusive `0..100` percentage. `0` is valid and produces
   zero light output while preserving RGB and the ON logical state.
 - RGB in the public state is sRGB (the same encoding used by the Web color
@@ -100,7 +110,7 @@ object remains valid across deinit/reinit; all NeoPixel resources are released
 by the underlying component.
 
 The lower NeoPixel library also serializes its own state and owns its optional
-effect worker. `light_manager` translates only the eight product effects above
+effect worker. `light_manager` translates only the thirteen product effects above
 to lower-layer operations; MCP and other application components do not access
 that worker or lower-level effects directly.
 
@@ -112,7 +122,7 @@ successful `light_manager_init()`. It writes `LIGHT_TEST` serial markers and
 waits `CONFIG_LIGHT_MANAGER_TEST_STEP_DELAY_MS` (default: 8000 ms) after every
 operation.
 
-One loop exercises the eight public product effects through
+One loop exercises the thirteen public product effects through
 `light_manager_set_state()` and logs the copied state after each request. It
 then verifies the product transition from an effect to `solid` and the
 OFF/ON preservation and resumption path for `blink`. The loop does not expose

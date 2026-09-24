@@ -82,8 +82,8 @@ timeout or lower-layer failure returns a deterministic `503 light_busy` or
 
 `POST /api/light/state` accepts a bounded query (under 160 bytes) with one or
 more optional exact fields: `power=true|false`, `red=0..255`, `green=0..255`,
-`blue=0..255`, `brightness=0..100`, and one of the eight effect tokens
-`solid|blink|breath|pulse|rainbow|strobe|heartbeat|candle`. Unknown, duplicate, malformed, or empty
+`blue=0..255`, `brightness=0..100`, and one of the thirteen effect tokens
+`solid|blink|breath|pulse|rainbow|strobe|heartbeat|candle|sos|lightning|wake_up|sleep_fade|notification`. Unknown, duplicate, malformed, or empty
 requests are rejected before reading or changing product state. The handler
 copies the current state, applies only provided fields, calls exactly one
 `light_manager_set_state()`, then returns a read-back snapshot.
@@ -111,9 +111,12 @@ manager deinitialization. Lower-layer apply failures retain their rejection
 feedback while a read-only reconciliation occurs.
 OFF preserves the server-owned RGB/brightness/effect values; Rainbow displays
 the retained logical RGB while noting that physical output is dynamic. The
-single-LED additions are Strobe (fast flash), Heartbeat (double pulse), and
-Candle (continuous brightness flicker); strip-only chase/wipe patterns remain
-intentionally unavailable.
+single-LED additions are Strobe (fast flash), Heartbeat (double pulse), Candle
+(continuous brightness flicker), SOS, Lightning, Wake Up, Sleep Fade, and
+Notification. Notification is a repeating double flash because the existing
+single product state has no separate restore-state owner. Wake Up ends stable
+at the selected brightness; Sleep Fade latches dark until a later command.
+Strip-only chase/wipe patterns remain intentionally unavailable.
 
 `local_web_server` maps a read-back `light_manager_state_t` into a copied
 `ui_web_light_status_t` queue payload. `app_gui` renders that payload on the

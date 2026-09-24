@@ -49,6 +49,16 @@ static bool local_web_light_effect_parse(const char *value,
         *effect = LIGHT_MANAGER_EFFECT_HEARTBEAT;
     } else if (strcmp(value, "candle") == 0) {
         *effect = LIGHT_MANAGER_EFFECT_CANDLE;
+    } else if (strcmp(value, "sos") == 0) {
+        *effect = LIGHT_MANAGER_EFFECT_SOS;
+    } else if (strcmp(value, "lightning") == 0) {
+        *effect = LIGHT_MANAGER_EFFECT_LIGHTNING;
+    } else if (strcmp(value, "wake_up") == 0) {
+        *effect = LIGHT_MANAGER_EFFECT_WAKE_UP;
+    } else if (strcmp(value, "sleep_fade") == 0) {
+        *effect = LIGHT_MANAGER_EFFECT_SLEEP_FADE;
+    } else if (strcmp(value, "notification") == 0) {
+        *effect = LIGHT_MANAGER_EFFECT_NOTIFICATION;
     } else {
         return false;
     }
@@ -151,6 +161,11 @@ const char *local_web_light_effect_name(light_manager_effect_t effect)
     case LIGHT_MANAGER_EFFECT_STROBE: return "strobe";
     case LIGHT_MANAGER_EFFECT_HEARTBEAT: return "heartbeat";
     case LIGHT_MANAGER_EFFECT_CANDLE: return "candle";
+    case LIGHT_MANAGER_EFFECT_SOS: return "sos";
+    case LIGHT_MANAGER_EFFECT_LIGHTNING: return "lightning";
+    case LIGHT_MANAGER_EFFECT_WAKE_UP: return "wake_up";
+    case LIGHT_MANAGER_EFFECT_SLEEP_FADE: return "sleep_fade";
+    case LIGHT_MANAGER_EFFECT_NOTIFICATION: return "notification";
     default: return NULL;
     }
 }

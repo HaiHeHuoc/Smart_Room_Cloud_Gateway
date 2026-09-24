@@ -29,6 +29,11 @@ typedef enum
     LIGHT_MANAGER_EFFECT_STROBE,
     LIGHT_MANAGER_EFFECT_HEARTBEAT,
     LIGHT_MANAGER_EFFECT_CANDLE,
+    LIGHT_MANAGER_EFFECT_SOS,
+    LIGHT_MANAGER_EFFECT_LIGHTNING,
+    LIGHT_MANAGER_EFFECT_WAKE_UP,
+    LIGHT_MANAGER_EFFECT_SLEEP_FADE,
+    LIGHT_MANAGER_EFFECT_NOTIFICATION,
 } light_manager_effect_t;
 
 /**
@@ -127,7 +132,7 @@ esp_err_t light_manager_get_state(light_manager_state_t *state);
  * @brief Start the Kconfig-gated infinite target-hardware test loop.
  *
  * When @c CONFIG_LIGHT_MANAGER_TEST_LOOP is enabled, the task exercises all
- * eight public product effects, state snapshots, a solid restore, and blink
+ * thirteen public product effects, state snapshots, a solid restore, and blink
  * OFF/ON resumption. It waits the configured interval after every action and
  * logs each result. It is for explicit hardware validation only, not
  * production behavior.

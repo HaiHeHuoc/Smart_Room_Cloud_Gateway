@@ -60,6 +60,11 @@ static const char *xiaozhi_mcp_light_state_effect_name(
     case XIAOZHI_FOUNDATION_LIGHT_EFFECT_STROBE: return "strobe";
     case XIAOZHI_FOUNDATION_LIGHT_EFFECT_HEARTBEAT: return "heartbeat";
     case XIAOZHI_FOUNDATION_LIGHT_EFFECT_CANDLE: return "candle";
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_SOS: return "sos";
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_LIGHTNING: return "lightning";
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_WAKE_UP: return "wake_up";
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_SLEEP_FADE: return "sleep_fade";
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_NOTIFICATION: return "notification";
     default: return NULL;
     }
 }
@@ -189,7 +194,7 @@ esp_err_t xiaozhi_mcp_light_state_query_attach(esp_mcp_t *mcp)
 
     esp_err_t ret = esp_mcp_tool_set_output_schema_json(
         tool,
-        "{\"type\":\"object\",\"properties\":{\"state_available\":{\"type\":\"boolean\"},\"power\":{\"type\":[\"string\",\"null\"],\"enum\":[\"on\",\"off\",null]},\"color\":{\"type\":[\"string\",\"null\"]},\"red\":{\"type\":[\"integer\",\"null\"],\"minimum\":0,\"maximum\":255},\"green\":{\"type\":[\"integer\",\"null\"],\"minimum\":0,\"maximum\":255},\"blue\":{\"type\":[\"integer\",\"null\"],\"minimum\":0,\"maximum\":255},\"brightness_percent\":{\"type\":[\"integer\",\"null\"],\"minimum\":0,\"maximum\":100},\"effect\":{\"type\":[\"string\",\"null\"],\"enum\":[\"solid\",\"blink\",\"breath\",\"pulse\",\"rainbow\",\"strobe\",\"heartbeat\",\"candle\",null]}},\"required\":[\"state_available\",\"power\",\"color\",\"red\",\"green\",\"blue\",\"brightness_percent\",\"effect\"]}");
+        "{\"type\":\"object\",\"properties\":{\"state_available\":{\"type\":\"boolean\"},\"power\":{\"type\":[\"string\",\"null\"],\"enum\":[\"on\",\"off\",null]},\"color\":{\"type\":[\"string\",\"null\"]},\"red\":{\"type\":[\"integer\",\"null\"],\"minimum\":0,\"maximum\":255},\"green\":{\"type\":[\"integer\",\"null\"],\"minimum\":0,\"maximum\":255},\"blue\":{\"type\":[\"integer\",\"null\"],\"minimum\":0,\"maximum\":255},\"brightness_percent\":{\"type\":[\"integer\",\"null\"],\"minimum\":0,\"maximum\":100},\"effect\":{\"type\":[\"string\",\"null\"],\"enum\":[\"solid\",\"blink\",\"breath\",\"pulse\",\"rainbow\",\"strobe\",\"heartbeat\",\"candle\",\"sos\",\"lightning\",\"wake_up\",\"sleep_fade\",\"notification\",null]}},\"required\":[\"state_available\",\"power\",\"color\",\"red\",\"green\",\"blue\",\"brightness_percent\",\"effect\"]}");
     if (ret == ESP_OK) {
         ret = esp_mcp_tool_set_annotations_json(
             tool,

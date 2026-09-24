@@ -106,7 +106,8 @@ static int expect_light_policy(void)
 
     const char *const effects[] = {
         "solid", "blink", "breath", "pulse", "rainbow", "strobe",
-        "heartbeat", "candle",
+        "heartbeat", "candle", "sos", "lightning", "wake_up",
+        "sleep_fade", "notification",
     };
     for (size_t index = 0U; index < sizeof(effects) / sizeof(effects[0]); ++index) {
         local_web_light_update_t effect_update = {0};

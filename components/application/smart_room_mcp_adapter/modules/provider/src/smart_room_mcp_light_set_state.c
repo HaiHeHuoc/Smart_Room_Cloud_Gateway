@@ -55,6 +55,21 @@ static bool app_xiaozhi_light_effect_to_manager(
     case XIAOZHI_FOUNDATION_LIGHT_EFFECT_CANDLE:
         *manager_effect = LIGHT_MANAGER_EFFECT_CANDLE;
         return true;
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_SOS:
+        *manager_effect = LIGHT_MANAGER_EFFECT_SOS;
+        return true;
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_LIGHTNING:
+        *manager_effect = LIGHT_MANAGER_EFFECT_LIGHTNING;
+        return true;
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_WAKE_UP:
+        *manager_effect = LIGHT_MANAGER_EFFECT_WAKE_UP;
+        return true;
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_SLEEP_FADE:
+        *manager_effect = LIGHT_MANAGER_EFFECT_SLEEP_FADE;
+        return true;
+    case XIAOZHI_FOUNDATION_LIGHT_EFFECT_NOTIFICATION:
+        *manager_effect = LIGHT_MANAGER_EFFECT_NOTIFICATION;
+        return true;
     default:
         return false;
     }
@@ -162,6 +177,21 @@ static esp_err_t app_xiaozhi_apply_light_set_state(
         break;
     case LIGHT_MANAGER_EFFECT_CANDLE:
         result->effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_CANDLE;
+        break;
+    case LIGHT_MANAGER_EFFECT_SOS:
+        result->effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_SOS;
+        break;
+    case LIGHT_MANAGER_EFFECT_LIGHTNING:
+        result->effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_LIGHTNING;
+        break;
+    case LIGHT_MANAGER_EFFECT_WAKE_UP:
+        result->effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_WAKE_UP;
+        break;
+    case LIGHT_MANAGER_EFFECT_SLEEP_FADE:
+        result->effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_SLEEP_FADE;
+        break;
+    case LIGHT_MANAGER_EFFECT_NOTIFICATION:
+        result->effect = XIAOZHI_FOUNDATION_LIGHT_EFFECT_NOTIFICATION;
         break;
     default:
         result->outcome = XIAOZHI_FOUNDATION_LIGHT_SET_STATE_SNAPSHOT_FAILED;

@@ -21,6 +21,30 @@
 static const char *TAG = "neopixel";
 
 typedef struct {
+    uint16_t duration_ms;
+    uint8_t brightness_percent;
+} neopixel_timed_level_t;
+
+static const neopixel_timed_level_t s_sos_pattern[] = {
+    {200u, 100u}, {200u, 0u}, {200u, 100u}, {200u, 0u},
+    {200u, 100u}, {600u, 0u}, {600u, 100u}, {200u, 0u},
+    {600u, 100u}, {200u, 0u}, {600u, 100u}, {600u, 0u},
+    {200u, 100u}, {200u, 0u}, {200u, 100u}, {200u, 0u},
+    {200u, 100u}, {1200u, 0u},
+};
+
+static const neopixel_timed_level_t s_lightning_pattern[] = {
+    {40u, 100u}, {55u, 0u}, {25u, 70u}, {420u, 0u},
+    {65u, 100u}, {35u, 0u}, {30u, 55u}, {750u, 0u},
+    {35u, 85u}, {45u, 0u}, {50u, 100u}, {30u, 0u},
+    {20u, 65u}, {1100u, 0u},
+};
+
+static const neopixel_timed_level_t s_notification_pattern[] = {
+    {120u, 100u}, {160u, 0u}, {120u, 100u}, {1600u, 0u},
+};
+
+typedef struct {
     uint8_t r;
     uint8_t g;
     uint8_t b;
@@ -66,6 +90,29 @@ static neopixel_ctx_t s;
 static inline uint8_t scale8(uint8_t value, uint8_t percent)
 {
     return (uint8_t)(((uint16_t)value * percent + 50u) / 100u);
+}
+
+static uint8_t pattern_brightness_percent(
+    uint64_t elapsed_ms,
+    const neopixel_timed_level_t *pattern,
+    size_t pattern_count)
+{
+    uint32_t period_ms = 0u;
+    for (size_t index = 0u; index < pattern_count; ++index) {
+        period_ms += pattern[index].duration_ms;
+    }
+    if (period_ms == 0u) {
+        return 0u;
+    }
+
+    uint32_t position_ms = (uint32_t)(elapsed_ms % period_ms);
+    for (size_t index = 0u; index < pattern_count; ++index) {
+        if (position_ms < pattern[index].duration_ms) {
+            return pattern[index].brightness_percent;
+        }
+        position_ms -= pattern[index].duration_ms;
+    }
+    return 0u;
 }
 
 static bool lock_ctx(void)
@@ -338,7 +385,7 @@ static esp_err_t validate_effect_config(neopixel_effect_t effect,
 {
     if (!cfg ||
         effect <= NEOPIXEL_EFFECT_NONE ||
-        effect > NEOPIXEL_EFFECT_CANDLE ||
+        effect > NEOPIXEL_EFFECT_NOTIFICATION ||
         cfg->brightness > 100 ||
         cfg->brightness_from > 100 ||
         cfg->brightness_to > 100) {
@@ -351,7 +398,14 @@ static esp_err_t validate_effect_config(neopixel_effect_t effect,
     }
 
     if (pixel_scope &&
-        (effect == NEOPIXEL_EFFECT_COLOR_WIPE ||
+        (effect == NEOPIXEL_EFFECT_HEARTBEAT ||
+         effect == NEOPIXEL_EFFECT_CANDLE ||
+         effect == NEOPIXEL_EFFECT_SOS ||
+         effect == NEOPIXEL_EFFECT_LIGHTNING ||
+         effect == NEOPIXEL_EFFECT_WAKE_UP ||
+         effect == NEOPIXEL_EFFECT_SLEEP_FADE ||
+         effect == NEOPIXEL_EFFECT_NOTIFICATION ||
+         effect == NEOPIXEL_EFFECT_COLOR_WIPE ||
          effect == NEOPIXEL_EFFECT_CHASE ||
          effect == NEOPIXEL_EFFECT_GRADIENT ||
          effect == NEOPIXEL_EFFECT_THEATER_CHASE)) {
@@ -495,6 +549,53 @@ static bool update_strip_effect_locked(uint32_t dt_ms)
         if (flicker > 1.00f) flicker = 1.00f;
         fill_logical_locked(cfg->color);
         set_all_output_brightness_locked((uint8_t)(cfg->brightness * flicker));
+        return true;
+    }
+
+    case NEOPIXEL_EFFECT_SOS:
+    case NEOPIXEL_EFFECT_LIGHTNING:
+    case NEOPIXEL_EFFECT_NOTIFICATION: {
+        const neopixel_timed_level_t *pattern = s_sos_pattern;
+        size_t pattern_count = sizeof(s_sos_pattern) / sizeof(s_sos_pattern[0]);
+
+        if (s.effect == NEOPIXEL_EFFECT_LIGHTNING) {
+            pattern = s_lightning_pattern;
+            pattern_count = sizeof(s_lightning_pattern) / sizeof(s_lightning_pattern[0]);
+        } else if (s.effect == NEOPIXEL_EFFECT_NOTIFICATION) {
+            pattern = s_notification_pattern;
+            pattern_count = sizeof(s_notification_pattern) /
+                            sizeof(s_notification_pattern[0]);
+        }
+
+        fill_logical_locked(cfg->color);
+        set_all_output_brightness_locked(
+            scale8(cfg->brightness,
+                   pattern_brightness_percent(elapsed, pattern, pattern_count)));
+        return true;
+    }
+
+    case NEOPIXEL_EFFECT_WAKE_UP:
+    case NEOPIXEL_EFFECT_SLEEP_FADE: {
+        const uint64_t duration = cfg->duration_ms ? cfg->duration_ms : 1u;
+        const float ratio = elapsed >= duration ? 1.0f
+                                                : (float)elapsed / (float)duration;
+        const float output_ratio = s.effect == NEOPIXEL_EFFECT_WAKE_UP
+                                       ? ratio
+                                       : 1.0f - ratio;
+
+        fill_logical_locked(cfg->color);
+        set_all_output_brightness_locked(
+            (uint8_t)(cfg->brightness * output_ratio));
+
+        if (elapsed >= duration) {
+            if (s.effect == NEOPIXEL_EFFECT_WAKE_UP) {
+                s.brightness = cfg->brightness;
+                set_all_output_brightness_locked(s.brightness);
+            } else {
+                set_all_output_brightness_locked(0u);
+            }
+            stop_strip_effect_locked();
+        }
         return true;
     }
 
@@ -709,6 +810,11 @@ static bool update_pixel_effect_locked(size_t index, uint32_t dt_ms)
     case NEOPIXEL_EFFECT_THEATER_CHASE:
     case NEOPIXEL_EFFECT_HEARTBEAT:
     case NEOPIXEL_EFFECT_CANDLE:
+    case NEOPIXEL_EFFECT_SOS:
+    case NEOPIXEL_EFFECT_LIGHTNING:
+    case NEOPIXEL_EFFECT_WAKE_UP:
+    case NEOPIXEL_EFFECT_SLEEP_FADE:
+    case NEOPIXEL_EFFECT_NOTIFICATION:
     case NEOPIXEL_EFFECT_NONE:
     default:
         stop_pixel_effect_state_locked(pixel);
@@ -1581,6 +1687,60 @@ esp_err_t neopixel_candle(uint32_t color, uint8_t brightness,
         .step_ms = 40u,
     };
     return neopixel_start_effect(NEOPIXEL_EFFECT_CANDLE, &cfg);
+}
+
+esp_err_t neopixel_sos(uint32_t color, uint8_t brightness)
+{
+    const neopixel_effect_config_t cfg = {
+        .color = color,
+        .brightness = brightness,
+        .step_ms = 20u,
+    };
+    return neopixel_start_effect(NEOPIXEL_EFFECT_SOS, &cfg);
+}
+
+esp_err_t neopixel_lightning(uint32_t color, uint8_t brightness)
+{
+    const neopixel_effect_config_t cfg = {
+        .color = color,
+        .brightness = brightness,
+        .step_ms = 20u,
+    };
+    return neopixel_start_effect(NEOPIXEL_EFFECT_LIGHTNING, &cfg);
+}
+
+esp_err_t neopixel_wake_up(uint32_t color, uint8_t brightness,
+                            uint32_t duration_ms)
+{
+    const neopixel_effect_config_t cfg = {
+        .color = color,
+        .brightness = brightness,
+        .duration_ms = duration_ms,
+        .step_ms = 20u,
+    };
+    return neopixel_start_effect(NEOPIXEL_EFFECT_WAKE_UP, &cfg);
+}
+
+esp_err_t neopixel_sleep_fade(uint32_t color, uint8_t brightness,
+                               uint32_t duration_ms)
+{
+    const neopixel_effect_config_t cfg = {
+        .color = color,
+        .brightness = brightness,
+        .duration_ms = duration_ms,
+        .step_ms = 20u,
+    };
+    return neopixel_start_effect(NEOPIXEL_EFFECT_SLEEP_FADE, &cfg);
+}
+
+esp_err_t neopixel_notification(uint32_t color, uint8_t brightness)
+{
+    const neopixel_effect_config_t cfg = {
+        .color = color,
+        .brightness = brightness,
+        .step_ms = 20u,
+    };
+    return neopixel_start_effect(NEOPIXEL_EFFECT_NOTIFICATION, &cfg);
 }
 
 esp_err_t neopixel_chase(uint32_t color, uint32_t speed_ms)

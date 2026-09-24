@@ -33,7 +33,7 @@ authority to start Sprint 22.
    0/mid/100, seek during playing and user-paused state, PTT/Xiaozhi arbitration,
    and supported WAV versus >=2 GiB rejection under SD contention.
 3. Sprint 21: verify Light GET/POST state, RGB/black, brightness 0/low/mid/100,
-   all eight effects, OFF/ON preservation, browser unavailable/busy recovery,
+   all thirteen effects, Wake Up/Sleep Fade completion, browser unavailable/busy recovery,
    Web/MCP last-writer behavior, and copied `WEB_LIGHT` LCD status.
 4. Record serial/resource evidence: no HTTP-to-LVGL call, no stuck effect
    worker, expected SD recovery, and relevant task/memory trends.

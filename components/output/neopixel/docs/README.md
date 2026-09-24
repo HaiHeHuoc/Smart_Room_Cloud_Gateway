@@ -311,6 +311,11 @@ Changing global brightness updates static pixels immediately. Active per-pixel e
 - `neopixel_transition()`
 - `neopixel_rainbow()`
 - `neopixel_rainbow_cycle()`
+- `neopixel_sos()`
+- `neopixel_lightning()`
+- `neopixel_wake_up()`
+- `neopixel_sleep_fade()`
+- `neopixel_notification()`
 - `neopixel_breath()`
 - `neopixel_pulse()`
 - `neopixel_chase()`
@@ -421,6 +426,19 @@ The following are strip-spatial and return `ESP_ERR_NOT_SUPPORTED` for one pixel
 - `NEOPIXEL_EFFECT_CHASE`
 - `NEOPIXEL_EFFECT_GRADIENT`
 - `NEOPIXEL_EFFECT_THEATER_CHASE`
+
+The product-level whole-strip effects below also return `ESP_ERR_NOT_SUPPORTED`
+for the generic per-pixel API. This prevents one LED from silently starting a
+strip-wide worker pattern; `light_manager` uses their dedicated whole-strip
+APIs instead.
+
+- `NEOPIXEL_EFFECT_HEARTBEAT`
+- `NEOPIXEL_EFFECT_CANDLE`
+- `NEOPIXEL_EFFECT_SOS`
+- `NEOPIXEL_EFFECT_LIGHTNING`
+- `NEOPIXEL_EFFECT_WAKE_UP`
+- `NEOPIXEL_EFFECT_SLEEP_FADE`
+- `NEOPIXEL_EFFECT_NOTIFICATION`
 
 ## Mixed 10-LED Example
 
@@ -575,7 +593,13 @@ remains paused across OFF/ON until explicitly resumed.
 - `GRADIENT`: renders once and stops.
 - `SOLID`: renders once and stops; whole-strip SOLID commits its configured brightness.
 
-Continuous effects include BLINK, BREATH, RAINBOW_CYCLE, CHASE, COLOR_WIPE, and THEATER_CHASE.
+Continuous effects include BLINK, BREATH, RAINBOW_CYCLE, CHASE, COLOR_WIPE,
+THEATER_CHASE, SOS, LIGHTNING, and NOTIFICATION. `WAKE_UP` and `SLEEP_FADE`
+are finite worker effects: Wake Up stops at its final configured brightness;
+Sleep Fade stops with zero physical output while preserving the configured
+logical brightness for the caller-owned product state. Starting another effect,
+turning the strip off, or deinitializing replaces/cancels either effect through
+the existing single worker ownership.
 
 ## Thread Safety
 

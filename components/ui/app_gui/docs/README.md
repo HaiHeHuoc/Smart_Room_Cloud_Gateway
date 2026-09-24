@@ -42,7 +42,7 @@ assistant, microphone, speaker, or independent GUI task.
 | `APP_GUI_SCREEN_SENSOR_DASHBOARD` | Sensor dashboard with synchronized local time/date in its left header, temperature/humidity below, and Wi-Fi, cloud, sensor, and audio summaries in the right status column. |
 | `APP_GUI_SCREEN_XIAOZHI` | Project-owned Xiaozhi voice presentation: connection state, actual-microphone recording duration, and bounded USER/ASSISTANT transcript. It is entered through the existing explicit screen-request API. |
 | `APP_GUI_SCREEN_RESET_RESULT` | Factory-reset success or failure result; entered only through `app_gui_show_reset_result()`. |
-| `APP_GUI_SCREEN_WEB_LIGHT` | Read-only Local Web light state: power, logical RGB, brightness, and effect. |
+| `APP_GUI_SCREEN_WEB_LIGHT` | Read-only Local Web light state: power, logical RGB, brightness, and one of thirteen stable effect labels, including `SOS`, `LIGHTNING`, `WAKE UP`, `SLEEP FADE`, and `NOTIFICATION`. |
 
 The old `APP_GUI_SCREEN_WIFI` and `APP_GUI_SCREEN_SENSOR` identifiers were
 renamed directly. No compatibility aliases are retained.

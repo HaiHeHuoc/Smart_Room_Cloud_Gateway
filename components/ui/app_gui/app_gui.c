@@ -4089,6 +4089,11 @@ static const char *app_gui_web_light_effect_to_string(
         case UI_WEB_LIGHT_EFFECT_STROBE: return "STROBE";
         case UI_WEB_LIGHT_EFFECT_HEARTBEAT: return "HEARTBEAT";
         case UI_WEB_LIGHT_EFFECT_CANDLE: return "CANDLE";
+        case UI_WEB_LIGHT_EFFECT_SOS: return "SOS";
+        case UI_WEB_LIGHT_EFFECT_LIGHTNING: return "LIGHTNING";
+        case UI_WEB_LIGHT_EFFECT_WAKE_UP: return "WAKE UP";
+        case UI_WEB_LIGHT_EFFECT_SLEEP_FADE: return "SLEEP FADE";
+        case UI_WEB_LIGHT_EFFECT_NOTIFICATION: return "NOTIFICATION";
         default: return "-";
     }
 }

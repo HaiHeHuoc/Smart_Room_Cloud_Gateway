@@ -241,6 +241,11 @@ Only a concrete regression or explicit Hải instruction should reopen Sprint 18
 - Sprint 21 exposes the same product light state used by MCP through bounded
   Light REST routes and an accessible browser tab. Web and MCP both call only
   `light_manager`; no Web code accesses NeoPixel, RMT, or GPIO.
+- The supported single-LED effect names are `solid`, `blink`, `breath`,
+  `pulse`, `rainbow`, `strobe`, `heartbeat`, `candle`, `sos`, `lightning`,
+  `wake_up`, `sleep_fade`, and `notification`. Wake Up completes at stable
+  output; Sleep Fade latches dark until a later product command; Notification
+  remains a bounded repeating double flash rather than adding restore state.
 - Browser writes reconcile against read-back state. `app_gui` receives copied
   Local Web Light snapshots in a length-one queue and renders `WEB_LIGHT` only
   in its UI task. The status screen is read-only.

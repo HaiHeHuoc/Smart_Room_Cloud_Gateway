@@ -5,9 +5,10 @@ Purpose: compact, overwriteable handoff for in-progress work. Current source,
 
 ## Active work
 
-Branch: `main_including_Firebase_security`
-Integration: Sprint 21 is merged locally with the current remote Sprint 20
-documentation baseline. No push is performed by this merge.
+Branch: `feat/sprint21-extended-light-effects` (from
+`main_including_Firebase_security` at `3813945`)
+Integration: Sprint 21 extended-effects implementation is uncommitted and has
+not been merged or pushed.
 Phase/Sprint: Sprint 21 — Local Web Control V3: Lights
 Checkpoint: source is implemented and build verified; target HIL remains
 pending except the user-confirmed color-channel check and prior Sprint 19
@@ -33,18 +34,22 @@ capacity/download checks.
   the driver boundary, preserving RGB/GRB byte-order configuration and API
   read-back. User photos at 5% confirmed the configured RGB channel order.
 - Single-LED effects are `solid`, `blink`, `breath`, `pulse`, `rainbow`,
-  `strobe`, `heartbeat`, and `candle`. Chase/wipe patterns remain unavailable
-  because they are not meaningful on the current one-LED board.
+  `strobe`, `heartbeat`, `candle`, `sos`, `lightning`, `wake_up`,
+  `sleep_fade`, and `notification`. Chase/wipe patterns remain unavailable
+  because they are not meaningful on the current one-LED board. Wake Up ends
+  at stable configured output, Sleep Fade latches dark until a newer command,
+  and Notification repeats its bounded double-flash pattern to avoid a second
+  product-state owner.
 
 ## Validation actually run
 
 - `components/application/local_web_server/test/host/run_tests.ps1`: PASS.
 - `components/application/smart_room_mcp_adapter/test/host/run_tests.ps1`:
   PASS.
-- `components/audio/audio_manager/test/host/run_tests.ps1`: PASS before the
+- `components/audio/audio_manager/test/host/run_tests.ps1`: PASS after the
   Sprint 21 effect expansion.
-- `git diff --check`: PASS before commit and merge resolution.
-- ESP-IDF 6.0.1 serialized build: PASS; firmware `0x284a00`, app free 37%.
+- `git diff --check`: PASS after the final effect-scope validation change.
+- ESP-IDF 6.0.1 serialized build: PASS; firmware `0x285380`, app free 37%.
 
 ## HIL still required
 
@@ -54,7 +59,7 @@ capacity/download checks.
 - Sprint 20: supported WAV playback/seek/volume with PTT/Xiaozhi arbitration,
   SD contention, and the >=2 GiB rejection/recovery path.
 - Sprint 21: Light REST/UI/LCD updates, black/RGB/brightness boundaries, all
-  eight effects, OFF/ON restoration, Web/MCP concurrency, unavailable/busy
+  thirteen effects, Wake Up/Sleep Fade completion semantics, Web/MCP concurrency, unavailable/busy
   recovery, and resource/effect-worker trends.
 
 ## Scope boundary
