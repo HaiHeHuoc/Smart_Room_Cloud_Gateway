@@ -60,7 +60,7 @@ Phase 18.4  COMPLETE / cloud.push_latest / USER ACCEPTED BY HẢI ON 2026-09-16
 Voice Recording Critical Window
             COMPLETE / USER ACCEPTED BY HẢI ON 2026-09-16
 Sprint 19   Local Web Control V1: SD Card File Manager / SOURCE INTEGRATED /
-            BUILD VERIFIED / TARGET REDEPLOY AND HIL PENDING
+            BUILD VERIFIED / TARGET HIL PARTIAL
 Sprint 20   Local Web Control V2: Playback + Volume / IMPLEMENTED /
             BUILD VERIFIED / TARGET HIL PENDING
 Sprint 21   Local Web Control V3: Lights / IMPLEMENTED / BUILD VERIFIED /
@@ -178,25 +178,26 @@ This work item is closed by Hải's explicit acceptance on 2026-09-16.
 
 ## What happens next
 
-Sprint 18 is closed. Do **not** automatically start the next sprint merely from
-this state update.
+Sprint 20 is now active at the Prompt 20.1 checkpoint. Do **not** automatically
+start Prompt 20.2 or Sprint 21 merely from this state update.
 
-When Hải explicitly requests new implementation, the approved sequence is:
+Highest-value next validation is:
 
 ```text
-Sprint 19 -> Local Web Control V1: SD Card File Manager
-Sprint 20 -> Local Web Control V2: Playback + Volume
-Sprint 21 -> Local Web Control V3: Lights
-Sprint 22 -> Local Web Control V4: Dashboard + System Status
-Sprint 23 -> Local Web Control V5: Scenes + Logs + Diagnostics
-Sprint 24 -> Wake Word + Advanced Voice UX
+1. Complete the remaining Sprint-19 storage HIL that is still unverified:
+   upload through 20 MiB, interruption/partial cleanup, file/folder mutations,
+   and SD removal/remount/recovery.
+2. Run Sprint-20 Prompt-20.1 target HIL for browser playback/control, PTT and
+   Xiaozhi arbitration, pause/resume/restart/stop, progress, volume 0/100,
+   PC/mobile tabs, and storage/playback contention.
+3. Use WAV files below 2 GiB for supported playback validation. FAT32 storage
+   may list/download 2-4 GiB files, but the current WAV playback reader does not
+   support files at or above 2 GiB.
 ```
 
-The Web roadmap remains SD-card-first. Web UI is for an already-networked
-device and must not configure/control Wi-Fi, provisioning, credentials,
-reconnect, or network lifecycle. Web and LCD remain sibling frontends over
-existing managers/services. Advanced OTA/factory-management remains outside
-current scope.
+The approved forward sequence remains Sprint 21 Lights, Sprint 22
+Dashboard/System Status, Sprint 23 Scenes/Logs/Diagnostics, and Sprint 24 Wake
+Word/Advanced Voice UX, but none starts automatically.
 
 ## Deferred regression work — non-blocking
 
@@ -245,6 +246,44 @@ Only a concrete regression or explicit Hải instruction should reopen Sprint 18
   in its UI task. The status screen is read-only.
 - Relevant host tests and ESP-IDF 6.0.1 serialized build passed. No browser,
   target-board, LCD, or multi-frontend HIL acceptance has yet been recorded.
+### Historical Prompt 20.1 contract detail
+## Sprint 20 Local Web Playback + Volume — Prompt 20.1 integrated
+
+Verified source on `main_including_Firebase_security` includes the Prompt 20.1
+implementation before this AI-memory synchronization.
+
+Current Local Web audio surface:
+
+```text
+GET  /api/audio/status
+GET  /api/audio/tracks
+POST /api/audio/play
+POST /api/audio/control
+POST /api/audio/volume
+```
+
+Retained ownership/contracts:
+
+- `audio_manager` remains the sole physical audio/I2S owner.
+- Local Web uses the copied Smart Room catalog seam and logical track IDs only.
+- Catalog invalidation occurs after committed storage mutation under
+  `/audio`; Web does not create a second filesystem scanner/cache owner.
+- Playback commands continue through the voice-assistant/audio arbitration path.
+- Runtime playback volume is bounded to 0..100.
+- Browser Storage and Playback tabs remain presentation-only frontends.
+
+Recorded Prompt-20.1 evidence is host-test PASS across Local Web catalog/policy,
+Smart Room catalog entry, and audio playback-control/WAV-lease paths, plus an
+ESP-IDF 6.0.1 serialized build PASS. These are recorded implementation results;
+this memory sync did not rerun them.
+
+Current WAV playback supports files smaller than 2 GiB
+(`<= 2,147,483,647` bytes) because the active FAT VFS/C stdio playback reader
+uses signed 32-bit seek/tell positioning. This limit is independent of SD
+capacity and the bounded PSRAM prefetch cache. Storage APIs may still
+list/download FAT32 files in the 2-4 GiB range.
+
+Target HIL for Prompt 20.1 remains pending.
 
 ## Security invariants
 

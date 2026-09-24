@@ -21,7 +21,7 @@ numbering, scope, history, and acceptance evidence unchanged.
 The approved post-Sprint-18 sequence is:
 
 ```text
-Sprint 19  Local Web Control V1: SD Card File Manager     IMPLEMENTED / BUILD VERIFIED / HIL PENDING
+Sprint 19  Local Web Control V1: SD Card File Manager     IMPLEMENTED / BUILD VERIFIED / HIL PARTIAL
 Sprint 20  Local Web Control V2: Playback + Volume       IMPLEMENTED / BUILD VERIFIED / HIL PENDING
 Sprint 21  Local Web Control V3: Lights                  IMPLEMENTED / BUILD VERIFIED / HIL PENDING
 Sprint 22  Local Web Control V4: Dashboard + System Status
@@ -34,6 +34,33 @@ Sprint 24  Wake Word + Advanced Voice UX                 PLANNED / NOT STARTED
 The former Sprint 19 Wake Word / Advanced Voice UX plan is deferred to Sprint
 24. Its content and required order are preserved in
 `XIAOZHI_IMPLEMENTATION_ROADMAP.md`.
+
+## Current implementation checkpoint — 2026-09-23
+
+Sprint 20 Prompt 20.1 is integrated on
+`main_including_Firebase_security`. Current verified source provides:
+
+- copied shared `/sdcard/audio` catalog access without a Web-owned scanner or
+  physical path exposure;
+- Local REST audio status, tracks, play, control, and runtime volume endpoints;
+- catalog-ID playback through existing voice-assistant/audio ownership;
+- accessible Storage/Playback browser tabs with bounded polling;
+- catalog invalidation after committed `/audio` storage mutations;
+- runtime playback volume bounded to 0..100.
+
+Recorded implementation evidence includes Local Web/Smart Room/audio host-test
+PASS and an ESP-IDF 6.0.1 serialized build PASS. Target HIL remains pending and
+must not be inferred from those host/build results.
+
+Current WAV playback support is limited to files smaller than 2 GiB
+(`2,147,483,647` bytes maximum) because the playback reader uses the current
+FAT VFS/C stdio `FILE *` + signed 32-bit seek/tell path. This is not an SD
+capacity or PSRAM-cache limit. Storage may still list/download FAT32 files in
+the 2-4 GiB range.
+
+Sprint 19 remains source-integrated with target HIL partial: capacity/status and
+download fixes are accepted, while upload/interruption/mutations/remount
+recovery still need target coverage.
 
 ## Product direction
 
