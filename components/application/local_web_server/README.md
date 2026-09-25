@@ -6,7 +6,7 @@ handoff; it does not configure, reconnect, or otherwise control Wi-Fi.
 
 Routes:
 
-- `GET /` — compiled-in responsive Storage shell;
+- `GET /` — compiled-in responsive Dashboard, Storage, Playback, and Lights shell;
 - `GET /api/storage/status` — SD availability and copied total/used/free bytes;
 - `GET /api/storage/list?path=<logical-path>` — bounded direct-child metadata.
 
@@ -15,9 +15,10 @@ browser download filename through `Content-Disposition`), raw-body
 `POST /api/storage/upload?path=<logical-path>` (at most 8 MiB), and bounded
 `POST` delete, rename, mkdir, and rmdir operations.
 
-The HTTP server reserves 18 URI-handler slots, exactly matching the routes
-registered by this component. A route addition must update that bounded count;
-otherwise ESP-IDF returns `ESP_ERR_HTTPD_HANDLERS_FULL` and startup rolls back.
+The HTTP server reserves 20 URI-handler slots for the current 19 registered
+routes, retaining one bounded spare slot. A route addition must still review
+that count; otherwise ESP-IDF returns `ESP_ERR_HTTPD_HANDLERS_FULL` and startup
+rolls back.
 
 The component calls only public `sd_card_manager` APIs. The SD manager keeps
 mount/recovery and VFS lease ownership and exposes only copied metadata. The
@@ -72,6 +73,67 @@ and SD-lease owner. No Web handler opens a WAV, seeks a `FILE *`, or changes
 I2S configuration. Playback speed control is intentionally deferred: a
 rate-change feature would require an explicit DSP/resampling design rather
 than changing the global I2S rate from the UI.
+
+## Dashboard status backend
+
+Sprint 22.1 adds the read-only `GET /api/dashboard/status` route. It streams
+a bounded JSON snapshot with `Cache-Control: no-store`; there is no Dashboard
+write route and no browser-owned status cache, task, or driver access.
+
+The route queries only copied public manager snapshots for sensor quality,
+SD lifecycle/capacity/leases, audio lifecycle and playback summary, product
+light state, cloud lifecycle, Wi-Fi connection/IP/RSSI facts, time sync, and
+monotonic uptime. A manager snapshot failure degrades only its section to
+`available:false`; the endpoint remains HTTP 200 whenever the bounded response
+can be constructed. `overall_state` is `ready` only when every section is
+normal, `attention` when any section needs attention or is unavailable while
+another remains available, and `unavailable` only when every section snapshot
+is unavailable.
+
+Sensor readings are numeric only when the copied value is valid, current, and
+finite. Stale, failed, or non-finite readings are emitted as JSON `null`, never
+as a failed-read sentinel. SD capacity is queried only while the lifecycle is
+READY; a capacity lookup failure emits `capacity_valid:false` and `null`
+capacity fields rather than fabricated zero READY storage.
+
+The dashboard deliberately omits SSID, passwords, provisioning/NVS data,
+Firebase/authentication material, filesystem paths, audio payloads, I2S/DMA
+state, and performance-monitor metrics. `performance_monitor` currently logs
+metrics but has no copied public snapshot, so CPU/heap/resource fields remain
+deferred.
+
+## Dashboard presentation edge
+
+Sprint 22.2 makes Dashboard the first, default tab over the existing read-only
+status route. It displays only copied operational facts: overall state, sensor
+validity/freshness, SD capacity and leases, Wi-Fi/IP/RSSI, audio
+playback/source/volume, logical light state, cloud state, time sync, and
+monotonic uptime. There are no Dashboard controls, Wi-Fi actions,
+configuration fields, secrets, paths, driver details, or performance-monitor
+log parsing.
+
+Dashboard uses a CSS Grid with one card at narrow mobile widths, two cards at
+tablet widths, and three cards on larger screens. It preserves the native
+accessible tablist: each tab has `role=tab`, `aria-controls`, selected state,
+and roving `tabindex`; Left/Right arrows and Home/End move and activate the
+corresponding tab.
+
+While the document is visible and Dashboard is active, exactly one status
+request may be in flight and the next request is scheduled two seconds after
+the previous request completes. Leaving the tab or hiding the document stops
+future Dashboard scheduling; returning immediately refreshes only the active
+tab. A per-request generation discards a response made stale by a tab change.
+If a request fails, the last accepted card values remain visible and the UI
+reports the failure plus the age of that snapshot. Rendering writes all
+server-derived values through DOM `textContent`, never `innerHTML`.
+
+Sprint 22.3 hardening treats a sensor timestamp later than the monotonic clock
+as an unknown sample age rather than a false “just now” value. The browser
+accepts Dashboard numeric fields only when they are finite JSON numbers and
+checks storage capacity bounds before calculating a percentage. If the user
+leaves and re-enters Dashboard while its final request is still in flight, one
+queued refresh runs after that request completes; this preserves the
+one-in-flight limit without leaving the tab unscheduled.
 
 ## Light REST edge
 

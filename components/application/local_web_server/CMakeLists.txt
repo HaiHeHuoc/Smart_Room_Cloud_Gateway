@@ -2,6 +2,7 @@ idf_component_register(
     SRCS
         "src/local_web_server.c"
         "src/local_web_audio_policy.c"
+        "src/local_web_dashboard_policy.c"
         "src/local_web_download.c"
         "src/local_web_icon_policy.c"
         "src/local_web_light_policy.c"
@@ -18,8 +19,12 @@ idf_component_register(
     PRIV_REQUIRES
         app_log
         audio_manager
+        cloud_manager
         light_manager
         sd_card_manager
+        sensor_manager
         smart_room_mcp_adapter
+        time_manager
         voice_assistant
+        wifi_manager
 )

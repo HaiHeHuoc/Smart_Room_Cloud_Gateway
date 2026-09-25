@@ -63,9 +63,10 @@ Sprint 19   Local Web Control V1: SD Card File Manager / SOURCE INTEGRATED /
             BUILD VERIFIED / TARGET HIL PARTIAL
 Sprint 20   Local Web Control V2: Playback + Volume / IMPLEMENTED /
             BUILD VERIFIED / TARGET HIL PENDING
-Sprint 21   Local Web Control V3: Lights / IMPLEMENTED / BUILD VERIFIED /
-            TARGET HIL PENDING
-Sprint 22   Local Web Control V4: Dashboard + System Status / PLANNED / NOT STARTED
+Sprint 21   Local Web Control V3: Lights / COMPLETE / USER ACCEPTED BY HẢI
+            ON 2026-09-24
+Sprint 22   Local Web Control V4: Dashboard + System Status / IMPLEMENTED /
+            BUILD VERIFIED / TARGET HIL PENDING
 Sprint 23   Local Web Control V5: Scenes + Logs + Diagnostics / PLANNED / NOT STARTED
 Sprint 24   Wake Word + Advanced Voice UX / PLANNED / NOT STARTED
 ```
@@ -178,26 +179,29 @@ This work item is closed by Hải's explicit acceptance on 2026-09-16.
 
 ## What happens next
 
-Sprint 20 is now active at the Prompt 20.1 checkpoint. Do **not** automatically
-start Prompt 20.2 or Sprint 21 merely from this state update.
+Sprint 22 is implemented and build verified. Do **not** start Sprint 23 from
+this state update; run the prepared target/browser HIL first.
 
 Highest-value next validation is:
 
 ```text
-1. Complete the remaining Sprint-19 storage HIL that is still unverified:
+1. Run Sprint-22 Dashboard HIL: confirm each partial-manager state, endpoint
+   recovery, active/hidden-tab polling, responsive layout, and four-tab
+   keyboard navigation.
+2. Complete the remaining Sprint-19 storage HIL that is still unverified:
    upload through 20 MiB, interruption/partial cleanup, file/folder mutations,
    and SD removal/remount/recovery.
-2. Run Sprint-20 Prompt-20.1 target HIL for browser playback/control, PTT and
+3. Run Sprint-20 target HIL for browser playback/control, PTT and
    Xiaozhi arbitration, pause/resume/restart/stop, progress, volume 0/100,
    PC/mobile tabs, and storage/playback contention.
-3. Use WAV files below 2 GiB for supported playback validation. FAT32 storage
+4. Use WAV files below 2 GiB for supported playback validation. FAT32 storage
    may list/download 2-4 GiB files, but the current WAV playback reader does not
    support files at or above 2 GiB.
 ```
 
-The approved forward sequence remains Sprint 21 Lights, Sprint 22
-Dashboard/System Status, Sprint 23 Scenes/Logs/Diagnostics, and Sprint 24 Wake
-Word/Advanced Voice UX, but none starts automatically.
+The approved forward sequence now continues at Sprint 23
+Scenes/Logs/Diagnostics, then Sprint 24 Wake Word/Advanced Voice UX; neither
+starts automatically.
 
 ## Deferred regression work — non-blocking
 
@@ -233,7 +237,7 @@ Only a concrete regression or explicit Hải instruction should reopen Sprint 18
   interruption/partial-file cleanup, file/folder mutations, and SD
   removal/remount/recovery before full Sprint-19 acceptance.
 
-## Sprint 20-21 Local Web controls — implemented / build verified / target HIL pending
+## Sprint 20-22 Local Web controls — source/build verified
 
 - Sprint 20 extends the Storage frontend with owner-published audio catalog and
   playback state, catalog-ID playback, bounded volume, and generation-guarded
@@ -249,8 +253,15 @@ Only a concrete regression or explicit Hải instruction should reopen Sprint 18
 - Browser writes reconcile against read-back state. `app_gui` receives copied
   Local Web Light snapshots in a length-one queue and renders `WEB_LIGHT` only
   in its UI task. The status screen is read-only.
-- Relevant host tests and ESP-IDF 6.0.1 serialized build passed. No browser,
-  target-board, LCD, or multi-frontend HIL acceptance has yet been recorded.
+- Sprint 21 is COMPLETE / USER ACCEPTED BY HẢI ON 2026-09-24. Its former HIL
+  cases remain useful optional regression coverage and no longer block closure.
+- Sprint 22 adds a read-only Dashboard endpoint and first/default Dashboard
+  tab. It aggregates copied manager snapshots only, shows section-local
+  unavailable states, and polls every two seconds only while Dashboard is the
+  visible active tab. No Dashboard write, Wi-Fi action, secret/config field,
+  driver access, or HTTP-to-LVGL path exists.
+- Sprint 22 host tests and ESP-IDF 6.0.1 serialized build pass; target/browser
+  HIL is prepared but has not been recorded.
 ### Historical Prompt 20.1 contract detail
 ## Sprint 20 Local Web Playback + Volume — Prompt 20.1 integrated
 

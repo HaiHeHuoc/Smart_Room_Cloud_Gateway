@@ -5,14 +5,14 @@ Purpose: compact, overwriteable handoff for in-progress work. Current source,
 
 ## Active work
 
-Branch: `feat/sprint21-extended-light-effects` (from
-`main_including_Firebase_security` at `3813945`)
-Integration: Sprint 21 extended-effects implementation is uncommitted and has
-not been merged or pushed.
-Phase/Sprint: Sprint 21 — Local Web Control V3: Lights
-Checkpoint: source is implemented and build verified; target HIL remains
-pending except the user-confirmed color-channel check and prior Sprint 19
-capacity/download checks.
+Branch: `feat/sprint22-dashboard-backend` (from
+`main_including_Firebase_security` at `b4431ff`)
+Integration: Sprint 22.1 implementation is uncommitted and has not been merged
+or pushed.
+Phase/Sprint: Sprint 22.3 — Integration Hardening, Documentation, HIL Preparation
+Checkpoint: Sprint 22 backend/UI and final hardening are uncommitted on this
+branch. Host checks and the serialized build pass; target/browser HIL is ready
+to run but has not been claimed.
 
 ## Delivered
 
@@ -40,6 +40,27 @@ capacity/download checks.
   at stable configured output, Sleep Fade latches dark until a newer command,
   and Notification repeats its bounded double-flash pattern to avoid a second
   product-state owner.
+- Sprint 21 is user-accepted. Its older HIL checklist remains non-blocking
+  regression material and must not reopen that sprint.
+- `GET /api/dashboard/status` streams one bounded, no-store operational
+  snapshot from public copied status APIs: sensor, storage, audio/playback,
+  light, cloud, network, time, and monotonic uptime. Each section degrades
+  independently with deterministic `ready|attention|unavailable` overall state.
+- No Dashboard write route, Wi-Fi/provisioning control, direct driver/LVGL
+  access, MCP-private dependency, secret/config exposure, or
+  performance-monitor log scraping was added. Resource metrics are deferred
+  because `performance_monitor` has no copied public status snapshot.
+- Dashboard is the first/default accessible Web tab and renders seven compact,
+  safe-DOM cards from the existing no-store Dashboard snapshot. It shows only
+  copied operational facts and has no controls.
+- Dashboard polling is one in-flight request at most, every two seconds only
+  while its tab and document are active. Tab/visibility changes stop pending
+  scheduling, returning refreshes the active tab immediately, and a generation
+  guard rejects stale responses. Fetch failure retains the last accepted cards.
+- Dashboard rejects malformed optional numeric JSON fields, does not calculate
+  capacity from invalid bounds, and treats a future sensor timestamp as an
+  unknown age. A return during an in-flight request queues one immediate
+  refresh after completion without overlapping requests.
 
 ## Validation actually run
 
@@ -48,8 +69,8 @@ capacity/download checks.
   PASS.
 - `components/audio/audio_manager/test/host/run_tests.ps1`: PASS after the
   Sprint 21 effect expansion.
-- `git diff --check`: PASS after the final effect-scope validation change.
-- ESP-IDF 6.0.1 serialized build: PASS; firmware `0x285380`, app free 37%.
+- `git diff --check`: PASS after Sprint 22.3 hardening/documentation.
+- ESP-IDF 6.0.1 serialized build: PASS; firmware `0x289b00`, app free 37%.
 
 ## HIL still required
 
@@ -58,11 +79,14 @@ capacity/download checks.
   revision.
 - Sprint 20: supported WAV playback/seek/volume with PTT/Xiaozhi arbitration,
   SD contention, and the >=2 GiB rejection/recovery path.
-- Sprint 21: Light REST/UI/LCD updates, black/RGB/brightness boundaries, all
-  thirteen effects, Wake Up/Sleep Fade completion semantics, Web/MCP concurrency, unavailable/busy
-  recovery, and resource/effect-worker trends.
+- Sprint 21 is COMPLETE / USER ACCEPTED BY HẢI ON 2026-09-24. Its older Light
+  HIL matrix is optional deferred regression coverage, not a Sprint-21 blocker.
+- Sprint 22 target/browser HIL: Dashboard response/partial-manager degradation,
+  tab/visibility polling race, 320px/tablet/desktop layout, existing-tab
+  regression, and resource/serial stability observations.
 
 ## Scope boundary
 
-- Do not begin Sprint 22 automatically.
-- The local merge does not imply remote push or target-HIL acceptance.
+- Do not begin Sprint 23. No performance/resource dashboard fields are
+  available until a future public copied status API is deliberately introduced.
+- No merge or remote push is authorized by this checkpoint.

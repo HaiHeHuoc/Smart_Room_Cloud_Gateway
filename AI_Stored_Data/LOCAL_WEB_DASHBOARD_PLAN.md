@@ -1,7 +1,7 @@
 # Local Web Dashboard Plan
 
 Updated: 2026-09-24
-Status: **SPRINTS 19-21 IMPLEMENTED / BUILD VERIFIED / TARGET HIL PENDING**
+Status: **SPRINT 21 COMPLETE / USER ACCEPTED; SPRINT 22 IMPLEMENTED / BUILD VERIFIED / TARGET HIL PENDING**
 Active integration branch: `main_including_Firebase_security`
 
 ## Purpose
@@ -10,8 +10,9 @@ This document is the durable cross-session plan for the Local Web Control
 Dashboard. Future ChatGPT/Codex/AI sessions must use it to avoid roadmap drift
 unless Hải explicitly approves a later roadmap change.
 
-Sprint 19-21 source and build facts below are recorded implementation evidence.
-Target HIL remains required and is not implied by this planning document.
+Sprint 19-22 source/build facts below are recorded implementation evidence.
+Sprint-22 target/browser HIL remains required and is not implied by this
+planning document.
 
 ## Roadmap position
 
@@ -23,9 +24,9 @@ The approved post-Sprint-18 sequence is:
 ```text
 Sprint 19  Local Web Control V1: SD Card File Manager     IMPLEMENTED / BUILD VERIFIED / HIL PARTIAL
 Sprint 20  Local Web Control V2: Playback + Volume       IMPLEMENTED / BUILD VERIFIED / HIL PENDING
-Sprint 21  Local Web Control V3: Lights                  IMPLEMENTED / BUILD VERIFIED / HIL PENDING
+Sprint 21  Local Web Control V3: Lights                  COMPLETE / USER ACCEPTED 2026-09-24
 Sprint 22  Local Web Control V4: Dashboard + System Status
-                                                         PLANNED / NOT STARTED
+                                                         IMPLEMENTED / BUILD VERIFIED / HIL PENDING
 Sprint 23  Local Web Control V5: Scenes + Logs + Diagnostics
                                                          PLANNED / NOT STARTED
 Sprint 24  Wake Word + Advanced Voice UX                 PLANNED / NOT STARTED
@@ -35,10 +36,23 @@ The former Sprint 19 Wake Word / Advanced Voice UX plan is deferred to Sprint
 24. Its content and required order are preserved in
 `XIAOZHI_IMPLEMENTATION_ROADMAP.md`.
 
-## Current implementation checkpoint — 2026-09-23
+## Integrated Sprint 22 checkpoint — 2026-09-24
 
 Sprint 20 Prompt 20.1 is integrated on
-`main_including_Firebase_security`. Current verified source provides:
+`main_including_Firebase_security`. The current Sprint-22 working branch adds
+the following source/build-verified Dashboard checkpoint without a merge:
+
+- read-only `GET /api/dashboard/status` over copied manager snapshots for
+  sensor, storage, audio/playback, light, cloud, network, time, and monotonic
+  uptime; each section is independently available/unavailable and the overall
+  token is `ready|attention|unavailable`;
+- a first/default Dashboard tab with compact responsive cards and no controls;
+- visible-active-only two-second polling, one in-flight request, stale response
+  generation guard, and retained last-success snapshot on request failure;
+- no Wi-Fi action, provisioning/configuration material, direct SD/FATFS,
+  I2S/driver, MCP-private, or LVGL access; performance metrics remain deferred.
+
+Existing verified source also provides:
 
 - copied shared `/sdcard/audio` catalog access without a Web-owned scanner or
   physical path exposure;
@@ -336,7 +350,7 @@ a second audio owner.
 
 ## Sprint 21 — Local Web Control V3: Lights
 
-Status: **IMPLEMENTED / BUILD VERIFIED / TARGET HIL PENDING**
+Status: **COMPLETE / USER ACCEPTED BY HẢI ON 2026-09-24**
 
 ### Goal
 
@@ -376,7 +390,7 @@ a conflicting light-state model.
 
 ## Sprint 22 — Local Web Control V4: Dashboard + System Status
 
-Status: **PLANNED / NOT STARTED**
+Status: **IMPLEMENTED / BUILD VERIFIED / TARGET HIL PENDING**
 
 ### Goal
 
@@ -401,6 +415,23 @@ as:
 - do not bypass managers to collect diagnostics;
 - rate-limit/coalesce updates so the dashboard does not become a new load or
   timing hazard.
+
+### Delivered implementation and HIL preparation
+
+- The `local_web_server` endpoint is GET-only and streams a bounded no-store
+  JSON response. It uses public copied status APIs only and degrades one failed
+  manager section without failing the normal HTTP response.
+- The browser renders operational cards for Sensor, Storage, Network, Audio,
+  Lights, Cloud, and Time/System via `textContent`. It validates optional
+  numeric data before formatting, never treats sensor sentinels as readings,
+  and keeps the prior good snapshot on endpoint failure.
+- Dashboard polling runs only while Dashboard is visible and active. A queued
+  return refresh closes the tab-switch/in-flight-request race without allowing
+  overlapping requests. Storage, Playback, and Lights retain their existing
+  separate active-tab behavior.
+- Target/browser HIL remains the acceptance gate. It must cover partial
+  manager availability, polling/visibility transitions, responsive layout,
+  existing-tab regression, and quiet resource/serial behavior.
 
 ## Sprint 23 — Local Web Control V5: Scenes + Logs + Diagnostics
 
@@ -464,8 +495,8 @@ For Sprints 19-23:
 
 ## Scope-change rule
 
-The implemented Sprint 19-21 statuses above override the older generic
-planning language in this section. Sprints 22+ remain planned until explicitly
+The implemented Sprint 19-22 statuses above override the older generic
+planning language in this section. Sprint 23+ remains planned until explicitly
 started and documented.
 
 This file records the approved roadmap, not permission to implement every item

@@ -3,13 +3,17 @@
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
 
 #include "esp_http_server.h"
+#include "esp_timer.h"
 
 #include "app_log.h"
 #include "app_gui.h"
 #include "audio_manager.h"
+#include "cloud_manager.h"
+#include "local_web_dashboard_policy.h"
 #include "local_web_download.h"
 #include "local_web_audio_policy.h"
 #include "local_web_icon_policy.h"
@@ -17,12 +21,14 @@
 #include "local_web_path_policy.h"
 #include "light_manager.h"
 #include "sd_card_manager.h"
+#include "sensor_manager.h"
 #include "smart_room_mcp_adapter.h"
 #include "voice_assistant_playback_control.h"
+#include "wifi_manager.h"
 
 #define LOCAL_WEB_HTTP_STACK_SIZE_BYTES 6144U
 #define LOCAL_WEB_HTTP_MAX_OPEN_SOCKETS 2U
-#define LOCAL_WEB_HTTP_ROUTE_COUNT 18U
+#define LOCAL_WEB_HTTP_ROUTE_COUNT 20U
 #define LOCAL_WEB_HTTP_MAX_URI_LEN 1280U
 #define LOCAL_WEB_RESPONSE_CHUNK_SIZE 512U
 #define LOCAL_WEB_TRANSFER_CHUNK_SIZE SD_CARD_MANAGER_TRANSFER_CHUNK_SIZE
@@ -70,6 +76,7 @@ static esp_err_t local_web_audio_volume_post(httpd_req_t *request);
 static esp_err_t local_web_audio_seek_post(httpd_req_t *request);
 static esp_err_t local_web_light_status_get(httpd_req_t *request);
 static esp_err_t local_web_light_state_post(httpd_req_t *request);
+static esp_err_t local_web_dashboard_status_get(httpd_req_t *request);
 static esp_err_t local_web_send_error(
     httpd_req_t *request,
     const char *http_status,
@@ -77,6 +84,8 @@ static esp_err_t local_web_send_error(
 static esp_err_t local_web_send_json_escaped(
     httpd_req_t *request,
     const char *value);
+static esp_err_t local_web_send_chunkf(httpd_req_t *request,
+                                       const char *format, ...);
 static const char *local_web_sd_state_name(sd_card_manager_state_t state);
 static const char *local_web_entry_type_name(
     sd_card_manager_directory_entry_type_t type);
@@ -330,6 +339,162 @@ static esp_err_t local_web_light_status_get(httpd_req_t *request)
     }
     local_web_publish_light_status(&state, ESP_OK);
     return local_web_light_send_state(request, &state);
+}
+
+static esp_err_t local_web_dashboard_status_get(httpd_req_t *request)
+{
+    sensor_manager_status_t sensor = {0};
+    sd_card_manager_status_t storage = {0};
+    sd_card_manager_filesystem_usage_t usage = {0};
+    audio_manager_status_t audio = {0};
+    audio_manager_playback_status_t playback = {0};
+    light_manager_state_t light = {0};
+    cloud_manager_status_t cloud = {0};
+    wifi_manager_status_t network = {0};
+    time_manager_status_t time = {0};
+
+    const bool sensor_available = sensor_manager_get_status(&sensor) == ESP_OK;
+    const bool storage_status_available = sd_card_manager_get_status(&storage) == ESP_OK;
+    const bool capacity_valid = storage_status_available &&
+        (storage.state == SD_CARD_MANAGER_STATE_READY) &&
+        (sd_card_manager_get_filesystem_usage(&usage) == ESP_OK);
+    const bool audio_available = audio_manager_get_status(&audio) == ESP_OK;
+    const bool playback_available = audio_available &&
+        (audio_manager_get_playback_status(&playback) == ESP_OK);
+    const bool light_available = light_manager_get_state(&light) == ESP_OK;
+    const bool cloud_available = cloud_manager_get_status(&cloud) == ESP_OK;
+    const bool network_available = wifi_manager_get_status(&network) == ESP_OK;
+    const bool time_available = time_manager_get_status(&time) == ESP_OK;
+    const bool sensor_current = sensor_available &&
+        local_web_dashboard_sensor_has_current_data(&sensor);
+    const char *const light_effect = light_available
+        ? local_web_light_effect_name(light.effect) : NULL;
+
+    const local_web_dashboard_health_t health[] = {
+        sensor_available ? local_web_dashboard_sensor_health(&sensor)
+                         : LOCAL_WEB_DASHBOARD_HEALTH_UNAVAILABLE,
+        storage_status_available
+            ? local_web_dashboard_storage_health(&storage, capacity_valid)
+            : LOCAL_WEB_DASHBOARD_HEALTH_UNAVAILABLE,
+        audio_available ? local_web_dashboard_audio_health(&audio, playback_available)
+                        : LOCAL_WEB_DASHBOARD_HEALTH_UNAVAILABLE,
+        (light_available && (light_effect != NULL))
+            ? LOCAL_WEB_DASHBOARD_HEALTH_NORMAL
+            : LOCAL_WEB_DASHBOARD_HEALTH_UNAVAILABLE,
+        cloud_available ? local_web_dashboard_cloud_health(&cloud)
+                        : LOCAL_WEB_DASHBOARD_HEALTH_UNAVAILABLE,
+        network_available ? local_web_dashboard_network_health(&network)
+                          : LOCAL_WEB_DASHBOARD_HEALTH_UNAVAILABLE,
+        time_available ? local_web_dashboard_time_health(&time)
+                       : LOCAL_WEB_DASHBOARD_HEALTH_UNAVAILABLE,
+    };
+    const uint64_t now_ms = (uint64_t)esp_timer_get_time() / 1000U;
+    const bool last_success_known = sensor_available &&
+        (sensor.last_success_time_ms > 0) &&
+        ((uint64_t)sensor.last_success_time_ms <= now_ms);
+
+    httpd_resp_set_type(request, "application/json");
+    httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+    esp_err_t result = local_web_send_chunkf(
+        request, "{\"ok\":true,\"overall_state\":\"%s\",\"sensor\":{"
+        "\"available\":%s,\"state\":\"%s\",\"data_valid\":%s,"
+        "\"data_stale\":%s,\"temperature_c\":",
+        local_web_dashboard_overall_state(health, sizeof(health) / sizeof(health[0])),
+        sensor_available ? "true" : "false",
+        sensor_available ? local_web_dashboard_sensor_state_name(sensor.state) : "unavailable",
+        sensor_current ? "true" : "false",
+        (sensor_available && sensor.data_stale) || !sensor_current ? "true" : "false");
+    if (result != ESP_OK) return result;
+    result = sensor_current
+        ? local_web_send_chunkf(request, "%.2f,\"humidity_percent\":%.2f",
+                                (double)sensor.temperature_c, (double)sensor.humidity_percent)
+        : httpd_resp_sendstr_chunk(request, "null,\"humidity_percent\":null");
+    if (result != ESP_OK) return result;
+    result = last_success_known
+        ? local_web_send_chunkf(request, ",\"last_success_age_ms\":%" PRIu64 "}",
+                                local_web_dashboard_age_ms(now_ms,
+                                                           sensor.last_success_time_ms))
+        : httpd_resp_sendstr_chunk(request, ",\"last_success_age_ms\":null}");
+    if (result != ESP_OK) return result;
+
+    result = local_web_send_chunkf(
+        request, ",\"storage\":{\"available\":%s,\"state\":\"%s\","
+        "\"capacity_valid\":%s,\"total_bytes\":",
+        capacity_valid ? "true" : "false",
+        storage_status_available
+            ? local_web_dashboard_storage_state_name(storage.state) : "unavailable",
+        capacity_valid ? "true" : "false");
+    if (result != ESP_OK) return result;
+    result = capacity_valid
+        ? local_web_send_chunkf(request, "%" PRIu64 ",\"used_bytes\":%" PRIu64
+                                  ",\"free_bytes\":%" PRIu64,
+                                  usage.total_bytes, usage.used_bytes, usage.free_bytes)
+        : httpd_resp_sendstr_chunk(request,
+                                   "null,\"used_bytes\":null,\"free_bytes\":null");
+    if (result != ESP_OK) return result;
+    result = storage_status_available
+        ? local_web_send_chunkf(request, ",\"active_leases\":%" PRIu32 "}",
+                                storage.active_leases)
+        : httpd_resp_sendstr_chunk(request, ",\"active_leases\":null}");
+    if (result != ESP_OK) return result;
+
+    result = local_web_send_chunkf(
+        request, ",\"audio\":{\"available\":%s,\"state\":\"%s\","
+        "\"playback_available\":%s,\"playback_state\":\"%s\","
+        "\"playback_source\":\"%s\",\"volume_percent\":%" PRIu32 "}",
+        audio_available ? "true" : "false",
+        audio_available ? local_web_dashboard_audio_state_name(audio.state) : "unavailable",
+        playback_available ? "true" : "false",
+        playback_available ? local_web_audio_state_name(playback.state) : "unavailable",
+        playback_available ? local_web_audio_source_name(playback.source) : "unavailable",
+        audio_available ? audio.playback_volume_percent : 0U);
+    if (result != ESP_OK) return result;
+
+    result = local_web_send_chunkf(
+        request, ",\"light\":{\"available\":%s,\"power\":%s,\"red\":%u,"
+        "\"green\":%u,\"blue\":%u,\"brightness_percent\":%u,\"effect\":\"%s\"}",
+        (light_available && (light_effect != NULL)) ? "true" : "false",
+        light_available && light.power_on ? "true" : "false",
+        light_available ? (unsigned)light.red : 0U,
+        light_available ? (unsigned)light.green : 0U,
+        light_available ? (unsigned)light.blue : 0U,
+        light_available ? (unsigned)light.brightness_percent : 0U,
+        (light_effect != NULL) ? light_effect : "unavailable");
+    if (result != ESP_OK) return result;
+
+    result = local_web_send_chunkf(
+        request, ",\"cloud\":{\"available\":%s,\"state\":\"%s\"}",
+        cloud_available ? "true" : "false",
+        cloud_available ? local_web_dashboard_cloud_state_name(cloud.state) : "unavailable");
+    if (result != ESP_OK) return result;
+
+    result = local_web_send_chunkf(
+        request, ",\"network\":{\"available\":%s,\"state\":\"%s\","
+        "\"has_ipv4_address\":%s,\"ipv4_address\":\"",
+        network_available ? "true" : "false",
+        network_available ? local_web_dashboard_network_state_name(network.state)
+                          : "unavailable",
+        network_available && network.has_ipv4_address ? "true" : "false");
+    if (result != ESP_OK) return result;
+    if (network_available && network.has_ipv4_address) {
+        result = local_web_send_json_escaped(request, network.ipv4_address);
+        if (result != ESP_OK) return result;
+    }
+    result = local_web_send_chunkf(request, "\",\"rssi_valid\":%s,\"rssi_dbm\":",
+                                   network_available && network.rssi_valid ? "true" : "false");
+    if (result != ESP_OK) return result;
+    result = network_available && network.rssi_valid
+        ? local_web_send_chunkf(request, "%d}", (int)network.rssi_dbm)
+        : httpd_resp_sendstr_chunk(request, "null}");
+    if (result != ESP_OK) return result;
+
+    result = local_web_send_chunkf(
+        request, ",\"time\":{\"available\":%s,\"state\":\"%s\",\"synced\":%s},"
+        "\"system\":{\"uptime_ms\":%" PRIu64 "}}",
+        time_available ? "true" : "false",
+        time_available ? local_web_dashboard_time_state_name(time.state) : "unavailable",
+        time_available && time.synced ? "true" : "false", now_ms);
+    return result == ESP_OK ? httpd_resp_send_chunk(request, NULL, 0U) : result;
 }
 
 static bool local_web_light_parse_state_query(httpd_req_t *request,
@@ -1088,6 +1253,23 @@ static esp_err_t local_web_send_json_escaped(
                : httpd_resp_send_chunk(request, s_response_chunk, output_length);
 }
 
+static esp_err_t local_web_send_chunkf(httpd_req_t *request,
+                                       const char *format, ...)
+{
+    if ((request == NULL) || (format == NULL)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    va_list arguments;
+    va_start(arguments, format);
+    const int written = vsnprintf(s_response_chunk, sizeof(s_response_chunk),
+                                  format, arguments);
+    va_end(arguments);
+    return ((written < 0) || (written >= (int)sizeof(s_response_chunk)))
+               ? ESP_ERR_INVALID_SIZE
+               : httpd_resp_send_chunk(request, s_response_chunk, written);
+}
+
 static const char *local_web_sd_state_name(sd_card_manager_state_t state)
 {
     switch (state)
@@ -1188,6 +1370,10 @@ static esp_err_t local_web_register_routes(httpd_handle_t server)
         .uri = "/api/light/state", .method = HTTP_POST,
         .handler = local_web_light_state_post,
     };
+    static const httpd_uri_t dashboard_status = {
+        .uri = "/api/dashboard/status", .method = HTTP_GET,
+        .handler = local_web_dashboard_status_get,
+    };
 
     esp_err_t result = httpd_register_uri_handler(server, &root);
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &storage_status);
@@ -1207,5 +1393,6 @@ static esp_err_t local_web_register_routes(httpd_handle_t server)
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &audio_seek);
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &light_status);
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &light_state);
+    if (result == ESP_OK) result = httpd_register_uri_handler(server, &dashboard_status);
     return result;
 }

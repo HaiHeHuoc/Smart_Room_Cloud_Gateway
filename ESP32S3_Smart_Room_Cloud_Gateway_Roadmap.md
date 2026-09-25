@@ -2140,11 +2140,11 @@ current Sprint 18 remains **MCP Controlled Actions**, with its existing Phase
 Approved future roadmap:
 
 ```text
-Sprint 18  MCP Controlled Actions                              IN PROGRESS
-Sprint 19  Local Web Control V1: SD Card File Manager          PLANNED / NOT STARTED
-Sprint 20  Local Web Control V2: Playback + Volume             PLANNED / NOT STARTED
-Sprint 21  Local Web Control V3: Lights                        PLANNED / NOT STARTED
-Sprint 22  Local Web Control V4: Dashboard + System Status     PLANNED / NOT STARTED
+Sprint 18  MCP Controlled Actions                              COMPLETE / USER ACCEPTED
+Sprint 19  Local Web Control V1: SD Card File Manager          SOURCE INTEGRATED / HIL PARTIAL
+Sprint 20  Local Web Control V2: Playback + Volume             IMPLEMENTED / BUILD VERIFIED / HIL PENDING
+Sprint 21  Local Web Control V3: Lights                        COMPLETE / USER ACCEPTED 2026-09-24
+Sprint 22  Local Web Control V4: Dashboard + System Status     IMPLEMENTED / BUILD VERIFIED / HIL PENDING
 Sprint 23  Local Web Control V5: Scenes + Logs + Diagnostics   PLANNED / NOT STARTED
 Sprint 24  Wake Word + Advanced Voice UX                       PLANNED / NOT STARTED
 ```
@@ -2170,6 +2170,7 @@ and retains this order:
 ```
 
 Detailed Local Web scope and anti-drift rules live in
-`AI_Stored_Data/LOCAL_WEB_DASHBOARD_PLAN.md`. No Sprint 19-24 implementation,
-build, HIL, endurance, or security evidence is claimed by this documentation
-reconciliation.
+`AI_Stored_Data/LOCAL_WEB_DASHBOARD_PLAN.md`. Sprint 19-22 source/build and
+the Sprint-21 user-acceptance evidence are recorded in the current-state
+documents; Sprint-22 target/browser HIL remains required and Sprint 23-24
+remain unstarted.

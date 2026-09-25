@@ -12,6 +12,7 @@ New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
     -I (Join-Path $testRoot 'include') `
     -I (Join-Path $componentRoot 'src') `
     (Join-Path $componentRoot 'src\local_web_audio_policy.c') `
+    (Join-Path $componentRoot 'src\local_web_dashboard_policy.c') `
     (Join-Path $componentRoot 'src\local_web_download.c') `
     (Join-Path $componentRoot 'src\local_web_icon_policy.c') `
     (Join-Path $componentRoot 'src\local_web_light_policy.c') `
@@ -23,7 +24,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Local Web path-policy test build failed' }
 if ($LASTEXITCODE -ne 0) { throw 'Local Web path-policy tests failed' }
 
 $serverSource = Get-Content (Join-Path $componentRoot 'src\local_web_server.c') -Raw
-if (($serverSource -notmatch 'LOCAL_WEB_HTTP_ROUTE_COUNT 18U') -or
+if (($serverSource -notmatch 'LOCAL_WEB_HTTP_ROUTE_COUNT 20U') -or
     ($serverSource -notmatch 'config\.max_uri_handlers = LOCAL_WEB_HTTP_ROUTE_COUNT') -or
     ($serverSource -notmatch '"/api/assets/icon"') -or
     ($serverSource -notmatch 'local_web_icon_logical_path') -or
@@ -33,6 +34,19 @@ if (($serverSource -notmatch 'LOCAL_WEB_HTTP_ROUTE_COUNT 18U') -or
     ($serverSource -notmatch 'app_gui_post_web_light_status')) {
     throw 'HTTPD URI-handler capacity does not cover the registered route set'
 }
+if (([regex]::Matches($serverSource, '\.uri = ')).Count -ne 19) {
+    throw 'HTTPD URI-handler route inventory changed without a capacity review'
+}
+
+if (($serverSource -notmatch '"/api/dashboard/status"') -or
+    ($serverSource -notmatch 'local_web_dashboard_status_get') -or
+    ($serverSource -match 'dashboard/status".*, .method = HTTP_POST') -or
+    ($serverSource -match 'wifi_manager_connect\(') -or
+    ($serverSource -match 'wifi_manager_disconnect\(') -or
+    ($serverSource -match 'neopixel_') -or
+    ($serverSource -match 'lv_')) {
+    throw 'Dashboard endpoint is not read-only or bypasses an owner boundary'
+}
 
 $webPage = Get-Content (Join-Path $componentRoot 'web\index.html') -Raw
 if (($webPage -notmatch 'STORAGE_POLL_INTERVAL_MS = 2000') -or
@@ -41,6 +55,38 @@ if (($webPage -notmatch 'STORAGE_POLL_INTERVAL_MS = 2000') -or
     ($webPage -notmatch 'storageAvailable === true && !busy') -or
     ($webPage -notmatch 'storageAvailable !== true')) {
     throw 'Storage UI does not refresh SD availability without a page reload'
+}
+
+if (($webPage -notmatch 'id="tab-dashboard"') -or
+    ($webPage -notmatch 'id="panel-dashboard"') -or
+    ($webPage -notmatch 'data-tab="dashboard"') -or
+    ($webPage -notmatch 'id="tab-storage"') -or
+    ($webPage -notmatch 'id="tab-playback"') -or
+    ($webPage -notmatch 'id="tab-lights"') -or
+    ($webPage -notmatch 'activeTab = ''dashboard''') -or
+    ($webPage -notmatch 'DASHBOARD_POLL_INTERVAL_MS = 2000') -or
+    ($webPage -notmatch 'async function tickDashboard') -or
+    ($webPage -notmatch 'dashboardPolling') -or
+    ($webPage -notmatch 'dashboardGeneration') -or
+    ($webPage -notmatch 'dashboardRefreshQueued') -or
+    ($webPage -notmatch 'dashboardActive') -or
+    ($webPage -notmatch "fetch\('/api/dashboard/status'") -or
+    ($webPage -notmatch 'data\.ok !== true') -or
+    ($webPage -notmatch 'dashboard-sensor-primary') -or
+    ($webPage -notmatch 'dashboard-storage-primary') -or
+    ($webPage -notmatch 'dashboard-network-primary') -or
+    ($webPage -notmatch 'dashboard-audio-primary') -or
+    ($webPage -notmatch 'dashboard-light-swatch') -or
+    ($webPage -notmatch 'dashboard-cloud-primary') -or
+    ($webPage -notmatch 'dashboard-time-primary') -or
+    ($webPage -notmatch 'dashboard-storage-progress') -or
+    ($webPage -notmatch 'role="tablist"') -or
+    ($webPage -notmatch 'ArrowLeft') -or
+    ($webPage -notmatch 'document\.hidden') -or
+    ($webPage -notmatch 'finiteNumber') -or
+    ($webPage -match '/api/(wifi|provision|dashboard/[^s])') -or
+    ($webPage -match 'innerHTML')) {
+    throw 'Dashboard UI is missing safe rendering, tab accessibility, or bounded active polling'
 }
 
 if (($webPage -notmatch 'id="tab-lights"') -or

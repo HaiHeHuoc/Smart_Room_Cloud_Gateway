@@ -3,6 +3,7 @@
 
 #include "local_web_path_policy.h"
 #include "local_web_audio_policy.h"
+#include "local_web_dashboard_policy.h"
 #include "local_web_download.h"
 #include "local_web_icon_policy.h"
 #include "local_web_light_policy.h"
@@ -116,7 +117,8 @@ static int expect_light_policy(void)
                     !local_web_light_apply_update(&effect_update, &black_off) ||
                     !black_off.power_on || (black_off.red != 255U) ||
                     (black_off.green != 255U) || (black_off.blue != 255U) ||
-                    (black_off.effect != (light_manager_effect_t)index);
+                    (black_off.effect != (light_manager_effect_t)index) ||
+                    (local_web_light_effect_name((light_manager_effect_t)index) == NULL);
     }
 
     local_web_light_update_t off = {0};
@@ -145,6 +147,108 @@ static int expect_light_policy(void)
                 LOCAL_WEB_LIGHT_MANAGER_RESULT_UNAVAILABLE;
     failures += local_web_light_manager_result_from_error(ESP_ERR_TIMEOUT) !=
                 LOCAL_WEB_LIGHT_MANAGER_RESULT_BUSY;
+    return failures;
+}
+
+static int expect_dashboard_policy(void)
+{
+    int failures = 0;
+    sensor_manager_status_t sensor = {
+        .state = SENSOR_MANAGER_STATE_READY,
+        .temperature_c = 27.4f,
+        .humidity_percent = 61.2f,
+        .data_valid = true,
+        .data_stale = false,
+        .last_success_time_ms = 900,
+    };
+    failures += !local_web_dashboard_sensor_has_current_data(&sensor);
+    failures += local_web_dashboard_sensor_health(&sensor) !=
+                LOCAL_WEB_DASHBOARD_HEALTH_NORMAL;
+    failures += local_web_dashboard_age_ms(1000U, sensor.last_success_time_ms) != 100U;
+    failures += local_web_dashboard_age_ms(1000U, 0) != 0U;
+    failures += local_web_dashboard_age_ms(1000U, -1) != 0U;
+    failures += local_web_dashboard_age_ms(1000U, 1100) != 0U;
+    sensor.data_stale = true;
+    failures += local_web_dashboard_sensor_has_current_data(&sensor);
+    failures += local_web_dashboard_sensor_health(&sensor) !=
+                LOCAL_WEB_DASHBOARD_HEALTH_ATTENTION;
+    sensor.data_stale = false;
+    sensor.temperature_c = __builtin_nanf("");
+    failures += local_web_dashboard_sensor_has_current_data(&sensor);
+
+    sd_card_manager_status_t storage = {
+        .state = SD_CARD_MANAGER_STATE_READY,
+        .active_leases = 1U,
+    };
+    failures += local_web_dashboard_storage_health(&storage, true) !=
+                LOCAL_WEB_DASHBOARD_HEALTH_NORMAL;
+    failures += local_web_dashboard_storage_health(&storage, false) !=
+                LOCAL_WEB_DASHBOARD_HEALTH_ATTENTION;
+    storage.state = SD_CARD_MANAGER_STATE_RECOVERING;
+    failures += local_web_dashboard_storage_health(&storage, true) !=
+                LOCAL_WEB_DASHBOARD_HEALTH_ATTENTION;
+
+    audio_manager_status_t audio = { .state = AUDIO_MANAGER_STATE_IDLE };
+    failures += local_web_dashboard_audio_health(&audio, true) !=
+                LOCAL_WEB_DASHBOARD_HEALTH_NORMAL;
+    audio.state = AUDIO_MANAGER_STATE_ERROR;
+    failures += local_web_dashboard_audio_health(&audio, true) !=
+                LOCAL_WEB_DASHBOARD_HEALTH_ATTENTION;
+
+    cloud_manager_status_t cloud = { .state = CLOUD_MANAGER_STATE_ONLINE };
+    failures += local_web_dashboard_cloud_health(&cloud) !=
+                LOCAL_WEB_DASHBOARD_HEALTH_NORMAL;
+    cloud.state = CLOUD_MANAGER_STATE_RETRY_WAIT;
+    failures += local_web_dashboard_cloud_health(&cloud) !=
+                LOCAL_WEB_DASHBOARD_HEALTH_ATTENTION;
+
+    wifi_manager_status_t network = {
+        .state = WIFI_MANAGER_STATE_CONNECTED,
+        .has_ipv4_address = true,
+    };
+    failures += local_web_dashboard_network_health(&network) !=
+                LOCAL_WEB_DASHBOARD_HEALTH_NORMAL;
+    network.has_ipv4_address = false;
+    failures += local_web_dashboard_network_health(&network) !=
+                LOCAL_WEB_DASHBOARD_HEALTH_ATTENTION;
+    failures += strcmp(local_web_dashboard_network_state_name(
+                           WIFI_MANAGER_STATE_DISCONNECTED), "disconnected") != 0;
+
+    time_manager_status_t time = {
+        .state = TIME_MANAGER_STATE_SYNCED,
+        .synced = true,
+    };
+    failures += local_web_dashboard_time_health(&time) !=
+                LOCAL_WEB_DASHBOARD_HEALTH_NORMAL;
+    time.synced = false;
+    failures += local_web_dashboard_time_health(&time) !=
+                LOCAL_WEB_DASHBOARD_HEALTH_ATTENTION;
+    failures += strcmp(local_web_dashboard_time_state_name(TIME_MANAGER_STATE_SYNCING),
+                       "syncing") != 0;
+
+    const local_web_dashboard_health_t ready[] = {
+        LOCAL_WEB_DASHBOARD_HEALTH_NORMAL,
+        LOCAL_WEB_DASHBOARD_HEALTH_NORMAL,
+    };
+    const local_web_dashboard_health_t attention[] = {
+        LOCAL_WEB_DASHBOARD_HEALTH_NORMAL,
+        LOCAL_WEB_DASHBOARD_HEALTH_ATTENTION,
+        LOCAL_WEB_DASHBOARD_HEALTH_UNAVAILABLE,
+    };
+    const local_web_dashboard_health_t unavailable[] = {
+        LOCAL_WEB_DASHBOARD_HEALTH_UNAVAILABLE,
+        LOCAL_WEB_DASHBOARD_HEALTH_UNAVAILABLE,
+    };
+    const local_web_dashboard_health_t partial_unavailable[] = {
+        LOCAL_WEB_DASHBOARD_HEALTH_NORMAL,
+        LOCAL_WEB_DASHBOARD_HEALTH_UNAVAILABLE,
+    };
+    failures += strcmp(local_web_dashboard_overall_state(ready, 2U), "ready") != 0;
+    failures += strcmp(local_web_dashboard_overall_state(attention, 3U), "attention") != 0;
+    failures += strcmp(local_web_dashboard_overall_state(unavailable, 2U),
+                       "unavailable") != 0;
+    failures += strcmp(local_web_dashboard_overall_state(partial_unavailable, 2U),
+                       "attention") != 0;
     return failures;
 }
 
@@ -192,5 +296,6 @@ int main(void)
     failures += expect_audio_policy();
     failures += expect_icon_policy();
     failures += expect_light_policy();
+    failures += expect_dashboard_policy();
     return failures == 0 ? 0 : 1;
 }
