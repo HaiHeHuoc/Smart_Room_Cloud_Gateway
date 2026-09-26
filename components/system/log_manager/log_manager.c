@@ -39,6 +39,9 @@
 #define LOCK_TICKS pdMS_TO_TICKS(20)
 #define WRITER_STACK_BYTES 6144
 #define CONSOLE_SINK_TAG "APP_LOG_SINK"
+#define ARCHIVE_SCAN_MAX 64U
+#define ARCHIVE_DIRECTORY_SCAN_MAX 64U
+#define ARCHIVE_LINE_BYTES RECORD_BYTES
 
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "LOG_MANAGER";
@@ -59,9 +62,9 @@ typedef struct {
 /* Static Variables --------------------------------------------------------- */
 /* INTERNAL_REQUIRED: locks and shared state. Never place these in PSRAM. */
 #if CONFIG_LOG_MANAGER_ENABLE
-static StaticSemaphore_t s_mutex_memory, s_done_memory;
+static StaticSemaphore_t s_mutex_memory, s_done_memory, s_archive_read_gate_memory;
 #endif
-static SemaphoreHandle_t s_mutex, s_done;
+static SemaphoreHandle_t s_mutex, s_done, s_archive_read_gate;
 static manager_t s;
 static uint32_t s_contention;
 /* Lock-free fallback copy used only for console formatting when the producer
@@ -93,6 +96,20 @@ static bool lock(TickType_t ticks)
 }
 
 static void unlock(void) { xSemaphoreGive(s_mutex); }
+
+/* Reader holds this only for one bounded archive request. Retention defers a
+ * delete instead of racing a browser-owned FILE handle. */
+static bool archive_read_gate_take(TickType_t ticks)
+{
+    SemaphoreHandle_t gate = __atomic_load_n(
+        &s_archive_read_gate, __ATOMIC_ACQUIRE);
+    return gate && xSemaphoreTake(gate, ticks) == pdTRUE;
+}
+
+static void archive_read_gate_release(void)
+{
+    xSemaphoreGive(s_archive_read_gate);
+}
 
 static void wake_locked(uint32_t bits)
 {
@@ -383,19 +400,178 @@ static bool owned_file(const char *name)
     return p > digits && !strcmp(p, ".log");
 }
 
+static uint64_t archive_hash(const char *path)
+{
+    uint64_t hash = UINT64_C(1469598103934665603);
+    for (; *path; ++path) {
+        hash ^= (uint8_t)*path;
+        hash *= UINT64_C(1099511628211);
+    }
+    return hash;
+}
+
+static void archive_id(char out[LOG_MANAGER_ARCHIVE_ID_LEN + 1U], const char *path)
+{
+    (void)snprintf(out, LOG_MANAGER_ARCHIVE_ID_LEN + 1U, "%016" PRIx64,
+                   archive_hash(path));
+}
+
+static bool archive_insert(log_manager_archive_list_t *archives,
+                           const char *path, const struct stat *st)
+{
+    if ((archives == NULL) || (path == NULL) || (st == NULL)) return false;
+    log_manager_archive_t entry = {
+        .size_bytes = (uint64_t)st->st_size,
+        .time_named = strncmp(strrchr(path, '/') + 1, "boot_", 5) != 0,
+        .sort_time = (int64_t)st->st_mtime,
+    };
+    archive_id(entry.id, path);
+    for (uint8_t index = 0U; index < archives->count; ++index) {
+        if (strcmp(archives->archives[index].id, entry.id) == 0) return false;
+    }
+    uint8_t insert_at = archives->count;
+    while ((insert_at > 0U) &&
+           ((entry.sort_time > archives->archives[insert_at - 1U].sort_time) ||
+            ((entry.sort_time == archives->archives[insert_at - 1U].sort_time) &&
+             (strcmp(entry.id, archives->archives[insert_at - 1U].id) < 0)))) --insert_at;
+    if (archives->count < LOG_MANAGER_ARCHIVE_LIST_MAX) {
+        for (uint8_t index = archives->count; index > insert_at; --index)
+            archives->archives[index] = archives->archives[index - 1U];
+        archives->archives[insert_at] = entry;
+        ++archives->count;
+    } else {
+        archives->truncated = true;
+        if (insert_at < archives->count) {
+            for (uint8_t index = archives->count - 1U; index > insert_at; --index)
+                archives->archives[index] = archives->archives[index - 1U];
+            archives->archives[insert_at] = entry;
+        }
+    }
+    return true;
+}
+
+static esp_err_t archive_scan(log_manager_archive_list_t *archives,
+                              const char *requested_id, char found[PATH_BYTES])
+{
+    if (archives) *archives = (log_manager_archive_list_t){ .available = true };
+    if (found) found[0] = '\0';
+    if (voice_recording_critical_is_active()) return ESP_ERR_TIMEOUT;
+    char active[PATH_BYTES] = {0};
+    if (!lock(LOCK_TICKS)) return ESP_ERR_TIMEOUT;
+    (void)snprintf(active, sizeof(active), "%s", s_path);
+    unlock();
+    if (sd_card_manager_acquire() != ESP_OK) return ESP_ERR_INVALID_STATE;
+
+    esp_err_t result = ESP_OK;
+    DIR *root = opendir(ROOT);
+    if (!root) {
+        int error = errno;
+        sd_card_manager_release();
+        if (sd_card_manager_is_vfs_media_error(error)) sd_card_manager_report_io_error(ESP_FAIL);
+        return ESP_FAIL;
+    }
+    uint16_t scanned = 0U;
+    uint16_t directories_scanned = 0U;
+    bool scan_limit_reached = false;
+    struct dirent *entry;
+    while ((entry = readdir(root)) != NULL && result == ESP_OK &&
+           !scan_limit_reached) {
+        if (!owned_directory(entry->d_name)) continue;
+        if (++directories_scanned > ARCHIVE_DIRECTORY_SCAN_MAX) {
+            if (archives) archives->truncated = true;
+            scan_limit_reached = true;
+            break;
+        }
+        char directory[PATH_BYTES];
+        if (!join_path(directory, ROOT, entry->d_name)) continue;
+        DIR *dir = opendir(directory);
+        if (!dir) { result = ESP_FAIL; break; }
+        struct dirent *file;
+        while ((file = readdir(dir)) != NULL) {
+            if (!owned_file(file->d_name)) continue;
+            if (++scanned > ARCHIVE_SCAN_MAX) {
+                if (archives) archives->truncated = true;
+                scan_limit_reached = true;
+                break;
+            }
+            char path[PATH_BYTES], id[LOG_MANAGER_ARCHIVE_ID_LEN + 1U];
+            struct stat st;
+            if (!join_path(path, directory, file->d_name) || stat(path, &st) != 0 ||
+                !S_ISREG(st.st_mode)) continue;
+            if (strcmp(path, active) == 0) continue;
+            archive_id(id, path);
+            if (requested_id && strcmp(id, requested_id) == 0) {
+                if (found && found[0]) { result = ESP_ERR_INVALID_RESPONSE; break; }
+                if (found) (void)snprintf(found, PATH_BYTES, "%s", path);
+            }
+            if (archives && !archive_insert(archives, path, &st)) {
+                result = ESP_ERR_INVALID_RESPONSE;
+                break;
+            }
+        }
+        if (closedir(dir) != 0 && result == ESP_OK) result = ESP_FAIL;
+    }
+    if (closedir(root) != 0 && result == ESP_OK) result = ESP_FAIL;
+    sd_card_manager_release();
+    return result;
+}
+
+static bool archive_parse_line(const char *line, log_manager_public_record_t *record)
+{
+    if ((line == NULL) || (record == NULL)) return false;
+    const char *cursor = line;
+    const char *end = strchr(cursor, ']');
+    if ((cursor[0] != '[') || (end == NULL)) return false;
+    *record = (log_manager_public_record_t){0};
+    if (strncmp(cursor + 1, "UNSYNCED", 8) == 0 && end == cursor + 9) {
+        record->time_valid = false;
+    } else {
+        if ((size_t)(end - cursor - 1) != LOG_MANAGER_PUBLIC_TIMESTAMP_MAX_LEN) return false;
+        for (size_t index = 0U; index < LOG_MANAGER_PUBLIC_TIMESTAMP_MAX_LEN; ++index)
+            if ((unsigned char)cursor[1U + index] < 0x20U) return false;
+        memcpy(record->timestamp, cursor + 1, LOG_MANAGER_PUBLIC_TIMESTAMP_MAX_LEN);
+        record->time_valid = true;
+    }
+    cursor = end + 1;
+    unsigned long long uptime = 0ULL;
+    char severity = 0;
+    char tag[LOG_MANAGER_PUBLIC_TAG_MAX_LEN + 1U] = {0};
+    char event[LOG_MANAGER_PUBLIC_EVENT_MAX_LEN + 1U] = {0};
+    if (sscanf(cursor, "[+%llums][%c][%24[^]]][%40[^]]][boot=%*16[0-9a-f]]",
+               &uptime, &severity, tag, event) != 4) return false;
+    const char *levels = "VDIWE";
+    const char *mapped[] = { "verbose", "debug", "info", "warn", "error" };
+    const char *level = strchr(levels, severity);
+    if (level == NULL) return false;
+    for (const char *field = tag; *field; ++field)
+        if (!((*field >= 'A' && *field <= 'Z') || (*field >= '0' && *field <= '9') ||
+              *field == '_' || *field == '-')) return false;
+    for (const char *field = event; *field; ++field)
+        if (!((*field >= 'A' && *field <= 'Z') || (*field >= '0' && *field <= '9') ||
+              *field == '_' || *field == '-')) return false;
+    record->uptime_ms = uptime;
+    (void)snprintf(record->level, sizeof(record->level), "%s", mapped[level - levels]);
+    (void)snprintf(record->tag, sizeof(record->tag), "%s", tag);
+    (void)snprintf(record->event, sizeof(record->event), "%s", event);
+    return true;
+}
+
 /* Constant-memory, two-level scan. Metadata operations are writer-only and
  * hold the active file's lease. Re-scan after each deletion: simple V1 policy.
  * A scan/delete error halts this pass instead of risking unrelated files.
  */
 static bool retain(size_t incoming)
 {
+    /* A bounded HTTP archive read wins over cleanup. The next file-open
+     * retries retention; the writer/ring lock is never held for this wait. */
+    if (!archive_read_gate_take(0U)) return true;
     for (;;) {
         uint64_t total = incoming;
         char oldest[PATH_BYTES] = "";
         time_t oldest_time = 0;
         bool ok = true;
         DIR *root = opendir(ROOT);
-        if (!root) { count_failure(errno); return false; }
+        if (!root) { count_failure(errno); archive_read_gate_release(); return false; }
         struct dirent *entry;
         errno = 0;
         while ((entry = readdir(root))) {
@@ -428,10 +604,12 @@ static bool retain(size_t incoming)
         }
         int error = errno;
         if (closedir(root) != 0 || error) ok = false;
-        if (!ok) { count_failure(error ? error : EIO); return false; }
-        if (total <= (uint64_t)CONFIG_LOG_MANAGER_RETAIN_MIB * 1024 * 1024) return true;
-        if (!oldest[0]) { count_failure(ENOSPC); return false; }
-        if (unlink(oldest) != 0) { count_failure(errno); return false; }
+        if (!ok) { count_failure(error ? error : EIO); archive_read_gate_release(); return false; }
+        if (total <= (uint64_t)CONFIG_LOG_MANAGER_RETAIN_MIB * 1024 * 1024) {
+            archive_read_gate_release(); return true;
+        }
+        if (!oldest[0]) { count_failure(ENOSPC); archive_read_gate_release(); return false; }
+        if (unlink(oldest) != 0) { count_failure(errno); archive_read_gate_release(); return false; }
     }
 }
 
@@ -872,6 +1050,7 @@ esp_err_t log_manager_init(void)
     if (!s_mutex) {
         s_done = xSemaphoreCreateBinaryStatic(&s_done_memory);
         SemaphoreHandle_t mutex = xSemaphoreCreateMutexStatic(&s_mutex_memory);
+        s_archive_read_gate = xSemaphoreCreateMutexStatic(&s_archive_read_gate_memory);
         __atomic_store_n(&s_mutex, mutex, __ATOMIC_RELEASE);
     }
     const esp_err_t listener_ret =
@@ -965,6 +1144,106 @@ esp_err_t log_manager_get_stats(log_manager_stats_t *stats)
     stats->dropped_records += stats->contention_drops;
     stats->buffered_bytes = s.ring.payload + s.pending_bytes;
     unlock();
+    return ESP_OK;
+}
+
+esp_err_t log_manager_list_archives(log_manager_archive_list_t *archives)
+{
+    if (archives == NULL) return ESP_ERR_INVALID_ARG;
+    if (!s.initialized) return ESP_ERR_INVALID_STATE;
+    return archive_scan(archives, NULL, NULL);
+}
+
+static bool archive_id_valid(const char *id)
+{
+    if ((id == NULL) || (strlen(id) != LOG_MANAGER_ARCHIVE_ID_LEN)) return false;
+    for (size_t index = 0U; index < LOG_MANAGER_ARCHIVE_ID_LEN; ++index) {
+        if (!((id[index] >= '0' && id[index] <= '9') ||
+              (id[index] >= 'a' && id[index] <= 'f'))) return false;
+    }
+    return true;
+}
+
+esp_err_t log_manager_read_archive(const char *archive_id, uint64_t offset,
+                                   log_manager_archive_page_t *page)
+{
+    if ((page == NULL) || !archive_id_valid(archive_id)) return ESP_ERR_INVALID_ARG;
+    if (!s.initialized) return ESP_ERR_INVALID_STATE;
+    *page = (log_manager_archive_page_t){
+        .available = true,
+        .next_offset_valid = true,
+        .details_omitted = true,
+        .offset = offset,
+    };
+    if (!archive_read_gate_take(LOCK_TICKS)) return ESP_ERR_TIMEOUT;
+    char path[PATH_BYTES] = {0};
+    esp_err_t result = archive_scan(NULL, archive_id, path);
+    if (result != ESP_OK) { archive_read_gate_release(); return result; }
+    if (!path[0]) { archive_read_gate_release(); return ESP_ERR_NOT_FOUND; }
+    if (voice_recording_critical_is_active()) { archive_read_gate_release(); return ESP_ERR_TIMEOUT; }
+    if (offset > INT32_MAX) { archive_read_gate_release(); return ESP_ERR_INVALID_SIZE; }
+    if (sd_card_manager_acquire() != ESP_OK) { archive_read_gate_release(); return ESP_ERR_INVALID_STATE; }
+
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) {
+        int error = errno;
+        sd_card_manager_release();
+        archive_read_gate_release();
+        if (error == ENOENT) return ESP_ERR_NOT_FOUND;
+        if (sd_card_manager_is_vfs_media_error(error)) sd_card_manager_report_io_error(ESP_FAIL);
+        return ESP_FAIL;
+    }
+    if ((offset > 0U) &&
+        ((fseek(file, (long)(offset - 1U), SEEK_SET) != 0) || fgetc(file) != '\n')) {
+        (void)fclose(file);
+        sd_card_manager_release();
+        archive_read_gate_release();
+        return ESP_ERR_INVALID_SIZE;
+    }
+    if (fseek(file, (long)offset, SEEK_SET) != 0) {
+        (void)fclose(file);
+        sd_card_manager_release();
+        archive_read_gate_release();
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    uint32_t scanned = 0U;
+    bool next_offset_valid = true;
+    char line[ARCHIVE_LINE_BYTES] = {0};
+    while ((page->record_count < LOG_MANAGER_ARCHIVE_PAGE_MAX_RECORDS) &&
+           (scanned < LOG_MANAGER_ARCHIVE_PAGE_MAX_SCAN_BYTES) &&
+           fgets(line, sizeof(line), file) != NULL) {
+        const size_t length = strlen(line);
+        scanned += (uint32_t)length;
+        if ((length == 0U) || (line[length - 1U] != '\n')) {
+            ++page->malformed_record_count;
+            bool line_finished = false;
+            int character;
+            while (scanned < LOG_MANAGER_ARCHIVE_PAGE_MAX_SCAN_BYTES &&
+                   (character = fgetc(file)) != EOF) {
+                ++scanned;
+                if (character == '\n') {
+                    line_finished = true;
+                    break;
+                }
+            }
+            if (!line_finished) next_offset_valid = false;
+            continue;
+        }
+        if (archive_parse_line(line, &page->records[page->record_count])) {
+            ++page->record_count;
+        } else {
+            ++page->malformed_record_count;
+        }
+    }
+    const long position = ftell(file);
+    page->next_offset_valid = next_offset_valid && position >= 0;
+    page->next_offset = page->next_offset_valid ? (uint64_t)position : offset;
+    page->eof = !page->next_offset_valid || (feof(file) != 0);
+    const int close_result = fclose(file);
+    sd_card_manager_release();
+    archive_read_gate_release();
+    if (close_result != 0) return ESP_FAIL;
     return ESP_OK;
 }
 

@@ -21,7 +21,10 @@ idf_component_register(
         audio_manager
         cloud_manager
         light_manager
+        log_manager
+        performance_monitor
         sd_card_manager
+        scene_manager
         sensor_manager
         smart_room_mcp_adapter
         time_manager

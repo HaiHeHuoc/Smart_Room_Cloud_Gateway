@@ -278,12 +278,17 @@ AI_Stored_Data/          AI handoff/support metadata; never a runtime dependency
 
 ```text
 Sprint 17   COMPLETE / read-only MCP voice HIL accepted
-Sprint 18   IN PROGRESS
+Sprint 18   COMPLETE / USER ACCEPTED BY HAI ON 2026-09-16
 Phase 18.1  COMPLETE / build PASS / target HIL accepted by Hải on 2026-09-13
-Phase 18.2  SOFTWARE INTEGRATED / target HIL pending
+Phase 18.2  COMPLETE / USER ACCEPTED BY HAI ON 2026-09-16
 Phase 18.3  SUPERSEDED / absorbed into 18.2.2
-Phase 18.4  SOFTWARE IMPLEMENTED / target HIL pending
-Sprint 19   SOFTWARE HARDENED / build PASS / target HIL pending
+Phase 18.4  COMPLETE / USER ACCEPTED BY HAI ON 2026-09-16
+Sprint 19   SOURCE INTEGRATED / BUILD VERIFIED / TARGET HIL PARTIAL
+Sprint 20   IMPLEMENTED / BUILD VERIFIED / TARGET HIL PENDING
+Sprint 21   COMPLETE / USER ACCEPTED BY HAI ON 2026-09-24
+Sprint 22   COMPLETE / BUILD VERIFIED / USER ACCEPTED BY HAI ON 2026-09-25
+Sprint 23   IMPLEMENTED / BUILD VERIFIED / TARGET HIL PENDING
+Sprint 24   PLANNED / NOT STARTED
 ```
 
 Historical phase documents remain historical evidence; current source and

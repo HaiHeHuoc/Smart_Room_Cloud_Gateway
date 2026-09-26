@@ -4,7 +4,8 @@ Updated: 2026-09-24
 Active branch: `main_including_Firebase_security`
 Sprint-18 closure authority: explicit user acceptance by Hải on 2026-09-16.
 Sprint 19-22 source is integrated/build verified as noted below. Sprint 21 is
-closed by user acceptance; Sprint 22 target/browser HIL is the active gate.
+closed by user acceptance; Sprint 22 target/browser HIL is non-blocking
+regression coverage while Sprint 23.1 proceeds.
 
 ## Current software state
 
@@ -16,16 +17,17 @@ Sprint 20    Local Web Control V2: Playback + Volume / IMPLEMENTED /
              BUILD VERIFIED / TARGET HIL PENDING
 Sprint 21    Local Web Control V3: Lights / COMPLETE / USER ACCEPTED BY HẢI ON
              2026-09-24; older HIL is deferred regression coverage
-Sprint 22    Local Web Control V4: Dashboard + System Status / IMPLEMENTED /
+Sprint 22    Local Web Control V4: Dashboard + System Status / COMPLETE /
+             BUILD VERIFIED / USER ACCEPTED BY Hai ON 2026-09-25
+Sprint 23    Local Web Control V5: Scenes + Logs + Diagnostics / IMPLEMENTED /
              BUILD VERIFIED / TARGET HIL PENDING
-Sprint 23    Local Web Control V5: Scenes + Logs + Diagnostics / PLANNED / NOT STARTED
 Sprint 24    Wake Word + Advanced Voice UX / PLANNED / NOT STARTED
 ```
 
 ## Immediate next work
 
-Run Sprint-22 integrated browser/board HIL against the current focused branch.
-This is not authority to start Sprint 23.
+Run Sprint-23 target/browser HIL. Sprint-22 HIL remains valuable regression
+coverage but does not block its user-accepted closure.
 
 1. Sprint 22: verify Dashboard endpoint/card partial failures and recovery;
    active-tab and hidden-document polling; return during an in-flight request;
@@ -68,6 +70,24 @@ This is not authority to start Sprint 23.
 - [ ] Stability: inspect normal serial output for HTTP/manager errors only when
   induced, with no per-poll log spam, repeated HTTPD faults, heap decline, stack
   warning, or visible regression in Storage, Playback, or Lights.
+
+## Sprint 23 target/browser HIL matrix
+
+- [ ] Navigation: seven tabs work on desktop/tablet/320 px; tab strip scrolls
+  without page overflow; ArrowLeft/Right and Home/End preserve selection.
+- [ ] Scenes: apply Focus, Relax, Night, and All Off; verify honest partial or
+  busy results, direct Light/Audio overrides, and no Xiaozhi/PTT interruption.
+- [ ] Logs: load closed archive metadata and pages; verify EOF, malformed or
+  partial lines, no raw detail/path/secret exposure, and SD remove/recover.
+- [ ] Diagnostics: verify first CPU sample, freshness age, 500 ms peak,
+  recording-critical deferral, and bounded export with no secret/path/raw log.
+- [ ] Polling: active-only cadence, hidden-document stop, visible return with
+  one refresh, and no overlapping/stale-response UI overwrite.
+- [ ] LCD: existing Web Storage and Web Light remain usable; no Logs LCD view
+  and no HTTP callback reaches LVGL.
+- [ ] Stress: mix WAV/PTT/Xiaozhi, Web polling, Light/Scene, and SD access for
+  10-15 minutes; observe task count/heap trends, HTTPD faults, SD leases,
+  audio timeouts, and logger drops without inventing hard thresholds.
 
 ## Deferred regression backlog — non-blocking
 

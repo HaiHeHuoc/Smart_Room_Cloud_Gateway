@@ -6,8 +6,10 @@
 logs CPU utilization, heap health, application partition usage, and its own
 stack high-water mark.
 
-This component reports diagnostics to the serial log. It does not create LVGL
-performance widgets or expose sampled values to application code.
+This component reports diagnostics to the serial log and copies its latest
+completed CPU sample through a small public read-only status API. It does not
+create LVGL performance widgets, take measurements on behalf of callers, or
+expose task handles, addresses, raw snapshots, or heap dumps.
 
 ## What Is Done
 
@@ -28,11 +30,14 @@ performance widgets or expose sampled values to application code.
   cycle whose 500-ms CPU sample detects capture partway through. The monitor
   waits for the lightweight transition notification and resumes normally after
   capture; it is not stopped, deleted, or recreated per turn.
+- Copies only the most recent completed CPU sample (average, 500-ms peak, idle,
+  report index, and monotonic capture time) under a short critical section.
 
 ## Public API
 
 ```c
 esp_err_t performance_monitor_start(void);
+esp_err_t performance_monitor_get_status(performance_monitor_status_t *status);
 ```
 
 Example:
@@ -43,6 +48,13 @@ if (ret != ESP_OK) {
     ESP_LOGE(TAG, "Performance monitor failed: %s", esp_err_to_name(ret));
 }
 ```
+
+`performance_monitor_get_status()` is task-context, non-blocking, allocation-
+free, and never starts a sample or writes a log. It returns
+`ESP_ERR_INVALID_STATE` until the monitor has started; `sample_valid=false`
+means startup or a deferred/failed measurement has not produced a completed
+sample yet. Callers must treat the capture time as snapshot freshness, not as a
+request-time metric.
 
 ## Configuration Requirements
 
@@ -96,6 +108,6 @@ I (...) PERF_MONITOR: [STACK] task=perf_monitor, minimum remaining=... bytes
 ## Future Attention
 
 - Add a stop API only if runtime enable/disable is required.
-- Expose structured samples through a callback or queue only when another
-  component needs the values.
+- Add further copied fields only after an owner-specific public contract and
+  presentation need are approved; do not scrape console logs for diagnostics.
 - Raise `PERF_MONITOR_MAX_TASKS` if the application grows beyond 40 tasks.

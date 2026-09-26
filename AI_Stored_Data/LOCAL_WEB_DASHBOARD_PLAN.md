@@ -1,7 +1,7 @@
 # Local Web Dashboard Plan
 
 Updated: 2026-09-24
-Status: **SPRINT 21 COMPLETE / USER ACCEPTED; SPRINT 22 IMPLEMENTED / BUILD VERIFIED / TARGET HIL PENDING**
+Status: **SPRINT 21 COMPLETE / USER ACCEPTED; SPRINT 22 COMPLETE / BUILD VERIFIED / USER ACCEPTED 2026-09-25; SPRINT 23 ACTIVE**
 Active integration branch: `main_including_Firebase_security`
 
 ## Purpose
@@ -26,9 +26,9 @@ Sprint 19  Local Web Control V1: SD Card File Manager     IMPLEMENTED / BUILD VE
 Sprint 20  Local Web Control V2: Playback + Volume       IMPLEMENTED / BUILD VERIFIED / HIL PENDING
 Sprint 21  Local Web Control V3: Lights                  COMPLETE / USER ACCEPTED 2026-09-24
 Sprint 22  Local Web Control V4: Dashboard + System Status
-                                                         IMPLEMENTED / BUILD VERIFIED / HIL PENDING
+                                                         COMPLETE / BUILD VERIFIED / USER ACCEPTED 2026-09-25
 Sprint 23  Local Web Control V5: Scenes + Logs + Diagnostics
-                                                         PLANNED / NOT STARTED
+                                                         IMPLEMENTED / BUILD VERIFIED / TARGET HIL PENDING
 Sprint 24  Wake Word + Advanced Voice UX                 PLANNED / NOT STARTED
 ```
 
@@ -435,20 +435,22 @@ as:
 
 ## Sprint 23 — Local Web Control V5: Scenes + Logs + Diagnostics
 
-Status: **PLANNED / NOT STARTED**
+Status: **IMPLEMENTED / BUILD VERIFIED / TARGET HIL PENDING**
 
 ### Goal
 
 Complete the planned local-control surface with bounded orchestration and useful
 support diagnostics.
 
-### Planned scope
+### Delivered scope
 
 - scenes composed only from approved owner APIs;
 - logs exposed through a bounded/sanitized read path;
 - diagnostics/status views useful for debugging and demo;
-- safe export/download of approved diagnostic information where justified;
-- LCD Web Remote scene/diagnostic status as appropriate.
+- safe bounded diagnostic export; and
+- seven accessible Web tabs. LCD Scene/Diagnostics views are intentionally
+  deferred because the product has no safe navigation route; no HTTP callback
+  calls LVGL.
 
 ### Boundaries
 
@@ -495,9 +497,8 @@ For Sprints 19-23:
 
 ## Scope-change rule
 
-The implemented Sprint 19-22 statuses above override the older generic
-planning language in this section. Sprint 23+ remains planned until explicitly
-started and documented.
+The implemented Sprint 19-23 statuses above override older generic planning
+language. Sprint 24 remains planned until explicitly started and documented.
 
 This file records the approved roadmap, not permission to implement every item
 immediately. Each sprint remains **PLANNED / NOT STARTED** until Hải explicitly

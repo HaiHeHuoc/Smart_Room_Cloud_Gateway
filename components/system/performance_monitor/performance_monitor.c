@@ -109,6 +109,8 @@ typedef struct {
 /* Static Variables --------------------------------------------------------- */
 
 static TaskHandle_t s_monitor_task_handle = NULL;
+static performance_monitor_status_t s_status;
+static portMUX_TYPE s_status_lock = portMUX_INITIALIZER_UNLOCKED;
 
 /*
  * Keep task snapshots outside the task stack.
@@ -1207,6 +1209,12 @@ static void performance_monitor_task(void *argument)
             report_index);
 
         if (cpu_result == ESP_OK) {
+            portENTER_CRITICAL(&s_status_lock);
+            s_status = (performance_monitor_status_t){ .started = true, .sample_valid = true,
+                .report_index = report_index, .captured_at_us = esp_timer_get_time(),
+                .cpu_used_x10 = cpu.used_x10, .cpu_peak_500ms_x10 = cpu.peak_used_x10,
+                .cpu_idle_x10 = cpu.idle_x10 };
+            portEXIT_CRITICAL(&s_status_lock);
             performance_monitor_log_cpu(
                 report_index,
                 &cpu);
@@ -1308,6 +1316,13 @@ esp_err_t performance_monitor_start(void)
 
 #else
 
+    ESP_RETURN_ON_FALSE(
+        s_monitor_task_handle == NULL,
+        ESP_ERR_INVALID_STATE,
+        TAG,
+        "Performance monitor is already running"
+    );
+
     const esp_err_t listener_ret =
         voice_recording_critical_register_listener(
             performance_monitor_recording_critical_listener,
@@ -1315,13 +1330,6 @@ esp_err_t performance_monitor_start(void)
     if (listener_ret != ESP_OK) {
         return listener_ret;
     }
-
-    ESP_RETURN_ON_FALSE(
-        s_monitor_task_handle == NULL,
-        ESP_ERR_INVALID_STATE,
-        TAG,
-        "Performance monitor is already running"
-    );
 
     const BaseType_t task_result =
         xTaskCreate(
@@ -1344,7 +1352,20 @@ esp_err_t performance_monitor_start(void)
         return ESP_ERR_NO_MEM;
     }
 
+    portENTER_CRITICAL(&s_status_lock);
+    s_status = (performance_monitor_status_t){ .started = true };
+    portEXIT_CRITICAL(&s_status_lock);
+
     return ESP_OK;
 
 #endif
+}
+
+esp_err_t performance_monitor_get_status(performance_monitor_status_t *status)
+{
+    if (status == NULL) return ESP_ERR_INVALID_ARG;
+    portENTER_CRITICAL(&s_status_lock);
+    *status = s_status;
+    portEXIT_CRITICAL(&s_status_lock);
+    return status->started ? ESP_OK : ESP_ERR_INVALID_STATE;
 }

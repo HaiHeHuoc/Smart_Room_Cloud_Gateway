@@ -26,6 +26,7 @@
 
 /* Local Web presentation --------------------------------------------------- */
 #include "local_web_server.h"
+#include "scene_manager.h"
 
 /* LVGL SD Management ------------------------------------------------------- */
 #include "lvgl_sd_fs.h"
@@ -483,6 +484,13 @@ void smart_room_app_start(void)
     }
 
 #if CONFIG_LOCAL_WEB_SERVER_ENABLE
+    const esp_err_t scene_init_ret = scene_manager_init();
+    if (scene_init_ret != ESP_OK)
+    {
+        APP_LOGW(
+            TAG, LOCAL_WEB_SERVER_INIT_DEFERRED_6EA6CD33,
+            "Scene manager unavailable: %s", esp_err_to_name(scene_init_ret));
+    }
     const esp_err_t local_web_init_ret = local_web_server_init();
     if (local_web_init_ret != ESP_OK)
     {
