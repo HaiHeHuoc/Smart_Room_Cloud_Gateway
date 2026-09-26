@@ -65,9 +65,10 @@ Sprint 20   Local Web Control V2: Playback + Volume / IMPLEMENTED /
             BUILD VERIFIED / TARGET HIL PENDING
 Sprint 21   Local Web Control V3: Lights / COMPLETE / USER ACCEPTED BY HẢI
             ON 2026-09-24
-Sprint 22   Local Web Control V4: Dashboard + System Status / IMPLEMENTED /
+Sprint 22   Local Web Control V4: Dashboard + System Status / COMPLETE /
+            BUILD VERIFIED / USER ACCEPTED BY Hai ON 2026-09-25
+Sprint 23   Local Web Control V5: Scenes + Logs + Diagnostics / IMPLEMENTED /
             BUILD VERIFIED / TARGET HIL PENDING
-Sprint 23   Local Web Control V5: Scenes + Logs + Diagnostics / PLANNED / NOT STARTED
 Sprint 24   Wake Word + Advanced Voice UX / PLANNED / NOT STARTED
 ```
 
@@ -179,8 +180,10 @@ This work item is closed by Hải's explicit acceptance on 2026-09-16.
 
 ## What happens next
 
-Sprint 22 is implemented and build verified. Do **not** start Sprint 23 from
-this state update; run the prepared target/browser HIL first.
+Sprint 22 is complete, build verified, and user-accepted on 2026-09-25.
+Sprint 23 is implemented and build verified. Its target/browser HIL matrix is
+the next acceptance gate; the older Sprint-22 HIL matrix remains useful
+non-blocking regression coverage.
 
 Highest-value next validation is:
 

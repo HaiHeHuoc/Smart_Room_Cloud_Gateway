@@ -74,6 +74,26 @@ static int expect_icon_policy(void)
                    "/web-icons/hard-drive.svg") != 0) ||
            (strcmp(local_web_icon_logical_path("playback"),
                    "/web-icons/music-2.svg") != 0) ||
+           (strcmp(local_web_icon_logical_path("dashboard"),
+                   "/web-icons/layout-dashboard.svg") != 0) ||
+           (strcmp(local_web_icon_logical_path("lights"),
+                   "/web-icons/lightbulb.svg") != 0) ||
+           (strcmp(local_web_icon_logical_path("scenes"),
+                   "/web-icons/wand-sparkles.svg") != 0) ||
+           (strcmp(local_web_icon_logical_path("logs"),
+                   "/web-icons/scroll-text.svg") != 0) ||
+           (strcmp(local_web_icon_logical_path("diagnostics"),
+                   "/web-icons/activity.svg") != 0) ||
+           (strcmp(local_web_icon_logical_path("sensor"),
+                   "/web-icons/thermometer.svg") != 0) ||
+           (strcmp(local_web_icon_logical_path("network"),
+                   "/web-icons/wifi.svg") != 0) ||
+           (strcmp(local_web_icon_logical_path("cloud"),
+                   "/web-icons/cloud.svg") != 0) ||
+           (strcmp(local_web_icon_logical_path("time"),
+                   "/web-icons/clock-3.svg") != 0) ||
+           (strcmp(local_web_icon_logical_path("refresh"),
+                   "/web-icons/refresh-cw.svg") != 0) ||
            (local_web_icon_logical_path("../audio/Input_1.wav") != NULL) ||
            (local_web_icon_logical_path("") != NULL);
 }

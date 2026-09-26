@@ -5,14 +5,30 @@ Purpose: compact, overwriteable handoff for in-progress work. Current source,
 
 ## Active work
 
-Branch: `feat/sprint22-dashboard-backend` (from
-`main_including_Firebase_security` at `b4431ff`)
-Integration: Sprint 22.1 implementation is uncommitted and has not been merged
-or pushed.
-Phase/Sprint: Sprint 22.3 — Integration Hardening, Documentation, HIL Preparation
-Checkpoint: Sprint 22 backend/UI and final hardening are uncommitted on this
-branch. Host checks and the serialized build pass; target/browser HIL is ready
-to run but has not been claimed.
+Branch: `feat/sprint23-scene-backend` (from
+`main_including_Firebase_security` at `97935d3`)
+Integration: Sprint 22 is COMPLETE / BUILD VERIFIED / USER ACCEPTED BY Hai on
+2026-09-25. No Sprint-23.1 commit, merge, or push has occurred.
+Phase/Sprint: Sprint 23.2 — Safe Logs Backend
+Checkpoint: Sprint 23.1 Scenes remains present. Sprint 23.2 adds bounded,
+owner-routed archive metadata/read APIs and sanitized Local Web REST. Host test
+passes; ESP-IDF build and target HIL are not claimed for this code state.
+
+### Sprint 23.4 correction (supersedes the stale 23.2 heading above)
+
+Phase/Sprint: Sprint 23.4 - Web UI + LCD Read-Only Integration.
+Sprint 23.1 Scenes, 23.2 Safe Logs, and 23.3 Diagnostics backend are present
+in this uncommitted local worktree. Sprint 23.4 adds seven-tab Web
+presentation over those contracts. Host/build validation is recorded only after
+this checkpoint's commands complete; target HIL is not claimed.
+
+### Sprint 23.5 correction (supersedes the status headings above)
+
+Sprint 23.1 Scenes, 23.2 Safe Logs, 23.3 Diagnostics, and 23.4 seven-tab Web
+presentation are implemented. 23.5 preserves their owner boundaries, fixes the
+confirmed one-shot chunked-response completion defect, and prepares target HIL.
+Build/host validation is recorded; target acceptance, merge, and push are not
+claimed.
 
 ## Delivered
 
@@ -61,6 +77,24 @@ to run but has not been claimed.
   capacity from invalid bounds, and treats a future sensor timestamp as an
   unknown age. A return during an in-flight request queues one immediate
   refresh after completion without overlapping requests.
+- Scenes loads its backend catalog once, applies only backend-owned IDs, guards
+  duplicate requests, and renders historical last-applied plus aggregate and
+  per-domain outcomes without claiming an active-state match.
+- Logs renders only `log_manager` public archive metadata and bounded sanitized
+  records. Archive scans are entry/manual only; record pages replace rather
+  than grow the DOM. No raw detail, VFS path, destructive action, live tail, or
+  raw log download is exposed.
+- Diagnostics renders only the current copied CPU/logging fields and the
+  backend-owned export. Its five-second active/visible-only poll has one request
+  in flight and shows unavailable performance samples honestly. `age_ms` now
+  reports the completed monitor sample age rather than a placeholder zero.
+- Existing `app_gui` has no clean product navigation path to additional Local
+  Web subviews. Sprint 23.4 therefore adds no unreachable LCD Scene/Diagnostics
+  screens and does not let HTTP route or call LVGL.
+- Pre-23.5 review corrected mixed Scene outcome aggregation so a successful
+  Light/Audio domain is never hidden by another domain's busy/unavailable
+  result. It also fences archive traversal by owned directory/file counts and
+  withholds a Logs forward cursor if a malformed line exhausts the scan budget.
 
 ## Validation actually run
 
@@ -71,6 +105,10 @@ to run but has not been claimed.
   Sprint 21 effect expansion.
 - `git diff --check`: PASS after Sprint 22.3 hardening/documentation.
 - ESP-IDF 6.0.1 serialized build: PASS; firmware `0x289b00`, app free 37%.
+- Sprint 23.4 `local_web_server` host/static suite: PASS.
+- Sprint 23.4 `git diff --check`: PASS.
+- Sprint 23.4 pre-23.5 review ESP-IDF 6.0.1 serialized build: PASS; firmware
+  `0x294540`, smallest app partition free `0x16bac0` (36%).
 
 ## HIL still required
 
@@ -85,8 +123,30 @@ to run but has not been claimed.
   tab/visibility polling race, 320px/tablet/desktop layout, existing-tab
   regression, and resource/serial stability observations.
 
-## Scope boundary
+## Sprint 23.1 boundary
 
-- Do not begin Sprint 23. No performance/resource dashboard fields are
-  available until a future public copied status API is deliberately introduced.
+- `scene_manager` owns only the fixed `focus`, `relax`, `night`, and `all_off`
+  orchestration/result contract. It has no driver, task, queue, UI, storage, or
+  persistence ownership; partial owner results have no rollback.
+- The Web presentation is implemented; custom/persisted/scheduled scenes remain
+  out of scope and there is no LCD log browser.
+- No merge or remote push is authorized by this checkpoint.
+
+## Sprint 23.2 boundary
+
+- Browser-visible log records contain only timestamp/time validity, uptime,
+  level, tag, and event. Free-form detail is never serialized.
+- Closed manager-owned archive access is bounded to 12 files, six records per
+  page, and 4096 scanned bytes. No raw download or log mutation exists.
+- Sprint 23.3 Diagnostics and Sprint 23.4 UI are implemented; target HIL is
+  still not claimed.
+
+## Sprint 23.4 boundary
+
+- Local Web navigation has exactly Dashboard, Storage, Playback, Lights,
+  Scenes, Logs, and Diagnostics. Hidden/inactive tabs stop their timers and
+  keyboard tab activation preserves roving tabindex and scrolls overflow tabs
+  into view.
+- Diagnostics remains a periodic copied snapshot/export surface, not a
+  measurement, control, raw-log, credential, path, or memory-dump surface.
 - No merge or remote push is authorized by this checkpoint.

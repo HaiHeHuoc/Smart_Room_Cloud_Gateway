@@ -14,7 +14,10 @@ sd_card_manager -> mount/unmount/recovery and file leases
 time_manager -> clock validity, timezone and SNTP
 ```
 
-Only the writer opens, writes, syncs, closes, scans or deletes log files. It
+Only the writer opens, writes, syncs, closes, rotates, retains or deletes log files. Bounded
+archive APIs may open only closed manager-owned files for a complete
+open/read/close operation; they never append, modify retention, expose paths,
+or retain a handle across calls. It
 acquires an SD lease before opening a file and releases it after closing. The
 same lease protects retention directory handles. Recovery can reject new
 leases immediately, then wait for the logger to close its file before unmount.
@@ -221,8 +224,17 @@ provider callback or the writer itself.
 | `log_manager_stop(timeout_ms)` | Rejects new persistent records, drains, syncs/closes and exits. TIMEOUT leaves resources alive; repeat stop. FAIL reports unavailable storage, cleanup error or uncertain durability; unwritten backlog remains available for restart. |
 | `log_manager_deinit()` | Requires stopped writer; frees PSRAM and counts remaining records as dropped. Idempotent. |
 | `log_manager_get_stats(&stats)` | Copies under a bounded 20-ms mutex attempt; INVALID_ARG for NULL, TIMEOUT on contention/uninitialized lock. |
+| `log_manager_list_archives(&archives)` | Scans at most 64 owned closed files under one managed SD lease, returns at most 12 opaque IDs, and excludes the active segment. It defers while recording is critical. |
+| `log_manager_read_archive(id, offset, &page)` | Takes a bounded archive-read gate, re-resolves an exact lowercase 16-hex opaque ID, then reads at most 6 records/4096 bytes. Offset must be a line boundary. It returns only timestamp, uptime, level, tag, and event; all raw details are omitted. `next_offset_valid=false` fail-closes pagination when the scan budget ends inside one malformed line. |
 | Console/storage setters | Central enable/level policy; no SD I/O. |
 | `log_manager_notify_environment_changed()` | Zero-wait task-context hint; no formatting or I/O. |
+
+Archive reads hold the private archive-read gate across one bounded
+resolve/open/read/close operation and its managed SD lease. Retention takes the
+same gate without waiting; if an archive read is in progress, it defers that
+cleanup pass rather than deleting a file being read. The producer ring mutex is
+never held across either operation, and a later writer file-open retries normal
+retention.
 
 For a future controlled reboot owner, call `log_manager_stop(1000)` and handle its
 result before the existing reboot decision. This change exposes that path but

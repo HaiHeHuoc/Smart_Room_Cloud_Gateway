@@ -38,6 +38,51 @@ typedef struct {
     bool time_synchronized;
 } log_manager_stats_t;
 
+#define LOG_MANAGER_ARCHIVE_ID_LEN 16U
+#define LOG_MANAGER_ARCHIVE_LIST_MAX 12U
+#define LOG_MANAGER_ARCHIVE_PAGE_MAX_RECORDS 6U
+#define LOG_MANAGER_ARCHIVE_PAGE_MAX_SCAN_BYTES 4096U
+#define LOG_MANAGER_PUBLIC_TIMESTAMP_MAX_LEN 23U
+#define LOG_MANAGER_PUBLIC_TAG_MAX_LEN 24U
+#define LOG_MANAGER_PUBLIC_EVENT_MAX_LEN 40U
+
+typedef struct {
+    char id[LOG_MANAGER_ARCHIVE_ID_LEN + 1U];
+    uint64_t size_bytes;
+    bool time_named;
+    /** Internal ordering metadata; Local Web deliberately does not serialize it. */
+    int64_t sort_time;
+} log_manager_archive_t;
+
+typedef struct {
+    bool available;
+    bool truncated;
+    uint8_t count;
+    log_manager_archive_t archives[LOG_MANAGER_ARCHIVE_LIST_MAX];
+} log_manager_archive_list_t;
+
+typedef struct {
+    bool time_valid;
+    char timestamp[LOG_MANAGER_PUBLIC_TIMESTAMP_MAX_LEN + 1U];
+    uint64_t uptime_ms;
+    char level[8U];
+    char tag[LOG_MANAGER_PUBLIC_TAG_MAX_LEN + 1U];
+    char event[LOG_MANAGER_PUBLIC_EVENT_MAX_LEN + 1U];
+} log_manager_public_record_t;
+
+typedef struct {
+    bool available;
+    bool eof;
+    /** False when a scan budget ended inside one malformed line. */
+    bool next_offset_valid;
+    bool details_omitted;
+    uint64_t offset;
+    uint64_t next_offset;
+    uint16_t malformed_record_count;
+    uint8_t record_count;
+    log_manager_public_record_t records[LOG_MANAGER_ARCHIVE_PAGE_MAX_RECORDS];
+} log_manager_archive_page_t;
+
 /** Allocate PSRAM ring/batch; idempotent. Call after PSRAM/RTOS startup.
  * Returns NO_MEM without internal-RAM fallback; NOT_SUPPORTED when disabled.
  * Static synchronization objects remain for application lifetime, even deinit.
@@ -75,6 +120,15 @@ esp_err_t log_manager_deinit(void);
  * previously accepted records whose durability later became uncertain.
  */
 esp_err_t log_manager_get_stats(log_manager_stats_t *stats);
+/** Copy closed, manager-owned archive metadata. IDs are opaque lookup keys. */
+esp_err_t log_manager_list_archives(log_manager_archive_list_t *archives);
+/**
+ * Copy one bounded page of sanitized structured records from a closed archive.
+ * Raw free-form details are never copied. @p offset must be zero or a line
+ * boundary previously returned as next_offset.
+ */
+esp_err_t log_manager_read_archive(const char *archive_id, uint64_t offset,
+                                   log_manager_archive_page_t *page);
 void log_manager_set_console_enabled(bool enabled);
 void log_manager_set_storage_enabled(bool enabled);
 void log_manager_set_console_level(esp_log_level_t level);

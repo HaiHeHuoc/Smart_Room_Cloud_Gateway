@@ -20,7 +20,10 @@
 #include "local_web_light_policy.h"
 #include "local_web_path_policy.h"
 #include "light_manager.h"
+#include "log_manager.h"
+#include "performance_monitor.h"
 #include "sd_card_manager.h"
+#include "scene_manager.h"
 #include "sensor_manager.h"
 #include "smart_room_mcp_adapter.h"
 #include "voice_assistant_playback_control.h"
@@ -28,7 +31,7 @@
 
 #define LOCAL_WEB_HTTP_STACK_SIZE_BYTES 6144U
 #define LOCAL_WEB_HTTP_MAX_OPEN_SOCKETS 2U
-#define LOCAL_WEB_HTTP_ROUTE_COUNT 20U
+#define LOCAL_WEB_HTTP_ROUTE_COUNT 29U
 #define LOCAL_WEB_HTTP_MAX_URI_LEN 1280U
 #define LOCAL_WEB_RESPONSE_CHUNK_SIZE 512U
 #define LOCAL_WEB_TRANSFER_CHUNK_SIZE SD_CARD_MANAGER_TRANSFER_CHUNK_SIZE
@@ -37,6 +40,7 @@
 #define LOCAL_WEB_QUERY_BUFFER_SIZE \
     ((LOCAL_WEB_LOGICAL_PATH_MAX_LEN * 3U * 2U) + 24U)
 #define LOCAL_WEB_LIGHT_QUERY_MAX_LEN 160U
+#define LOCAL_WEB_SCENE_QUERY_MAX_LEN 32U
 
 static const char *const TAG = "local_web_server";
 
@@ -77,6 +81,14 @@ static esp_err_t local_web_audio_seek_post(httpd_req_t *request);
 static esp_err_t local_web_light_status_get(httpd_req_t *request);
 static esp_err_t local_web_light_state_post(httpd_req_t *request);
 static esp_err_t local_web_dashboard_status_get(httpd_req_t *request);
+static esp_err_t local_web_scenes_get(httpd_req_t *request);
+static esp_err_t local_web_scenes_status_get(httpd_req_t *request);
+static esp_err_t local_web_scenes_apply_post(httpd_req_t *request);
+static esp_err_t local_web_logs_status_get(httpd_req_t *request);
+static esp_err_t local_web_logs_files_get(httpd_req_t *request);
+static esp_err_t local_web_logs_read_get(httpd_req_t *request);
+static esp_err_t local_web_diagnostics_status_get(httpd_req_t *request);
+static esp_err_t local_web_diagnostics_export_get(httpd_req_t *request);
 static esp_err_t local_web_send_error(
     httpd_req_t *request,
     const char *http_status,
@@ -86,6 +98,8 @@ static esp_err_t local_web_send_json_escaped(
     const char *value);
 static esp_err_t local_web_send_chunkf(httpd_req_t *request,
                                        const char *format, ...);
+static esp_err_t local_web_send_responsef(httpd_req_t *request,
+                                          const char *format, ...);
 static const char *local_web_sd_state_name(sd_card_manager_state_t state);
 static const char *local_web_entry_type_name(
     sd_card_manager_directory_entry_type_t type);
@@ -113,6 +127,10 @@ static esp_err_t local_web_light_send_manager_error(httpd_req_t *request,
                                                      esp_err_t result,
                                                      const char *failure_error);
 static esp_err_t local_web_register_routes(httpd_handle_t server);
+static bool local_web_scene_parse_apply_query(httpd_req_t *request,
+                                              char scene_id[SCENE_MANAGER_ID_MAX_LEN + 1U]);
+static esp_err_t local_web_scene_send_status(httpd_req_t *request,
+                                             const scene_manager_status_t *status);
 
 static const char *local_web_audio_state_name(
     audio_manager_playback_control_state_t state)
@@ -614,6 +632,280 @@ static bool local_web_get_query_value(httpd_req_t *request, const char *key)
                                      sizeof(s_query_buffer)) == ESP_OK) &&
         (httpd_query_key_value(s_query_buffer, key, s_query_value,
                                sizeof(s_query_value)) == ESP_OK);
+}
+
+static bool local_web_scene_parse_apply_query(
+    httpd_req_t *request,
+    char scene_id[SCENE_MANAGER_ID_MAX_LEN + 1U])
+{
+    if ((request == NULL) || (scene_id == NULL) ||
+        (httpd_req_get_url_query_len(request) == 0U) ||
+        (httpd_req_get_url_query_len(request) >= LOCAL_WEB_SCENE_QUERY_MAX_LEN) ||
+        (httpd_req_get_url_query_len(request) >= sizeof(s_query_buffer)) ||
+        (httpd_req_get_url_query_str(request, s_query_buffer,
+                                     sizeof(s_query_buffer)) != ESP_OK)) {
+        return false;
+    }
+
+    bool id_seen = false;
+    char *field = s_query_buffer;
+    while (field[0] != '\0') {
+        char *const separator = strchr(field, '&');
+        if (separator != NULL) *separator = '\0';
+        char *const equals = strchr(field, '=');
+        if ((equals == NULL) || (equals == field) || (equals[1] == '\0')) return false;
+        *equals = '\0';
+        if ((strcmp(field, "id") != 0) || id_seen ||
+            (strlen(equals + 1U) > SCENE_MANAGER_ID_MAX_LEN)) return false;
+        (void)strncpy(scene_id, equals + 1U, SCENE_MANAGER_ID_MAX_LEN);
+        scene_id[SCENE_MANAGER_ID_MAX_LEN] = '\0';
+        id_seen = true;
+        if (separator == NULL) break;
+        field = separator + 1U;
+    }
+    return id_seen;
+}
+
+static esp_err_t local_web_scene_send_status(
+    httpd_req_t *request,
+    const scene_manager_status_t *status)
+{
+    if ((request == NULL) || (status == NULL)) return ESP_ERR_INVALID_ARG;
+    const int written = snprintf(
+        s_response_chunk, sizeof(s_response_chunk),
+        "{\"ok\":true,\"available\":true,\"generation\":%" PRIu32 ","
+        "\"last_requested_scene\":\"%s\",\"last_completed_scene\":\"%s\","
+        "\"outcome\":\"%s\",\"light\":{\"outcome\":\"%s\"},"
+        "\"audio\":{\"outcome\":\"%s\"}}",
+        status->generation, status->last_requested_scene,
+        status->last_completed_scene,
+        scene_manager_outcome_to_string(status->outcome),
+        scene_manager_outcome_to_string(status->light_outcome),
+        scene_manager_outcome_to_string(status->audio_outcome));
+    if ((written < 0) || (written >= (int)sizeof(s_response_chunk))) {
+        return local_web_send_error(request, "500 Internal Server Error", "response_too_large");
+    }
+    httpd_resp_set_type(request, "application/json");
+    httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+    return httpd_resp_send(request, s_response_chunk, written);
+}
+
+static esp_err_t local_web_scenes_get(httpd_req_t *request)
+{
+    scene_manager_catalog_t catalog = {0};
+    if (scene_manager_get_catalog(&catalog) != ESP_OK) {
+        httpd_resp_set_type(request, "application/json");
+        httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+        return httpd_resp_sendstr(request, "{\"ok\":true,\"available\":false}");
+    }
+    httpd_resp_set_type(request, "application/json");
+    httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+    if (httpd_resp_sendstr_chunk(request, "{\"ok\":true,\"scenes\":[") != ESP_OK) return ESP_FAIL;
+    for (uint8_t index = 0U; index < catalog.count; ++index) {
+        const int written = snprintf(s_response_chunk, sizeof(s_response_chunk),
+                                     "%s{\"id\":\"%s\",\"name\":\"%s\"}",
+                                     (index == 0U) ? "" : ",",
+                                     catalog.entries[index].id,
+                                     catalog.entries[index].name);
+        if ((written < 0) || (written >= (int)sizeof(s_response_chunk)) ||
+            (httpd_resp_send_chunk(request, s_response_chunk, written) != ESP_OK)) return ESP_FAIL;
+    }
+    return httpd_resp_sendstr_chunk(request, "]}") == ESP_OK
+               ? httpd_resp_send_chunk(request, NULL, 0U) : ESP_FAIL;
+}
+
+static esp_err_t local_web_scenes_status_get(httpd_req_t *request)
+{
+    scene_manager_status_t status = {0};
+    const esp_err_t result = scene_manager_get_status(&status);
+    if (result == ESP_ERR_INVALID_STATE) {
+        httpd_resp_set_type(request, "application/json");
+        httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+        return httpd_resp_sendstr(request, "{\"ok\":true,\"available\":false}");
+    }
+    if (result == ESP_ERR_TIMEOUT) return local_web_send_error(request, "409 Conflict", "scene_busy");
+    if (result != ESP_OK) return local_web_send_error(request, "500 Internal Server Error", "scene_status_failed");
+    return local_web_scene_send_status(request, &status);
+}
+
+static esp_err_t local_web_scenes_apply_post(httpd_req_t *request)
+{
+    char scene_id[SCENE_MANAGER_ID_MAX_LEN + 1U] = {0};
+    if (!local_web_scene_parse_apply_query(request, scene_id)) {
+        return local_web_send_error(request, "400 Bad Request", "invalid_scene_request");
+    }
+    scene_manager_status_t status = {0};
+    const esp_err_t result = scene_manager_apply(scene_id, &status);
+    if (result == ESP_ERR_INVALID_ARG) return local_web_send_error(request, "400 Bad Request", "unknown_scene");
+    if (result == ESP_ERR_INVALID_STATE) return local_web_send_error(request, "503 Service Unavailable", "scene_unavailable");
+    if (result != ESP_OK) return local_web_send_error(request, "500 Internal Server Error", "scene_apply_failed");
+    if ((status.outcome == SCENE_MANAGER_OUTCOME_BUSY) ||
+        (status.outcome == SCENE_MANAGER_OUTCOME_REJECTED)) {
+        return local_web_send_error(request, "409 Conflict", "scene_busy");
+    }
+    if (status.outcome == SCENE_MANAGER_OUTCOME_UNAVAILABLE) {
+        return local_web_send_error(request, "503 Service Unavailable", "scene_unavailable");
+    }
+    return local_web_scene_send_status(request, &status);
+}
+
+static esp_err_t local_web_logs_status_get(httpd_req_t *request)
+{
+    log_manager_stats_t stats = {0};
+    const esp_err_t result = log_manager_get_stats(&stats);
+    if (result == ESP_ERR_INVALID_STATE) return local_web_send_error(request, "503 Service Unavailable", "logs_unavailable");
+    if (result == ESP_ERR_TIMEOUT) return local_web_send_error(request, "409 Conflict", "logs_busy");
+    if (result != ESP_OK) return local_web_send_error(request, "500 Internal Server Error", "logs_status_failed");
+    httpd_resp_set_type(request, "application/json");
+    httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+    return local_web_send_responsef(request,
+        "{\"ok\":true,\"available\":true,\"storage_available\":%s,"
+        "\"time_synchronized\":%s,\"produced_records\":%" PRIu64 ","
+        "\"persisted_records\":%" PRIu64 ",\"durable_records\":%" PRIu64 ","
+        "\"dropped_records\":%" PRIu64 ",\"storage_write_failures\":%" PRIu32 ","
+        "\"file_rotations\":%" PRIu32 ",\"buffered_bytes\":%u,"
+        "\"peak_buffered_bytes\":%u,\"buffer_capacity\":%u}",
+        stats.storage_available ? "true" : "false", stats.time_synchronized ? "true" : "false",
+        stats.produced_records, stats.persisted_records, stats.durable_records,
+        stats.dropped_records, stats.storage_write_failures, stats.file_rotations,
+        (unsigned)stats.buffered_bytes, (unsigned)stats.peak_buffered_bytes,
+        (unsigned)stats.buffer_capacity);
+}
+
+static esp_err_t local_web_logs_files_get(httpd_req_t *request)
+{
+    log_manager_archive_list_t archives = {0};
+    const esp_err_t result = log_manager_list_archives(&archives);
+    if (result == ESP_ERR_INVALID_STATE) return local_web_send_error(request, "503 Service Unavailable", "logs_unavailable");
+    if (result == ESP_ERR_TIMEOUT) return local_web_send_error(request, "409 Conflict", "logs_busy");
+    if (result != ESP_OK) return local_web_send_error(request, "500 Internal Server Error", "logs_list_failed");
+    httpd_resp_set_type(request, "application/json");
+    httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+    if (httpd_resp_sendstr_chunk(request, "{\"ok\":true,\"available\":true,\"files\":[") != ESP_OK) return ESP_FAIL;
+    for (uint8_t index = 0U; index < archives.count; ++index) {
+        if (local_web_send_chunkf(request,
+            "%s{\"id\":\"%s\",\"size_bytes\":%" PRIu64 ",\"time_named\":%s}",
+            index == 0U ? "" : ",", archives.archives[index].id,
+            archives.archives[index].size_bytes,
+            archives.archives[index].time_named ? "true" : "false") != ESP_OK) return ESP_FAIL;
+    }
+    return local_web_send_chunkf(request, "],\"truncated\":%s}",
+                                 archives.truncated ? "true" : "false") == ESP_OK
+        ? httpd_resp_send_chunk(request, NULL, 0U) : ESP_FAIL;
+}
+
+static bool local_web_logs_read_query(httpd_req_t *request, char *id, size_t id_size,
+                                      uint64_t *offset)
+{
+    if ((request == NULL) || (id == NULL) || (offset == NULL) ||
+        httpd_req_get_url_query_len(request) == 0U ||
+        httpd_req_get_url_query_len(request) >= 64U ||
+        httpd_req_get_url_query_str(request, s_query_buffer, sizeof(s_query_buffer)) != ESP_OK) return false;
+    bool got_id = false, got_offset = false;
+    char *field = s_query_buffer;
+    while (*field) {
+        char *separator = strchr(field, '&');
+        if (separator) *separator = '\0';
+        char *equals = strchr(field, '=');
+        if (!equals || equals == field || !equals[1]) return false;
+        *equals = '\0';
+        if (!strcmp(field, "id") && !got_id && strlen(equals + 1U) < id_size) {
+            (void)snprintf(id, id_size, "%s", equals + 1U); got_id = true;
+        } else if (!strcmp(field, "offset") && !got_offset &&
+                   local_web_audio_uint64_parse(equals + 1U, offset)) {
+            got_offset = true;
+        } else return false;
+        if (!separator) break;
+        field = separator + 1U;
+    }
+    return got_id && got_offset;
+}
+
+static esp_err_t local_web_logs_read_get(httpd_req_t *request)
+{
+    char id[LOG_MANAGER_ARCHIVE_ID_LEN + 1U] = {0};
+    uint64_t offset = 0U;
+    if (!local_web_logs_read_query(request, id, sizeof(id), &offset))
+        return local_web_send_error(request, "400 Bad Request", "invalid_log_read_request");
+    log_manager_archive_page_t page = {0};
+    const esp_err_t result = log_manager_read_archive(id, offset, &page);
+    if (result == ESP_ERR_NOT_FOUND) return local_web_send_error(request, "404 Not Found", "log_not_found");
+    if (result == ESP_ERR_INVALID_ARG || result == ESP_ERR_INVALID_SIZE)
+        return local_web_send_error(request, "400 Bad Request", "invalid_log_cursor");
+    if (result == ESP_ERR_INVALID_STATE) return local_web_send_error(request, "503 Service Unavailable", "logs_unavailable");
+    if (result == ESP_ERR_TIMEOUT) return local_web_send_error(request, "409 Conflict", "logs_busy");
+    if (result != ESP_OK) return local_web_send_error(request, "500 Internal Server Error", "logs_read_failed");
+    httpd_resp_set_type(request, "application/json");
+    httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+    if (local_web_send_chunkf(request, "{\"ok\":true,\"id\":\"%s\",\"offset\":%" PRIu64 ","
+        "\"next_offset\":%" PRIu64 ",\"next_offset_valid\":%s,\"eof\":%s,\"malformed_record_count\":%u,"
+        "\"details_omitted\":true,\"records\":[", id, page.offset, page.next_offset,
+        page.next_offset_valid ? "true" : "false", page.eof ? "true" : "false",
+        (unsigned)page.malformed_record_count) != ESP_OK) return ESP_FAIL;
+    for (uint8_t index = 0U; index < page.record_count; ++index) {
+        const log_manager_public_record_t *record = &page.records[index];
+        const esp_err_t send_result = record->time_valid
+            ? local_web_send_chunkf(request,
+                "%s{\"timestamp\":\"%s\",\"time_valid\":true,\"uptime_ms\":%" PRIu64 ","
+                "\"level\":\"%s\",\"tag\":\"%s\",\"event\":\"%s\"}",
+                index == 0U ? "" : ",", record->timestamp, record->uptime_ms,
+                record->level, record->tag, record->event)
+            : local_web_send_chunkf(request,
+                "%s{\"timestamp\":null,\"time_valid\":false,\"uptime_ms\":%" PRIu64 ","
+                "\"level\":\"%s\",\"tag\":\"%s\",\"event\":\"%s\"}",
+                index == 0U ? "" : ",", record->uptime_ms,
+                record->level, record->tag, record->event);
+        if (send_result != ESP_OK) return ESP_FAIL;
+    }
+    return httpd_resp_sendstr_chunk(request, "]}") == ESP_OK
+        ? httpd_resp_send_chunk(request, NULL, 0U) : ESP_FAIL;
+}
+
+static esp_err_t local_web_diagnostics_status_get(httpd_req_t *request)
+{
+    performance_monitor_status_t performance = {0};
+    log_manager_stats_t logging = {0};
+    const bool performance_available = performance_monitor_get_status(&performance) == ESP_OK;
+    const bool logging_available = log_manager_get_stats(&logging) == ESP_OK;
+    const int64_t now_us = esp_timer_get_time();
+    const bool age_valid = performance_available && performance.sample_valid &&
+        now_us >= 0 && performance.captured_at_us >= 0 &&
+        performance.captured_at_us <= now_us;
+    char age_ms[24] = "null";
+    if (age_valid) {
+        (void)snprintf(age_ms, sizeof(age_ms), "%llu",
+                       (unsigned long long)((now_us - performance.captured_at_us) / 1000));
+    }
+    httpd_resp_set_type(request, "application/json");
+    httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+    return local_web_send_responsef(request,
+        "{\"ok\":true,\"performance\":{\"available\":%s,\"sample_valid\":%s,"
+        "\"report_index\":%" PRIu32 ",\"age_ms\":%s,\"cpu\":{\"used_x10\":%" PRIu32 ","
+        "\"peak_500ms_x10\":%" PRIu32 ",\"idle_x10\":%" PRIu32 "}},"
+        "\"logging\":{\"available\":%s,\"produced_records\":%" PRIu64 ","
+        "\"durable_records\":%" PRIu64 ",\"dropped_records\":%" PRIu64 "}}",
+        performance_available ? "true" : "false", performance.sample_valid ? "true" : "false",
+        performance.report_index, age_ms, performance.cpu_used_x10,
+        performance.cpu_peak_500ms_x10, performance.cpu_idle_x10,
+        logging_available ? "true" : "false", logging.produced_records,
+        logging.durable_records, logging.dropped_records);
+}
+
+static esp_err_t local_web_diagnostics_export_get(httpd_req_t *request)
+{
+    performance_monitor_status_t performance = {0};
+    log_manager_stats_t logging = {0};
+    const bool performance_available = performance_monitor_get_status(&performance) == ESP_OK;
+    const bool logging_available = log_manager_get_stats(&logging) == ESP_OK;
+    httpd_resp_set_type(request, "text/plain; charset=utf-8");
+    httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+    return local_web_send_responsef(request,
+        "Smart Room Diagnostic Report\nCPU\navailable=%u\nsample_valid=%u\nused_x10=%" PRIu32
+        "\npeak_500ms_x10=%" PRIu32 "\nLOGGING\navailable=%u\nproduced=%" PRIu64
+        "\ndurable=%" PRIu64 "\ndropped=%" PRIu64 "\n",
+        performance_available, performance.sample_valid, performance.cpu_used_x10,
+        performance.cpu_peak_500ms_x10, logging_available, logging.produced_records,
+        logging.durable_records, logging.dropped_records);
 }
 
 static esp_err_t local_web_audio_play_post(httpd_req_t *request)
@@ -1270,6 +1562,24 @@ static esp_err_t local_web_send_chunkf(httpd_req_t *request,
                : httpd_resp_send_chunk(request, s_response_chunk, written);
 }
 
+/* A complete, bounded response must not leave HTTPD in chunked mode. */
+static esp_err_t local_web_send_responsef(httpd_req_t *request,
+                                          const char *format, ...)
+{
+    if ((request == NULL) || (format == NULL)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    va_list arguments;
+    va_start(arguments, format);
+    const int written = vsnprintf(s_response_chunk, sizeof(s_response_chunk),
+                                  format, arguments);
+    va_end(arguments);
+    return ((written < 0) || (written >= (int)sizeof(s_response_chunk)))
+               ? ESP_ERR_INVALID_SIZE
+               : httpd_resp_send(request, s_response_chunk, written);
+}
+
 static const char *local_web_sd_state_name(sd_card_manager_state_t state)
 {
     switch (state)
@@ -1374,6 +1684,31 @@ static esp_err_t local_web_register_routes(httpd_handle_t server)
         .uri = "/api/dashboard/status", .method = HTTP_GET,
         .handler = local_web_dashboard_status_get,
     };
+    static const httpd_uri_t scenes = {
+        .uri = "/api/scenes", .method = HTTP_GET, .handler = local_web_scenes_get,
+    };
+    static const httpd_uri_t scenes_status = {
+        .uri = "/api/scenes/status", .method = HTTP_GET,
+        .handler = local_web_scenes_status_get,
+    };
+    static const httpd_uri_t scenes_apply = {
+        .uri = "/api/scenes/apply", .method = HTTP_POST,
+        .handler = local_web_scenes_apply_post,
+    };
+    static const httpd_uri_t logs_status = {
+        .uri = "/api/logs/status", .method = HTTP_GET,
+        .handler = local_web_logs_status_get,
+    };
+    static const httpd_uri_t logs_files = {
+        .uri = "/api/logs/files", .method = HTTP_GET,
+        .handler = local_web_logs_files_get,
+    };
+    static const httpd_uri_t logs_read = {
+        .uri = "/api/logs/read", .method = HTTP_GET,
+        .handler = local_web_logs_read_get,
+    };
+    static const httpd_uri_t diagnostics_status = { .uri = "/api/diagnostics/status", .method = HTTP_GET, .handler = local_web_diagnostics_status_get };
+    static const httpd_uri_t diagnostics_export = { .uri = "/api/diagnostics/export", .method = HTTP_GET, .handler = local_web_diagnostics_export_get };
 
     esp_err_t result = httpd_register_uri_handler(server, &root);
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &storage_status);
@@ -1394,5 +1729,13 @@ static esp_err_t local_web_register_routes(httpd_handle_t server)
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &light_status);
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &light_state);
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &dashboard_status);
+    if (result == ESP_OK) result = httpd_register_uri_handler(server, &scenes);
+    if (result == ESP_OK) result = httpd_register_uri_handler(server, &scenes_status);
+    if (result == ESP_OK) result = httpd_register_uri_handler(server, &scenes_apply);
+    if (result == ESP_OK) result = httpd_register_uri_handler(server, &logs_status);
+    if (result == ESP_OK) result = httpd_register_uri_handler(server, &logs_files);
+    if (result == ESP_OK) result = httpd_register_uri_handler(server, &logs_read);
+    if (result == ESP_OK) result = httpd_register_uri_handler(server, &diagnostics_status);
+    if (result == ESP_OK) result = httpd_register_uri_handler(server, &diagnostics_export);
     return result;
 }

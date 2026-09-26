@@ -15,8 +15,8 @@ browser download filename through `Content-Disposition`), raw-body
 `POST /api/storage/upload?path=<logical-path>` (at most 8 MiB), and bounded
 `POST` delete, rename, mkdir, and rmdir operations.
 
-The HTTP server reserves 20 URI-handler slots for the current 19 registered
-routes, retaining one bounded spare slot. A route addition must still review
+The HTTP server reserves 29 URI-handler slots for the current 27 registered
+routes, retaining two bounded spare slots. A route addition must still review
 that count; otherwise ESP-IDF returns `ESP_ERR_HTTPD_HANDLERS_FULL` and startup
 rolls back.
 
@@ -185,10 +185,77 @@ Strip-only chase/wipe patterns remain intentionally unavailable.
 `WEB_LIGHT` LCD view; the HTTP task never accesses LVGL and the LCD is not an
 interactive controller.
 
+## Scenes presentation
+
+Sprint 23.4 presents the bounded backend over the application-owned
+`scene_manager`: `GET /api/scenes`, `GET /api/scenes/status`,
+and `POST /api/scenes/apply?id=<focus|relax|night|all_off>`. The catalog is
+compile-time fixed and has no arbitrary command, path, credential, driver, or
+configuration input. Missing, duplicate, malformed, overlong, and unknown IDs
+are rejected before orchestration.
+
+Status is a copied historical apply result, not a continuously evaluated
+"active scene" claim. Scene application calls `light_manager` once with a
+complete state, then uses the approved audio/voice facade only. It never opens
+audio content, calls I2S/NeoPixel/LVGL, or manipulates a driver. A mixed owner
+result returns HTTP 200 with `outcome:"partial"`; it does not roll back a
+successful Light step. When either domain applied successfully, another
+domain's busy/unavailable result remains an HTTP-200 structured `partial`
+outcome. HTTP 409/503 are reserved for aggregate busy/rejected/unavailable
+outcomes where no successful domain result must be reported.
+
+The Scenes tab loads the catalog once, refreshes copied historical status on
+entry and after an apply, then polls only while its tab and the document are
+visible. It disables an in-flight Apply action and reports the aggregate plus
+Light/Audio outcomes, including partial application. It deliberately says
+`Last applied`, never claims that current device state still matches a scene.
+
+## Safe Logs backend
+
+Sprint 23.2 adds read-only `GET /api/logs/status`, `GET /api/logs/files`, and
+`GET /api/logs/read?id=<opaque-id>&offset=<line-boundary>`. Local Web neither
+opens nor lists the log namespace; `log_manager` holds the SD lease, resolves
+only its exact closed-file grammar, opens, reads a bounded page, closes, and
+releases the lease before HTTP serialization.
+
+Archive IDs are lowercase 16-hex hashes of manager-private paths. They are
+lookup keys, not authorization tokens. Lists return at most 12 archives; reads
+scan at most 4096 bytes and return at most six records. The public record model
+contains only time validity/timestamp, uptime, severity, tag, and event. It
+always omits raw free-form details, has no download route, accepts no path, and
+fails malformed lines closed. If a scan budget ends inside a malformed line,
+the response withholds the forward cursor instead of returning a non-line
+boundary offset. Reads defer with a bounded busy response during
+the Voice Recording Critical Window.
+
+The Logs tab refreshes logger counters on entry and at most every five seconds
+while visible. Archive scans happen once on entry or through the explicit
+Refresh archives control; records load only after an explicit archive/page
+request and replace the bounded viewport. The UI displays opaque archive
+selection only, size/classification metadata, and the public structured record
+fields through `textContent`. It provides no path, raw detail, live tail,
+download, deletion, rotate, flush, or logger control.
+
+## Diagnostics presentation
+
+`GET /api/diagnostics/status` exposes the copied performance-monitor CPU
+snapshot and safe logging counters. The browser does not trigger a measurement:
+it renders `Waiting for performance sample` until a completed sample exists,
+labels the sampled peak as `Peak 500 ms`, and distinguishes the performance
+sample age from browser refresh time. It polls at most every five seconds only
+while the Diagnostics tab and document are visible; a stale last-good snapshot
+survives a refresh failure. `GET /api/diagnostics/export` remains the sole
+sanitized report producer and is used directly for download.
+
+The current LCD routing exposes only the existing Web Storage and Web Light
+views. No Scene or Diagnostics LCD screen was added because the product has no
+clean navigation route to new Web subviews; creating unreachable screens or
+having HTTP route the LCD would violate the presentation boundary.
+
 ## SD-backed presentation icons
 
-The Web chrome loads five fixed SVG assets through
-`GET /api/assets/icon?name=<storage|folder|playback|upload|volume>`. The
+The Web chrome loads 22 fixed SVG assets through
+`GET /api/assets/icon?name=<storage|folder|playback|upload|volume|dashboard|lights|scenes|logs|diagnostics|sensor|network|cloud|time|up|new_folder|play|pause|restart|stop|refresh|download>`. The
 endpoint maps those tokens to fixed `/web-icons/*.svg` paths and streams them
 through the existing `sd_card_manager_download_*` lease-owned API with
 `image/svg+xml`; arbitrary paths, raw VFS paths, and non-allowlisted files are
