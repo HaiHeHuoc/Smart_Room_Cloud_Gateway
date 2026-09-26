@@ -1,11 +1,12 @@
 # Next Work + Deferred HIL Backlog
 
-Updated: 2026-09-24
+Updated: 2026-09-26
 Active branch: `main_including_Firebase_security`
+Source integration baseline: `2bf646f2f6ba4a70457f3d0a88e2a13edb4bd23f` (Sprint-23 V5 merge)
 Sprint-18 closure authority: explicit user acceptance by Hải on 2026-09-16.
-Sprint 19-22 source is integrated/build verified as noted below. Sprint 21 is
-closed by user acceptance; Sprint 22 target/browser HIL is non-blocking
-regression coverage while Sprint 23.1 proceeds.
+Sprint 19-23 source is integrated/build verified as noted below. Sprint 21 and
+Sprint 22 are closed by user acceptance. Sprint-23 target/browser HIL is the
+current acceptance gate; Sprint-22 HIL is non-blocking regression coverage.
 
 ## Current software state
 
@@ -19,7 +20,7 @@ Sprint 21    Local Web Control V3: Lights / COMPLETE / USER ACCEPTED BY HẢI ON
              2026-09-24; older HIL is deferred regression coverage
 Sprint 22    Local Web Control V4: Dashboard + System Status / COMPLETE /
              BUILD VERIFIED / USER ACCEPTED BY Hai ON 2026-09-25
-Sprint 23    Local Web Control V5: Scenes + Logs + Diagnostics / IMPLEMENTED /
+Sprint 23    Local Web Control V5: Scenes + Logs + Diagnostics / SOURCE INTEGRATED /
              BUILD VERIFIED / TARGET HIL PENDING
 Sprint 24    Wake Word + Advanced Voice UX / PLANNED / NOT STARTED
 ```
