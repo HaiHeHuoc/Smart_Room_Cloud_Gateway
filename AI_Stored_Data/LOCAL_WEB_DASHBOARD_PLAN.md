@@ -1,7 +1,7 @@
 # Local Web Dashboard Plan
 
-Updated: 2026-09-24
-Status: **SPRINT 21 COMPLETE / USER ACCEPTED; SPRINT 22 COMPLETE / BUILD VERIFIED / USER ACCEPTED 2026-09-25; SPRINT 23 ACTIVE**
+Updated: 2026-09-26
+Status: **SPRINT 21 COMPLETE / USER ACCEPTED; SPRINT 22 COMPLETE / BUILD VERIFIED / USER ACCEPTED 2026-09-25; SPRINT 23 SOURCE INTEGRATED / BUILD VERIFIED / TARGET HIL PENDING; SPRINT 24 NOT STARTED**
 Active integration branch: `main_including_Firebase_security`
 
 ## Purpose
@@ -10,9 +10,10 @@ This document is the durable cross-session plan for the Local Web Control
 Dashboard. Future ChatGPT/Codex/AI sessions must use it to avoid roadmap drift
 unless Hải explicitly approves a later roadmap change.
 
-Sprint 19-22 source/build facts below are recorded implementation evidence.
-Sprint-22 target/browser HIL remains required and is not implied by this
-planning document.
+Sprint 19-23 source/build facts below are recorded implementation evidence.
+Sprint-23 target/browser HIL remains required. Sprint-22 target/browser HIL is
+retained as non-blocking regression coverage after user acceptance on
+2026-09-25.
 
 ## Roadmap position
 
@@ -63,8 +64,9 @@ Existing verified source also provides:
 - runtime playback volume bounded to 0..100.
 
 Recorded implementation evidence includes Local Web/Smart Room/audio host-test
-PASS and an ESP-IDF 6.0.1 serialized build PASS. Target HIL remains pending and
-must not be inferred from those host/build results.
+PASS and an ESP-IDF 6.0.1 serialized build PASS. Hải accepted Sprint 22 on
+2026-09-25; its target/browser matrix remains useful non-blocking regression
+coverage.
 
 Current WAV playback support is limited to files smaller than 2 GiB
 (`2,147,483,647` bytes maximum) because the playback reader uses the current
@@ -75,6 +77,26 @@ the 2-4 GiB range.
 Sprint 19 remains source-integrated with target HIL partial: capacity/status and
 download fixes are accepted, while upload/interruption/mutations/remount
 recovery still need target coverage.
+
+## Integrated Sprint 23 checkpoint — 2026-09-26
+
+Sprint-23 implementation commit `21b2333e5d6d4e3b5484e829eeb6ba09f1658e8f`
+is integrated into `main_including_Firebase_security` by baseline merge commit
+`2bf646f2f6ba4a70457f3d0a88e2a13edb4bd23f`.
+
+Integrated V5 scope:
+
+- fixed owner-routed `focus`, `relax`, `night`, and `all_off` scenes;
+- bounded sanitized log archive metadata/record paging with no raw detail,
+  physical path, destructive action, or raw-log download;
+- copied Diagnostics CPU/logging facts plus bounded backend-owned export;
+- seven accessible Web tabs: Dashboard, Storage, Playback, Lights, Scenes,
+  Logs, and Diagnostics;
+- archive retention protection for an active bounded archive read;
+- no HTTP-to-LVGL path and no new unreachable LCD Scene/Logs/Diagnostics view.
+
+Recorded host/static checks and the serialized ESP-IDF 6.0.1 build pass.
+Sprint-23 target/browser HIL remains the current acceptance gate.
 
 ## Product direction
 
@@ -149,7 +171,7 @@ first. Do not create a shortcut from the web server to a driver.
 
 ## Sprint 19 — Local Web Control V1: SD Card File Manager
 
-Status: **PROMPTS 1-3 PLUS CAPACITY FIX BUILT / TARGET REDEPLOY AND HIL PENDING**
+Status: **SOURCE INTEGRATED / BUILD VERIFIED / TARGET HIL PARTIAL**
 
 ### Goal
 
@@ -271,7 +293,8 @@ card before adding other web-control features.
   `503 storage_usage_unavailable` instead of a misleading successful zero-byte
   response. SD mount/VFS/lease ownership remains unchanged.
 - Host capacity-invariant and path-policy tests pass; a clean ESP-IDF 6.0.1
-  build passes. The fixed firmware has not yet been flashed or target-verified.
+  build passes. That was the original capacity-fix checkpoint; on 2026-09-22
+  Hải later confirmed the deployed capacity/status and browser-download fixes.
 
 ### Large-file metadata and download-name HIL defects (2026-09-22)
 
@@ -289,14 +312,16 @@ card before adding other web-control features.
 - New host tests cover the 2 GiB sign boundary, FAT32 4 GiB maximum, ordinary
   filename, escaped spaces, and root rejection. Clean ESP-IDF 6.0.1 build
   passes; generated binary is 2,601,776 bytes with 38% smallest-app-partition
-  space free. Target redeploy and HIL remain required.
+  space free. The 2026-09-22 deployed HIL later accepted corrected
+  capacity/status and browser-download behavior; other Sprint-19 target cases
+  remain pending.
 
 ### Target HIL matrix (pending)
 
 1. Open `/` from a phone and PC on the existing local LAN; verify the LCD
    Web Storage status, browsing, parent navigation, and unavailable-card state.
 2. Exercise upload, download, delete, rename, mkdir, and empty/non-empty rmdir
-   with normal files, 8 MiB boundary files, duplicate names, invalid paths,
+   with normal files, 20 MiB boundary files, duplicate names, invalid paths,
    a 2-4 GiB FAT32 file whose displayed/downloaded name must remain correct.
 3. Disconnect the browser during upload/download; verify no published partial
    file, server recovery, and subsequent transfer capability.
@@ -390,7 +415,10 @@ a conflicting light-state model.
 
 ## Sprint 22 — Local Web Control V4: Dashboard + System Status
 
-Status: **IMPLEMENTED / BUILD VERIFIED / TARGET HIL PENDING**
+Status: **COMPLETE / BUILD VERIFIED / USER ACCEPTED BY HẢI ON 2026-09-25**
+
+Target/browser HIL remains useful non-blocking regression coverage; it is not a
+Sprint-22 closure blocker.
 
 ### Goal
 
@@ -429,9 +457,10 @@ as:
   return refresh closes the tab-switch/in-flight-request race without allowing
   overlapping requests. Storage, Playback, and Lights retain their existing
   separate active-tab behavior.
-- Target/browser HIL remains the acceptance gate. It must cover partial
-  manager availability, polling/visibility transitions, responsive layout,
-  existing-tab regression, and quiet resource/serial behavior.
+- Hải accepted Sprint 22 on 2026-09-25. The same target/browser matrix is
+  retained as optional regression coverage for partial manager availability,
+  polling/visibility transitions, responsive layout, existing-tab regression,
+  and quiet resource/serial behavior.
 
 ## Sprint 23 — Local Web Control V5: Scenes + Logs + Diagnostics
 

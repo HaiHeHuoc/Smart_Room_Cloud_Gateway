@@ -1,7 +1,8 @@
 # Smart Room Cloud Gateway — Current Project State
 
-Updated: 2026-09-24
+Updated: 2026-09-26
 Active integration branch: `main_including_Firebase_security`
+Source integration baseline: `2bf646f2f6ba4a70457f3d0a88e2a13edb4bd23f` (`merge: integrate Sprint 23 Local Web V5`)
 Sprint-18 closure authority: explicit user acceptance by Hải on 2026-09-16
 
 > This file is the current-state companion for cross-session AI handoff.
@@ -67,7 +68,7 @@ Sprint 21   Local Web Control V3: Lights / COMPLETE / USER ACCEPTED BY HẢI
             ON 2026-09-24
 Sprint 22   Local Web Control V4: Dashboard + System Status / COMPLETE /
             BUILD VERIFIED / USER ACCEPTED BY Hai ON 2026-09-25
-Sprint 23   Local Web Control V5: Scenes + Logs + Diagnostics / IMPLEMENTED /
+Sprint 23   Local Web Control V5: Scenes + Logs + Diagnostics / SOURCE INTEGRATED /
             BUILD VERIFIED / TARGET HIL PENDING
 Sprint 24   Wake Word + Advanced Voice UX / PLANNED / NOT STARTED
 ```
@@ -181,8 +182,8 @@ This work item is closed by Hải's explicit acceptance on 2026-09-16.
 ## What happens next
 
 Sprint 22 is complete, build verified, and user-accepted on 2026-09-25.
-Sprint 23 is implemented and build verified. Its target/browser HIL matrix is
-the next acceptance gate; the older Sprint-22 HIL matrix remains useful
+Sprint 23 is source-integrated and build verified. Its target/browser HIL matrix
+is the current acceptance gate; the older Sprint-22 HIL matrix remains useful
 non-blocking regression coverage.
 
 Highest-value next validation is:
@@ -202,9 +203,9 @@ Highest-value next validation is:
    support files at or above 2 GiB.
 ```
 
-The approved forward sequence now continues at Sprint 23
-Scenes/Logs/Diagnostics, then Sprint 24 Wake Word/Advanced Voice UX; neither
-starts automatically.
+Sprint 23 source is integrated; its target/browser HIL is the current acceptance
+gate. Sprint 24 Wake Word/Advanced Voice UX remains PLANNED / NOT STARTED and
+does not start automatically.
 
 ## Deferred regression work — non-blocking
 
@@ -240,7 +241,7 @@ Only a concrete regression or explicit Hải instruction should reopen Sprint 18
   interruption/partial-file cleanup, file/folder mutations, and SD
   removal/remount/recovery before full Sprint-19 acceptance.
 
-## Sprint 20-22 Local Web controls — source/build verified
+## Sprint 20-23 Local Web controls — source/build verified
 
 - Sprint 20 extends the Storage frontend with owner-published audio catalog and
   playback state, catalog-ID playback, bounded volume, and generation-guarded
@@ -263,8 +264,13 @@ Only a concrete regression or explicit Hải instruction should reopen Sprint 18
   unavailable states, and polls every two seconds only while Dashboard is the
   visible active tab. No Dashboard write, Wi-Fi action, secret/config field,
   driver access, or HTTP-to-LVGL path exists.
-- Sprint 22 host tests and ESP-IDF 6.0.1 serialized build pass; target/browser
-  HIL is prepared but has not been recorded.
+- Sprint 22 host tests and ESP-IDF 6.0.1 serialized build pass. Hải accepted
+  Sprint 22 on 2026-09-25; its target/browser HIL remains non-blocking regression
+  coverage.
+- Sprint 23 adds fixed owner-routed Scenes, bounded sanitized Logs, copied
+  Diagnostics/export, and seven Local Web tabs. Source is integrated through
+  `2bf646f2f6ba4a70457f3d0a88e2a13edb4bd23f`; host/build evidence passes and
+  target/browser HIL remains pending.
 ### Historical Prompt 20.1 contract detail
 ## Sprint 20 Local Web Playback + Volume — Prompt 20.1 integrated
 
