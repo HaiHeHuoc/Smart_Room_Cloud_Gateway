@@ -27,6 +27,7 @@
 #include "sensor_manager.h"
 #include "smart_room_mcp_adapter.h"
 #include "voice_assistant_playback_control.h"
+#include "voice_recording_critical.h"
 #include "wifi_manager.h"
 
 #define LOCAL_WEB_HTTP_STACK_SIZE_BYTES 6144U
@@ -893,6 +894,11 @@ static esp_err_t local_web_diagnostics_status_get(httpd_req_t *request)
 
 static esp_err_t local_web_diagnostics_export_get(httpd_req_t *request)
 {
+    if (voice_recording_critical_is_active()) {
+        return local_web_send_error(
+            request, "503 Service Unavailable", "recording_critical");
+    }
+
     performance_monitor_status_t performance = {0};
     log_manager_stats_t logging = {0};
     const bool performance_available = performance_monitor_get_status(&performance) == ESP_OK;
@@ -1054,6 +1060,11 @@ static esp_err_t local_web_storage_list_get(httpd_req_t *request)
 
 static esp_err_t local_web_storage_download_get(httpd_req_t *request)
 {
+    if (voice_recording_critical_is_active()) {
+        return local_web_send_error(
+            request, "503 Service Unavailable", "recording_critical");
+    }
+
     char logical_path[LOCAL_WEB_LOGICAL_PATH_MAX_LEN + 1U] = {0};
     if (local_web_get_normalized_query_path(
             request, "path", logical_path, sizeof(logical_path)) != ESP_OK ||
@@ -1087,6 +1098,12 @@ static esp_err_t local_web_storage_download_get(httpd_req_t *request)
     esp_err_t result = ESP_OK;
     for (;;)
     {
+        if (voice_recording_critical_is_active())
+        {
+            result = ESP_ERR_INVALID_STATE;
+            break;
+        }
+
         size_t read_size = 0U;
         result = sd_card_manager_download_read(
             transfer.transfer_id, s_transfer_chunk, sizeof(s_transfer_chunk),
@@ -1169,6 +1186,11 @@ static esp_err_t local_web_icon_get(httpd_req_t *request)
 
 static esp_err_t local_web_storage_upload_post(httpd_req_t *request)
 {
+    if (voice_recording_critical_is_active()) {
+        return local_web_send_error(
+            request, "503 Service Unavailable", "recording_critical");
+    }
+
     char logical_path[LOCAL_WEB_LOGICAL_PATH_MAX_LEN + 1U] = {0};
     if (local_web_get_normalized_query_path(
             request, "path", logical_path, sizeof(logical_path)) != ESP_OK ||
@@ -1194,6 +1216,12 @@ static esp_err_t local_web_storage_upload_post(httpd_req_t *request)
     esp_err_t result = ESP_OK;
     while (remaining > 0U)
     {
+        if (voice_recording_critical_is_active())
+        {
+            result = ESP_ERR_INVALID_STATE;
+            break;
+        }
+
         const size_t requested = (remaining < sizeof(s_transfer_chunk)) ?
                                  remaining : sizeof(s_transfer_chunk);
         const int received = httpd_req_recv(
@@ -1215,7 +1243,14 @@ static esp_err_t local_web_storage_upload_post(httpd_req_t *request)
     if (result != ESP_OK)
     {
         sd_card_manager_upload_abort(transfer.transfer_id);
-        return local_web_send_error(request, "500 Internal Server Error", "upload_interrupted");
+        if (result == ESP_ERR_INVALID_STATE &&
+            voice_recording_critical_is_active())
+        {
+            return local_web_send_error(
+                request, "503 Service Unavailable", "recording_critical");
+        }
+        return local_web_send_error(
+            request, "500 Internal Server Error", "upload_interrupted");
     }
     result = sd_card_manager_upload_finish(transfer.transfer_id);
     if (result != ESP_OK)
