@@ -1,84 +1,129 @@
 # Current Working Checkpoint
 
-Purpose: compact, overwriteable handoff for active work. Current source,
-`AGENTS.md`, canonical documentation, and explicit build/HIL evidence remain
-authoritative.
+Purpose: compact handoff for the active focused fix. Repository/source and
+actual target evidence remain authoritative.
 
 Updated: 2026-09-26
-Active branch: `main_including_Firebase_security`
-Source integration baseline: `2bf646f2f6ba4a70457f3d0a88e2a13edb4bd23f`
-Baseline commit: `merge: integrate Sprint 23 Local Web V5`
-Sprint-23 implementation commit: `21b2333e5d6d4e3b5484e829eeb6ba09f1658e8f`
 
-## Current status
+## Active work
 
-- Sprint 18: COMPLETE / USER ACCEPTED BY HẢI ON 2026-09-16.
-- Sprint 19: SOURCE INTEGRATED / BUILD VERIFIED / TARGET HIL PARTIAL.
-- Sprint 20: IMPLEMENTED / BUILD VERIFIED / TARGET HIL PENDING.
-- Sprint 21: COMPLETE / USER ACCEPTED BY HẢI ON 2026-09-24.
-- Sprint 22: COMPLETE / BUILD VERIFIED / USER ACCEPTED BY HẢI ON 2026-09-25.
-- Sprint 23: SOURCE INTEGRATED / BUILD VERIFIED / TARGET HIL PENDING.
-- Sprint 24: PLANNED / NOT STARTED.
+Branch: `fix/xiaozhi-ptt-uplink-drop`
 
-Sprint 23 source is now integrated into the requested branch. Do not describe
-Sprint 23 as an unmerged feature branch or as not started. Target/browser HIL
-has not yet been recorded, so do not claim Sprint-23 hardware acceptance.
+Base integration branch: `main_including_Firebase_security`
 
-## Sprint 23 delivered contract
+Base HEAD: `18044491f201d9a944aa6cf170f8f85614f7057b`
 
-- Local Web has exactly seven presentation tabs: Dashboard, Storage, Playback,
-  Lights, Scenes, Logs, and Diagnostics.
-- `scene_manager` owns fixed `focus`, `relax`, `night`, and `all_off`
-  orchestration/results. It composes existing owner APIs and does not own
-  drivers, storage, UI, or rollback state.
-- Logs expose only bounded manager-owned archive metadata and sanitized records.
-  Free-form detail, raw VFS paths, secrets, destructive actions, and raw-log
-  download remain outside the browser contract.
-- Archive retention does not delete an archive while a bounded read of that
-  archive is active.
-- Diagnostics expose copied bounded CPU/logging facts plus backend-owned export;
-  no memory/config/credential dump or unrestricted filesystem access exists.
-- HTTP remains a frontend: no LVGL, SD/FATFS, I2S/audio, NeoPixel/RMT/GPIO, or
-  Wi-Fi/provisioning lifecycle ownership.
-- Existing LCD Web Storage/Web Light surfaces remain; no unreachable Sprint-23
-  LCD Scene/Logs/Diagnostics navigation was added.
+Current phase: focused Xiaozhi PTT uplink robustness fix before Sprint 24
+WakeNet implementation.
 
-## Recorded validation
+Sprint 23 was explicitly accepted by Hải on 2026-09-26. Broader Sprint-23
+closure documentation reconciliation on the integration branch remains
+separate from this focused code fix.
 
-- Local Web host/static policy suite: PASS.
-- Smart Room MCP adapter host suite: PASS.
-- Audio-manager host suite: PASS for retained integration coverage.
-- ESP-IDF 6.0.1 serialized build: PASS for the Sprint-23 implementation state.
-- Recorded firmware size at the Sprint-23 pre-HIL checkpoint: `0x294540`;
-  smallest app partition free: `0x16bac0` (36%).
-- Sprint-23 target/browser HIL: NOT YET RECORDED.
+## User-visible symptom
 
-Build/host evidence is not target-HIL evidence.
+During a normal GPIO38 Push-To-Talk turn, capture starts successfully but
+Xiaozhi can hear the utterance incorrectly: missing words/syllables, dropped
+content, or reduced recognition accuracy.
 
-## Remaining validation
+The selected fix intentionally does not wait for a pre-fix hardware baseline.
+It hardens the already bounded capture-to-uplink path while preserving current
+ownership.
 
-Primary gate: run Sprint-23 target/browser HIL for seven-tab navigation, all
-four fixed scenes, sanitized archive paging/recovery, Diagnostics freshness and
-export, visibility-aware polling, LCD non-regression, and mixed
-WAV/PTT/Xiaozhi/Web/Light/SD stress.
+## Implemented changes
 
-Deferred/non-blocking regression:
-- Sprint 22 Dashboard HIL after user acceptance.
-- Sprint 19 upload/interruption/mutation/remount cases beyond accepted
-  capacity/status and browser-download fixes.
-- Sprint 20 playback/seek/volume/PTT/Xiaozhi/SD-contention target cases.
-- Sprint 21 older Light HIL; do not reopen without a concrete regression.
+### Voice uplink
 
-## Durable boundaries
+- `voice_uplink` priority raised from 5 to 6.
+- `audio_manager` remains priority 7 and sole I2S/RX/DMA owner.
+- Uplink PCM queue increased from 8 to 16 frames.
+- At 256 samples/frame and 16 kHz, queue jitter headroom increases from about
+  128 ms to about 256 ms.
+- Queue storage remains PSRAM-backed.
+- The audio-manager stream callback remains non-blocking and still uses
+  zero-wait `xQueueSend()`; network latency never blocks the I2S owner.
+- Turn summary now records queue peak depth, maximum Opus encode duration, and
+  maximum foundation/network send duration for post-fix HIL evidence.
 
-- Local Web remains SD-card-first and is used only after networking exists.
-- No Web Wi-Fi/provisioning control, credential erase, OTA install/update,
-  factory reset, reboot, arbitrary NVS/GPIO/task/shell control.
-- Preserve application -> manager/service -> driver/framework ownership.
-- Never expose credentials, tokens, PoP/session material, private provider
-  handles, raw pointers, or unrestricted filesystem content.
+### Recording-critical background policy
 
-## Next action
+Existing behavior was preserved:
 
-Run Sprint-23 target/browser HIL and record only observed evidence. Sprint 24
-Wake Word + Advanced Voice UX does not start automatically.
+- performance monitor defers during live voice recording;
+- persistent log writer parks/defers at its safe point;
+- ordinary periodic cloud uploads already defer during
+  `VOICE_RECORDING_CRITICAL`.
+
+Additional Local Web policy:
+
+- new Storage downloads are rejected while live recording is critical;
+- an in-progress Storage download terminates if recording becomes critical;
+- new Storage uploads are rejected while recording is critical;
+- an in-progress upload is aborted/cleaned if recording becomes critical;
+- Diagnostics export is rejected while recording is critical.
+
+No Wi-Fi, TCP/IP, ESP event, IPC, timer, or scheduler suspension was added.
+
+## Commits
+
+- `589bbdae0afcf29773345c80817abadd25fb2b6d`
+  `fix(voice): prioritize and buffer live PTT uplink`
+- `9c7742d3e53ac823543d50593ec121759b4648c2`
+  `fix(web): honor voice recording critical window`
+- `609aa0d4d6e34b5656a1021c1302154167728e73`
+  `fix(web): defer heavy transfers during PTT capture`
+
+## Validation actually performed
+
+- Pre-fix hardware test: intentionally skipped per Hải's instruction.
+- Source/diff review after the fix: PASS.
+- Branch comparison against base: three implementation files/areas changed,
+  plus this checkpoint.
+- Confirmed no global scheduler suspend and no Wi-Fi/TCPIP task suspend.
+- ESP-IDF build: NOT RUN in this connector-only session.
+- Target/HIL: NOT RUN yet.
+
+## Required post-fix HIL
+
+Flash this branch and perform several PTT turns:
+
+1. Speak immediately after pressing GPIO38.
+2. Speak continuously for 5-10 seconds.
+3. Repeat while Web dashboard is open.
+4. Optionally attempt a Web upload/download during PTT and confirm it is
+   deferred/rejected instead of competing with the voice path.
+
+Capture the `VOICE_UPLINK` turn summary. Highest-value fields:
+
+- `queue_drops`
+- `stale_drops`
+- `queue_peak=<N>/16`
+- `max_encode_us`
+- `max_send_us`
+- `capture_to_first_pcm_ms`
+- `capture_to_first_opus_ms`
+
+Also inspect `audio_manager` diagnostics for RX overflow/timeouts.
+
+Expected nominal result:
+
+- queue_drops = 0
+- unexpected stale_drops = 0
+- RX overflow delta = 0
+- RX timeout delta = 0
+
+If queue depth still reaches 16/16 or queue_drops remain non-zero while RX is
+clean, the next justified architecture step is to decouple Opus encoding from
+the blocking network sender using a second bounded Opus packet queue.
+
+Do not increase I2S DMA descriptors or add another sender task before this
+post-fix evidence.
+
+## Scope boundary
+
+- No ESP-SR/WakeNet implementation in this fix branch.
+- No new I2S owner.
+- No direct provider handle leakage.
+- No unrelated architecture changes.
+- No merge into `main_including_Firebase_security` without Hải's explicit
+  instruction.
