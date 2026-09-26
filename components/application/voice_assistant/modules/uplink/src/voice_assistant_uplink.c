@@ -26,8 +26,12 @@
  * 32 KiB retains more than 7 KiB stack margin while returning 4 KiB of
  * Internal RAM to the TLS/I2S contention boundary. */
 #define UPLINK_TASK_STACK_BYTES      (32U * 1024U)
-#define UPLINK_TASK_PRIORITY         5U
-#define UPLINK_QUEUE_LENGTH          8U
+/* Live uplink must outrank normal priority-5 GUI/Web/effect work while
+ * remaining below the priority-7 I2S capture owner. */
+#define UPLINK_TASK_PRIORITY         6U
+/* 16 x 256 samples at 16 kHz gives ~256 ms of bounded PCM jitter headroom.
+ * Storage remains PSRAM-backed; the audio-manager callback still never blocks. */
+#define UPLINK_QUEUE_LENGTH          16U
 #define UPLINK_RECONCILE_MS          20U
 /* mbedTLS owns dynamic WebSocket records in PSRAM. Reserve enough contiguous
  * PSRAM for the 16 KiB receive record, the bounded TX record, and allocator
@@ -76,6 +80,9 @@ typedef struct {
     uint64_t frames_sent_before;
     uint64_t queue_drops_before;
     uint64_t stale_drops_before;
+    uint32_t queue_peak_depth;
+    uint32_t max_opus_encode_us;
+    uint32_t max_network_send_us;
 } uplink_turn_timing_t;
 
 /* The audio-manager callback and uplink task share these few diagnostics under
@@ -120,7 +127,8 @@ static void uplink_log_turn_summary(
         " capture_to_first_opus_ms=%" PRIi64
         " capture_to_stop_ms=%" PRIi64
         " frames_queued=%" PRIu64 " frames_sent=%" PRIu64
-        " queue_drops=%" PRIu64 " stale_drops=%" PRIu64,
+        " queue_drops=%" PRIu64 " stale_drops=%" PRIu64
+        " queue_peak=%u/%u max_encode_us=%u max_send_us=%u",
         (unsigned)session_generation,
         (unsigned)ptt_generation,
         uplink_elapsed_ms(timing.pressed_at_us, timing.authorized_at_us),
@@ -132,7 +140,11 @@ static void uplink_log_turn_summary(
         status.frames_queued - timing.frames_queued_before,
         status.frames_sent - timing.frames_sent_before,
         status.frames_dropped_queue_full - timing.queue_drops_before,
-        status.frames_dropped_stale - timing.stale_drops_before);
+        status.frames_dropped_stale - timing.stale_drops_before,
+        (unsigned)timing.queue_peak_depth,
+        (unsigned)UPLINK_QUEUE_LENGTH,
+        (unsigned)timing.max_opus_encode_us,
+        (unsigned)timing.max_network_send_us);
 }
 
 static void uplink_stream_callback(
@@ -179,10 +191,14 @@ static void uplink_stream_callback(
         return;
     }
 
+    const UBaseType_t queue_depth = uxQueueMessagesWaiting(s_queue);
     portENTER_CRITICAL(&s_lock);
     ++s_status.frames_queued;
     if (s_turn_timing.first_queued_at_us == 0) {
         s_turn_timing.first_queued_at_us = callback_time_us;
+    }
+    if ((uint32_t)queue_depth > s_turn_timing.queue_peak_depth) {
+        s_turn_timing.queue_peak_depth = (uint32_t)queue_depth;
     }
     portEXIT_CRITICAL(&s_lock);
 }
@@ -462,18 +478,42 @@ static esp_err_t uplink_encode_and_send(
     size_t sample_count)
 {
     size_t packet_size = 0U;
+    const int64_t encode_started_us = esp_timer_get_time();
     esp_err_t ret = voice_assistant_opus_encode(
         samples,
         sample_count,
         s_opus_packet,
         sizeof(s_opus_packet),
         &packet_size);
+    const int64_t encode_duration_us = esp_timer_get_time() - encode_started_us;
+    if (encode_duration_us > 0) {
+        portENTER_CRITICAL(&s_lock);
+        if ((uint64_t)encode_duration_us > s_turn_timing.max_opus_encode_us) {
+            s_turn_timing.max_opus_encode_us =
+                (encode_duration_us > UINT32_MAX)
+                    ? UINT32_MAX
+                    : (uint32_t)encode_duration_us;
+        }
+        portEXIT_CRITICAL(&s_lock);
+    }
     if (ret != ESP_OK) {
         return ret;
     }
 
+    const int64_t send_started_us = esp_timer_get_time();
     ret = xiaozhi_foundation_audio_uplink_send_opus_packet(
         generation, s_opus_packet, packet_size);
+    const int64_t send_duration_us = esp_timer_get_time() - send_started_us;
+    if (send_duration_us > 0) {
+        portENTER_CRITICAL(&s_lock);
+        if ((uint64_t)send_duration_us > s_turn_timing.max_network_send_us) {
+            s_turn_timing.max_network_send_us =
+                (send_duration_us > UINT32_MAX)
+                    ? UINT32_MAX
+                    : (uint32_t)send_duration_us;
+        }
+        portEXIT_CRITICAL(&s_lock);
+    }
     if (ret == ESP_OK) {
         ++s_turn_packets;
         s_turn_opus_bytes += packet_size;
