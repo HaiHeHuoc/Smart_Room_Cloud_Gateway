@@ -145,6 +145,8 @@ static const char *performance_monitor_stack_location_to_string(
 
 static void performance_monitor_log_boot_information(void);
 
+static void performance_monitor_log_display_gap(void);
+
 static void performance_monitor_log_report_header(
     uint32_t report_index);
 
@@ -378,6 +380,16 @@ static void performance_monitor_log_boot_information(void)
     }
 }
 
+static void performance_monitor_log_display_gap(void)
+{
+    /*
+     * Keep console reports readable without creating an empty persistent log
+     * record. app_log intentionally flattens control characters so that every
+     * stored record remains one physical line.
+     */
+    esp_log_write(ESP_LOG_INFO, TAG, "\n");
+}
+
 static void performance_monitor_log_report_header(
     uint32_t report_index)
 {
@@ -385,10 +397,7 @@ static void performance_monitor_log_report_header(
         (uint64_t)esp_timer_get_time() /
         1000000ULL;
 
-    /*
-     * Keep consecutive reports visually separated in the serial monitor.
-     */
-    APP_LOGI(TAG, N_EEE023F8, "\n");
+    performance_monitor_log_display_gap();
 
     APP_LOGI(
         TAG, REPORT_U_SYSTEM_UPTIME_LLU_A4BDC4F2,
@@ -799,6 +808,8 @@ static void performance_monitor_log_cpu(
         return;
     }
 
+    performance_monitor_log_display_gap();
+
     APP_LOGI(
         TAG, REPORT_U_CPU_USED_U_AE5CA014,
         "[REPORT:%06u][CPU] used=%u.%u%%, peak_500ms=%u.%u%%, "
@@ -913,6 +924,8 @@ static void performance_monitor_log_heap_region(
 static void performance_monitor_log_memory(
     uint32_t report_index)
 {
+    performance_monitor_log_display_gap();
+
     performance_monitor_log_heap_region(
         report_index,
         "INTERNAL",
@@ -1012,6 +1025,8 @@ static void performance_monitor_log_task_summary(
 {
     if ((tasks == NULL) ||
         (task_count == 0U)) {
+        performance_monitor_log_display_gap();
+
         APP_LOGW(
             TAG, REPORT_U_TASKS_NO_TASK_BA5085EF,
             "[REPORT:%06u][TASKS] no task snapshot available",
@@ -1020,6 +1035,8 @@ static void performance_monitor_log_task_summary(
 
         return;
     }
+
+    performance_monitor_log_display_gap();
 
     performance_monitor_task_state_counts_t counts = {0};
 
@@ -1079,6 +1096,8 @@ static void performance_monitor_log_task_table(
         (cpu->end_task_count == 0U)) {
         return;
     }
+
+    performance_monitor_log_display_gap();
 
     APP_LOGI(
         TAG, REPORT_U_TASK_TABLE_ENTRIES_439099A9,
@@ -1177,6 +1196,7 @@ static void performance_monitor_task(void *argument)
              * burst if monitoring happens to start during microphone capture. */
             performance_monitor_log_boot_information();
             performance_monitor_log_app_flash();
+            performance_monitor_log_display_gap();
             startup_information_logged = true;
         }
 
@@ -1220,6 +1240,8 @@ static void performance_monitor_task(void *argument)
                 &cpu);
         }
         else {
+            performance_monitor_log_display_gap();
+
             APP_LOGE(
                 TAG, REPORT_U_CPU_MEASUREMENT_FAI_C461E63E,
                 "[REPORT:%06u][CPU] measurement failed: %s",
@@ -1241,6 +1263,8 @@ static void performance_monitor_task(void *argument)
 
         performance_monitor_log_report_header(
             report_index);
+
+        performance_monitor_log_display_gap();
 
         APP_LOGE(
             TAG, REPORT_U_CPU_CONFIG_FREERTOS_E66B9907,
@@ -1285,6 +1309,8 @@ static void performance_monitor_task(void *argument)
         }
 
 #endif
+
+        performance_monitor_log_display_gap();
     }
 }
 

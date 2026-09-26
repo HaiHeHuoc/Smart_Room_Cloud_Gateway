@@ -83,6 +83,10 @@ I (...) PERF_MONITOR: [RAM:DMA] total=..., used=..., free=..., minimum=..., larg
 I (...) PERF_MONITOR: [STACK] task=perf_monitor, minimum remaining=... bytes
 ```
 
+Each high-level report block (header, CPU, RAM, task summary, and the
+occasional task table) has a console-only blank line before it; one final blank
+line closes the report. The spacing is not persisted as an empty log record.
+
 ## Important Notes
 
 - `used` is system-wide runtime utilization over the nominal five-second
