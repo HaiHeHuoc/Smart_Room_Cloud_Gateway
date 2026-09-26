@@ -19,6 +19,7 @@ idf_component_register(
     PRIV_REQUIRES
         app_log
         audio_manager
+        common
         cloud_manager
         light_manager
         log_manager
