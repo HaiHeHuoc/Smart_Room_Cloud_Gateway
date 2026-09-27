@@ -1,0 +1,13 @@
+menu "AFE pipeline WakeNet and VAD proof"
+
+config AFE_PIPELINE_ENABLE
+    bool "Enable continuous ESP-SR AFE WakeNet and VAD proof"
+    default n
+    depends on IDF_TARGET_ESP32S3 && SR_WN_WN9_HIESP
+    help
+        Run only the Phase 24.2.2 microphone-to-AFE feed/fetch soak proof with
+        the packed wn9_hiesp WakeNet model and observational VAD. This does not
+        enable Xiaozhi handoff, PTT arbitration, playback suppression, UI
+        changes, or an automatic reset/rearm policy.
+
+endmenu

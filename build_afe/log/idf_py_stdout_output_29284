@@ -1,0 +1,65 @@
+Command: ninja all
+[1/10] Building C object esp-idf/mbedtls/CMakeFiles/__idf_mbedtls.dir/__/__/esp_idf_6_0_1_compat/esp_crt_bundle.c.obj
+[2/10] Linking C static library esp-idf\mbedtls\libmbedtls.a
+[3/10] Performing configure step for 'bootloader'
+-- Component directory C:/esp/v6.0.1/esp-idf/components/mqtt does not contain a CMakeLists.txt file. No component will be added
+-- Minimal build - OFF
+-- Building ESP-IDF components for target esp32s3
+-- ESP-TEE is currently supported only on the esp32c6;esp32h2;esp32c5;esp32c61 SoCs
+-- KCONFIG_REPORT_VERBOSITY not set, using default
+-- Project sdkconfig file D:/01_Hai_Project/01_Smart_Room_Cloud_Gateway/Smart_Room_Cloud_Gateway_24_rework/sdkconfig.afe_pipeline.proof
+Configuration Report                                                            
++------------------------------------------------------------------------------+
+|  Parser Version: 1                                                           |
+|  Verbosity: default                                                          |
+|  Defaults policy: sdkconfig                                                  |
+|  Status: Finished with notifications                                         |
+|                                                                              |
+| Disabled Symbols/Choices With User-Set Value                                 |
+| +--------------------------------------------------------------------------+ |
+| | * FREERTOS_TASK_CREATE_ALLOW_EXT_MEM (defined at                         | |
+| | C:/esp/v6.0.1/esp-idf/components/freertos/Kconfig:576) with user-set     | |
+| | value y from                                                             | |
+| | D:/01_Hai_Project/01_Smart_Room_Cloud_Gateway/Smart_Room_Cloud_Gateway_à | |
+| +--------------------------------------------------------------------------+ |
++------------------------------------------------------------------------------+
+-- Compiler supported targets: xtensa-esp-elf
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Adding linker script C:/esp/v6.0.1/esp-idf/components/soc/esp32s3/ld/esp32s3.peripherals.ld
+-- Bootloader project name: "bootloader" version: 1
+-- Adding linker script C:/esp/v6.0.1/esp-idf/components/esp_hal_wdt/esp32s3/rom.wdt.ld
+-- Adding linker script C:/esp/v6.0.1/esp-idf/components/esp_rom/esp32s3/ld/esp32s3.rom.ld
+-- Adding linker script C:/esp/v6.0.1/esp-idf/components/esp_rom/esp32s3/ld/esp32s3.rom.api.ld
+-- Adding linker script C:/esp/v6.0.1/esp-idf/components/esp_rom/esp32s3/ld/esp32s3.rom.bt_funcs.ld
+-- Adding linker script C:/esp/v6.0.1/esp-idf/components/esp_rom/esp32s3/ld/esp32s3.rom.libgcc.ld
+-- Adding linker script C:/esp/v6.0.1/esp-idf/components/esp_rom/esp32s3/ld/esp32s3.rom.version.ld
+-- Adding linker script C:/esp/v6.0.1/esp-idf/components/esp_rom/esp32s3/ld/esp32s3.rom.libc.ld
+-- Components: bootloader bootloader_support efuse esp_app_format esp_blockdev esp_bootloader_format esp_common esp_hal_ana_conv esp_hal_clock esp_hal_dma esp_hal_gpio esp_hal_gpspi esp_hal_mspi esp_hal_pmu esp_hal_rtc_timer esp_hal_security esp_hal_timg esp_hal_uart esp_hal_usb esp_hal_wdt esp_hw_support esp_libc esp_rom esp_security esp_stdio esp_system esptool_py freertos hal log main micro-ecc partition_table soc spi_flash xtensa
+-- Component paths: C:/esp/v6.0.1/esp-idf/components/bootloader C:/esp/v6.0.1/esp-idf/components/bootloader_support C:/esp/v6.0.1/esp-idf/components/efuse C:/esp/v6.0.1/esp-idf/components/esp_app_format C:/esp/v6.0.1/esp-idf/components/esp_blockdev C:/esp/v6.0.1/esp-idf/components/esp_bootloader_format C:/esp/v6.0.1/esp-idf/components/esp_common C:/esp/v6.0.1/esp-idf/components/esp_hal_ana_conv C:/esp/v6.0.1/esp-idf/components/esp_hal_clock C:/esp/v6.0.1/esp-idf/components/esp_hal_dma C:/esp/v6.0.1/esp-idf/components/esp_hal_gpio C:/esp/v6.0.1/esp-idf/components/esp_hal_gpspi C:/esp/v6.0.1/esp-idf/components/esp_hal_mspi C:/esp/v6.0.1/esp-idf/components/esp_hal_pmu C:/esp/v6.0.1/esp-idf/components/esp_hal_rtc_timer C:/esp/v6.0.1/esp-idf/components/esp_hal_security C:/esp/v6.0.1/esp-idf/components/esp_hal_timg C:/esp/v6.0.1/esp-idf/components/esp_hal_uart C:/esp/v6.0.1/esp-idf/components/esp_hal_usb C:/esp/v6.0.1/esp-idf/components/esp_hal_wdt C:/esp/v6.0.1/esp-idf/components/esp_hw_support C:/esp/v6.0.1/esp-idf/components/esp_libc C:/esp/v6.0.1/esp-idf/components/esp_rom C:/esp/v6.0.1/esp-idf/components/esp_security C:/esp/v6.0.1/esp-idf/components/esp_stdio C:/esp/v6.0.1/esp-idf/components/esp_system C:/esp/v6.0.1/esp-idf/components/esptool_py C:/esp/v6.0.1/esp-idf/components/freertos C:/esp/v6.0.1/esp-idf/components/hal C:/esp/v6.0.1/esp-idf/components/log C:/esp/v6.0.1/esp-idf/components/bootloader/subproject/main C:/esp/v6.0.1/esp-idf/components/bootloader/subproject/components/micro-ecc C:/esp/v6.0.1/esp-idf/components/partition_table C:/esp/v6.0.1/esp-idf/components/soc C:/esp/v6.0.1/esp-idf/components/spi_flash C:/esp/v6.0.1/esp-idf/components/xtensa
+-- Adding linker script C:/esp/v6.0.1/esp-idf/components/bootloader/subproject/main/ld/esp32s3/bootloader.ld.in
+--   -> Preprocessing .in script: C:/esp/v6.0.1/esp-idf/components/bootloader/subproject/main/ld/esp32s3/bootloader.ld.in
+-- Configuring done (7.4s)
+-- Generating done (0.2s)
+-- Build files have been written to: D:/01_Hai_Project/01_Smart_Room_Cloud_Gateway/Smart_Room_Cloud_Gateway_24_rework/build_afe/bootloader
+[4/10] Performing build step for 'bootloader'
+[1/1] C:\WINDOWS\system32\cmd.exe /C "cd /D D:\01_Hai_Project\01_Smart_Room_Cloud_Gateway\Smart_Room_Cloud_Gateway_24_rework\build_afe\bootloader && C:\Users\tranl\.espressif\python_env\idf6.0_py3.14_env\Scripts\python.exe C:/esp/v6.0.1/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 bootloader 0x0 D:/01_Hai_Project/01_Smart_Room_Cloud_Gateway/Smart_Room_Cloud_Gateway_24_rework/build_afe/bootloader/bootloader.bin"
+Bootloader binary size 0x5240 bytes. 0x2dc0 bytes (36%) free.
+[5/10] No install step for 'bootloader'
+[6/10] Completed 'bootloader'
+[7/10] Generating esp-idf/esp_system/ld/sections.ld
+[8/10] Linking CXX executable Smart_Room_Cloud_Gateway.elf
+[9/10] Generating binary image from built executable
+esptool v5.3.dev2
+Creating ESP32-S3 image...
+Merged 3 ELF sections.
+Successfully created ESP32-S3 image.
+Generated D:/01_Hai_Project/01_Smart_Room_Cloud_Gateway/Smart_Room_Cloud_Gateway_24_rework/build_afe/Smart_Room_Cloud_Gateway.bin
+[10/10] C:\WINDOWS\system32\cmd.exe /C "cd /D D:\01_Hai_Project\01_Smart_Room_Cloud_Gateway\Smart_Room_Cloud_Gateway_24_rework\build_afe && C:\Users\tranl\.espressif\python_env\idf6.0_py3.14_env\Scripts\python.exe C:/esp/v6.0.1/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 partition --type app D:/01_Hai_Project/01_Smart_Room_Cloud_Gateway/Smart_Room_Cloud_Gateway_24_rework/build_afe/partition_table/partition-table.bin D:/01_Hai_Project/01_Smart_Room_Cloud_Gateway/Smart_Room_Cloud_Gateway_24_rework/build_afe/Smart_Room_Cloud_Gateway.bin"
+Smart_Room_Cloud_Gateway.bin binary size 0x2eb1a0 bytes. Smallest app partition is 0x400000 bytes. 0x114e60 bytes (27%) free.

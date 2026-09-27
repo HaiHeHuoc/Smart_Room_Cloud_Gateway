@@ -46,6 +46,20 @@ typedef void (*audio_manager_stream_frame_callback_t)(
     void *user_context);
 
 /**
+ * @brief Register the independent local-monitor observer used by the AFE soak
+ *        checkpoint.
+ *
+ * This observer is separate from the transaction-owned Xiaozhi uplink stream.
+ * Its callback is invoked by the audio-manager task while its explicitly
+ * requested local-monitor capture mode is active. It must copy/enqueue the
+ * borrowed PCM16 frame and return without blocking. Passing NULL unregisters
+ * the observer; lifecycle remains owned by audio_manager.
+ */
+esp_err_t audio_manager_stream_register_local_monitor_callback(
+    audio_manager_stream_frame_callback_t callback,
+    void *user_context);
+
+/**
  * @brief Register or unregister the single live-frame observer.
  *
  * Passing NULL unregisters the observer. Registration alone never starts I2S
@@ -84,6 +98,19 @@ typedef struct
 
 esp_err_t audio_manager_stream_get_status(
     audio_manager_stream_status_t *status);
+
+/** Bounded counters for the independent local-monitor PCM copy path. */
+typedef struct
+{
+    bool observer_registered;
+    uint64_t frames_published;
+    uint64_t samples_published;
+    uint64_t frames_dropped_no_callback;
+} audio_manager_local_monitor_status_t;
+
+/** Copy local-monitor publication counters without exposing I2S resources. */
+esp_err_t audio_manager_stream_get_local_monitor_status(
+    audio_manager_local_monitor_status_t *status);
 
 #ifdef __cplusplus
 }

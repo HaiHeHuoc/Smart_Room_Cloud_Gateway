@@ -365,6 +365,26 @@ esp_err_t audio_manager_start_recording(void);
 esp_err_t audio_manager_stop_recording(void);
 
 /**
+ * @brief Start the optional continuous local-monitor capture checkpoint.
+ *
+ * The audio-manager task remains the sole I2S RX/DMA owner and publishes only
+ * borrowed PCM16 copies through audio_manager_stream's distinct local-monitor
+ * observer. It has no WakeNet dependency: afe_pipeline may register as that
+ * observer while this manager retains all I2S ownership. This primitive does
+ * not arbitrate or hand off to PTT, Xiaozhi, playback, or UI; callers must
+ * stop it before requesting those later lifecycle behaviors. Task context only.
+ */
+esp_err_t audio_manager_start_local_monitor(void);
+
+/**
+ * @brief Request bounded cooperative stop of continuous local-monitor capture.
+ *
+ * The manager observes the request between RX blocks; this function never
+ * stops/reconfigures I2S from the caller context. Task context only.
+ */
+esp_err_t audio_manager_stop_local_monitor(void);
+
+/**
  * @brief Queue playback of the most recent valid processed recording.
  *
  * The manager must be started and IDLE and recorded_audio_available must be

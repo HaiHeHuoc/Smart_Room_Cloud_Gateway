@@ -1,0 +1,29 @@
+Command: ninja all
+CMake Warning at C:/esp/v6.0.1/esp-idf/tools/cmake/build.cmake:695 (message):
+Call Stack (most recent call first):
+  C:/esp/v6.0.1/esp-idf/tools/cmake/project.cmake:773 (idf_build_process)
+  CMakeLists.txt:22 (project)
+
+
+Configuration Report               
++---------------------------------+
+|  Parser Version: 1              |
+|  Verbosity: default             |
+|  Defaults policy: sdkconfig     |
+|  Status: Finished successfully  |
+|                                 |
++---------------------------------+
+CMake Warning at C:/esp/v6.0.1/esp-idf/tools/cmake/project.cmake:786 (message):
+  Missing kconfig option.  Re-run the build process...
+Call Stack (most recent call first):
+  CMakeLists.txt:22 (project)
+
+
+Configuration Report               
++---------------------------------+
+|  Parser Version: 1              |
+|  Verbosity: default             |
+|  Defaults policy: sdkconfig     |
+|  Status: Finished successfully  |
+|                                 |
++---------------------------------+

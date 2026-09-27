@@ -1,0 +1,6 @@
+"-specs=D:/01_Hai_Project/01_Smart_Room_Cloud_Gateway/Smart_Room_Cloud_Gateway_24_rework/build_afe/bootloader/specs/picolibc.specs"
+-mlongcalls
+-fno-builtin-memcpy
+-fno-builtin-memset
+-fno-builtin-bzero
+-fno-rtti

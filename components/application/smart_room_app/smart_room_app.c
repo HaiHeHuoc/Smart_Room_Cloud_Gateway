@@ -67,6 +67,7 @@
 
 /* Audio manager ------------------------------------------------------------ */
 #include "audio_manager.h"
+#include "afe_pipeline.h"
 #include "voice_assistant.h"
 
 /* Light manager ------------------------------------------------------------ */
@@ -1628,6 +1629,18 @@ static esp_err_t app_start_audio_manager_after_network_online(void)
     APP_LOGI(
         TAG, AUDIO_MANAGER_TASK_STARTED_M_5C489DBF,
         "Audio manager task started; mode is reported by audio_manager");
+
+#if CONFIG_AFE_PIPELINE_ENABLE
+    audio_ret = afe_pipeline_start();
+    if (audio_ret != ESP_OK)
+    {
+        APP_LOGE(
+            TAG, FAILED_TO_START_AFE_PIPELINE_8B5058A8,
+            "Failed to start AFE WakeNet/VAD pipeline: %s",
+            esp_err_to_name(audio_ret));
+        return audio_ret;
+    }
+#endif
 
     return ESP_OK;
 }

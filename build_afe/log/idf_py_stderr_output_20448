@@ -1,0 +1,29 @@
+Command: cmake -G Ninja -B D:\01_Hai_Project\01_Smart_Room_Cloud_Gateway\Smart_Room_Cloud_Gateway_24_rework\build_afe -DPYTHON_DEPS_CHECKED=1 -DPYTHON=C:\Users\tranl\.espressif\python_env\idf6.0_py3.14_env\Scripts\python.exe -DESP_PLATFORM=1 -DCCACHE_ENABLE=True D:\01_Hai_Project\01_Smart_Room_Cloud_Gateway\Smart_Room_Cloud_Gateway_24_rework
+CMake Warning at C:/esp/v6.0.1/esp-idf/tools/cmake/build.cmake:695 (message):
+Call Stack (most recent call first):
+  C:/esp/v6.0.1/esp-idf/tools/cmake/project.cmake:773 (idf_build_process)
+  CMakeLists.txt:22 (project)
+
+
+Configuration Report               
++---------------------------------+
+|  Parser Version: 1              |
+|  Verbosity: default             |
+|  Defaults policy: sdkconfig     |
+|  Status: Finished successfully  |
+|                                 |
++---------------------------------+
+CMake Warning at C:/esp/v6.0.1/esp-idf/tools/cmake/project.cmake:786 (message):
+  Missing kconfig option.  Re-run the build process...
+Call Stack (most recent call first):
+  CMakeLists.txt:22 (project)
+
+
+Configuration Report               
++---------------------------------+
+|  Parser Version: 1              |
+|  Verbosity: default             |
+|  Defaults policy: sdkconfig     |
+|  Status: Finished successfully  |
+|                                 |
++---------------------------------+

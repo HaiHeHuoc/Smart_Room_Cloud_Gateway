@@ -1,0 +1,8 @@
+source "C:/esp/v6.0.1/esp-idf/components/app_update/Kconfig.projbuild"
+source "C:/esp/v6.0.1/esp-idf/components/bootloader/Kconfig.projbuild"
+source "C:/esp/v6.0.1/esp-idf/components/esp_app_format/Kconfig.projbuild"
+source "C:/esp/v6.0.1/esp-idf/components/esp_rom/Kconfig.projbuild"
+source "C:/esp/v6.0.1/esp-idf/components/esptool_py/Kconfig.projbuild"
+source "C:/esp/v6.0.1/esp-idf/components/partition_table/Kconfig.projbuild"
+source "D:/01_Hai_Project/01_Smart_Room_Cloud_Gateway/Smart_Room_Cloud_Gateway_24_rework/main/Kconfig.projbuild"
+source "D:/01_Hai_Project/01_Smart_Room_Cloud_Gateway/Smart_Room_Cloud_Gateway_24_rework/managed_components/espressif__esp-sr/Kconfig.projbuild"

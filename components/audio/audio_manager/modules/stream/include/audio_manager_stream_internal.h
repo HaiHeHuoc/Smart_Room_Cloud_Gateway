@@ -10,6 +10,11 @@ esp_err_t audio_manager_stream_publish_internal(
     const int16_t *samples,
     size_t sample_count);
 
+/** Publish one borrowed PCM16 frame from manager-owned local-monitor capture. */
+esp_err_t audio_manager_stream_publish_local_monitor_internal(
+    const int16_t *samples,
+    size_t sample_count);
+
 /** Reset/enable the raw-slot conversion tap for one armed live stream. */
 void audio_manager_stream_tap_arm(void);
 

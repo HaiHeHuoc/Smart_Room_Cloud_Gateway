@@ -10,6 +10,21 @@ static portMUX_TYPE s_stream_lock = portMUX_INITIALIZER_UNLOCKED;
 static audio_manager_stream_frame_callback_t s_stream_callback = NULL;
 static void *s_stream_callback_context = NULL;
 static audio_manager_stream_status_t s_stream_status = {0};
+static audio_manager_stream_frame_callback_t s_local_monitor_callback = NULL;
+static void *s_local_monitor_callback_context = NULL;
+static audio_manager_local_monitor_status_t s_local_monitor_status = {0};
+
+esp_err_t audio_manager_stream_register_local_monitor_callback(
+    audio_manager_stream_frame_callback_t callback,
+    void *user_context)
+{
+    portENTER_CRITICAL(&s_stream_lock);
+    s_local_monitor_callback = callback;
+    s_local_monitor_callback_context = user_context;
+    s_local_monitor_status.observer_registered = (callback != NULL);
+    portEXIT_CRITICAL(&s_stream_lock);
+    return ESP_OK;
+}
 
 esp_err_t audio_manager_stream_register_callback(
     audio_manager_stream_frame_callback_t callback,
@@ -81,6 +96,20 @@ esp_err_t audio_manager_stream_get_status(
     return ESP_OK;
 }
 
+esp_err_t audio_manager_stream_get_local_monitor_status(
+    audio_manager_local_monitor_status_t *status)
+{
+    if (status == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    portENTER_CRITICAL(&s_stream_lock);
+    *status = s_local_monitor_status;
+    portEXIT_CRITICAL(&s_stream_lock);
+    return ESP_OK;
+}
+
 esp_err_t audio_manager_stream_publish_internal(
     const int16_t *samples,
     size_t sample_count)
@@ -118,6 +147,46 @@ esp_err_t audio_manager_stream_publish_internal(
     if (callback == NULL)
     {
         ++s_stream_status.frames_dropped_no_callback;
+    }
+    portEXIT_CRITICAL(&s_stream_lock);
+
+    if (callback != NULL)
+    {
+        callback(&frame, callback_context);
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t audio_manager_stream_publish_local_monitor_internal(
+    const int16_t *samples,
+    size_t sample_count)
+{
+    if ((samples == NULL) ||
+        (sample_count == 0U) ||
+        (sample_count > AUDIO_MANAGER_STREAM_FRAME_SAMPLES))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    audio_manager_stream_frame_callback_t callback = NULL;
+    void *callback_context = NULL;
+    audio_manager_stream_frame_t frame = {0};
+
+    portENTER_CRITICAL(&s_stream_lock);
+    frame.samples = samples;
+    frame.sample_count = sample_count;
+    frame.sample_rate_hz = AUDIO_MANAGER_STREAM_SAMPLE_RATE_HZ;
+    frame.channels = AUDIO_MANAGER_STREAM_CHANNELS;
+    frame.stream_generation = 0U;
+    frame.frame_sequence = s_local_monitor_status.frames_published + 1U;
+    callback = s_local_monitor_callback;
+    callback_context = s_local_monitor_callback_context;
+    ++s_local_monitor_status.frames_published;
+    s_local_monitor_status.samples_published += sample_count;
+    if (callback == NULL)
+    {
+        ++s_local_monitor_status.frames_dropped_no_callback;
     }
     portEXIT_CRITICAL(&s_stream_lock);
 

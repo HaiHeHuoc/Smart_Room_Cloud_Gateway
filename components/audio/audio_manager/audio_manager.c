@@ -130,6 +130,7 @@ typedef enum
     AUDIO_RECORD_CONTROL_GOLDEN_FIXED = 0,
     AUDIO_RECORD_CONTROL_PRODUCTION_FIXED,
     AUDIO_RECORD_CONTROL_MANUAL,
+    AUDIO_RECORD_CONTROL_LOCAL_MONITOR,
 } audio_record_control_t;
 
 typedef enum
@@ -260,6 +261,7 @@ typedef enum
     AUDIO_MANAGER_COMMAND_PLAY_RECORDED,
     AUDIO_MANAGER_COMMAND_PLAY_WAV,
     AUDIO_MANAGER_COMMAND_PLAY_PCM16_STREAM,
+    AUDIO_MANAGER_COMMAND_START_LOCAL_MONITOR,
     AUDIO_MANAGER_COMMAND_SHUTDOWN,
 } audio_manager_command_kind_t;
 
@@ -280,6 +282,7 @@ typedef enum
     AUDIO_MANAGER_OPERATION_RECORDED_PLAYBACK,
     AUDIO_MANAGER_OPERATION_WAV,
     AUDIO_MANAGER_OPERATION_PCM16_STREAM,
+    AUDIO_MANAGER_OPERATION_LOCAL_MONITOR,
     AUDIO_MANAGER_OPERATION_STABILITY,
 } audio_manager_operation_t;
 
@@ -289,6 +292,7 @@ typedef struct
     bool shutdown_requested;
     bool cancel_requested;
     bool record_stop_requested;
+    bool local_monitor_stop_requested;
     bool pause_requested;
     bool resume_requested;
     bool restart_requested;
@@ -353,6 +357,7 @@ static audio_manager_runtime_t s_runtime = {0};
 /* Small I2S staging stays in Internal/DMA RAM; long history stays in PSRAM. */
 DMA_ATTR static int32_t s_rx_block[
     AUDIO_MANAGER_FRAMES_PER_BLOCK * AUDIO_MANAGER_SLOT_COUNT];
+static int16_t s_local_monitor_block[AUDIO_MANAGER_FRAMES_PER_BLOCK];
 DMA_ATTR static int16_t s_tx_block[
     AUDIO_MANAGER_FRAMES_PER_BLOCK * AUDIO_MANAGER_SLOT_COUNT];
 /* Mono ingress is copied out of the PSRAM ring before it is mapped into the
@@ -453,6 +458,8 @@ static esp_err_t record_audio(
     audio_record_control_t control,
     size_t *samples_recorded,
     audio_record_stop_reason_t *stop_reason);
+static esp_err_t audio_manager_run_local_monitor(void);
+static void audio_manager_handle_local_monitor_command(void);
 
 static esp_err_t start_i2s_tx(void);
 static esp_err_t stop_i2s_tx(void);
@@ -1138,11 +1145,13 @@ static audio_record_stop_reason_t audio_manager_record_stop_reason(
     bool shutdown_requested;
     bool cancel_requested;
     bool record_stop_requested;
+    bool local_monitor_stop_requested;
 
     portENTER_CRITICAL(&s_control_lock);
     shutdown_requested = s_control.shutdown_requested;
     cancel_requested = s_control.cancel_requested;
     record_stop_requested = s_control.record_stop_requested;
+    local_monitor_stop_requested = s_control.local_monitor_stop_requested;
     portEXIT_CRITICAL(&s_control_lock);
 
     if (shutdown_requested || cancel_requested)
@@ -1151,6 +1160,12 @@ static audio_record_stop_reason_t audio_manager_record_stop_reason(
     }
 
     if ((control == AUDIO_RECORD_CONTROL_MANUAL) && record_stop_requested)
+    {
+        return AUDIO_RECORD_STOP_MANUAL;
+    }
+
+    if ((control == AUDIO_RECORD_CONTROL_LOCAL_MONITOR) &&
+        local_monitor_stop_requested)
     {
         return AUDIO_RECORD_STOP_MANUAL;
     }
@@ -1176,6 +1191,7 @@ static void audio_manager_finish_operation(void)
     s_control.operation = AUDIO_MANAGER_OPERATION_NONE;
     s_control.cancel_requested = false;
     s_control.record_stop_requested = false;
+    s_control.local_monitor_stop_requested = false;
     s_control.pause_requested = false;
     s_control.resume_requested = false;
     s_control.restart_requested = false;
@@ -1191,6 +1207,7 @@ static void audio_manager_suspend_operation(void)
     s_control.operation = AUDIO_MANAGER_OPERATION_NONE;
     s_control.cancel_requested = false;
     s_control.record_stop_requested = false;
+    s_control.local_monitor_stop_requested = false;
     s_control.pause_requested = false;
     /* Keep a resume requested while PAUSING until the released retained source
      * is actually eligible for queueing. Clearing it here used to make a
@@ -1841,6 +1858,102 @@ static esp_err_t record_audio(
 
     *samples_recorded = captured;
     return ESP_OK;
+}
+
+/* Continuous local monitoring has no retained PCM24/DSP lifecycle. It only
+ * copies the selected microphone slot to a bounded observer while this manager
+ * task remains the sole I2S RX owner. */
+static int16_t audio_manager_pcm24_to_pcm16(int32_t pcm24)
+{
+    int32_t pcm16 = pcm24 / (int32_t)AUDIO_DSP_PCM24_SCALE_FACTOR;
+    if (pcm16 > INT16_MAX) {
+        pcm16 = INT16_MAX;
+    } else if (pcm16 < INT16_MIN) {
+        pcm16 = INT16_MIN;
+    }
+    return (int16_t)pcm16;
+}
+
+static esp_err_t audio_manager_run_local_monitor(void)
+{
+    microphone_slot_t selected_slot = MICROPHONE_SLOT_LEFT;
+    audio_record_stop_reason_t stop_reason = AUDIO_RECORD_STOP_NONE;
+
+    esp_err_t result = hold_amplifier_data_low();
+    if (result != ESP_OK) {
+        return result;
+    }
+    result = start_i2s_rx();
+    if (result != ESP_OK) {
+        return result;
+    }
+
+    result = discard_microphone_startup(
+        AUDIO_RECORD_CONTROL_LOCAL_MONITOR, &stop_reason);
+    if ((result == ESP_OK) && (stop_reason == AUDIO_RECORD_STOP_NONE)) {
+        result = detect_microphone_slot(
+            &selected_slot, AUDIO_RECORD_CONTROL_LOCAL_MONITOR, &stop_reason);
+    }
+
+    const size_t selected_slot_index =
+        (selected_slot == MICROPHONE_SLOT_RIGHT) ? 1U : 0U;
+    while ((result == ESP_OK) && (stop_reason == AUDIO_RECORD_STOP_NONE)) {
+        stop_reason = audio_manager_record_stop_reason(
+            AUDIO_RECORD_CONTROL_LOCAL_MONITOR);
+        if (stop_reason != AUDIO_RECORD_STOP_NONE) {
+            break;
+        }
+
+        size_t frames_read = 0U;
+        result = read_rx_block(&frames_read);
+        if (result != ESP_OK) {
+            break;
+        }
+        if (frames_read > AUDIO_MANAGER_FRAMES_PER_BLOCK) {
+            result = ESP_ERR_INVALID_SIZE;
+            break;
+        }
+
+        for (size_t frame = 0U; frame < frames_read; ++frame) {
+            const size_t source_index =
+                (frame * AUDIO_MANAGER_SLOT_COUNT) + selected_slot_index;
+            s_local_monitor_block[frame] = audio_manager_pcm24_to_pcm16(
+                audio_manager_stream_convert_raw_slot_to_pcm24(
+                    s_rx_block[source_index]));
+        }
+        if (frames_read > 0U) {
+            result = audio_manager_stream_publish_local_monitor_internal(
+                s_local_monitor_block, frames_read);
+        }
+    }
+
+    const esp_err_t stop_result = stop_i2s_rx();
+    return (result == ESP_OK) ? stop_result : result;
+}
+
+static void audio_manager_handle_local_monitor_command(void)
+{
+    APP_LOGI(TAG, LOCAL_MONITOR_CAPTURE_START_31E91A4A,
+             "========== LOCAL MONITOR CAPTURE ==========");
+
+    const esp_err_t result = audio_manager_run_local_monitor();
+    if (audio_manager_take_status_mutex("storing local monitor result")) {
+        s_runtime.status.last_error = result;
+        s_runtime.status.state =
+            (result == ESP_OK) ? AUDIO_MANAGER_STATE_IDLE : AUDIO_MANAGER_STATE_ERROR;
+        audio_manager_refresh_diagnostics_locked();
+        xSemaphoreGive(s_runtime.status_mutex);
+        audio_manager_notify_status_changed();
+    }
+    audio_manager_finish_operation();
+
+    if (result == ESP_OK) {
+        APP_LOGI(TAG, LOCAL_MONITOR_CAPTURE_STOP_858B1A57,
+                 "Local monitor capture stopped");
+    } else {
+        APP_LOGE(TAG, LOCAL_MONITOR_CAPTURE_FAILED_4EC3F7DA,
+                 "Local monitor capture failed: %s", esp_err_to_name(result));
+    }
 }
 
 /* Static Functions: TX / MAX98357A ---------------------------------------- */
@@ -4781,6 +4894,10 @@ static void audio_manager_task(void *argument)
                         command.stream_generation);
                     break;
 
+                case AUDIO_MANAGER_COMMAND_START_LOCAL_MONITOR:
+                    audio_manager_handle_local_monitor_command();
+                    break;
+
                 case AUDIO_MANAGER_COMMAND_SHUTDOWN:
                     task_done = true;
                     break;
@@ -5243,6 +5360,41 @@ esp_err_t audio_manager_stop_recording(void)
         (s_control.operation == AUDIO_MANAGER_OPERATION_RECORD_MANUAL))
     {
         s_control.record_stop_requested = true;
+        requested = true;
+    }
+    portEXIT_CRITICAL(&s_control_lock);
+
+    xSemaphoreGive(s_runtime.status_mutex);
+    return requested ? ESP_OK : ESP_ERR_INVALID_STATE;
+}
+
+esp_err_t audio_manager_start_local_monitor(void)
+{
+    return audio_manager_queue_simple_operation(
+        AUDIO_MANAGER_COMMAND_START_LOCAL_MONITOR,
+        AUDIO_MANAGER_OPERATION_LOCAL_MONITOR,
+        false,
+        "queueing local monitor capture");
+}
+
+esp_err_t audio_manager_stop_local_monitor(void)
+{
+    if (!s_runtime.initialized || (s_runtime.status_mutex == NULL))
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!audio_manager_take_status_mutex("stopping local monitor capture"))
+    {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    bool requested = false;
+    portENTER_CRITICAL(&s_control_lock);
+    if (s_control.task_running &&
+        !s_control.shutdown_requested &&
+        (s_control.operation == AUDIO_MANAGER_OPERATION_LOCAL_MONITOR))
+    {
+        s_control.local_monitor_stop_requested = true;
         requested = true;
     }
     portEXIT_CRITICAL(&s_control_lock);

@@ -1,0 +1,4 @@
+# Build-only configuration for Phase-24.2.2 AFE WakeNet + VAD proof.
+# The normal sdkconfig.defaults deliberately keeps this feature disabled.
+CONFIG_SR_WN_WN9_HIESP=y
+CONFIG_AFE_PIPELINE_ENABLE=y

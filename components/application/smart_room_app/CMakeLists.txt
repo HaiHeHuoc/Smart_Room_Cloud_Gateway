@@ -4,6 +4,7 @@ idf_component_register(
     INCLUDE_DIRS
         "include"
     PRIV_REQUIRES
+        afe_pipeline
         app_gui
         app_log
         app_network_coordinator
