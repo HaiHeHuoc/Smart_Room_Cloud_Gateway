@@ -1,0 +1,3 @@
+dependencies:
+  # WakeNet owner is deliberately separate from Xiaozhi/PTT orchestration.
+  espressif/esp-sr: "2.4.7"

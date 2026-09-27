@@ -2,3 +2,7 @@
 nvs,        data, nvs,     0x9000,   0x6000,
 phy_init,   data, phy,     0xF000,   0x1000,
 factory,    app,  factory, 0x10000,  4M,
+# ESP-SR memory-maps the selected stock model from this data partition. The
+# Phase 24.1 gate stays off by default, so no model is packed or used at
+# runtime until the owner-preserving PCM consumer exists.
+model,      data, spiffs,  0x410000, 1M,

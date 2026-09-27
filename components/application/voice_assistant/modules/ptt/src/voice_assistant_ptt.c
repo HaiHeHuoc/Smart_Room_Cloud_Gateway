@@ -35,6 +35,7 @@ typedef enum {
 
 typedef struct {
     ptt_command_type_t type;
+    voice_assistant_ptt_trigger_t trigger;
     uint32_t generation;
 } ptt_command_t;
 
@@ -49,7 +50,13 @@ static bool s_command_pending = false;
 /* A physical RELEASE must not be discarded just because its matching PRESS is
  * still waiting in the policy queue. The release is queued after that press
  * and prevents a fast tap from becoming an indefinitely authorized capture. */
-static bool s_release_queued = false;
+static voice_assistant_ptt_trigger_t s_release_queued_trigger =
+    VOICE_ASSISTANT_PTT_TRIGGER_NONE;
+/* Cancellation is permitted behind a still-queued PRESS. This is required for
+ * a fail-closed Wake-to-voice bridge: if its bounded event queue overflows,
+ * the policy must be able to revoke the intent before that press authorizes
+ * microphone capture. */
+static bool s_cancel_queued = false;
 
 static voice_assistant_ptt_status_t s_status = {
     .state = VOICE_ASSISTANT_PTT_UNINITIALIZED,
@@ -103,6 +110,10 @@ static void ptt_set_status(
     s_status.pressed = pressed;
     s_status.capture_authorized = capture_authorized;
     s_status.session_generation = session_generation;
+    if ((state == VOICE_ASSISTANT_PTT_IDLE) ||
+        (state == VOICE_ASSISTANT_PTT_UNINITIALIZED)) {
+        s_status.trigger = VOICE_ASSISTANT_PTT_TRIGGER_NONE;
+    }
     if (state == VOICE_ASSISTANT_PTT_AUTHORIZED) {
         s_status.authorized_at_us = esp_timer_get_time();
     }
@@ -122,17 +133,24 @@ static void ptt_set_status(
     ptt_publish();
 }
 
-static void ptt_finish_command(ptt_command_type_t type)
+static void ptt_finish_command(const ptt_command_t *command)
 {
-    if (!ptt_take_lock()) {
+    if ((command == NULL) || !ptt_take_lock()) {
         return;
     }
-    if (type == PTT_COMMAND_RELEASE) {
-        s_release_queued = false;
+    if ((command->type == PTT_COMMAND_RELEASE) &&
+        (s_release_queued_trigger == command->trigger)) {
+        s_release_queued_trigger = VOICE_ASSISTANT_PTT_TRIGGER_NONE;
     }
-    /* A matching RELEASE may already be queued behind the command that just
-     * completed. Keep producer serialization active until it is consumed. */
-    s_command_pending = s_release_queued;
+    if (command->type == PTT_COMMAND_CANCEL) {
+        s_cancel_queued = false;
+    }
+    /* A matching RELEASE or a fail-closed CANCEL may already be queued behind
+     * the command that just completed. Keep producer serialization active
+     * until it is consumed. */
+    s_command_pending =
+        (s_release_queued_trigger != VOICE_ASSISTANT_PTT_TRIGGER_NONE) ||
+        s_cancel_queued;
     xSemaphoreGive(s_lock);
 }
 
@@ -141,7 +159,20 @@ static bool ptt_release_is_queued(void)
     bool queued = false;
 
     if (ptt_take_lock()) {
-        queued = s_release_queued;
+        queued = (s_release_queued_trigger != VOICE_ASSISTANT_PTT_TRIGGER_NONE) &&
+                 (s_release_queued_trigger == s_status.trigger);
+        xSemaphoreGive(s_lock);
+    }
+
+    return queued;
+}
+
+static bool ptt_cancel_is_queued(void)
+{
+    bool queued = false;
+
+    if (ptt_take_lock()) {
+        queued = s_cancel_queued;
         xSemaphoreGive(s_lock);
     }
 
@@ -372,11 +403,14 @@ static void ptt_handle_press(const ptt_command_t *command)
         return;
     }
 
-    /* The physical button was released before this queued PRESS reached the
-     * policy task. Its FIFO RELEASE will follow, so never briefly authorize
-     * microphone capture for a completed tap. */
-    if (ptt_release_is_queued()) {
-        ptt_set_status(VOICE_ASSISTANT_PTT_RELEASED,
+    /* A FIFO RELEASE or fail-closed CANCEL may already be queued behind this
+     * PRESS. Never briefly authorize capture for an intent that has already
+     * ended, including a Wake-to-voice bridge overflow. */
+    const bool cancel_queued = ptt_cancel_is_queued();
+    if (ptt_release_is_queued() || cancel_queued) {
+        ptt_set_status(cancel_queued
+                           ? VOICE_ASSISTANT_PTT_CANCEL_PENDING
+                           : VOICE_ASSISTANT_PTT_RELEASED,
                        false,
                        false,
                        voice.session_generation,
@@ -511,7 +545,7 @@ static void ptt_handle_press(const ptt_command_t *command)
     APP_LOGI(TAG, PRESS_ARMED_GENERATION_U_C92011BD, "press armed generation=%u", (unsigned)command->generation);
 }
 
-static void ptt_handle_release(void)
+static void ptt_handle_release(voice_assistant_ptt_trigger_t trigger)
 {
     voice_assistant_ptt_status_t current = {0};
     if (!ptt_take_lock()) {
@@ -519,6 +553,12 @@ static void ptt_handle_release(void)
     }
     current = s_status;
     xSemaphoreGive(s_lock);
+
+    /* GPIO38 and the offline wake trigger are independent sources. A button
+     * release received during a hands-free turn must not stop that turn. */
+    if (current.trigger != trigger) {
+        return;
+    }
 
     switch (current.state) {
         case VOICE_ASSISTANT_PTT_ARMING_SESSION:
@@ -649,7 +689,7 @@ static void ptt_task(void *argument)
                     ptt_handle_press(&command);
                     break;
                 case PTT_COMMAND_RELEASE:
-                    ptt_handle_release();
+                    ptt_handle_release(command.trigger);
                     break;
                 case PTT_COMMAND_CANCEL:
                     ptt_handle_cancel();
@@ -662,19 +702,24 @@ static void ptt_task(void *argument)
                                    ESP_ERR_INVALID_ARG);
                     break;
             }
-            ptt_finish_command(command.type);
+            ptt_finish_command(&command);
         }
         ptt_reconcile_voice_state();
     }
 }
 
-static esp_err_t ptt_queue_command(ptt_command_type_t type)
+static esp_err_t ptt_queue_command(ptt_command_type_t type,
+                                   voice_assistant_ptt_trigger_t trigger)
 {
     if ((s_lock == NULL) || (s_queue == NULL) || (s_task == NULL)) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    ptt_command_t command = {.type = type, .generation = 0U};
+    ptt_command_t command = {
+        .type = type,
+        .trigger = trigger,
+        .generation = 0U,
+    };
     if (!ptt_take_lock()) {
         return ESP_ERR_TIMEOUT;
     }
@@ -682,19 +727,30 @@ static esp_err_t ptt_queue_command(ptt_command_type_t type)
     const bool command_was_pending = s_command_pending;
 
     if (s_command_pending) {
-        if (type != PTT_COMMAND_RELEASE) {
+        if (type == PTT_COMMAND_CANCEL) {
+            if (s_cancel_queued) {
+                xSemaphoreGive(s_lock);
+                return ESP_OK;
+            }
+            /* Allow one terminal cancellation behind a queued PRESS. */
+        } else if ((type != PTT_COMMAND_RELEASE) ||
+                   (trigger != s_status.trigger)) {
             xSemaphoreGive(s_lock);
             return ESP_ERR_INVALID_STATE;
-        }
-
-        if (s_release_queued || !s_status.pressed) {
-            /* Repeated GPIO samples of one released level are idempotent. */
+        } else if ((s_release_queued_trigger != VOICE_ASSISTANT_PTT_TRIGGER_NONE) ||
+                   !s_status.pressed) {
+            /* Repeated release samples of one source are idempotent. */
             xSemaphoreGive(s_lock);
             return ESP_OK;
         }
     }
 
     if (type == PTT_COMMAND_PRESS) {
+        if ((trigger != VOICE_ASSISTANT_PTT_TRIGGER_GPIO) &&
+            (trigger != VOICE_ASSISTANT_PTT_TRIGGER_WAKE_WORD)) {
+            xSemaphoreGive(s_lock);
+            return ESP_ERR_INVALID_ARG;
+        }
         if ((s_status.state != VOICE_ASSISTANT_PTT_IDLE) &&
             (s_status.state != VOICE_ASSISTANT_PTT_RELEASED) &&
             (s_status.state != VOICE_ASSISTANT_PTT_ERROR)) {
@@ -706,20 +762,30 @@ static esp_err_t ptt_queue_command(ptt_command_type_t type)
             s_status.ptt_generation = 1U;
         }
         command.generation = s_status.ptt_generation;
+        s_status.trigger = trigger;
         s_status.pressed = true;
         s_status.capture_authorized = false;
         s_status.pressed_at_us = esp_timer_get_time();
         s_status.authorized_at_us = 0;
     } else {
-        if ((type == PTT_COMMAND_RELEASE) && !s_status.pressed) {
-            xSemaphoreGive(s_lock);
-            return ESP_OK;
+        if (type == PTT_COMMAND_RELEASE) {
+            if (!s_status.pressed) {
+                xSemaphoreGive(s_lock);
+                return ESP_OK;
+            }
+            if (trigger != s_status.trigger) {
+                xSemaphoreGive(s_lock);
+                return (trigger == VOICE_ASSISTANT_PTT_TRIGGER_GPIO)
+                    ? ESP_OK : ESP_ERR_INVALID_STATE;
+            }
         }
         command.generation = s_status.ptt_generation;
     }
 
     if (type == PTT_COMMAND_RELEASE) {
-        s_release_queued = true;
+        s_release_queued_trigger = trigger;
+    } else if (type == PTT_COMMAND_CANCEL) {
+        s_cancel_queued = true;
     }
     s_command_pending = true;
     xSemaphoreGive(s_lock);
@@ -731,7 +797,9 @@ static esp_err_t ptt_queue_command(ptt_command_type_t type)
                 s_status.pressed = false;
             }
             if (type == PTT_COMMAND_RELEASE) {
-                s_release_queued = false;
+                s_release_queued_trigger = VOICE_ASSISTANT_PTT_TRIGGER_NONE;
+            } else if (type == PTT_COMMAND_CANCEL) {
+                s_cancel_queued = false;
             }
             xSemaphoreGive(s_lock);
         }
@@ -757,9 +825,11 @@ esp_err_t voice_assistant_ptt_init(void)
     }
     memset(&s_status, 0, sizeof(s_status));
     s_status.state = VOICE_ASSISTANT_PTT_IDLE;
+    s_status.trigger = VOICE_ASSISTANT_PTT_TRIGGER_NONE;
     s_status.last_error = ESP_OK;
     s_command_pending = false;
-    s_release_queued = false;
+    s_release_queued_trigger = VOICE_ASSISTANT_PTT_TRIGGER_NONE;
+    s_cancel_queued = false;
     APP_LOGI(TAG, INITIALIZED_WITHOUT_GPIO_OWN_5DB50327, "initialized without GPIO ownership");
     return ESP_OK;
 }
@@ -801,17 +871,32 @@ esp_err_t voice_assistant_ptt_start(void)
 
 esp_err_t voice_assistant_ptt_press(void)
 {
-    return ptt_queue_command(PTT_COMMAND_PRESS);
+    return ptt_queue_command(PTT_COMMAND_PRESS,
+                             VOICE_ASSISTANT_PTT_TRIGGER_GPIO);
 }
 
 esp_err_t voice_assistant_ptt_release(void)
 {
-    return ptt_queue_command(PTT_COMMAND_RELEASE);
+    return ptt_queue_command(PTT_COMMAND_RELEASE,
+                             VOICE_ASSISTANT_PTT_TRIGGER_GPIO);
+}
+
+esp_err_t voice_assistant_ptt_start_handsfree(void)
+{
+    return ptt_queue_command(PTT_COMMAND_PRESS,
+                             VOICE_ASSISTANT_PTT_TRIGGER_WAKE_WORD);
+}
+
+esp_err_t voice_assistant_ptt_finish_handsfree(void)
+{
+    return ptt_queue_command(PTT_COMMAND_RELEASE,
+                             VOICE_ASSISTANT_PTT_TRIGGER_WAKE_WORD);
 }
 
 esp_err_t voice_assistant_ptt_cancel(void)
 {
-    return ptt_queue_command(PTT_COMMAND_CANCEL);
+    return ptt_queue_command(PTT_COMMAND_CANCEL,
+                             VOICE_ASSISTANT_PTT_TRIGGER_NONE);
 }
 
 esp_err_t voice_assistant_ptt_register_status_callback(

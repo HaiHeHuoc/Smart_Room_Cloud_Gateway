@@ -21,11 +21,19 @@ typedef enum {
     VOICE_ASSISTANT_PTT_ERROR,
 } voice_assistant_ptt_state_t;
 
+/** The user-facing source that owns the current capture intent. */
+typedef enum {
+    VOICE_ASSISTANT_PTT_TRIGGER_NONE = 0,
+    VOICE_ASSISTANT_PTT_TRIGGER_GPIO,
+    VOICE_ASSISTANT_PTT_TRIGGER_WAKE_WORD,
+} voice_assistant_ptt_trigger_t;
+
 typedef struct {
     voice_assistant_ptt_state_t state;
+    voice_assistant_ptt_trigger_t trigger;
     uint32_t ptt_generation;
     uint32_t session_generation;
-    /** Monotonic debounced GPIO press delivery time, or zero before this intent. */
+    /** Monotonic trigger delivery time, or zero before this intent. */
     int64_t pressed_at_us;
     /** Monotonic authorization time, or zero until a real READY path authorizes capture. */
     int64_t authorized_at_us;
@@ -69,6 +77,16 @@ esp_err_t voice_assistant_ptt_press(void);
  * Phase 14-B consumes this policy to start/stop microphone capture.
  */
 esp_err_t voice_assistant_ptt_release(void);
+
+/**
+ * Queue one offline-wake-word voice-turn intent. This follows the same
+ * authorization and resource gates as GPIO38, but GPIO release events cannot
+ * terminate it. The wake-word owner must later call finish or cancel.
+ */
+esp_err_t voice_assistant_ptt_start_handsfree(void);
+
+/** Finish the current wake-word intent; it is ignored for a GPIO-owned turn. */
+esp_err_t voice_assistant_ptt_finish_handsfree(void);
 
 /**
  * Cancel the current PTT intent. If a transport start is still pending,

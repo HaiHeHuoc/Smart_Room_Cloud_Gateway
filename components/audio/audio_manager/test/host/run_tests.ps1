@@ -29,6 +29,17 @@ if ($LASTEXITCODE -ne 0) { throw 'WAV resume-position test build failed' }
 & (Join-Path $outputRoot 'audio_wav_resume_position_tests.exe')
 if ($LASTEXITCODE -ne 0) { throw 'WAV resume-position tests failed' }
 
+& $gcc -std=c11 -Wall -Wextra -Werror `
+    -I (Join-Path $testRoot 'include') `
+    -I (Join-Path $componentRoot 'include') `
+    -I (Join-Path $componentRoot 'modules\stream\include') `
+    (Join-Path $componentRoot 'modules\stream\src\audio_manager_stream.c') `
+    (Join-Path $testRoot 'test_audio_manager_stream_distribution.c') `
+    -o (Join-Path $outputRoot 'audio_manager_stream_distribution_tests.exe')
+if ($LASTEXITCODE -ne 0) { throw 'PCM distribution test build failed' }
+& (Join-Path $outputRoot 'audio_manager_stream_distribution_tests.exe')
+if ($LASTEXITCODE -ne 0) { throw 'PCM distribution tests failed' }
+
 $arbiterSource = Get-Content `
     (Join-Path $componentRoot 'modules\arbitration\src\audio_manager_playback_arbiter.c') `
     -Raw

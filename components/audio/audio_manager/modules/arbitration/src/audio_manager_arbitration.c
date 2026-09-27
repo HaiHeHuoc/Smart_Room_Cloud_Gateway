@@ -35,6 +35,7 @@ static uint8_t audio_manager_default_priority(audio_manager_client_t client)
         case AUDIO_MANAGER_CLIENT_UI:
             return AUDIO_MANAGER_PRIORITY_UI;
         case AUDIO_MANAGER_CLIENT_RECORDER:
+        case AUDIO_MANAGER_CLIENT_WAKE_WORD:
         case AUDIO_MANAGER_CLIENT_TEST:
             return AUDIO_MANAGER_PRIORITY_BACKGROUND;
         case AUDIO_MANAGER_CLIENT_NONE:
@@ -56,6 +57,7 @@ static audio_manager_busy_policy_t audio_manager_default_busy_policy(
         case AUDIO_MANAGER_CLIENT_SYSTEM:
         case AUDIO_MANAGER_CLIENT_XIAOZHI:
         case AUDIO_MANAGER_CLIENT_RECORDER:
+        case AUDIO_MANAGER_CLIENT_WAKE_WORD:
         case AUDIO_MANAGER_CLIENT_TEST:
         case AUDIO_MANAGER_CLIENT_NONE:
         case AUDIO_MANAGER_CLIENT_COUNT:
@@ -73,6 +75,7 @@ static bool audio_manager_default_interruptible(audio_manager_client_t client)
         case AUDIO_MANAGER_CLIENT_XIAOZHI:
         case AUDIO_MANAGER_CLIENT_NOTIFICATION:
         case AUDIO_MANAGER_CLIENT_RECORDER:
+        case AUDIO_MANAGER_CLIENT_WAKE_WORD:
         case AUDIO_MANAGER_CLIENT_UI:
         case AUDIO_MANAGER_CLIENT_TEST:
         case AUDIO_MANAGER_CLIENT_NONE:
@@ -133,6 +136,7 @@ const char *audio_manager_client_to_string(audio_manager_client_t client)
         case AUDIO_MANAGER_CLIENT_NOTIFICATION: return "NOTIFICATION";
         case AUDIO_MANAGER_CLIENT_ALARM: return "ALARM";
         case AUDIO_MANAGER_CLIENT_RECORDER: return "RECORDER";
+        case AUDIO_MANAGER_CLIENT_WAKE_WORD: return "WAKE_WORD";
         case AUDIO_MANAGER_CLIENT_UI: return "UI";
         case AUDIO_MANAGER_CLIENT_TEST: return "TEST";
         case AUDIO_MANAGER_CLIENT_COUNT:

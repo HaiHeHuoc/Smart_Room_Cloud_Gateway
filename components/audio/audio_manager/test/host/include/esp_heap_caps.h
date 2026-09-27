@@ -5,6 +5,7 @@
 
 #define MALLOC_CAP_INTERNAL 0x01U
 #define MALLOC_CAP_8BIT     0x02U
+#define MALLOC_CAP_SPIRAM   0x04U
 
 static inline void *heap_caps_malloc(size_t size, unsigned capabilities)
 {

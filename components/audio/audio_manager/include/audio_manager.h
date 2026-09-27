@@ -365,6 +365,18 @@ esp_err_t audio_manager_start_recording(void);
 esp_err_t audio_manager_stop_recording(void);
 
 /**
+ * @brief Begin or stop the manager-owned continuous local PCM monitor.
+ *
+ * This low-level capture mode exists only for a single local consumer that
+ * has registered `audio_manager_stream_local_monitor_*`.  It never exposes
+ * I2S or DMA ownership, retains no recording, and performs no DSP.  The
+ * manager task remains the only RX owner.  Calls are asynchronous; observe
+ * `capture_i2s_active` for the applied boundary.  Task context only.
+ */
+esp_err_t audio_manager_start_local_monitor_capture(void);
+esp_err_t audio_manager_stop_local_monitor_capture(void);
+
+/**
  * @brief Queue playback of the most recent valid processed recording.
  *
  * The manager must be started and IDLE and recorded_audio_available must be

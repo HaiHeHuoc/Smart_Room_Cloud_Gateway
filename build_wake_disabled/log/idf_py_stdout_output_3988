@@ -1,0 +1,40 @@
+Command: ninja all
+[1/2384] Generating project_elf_src_esp32s3.c
+[2/2384] Preprocessing linker script C:/esp/v6.0.1/esp-idf/components/esp_system/ld/esp32s3/memory.ld.in -> D:/01_Hai_Project/01_Smart_Room_Cloud_Gateway/Smart_Room_Cloud_Gateway/build_wake_disabled/esp-idf/esp_system/ld/memory.ld
+[3/2384] Preprocessing linker script C:/esp/v6.0.1/esp-idf/components/esp_system/ld/esp32s3/sections.ld.in -> D:/01_Hai_Project/01_Smart_Room_Cloud_Gateway/Smart_Room_Cloud_Gateway/build_wake_disabled/esp-idf/esp_system/ld/sections.ld.in
+[4/2384] Move and Pack models...
+FAILED: srmodels/srmodels.bin D:/01_Hai_Project/01_Smart_Room_Cloud_Gateway/Smart_Room_Cloud_Gateway/build_wake_disabled/srmodels/srmodels.bin 
+C:\WINDOWS\system32\cmd.exe /C "cd /D D:\01_Hai_Project\01_Smart_Room_Cloud_Gateway\Smart_Room_Cloud_Gateway\build_wake_disabled\esp-idf\espressif__esp-sr && python D:/01_Hai_Project/01_Smart_Room_Cloud_Gateway/Smart_Room_Cloud_Gateway/managed_components/espressif__esp-sr/model/movemodel.py -d1 D:/01_Hai_Project/01_Smart_Room_Cloud_Gateway/Smart_Room_Cloud_Gateway/sdkconfig -d2 D:/01_Hai_Project/01_Smart_Room_Cloud_Gateway/Smart_Room_Cloud_Gateway/managed_components/espressif__esp-sr -d3 D:/01_Hai_Project/01_Smart_Room_Cloud_Gateway/Smart_Room_Cloud_Gateway/build_wake_disabled"
+
+ESP-SR Models Report
+Traceback (most recent call last):
+  File "D:\01_Hai_Project\01_Smart_Room_Cloud_Gateway\Smart_Room_Cloud_Gateway\managed_components\espressif__esp-sr\model\movemodel.py", line 202, in <module>
+    print(u'\u2500' * 40)
+    ~~~~~^^^^^^^^^^^
+  File "C:\Users\tranl\AppData\Local\Programs\Python\Python314\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode characters in position 0-39: character maps to <undefined>
+[5/2384] Generating ../../partition_table/partition-table.bin
+Partition table binary generated. Contents:
+*******************************************************************************
+# ESP-IDF Partition Table
+# Name, Type, SubType, Offset, Size, Flags
+nvs,data,nvs,0x9000,24K,
+phy_init,data,phy,0xf000,4K,
+factory,app,factory,0x10000,4M,
+model,data,spiffs,0x410000,1M,
+*******************************************************************************
+[6/2384] Building C object esp-idf/esp_http_client/CMakeFiles/__idf_esp_http_client.dir/lib/http_utils.c.obj
+[7/2384] Building C object esp-idf/esp_http_client/CMakeFiles/__idf_esp_http_client.dir/lib/http_header.c.obj
+[8/2384] Building C object esp-idf/esp_http_server/CMakeFiles/__idf_esp_http_server.dir/src/util/ctrl_sock.c.obj
+[9/2384] Building C object esp-idf/esp_http_server/CMakeFiles/__idf_esp_http_server.dir/src/httpd_sess.c.obj
+[10/2384] Building C object esp-idf/esp_http_server/CMakeFiles/__idf_esp_http_server.dir/src/httpd_uri.c.obj
+[11/2384] Building C object esp-idf/esp_https_ota/CMakeFiles/__idf_esp_https_ota.dir/src/esp_https_ota.c.obj
+[12/2384] Building C object esp-idf/esp_http_server/CMakeFiles/__idf_esp_http_server.dir/src/httpd_parse.c.obj
+[13/2384] Building C object esp-idf/esp_http_server/CMakeFiles/__idf_esp_http_server.dir/src/httpd_main.c.obj
+[14/2384] Building C object esp-idf/esp_http_server/CMakeFiles/__idf_esp_http_server.dir/src/httpd_txrx.c.obj
+[15/2384] Building C object esp-idf/esp_http_server/CMakeFiles/__idf_esp_http_server.dir/src/httpd_ws.c.obj
+[16/2384] Building C object esp-idf/esp_http_client/CMakeFiles/__idf_esp_http_client.dir/lib/http_auth.c.obj
+[17/2384] Building C object esp-idf/esp_http_client/CMakeFiles/__idf_esp_http_client.dir/esp_http_client.c.obj
+ninja: build stopped: subcommand failed.

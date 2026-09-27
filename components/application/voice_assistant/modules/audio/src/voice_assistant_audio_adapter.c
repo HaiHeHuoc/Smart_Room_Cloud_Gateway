@@ -1,6 +1,7 @@
 #include "voice_assistant_audio_adapter.h"
 
 #include "voice_assistant.h"
+#include "voice_assistant_audio_arbitration_bridge.h"
 
 static voice_assistant_audio_state_t voice_assistant_map_audio_state(
     audio_manager_state_t state)
@@ -31,10 +32,25 @@ esp_err_t voice_assistant_audio_adapter_post(
         return ESP_ERR_INVALID_ARG;
     }
 
+    /* audio_manager is also the owner of wake-word and local-playback I2S.
+     * The Xiaozhi UI must show RECORDING/PLAYBACK only for its own reserved
+     * resource, otherwise opening the network makes passive wake listening
+     * look like a user speech turn. These atomic ownership snapshots keep the
+     * status callback non-blocking. */
+    const bool capture_active = status->capture_i2s_active &&
+        voice_assistant_audio_capture_owned();
+    const bool playback_active = status->playback_i2s_active &&
+        voice_assistant_audio_playback_owned();
+    voice_assistant_audio_state_t state = voice_assistant_map_audio_state(status->state);
+    if ((status->state != AUDIO_MANAGER_STATE_ERROR) &&
+        !capture_active && !playback_active) {
+        state = VOICE_ASSISTANT_AUDIO_IDLE;
+    }
+
     const voice_assistant_audio_status_t voice_status = {
-        .state = voice_assistant_map_audio_state(status->state),
-        .capture_active = status->capture_i2s_active,
-        .playback_active = status->playback_i2s_active,
+        .state = state,
+        .capture_active = capture_active,
+        .playback_active = playback_active,
         .last_error = status->last_error,
     };
 

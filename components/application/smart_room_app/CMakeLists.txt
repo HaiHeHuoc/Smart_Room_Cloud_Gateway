@@ -18,6 +18,7 @@ idf_component_register(
         esp_netif
         firebase_auth
         freertos
+        heap
         light_manager
         local_web_server
         log_manager
@@ -33,6 +34,7 @@ idf_component_register(
         time_manager
         ui_manager_lvgl
         voice_assistant
+        wake_word_manager
         wifi_manager
         xiaozhi_foundation
 )

@@ -16,6 +16,9 @@ void audio_manager_stream_tap_arm(void);
 /** Disable the conversion tap immediately; partial frames are discarded. */
 void audio_manager_stream_tap_disarm(void);
 
+/** Enable/disable the independent local-monitor conversion feed. */
+void audio_manager_stream_tap_set_local_monitor_enabled(bool enabled);
+
 /**
  * It preserves audio_dsp_convert_raw_slot_to_pcm24() semantics and additionally
  * publishes selected live microphone samples while a stream is armed.

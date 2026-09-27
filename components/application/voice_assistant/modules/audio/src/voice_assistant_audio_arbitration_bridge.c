@@ -54,7 +54,7 @@ esp_err_t voice_assistant_audio_capture_start(void)
     }
 
     /* PTT capture should not wait behind another capture client. */
-    request.busy_policy = AUDIO_MANAGER_BUSY_REJECT;
+    request.busy_policy = AUDIO_MANAGER_BUSY_PREEMPT_LOWER_PRIORITY;
     request.priority = AUDIO_MANAGER_PRIORITY_XIAOZHI;
     request.interruptible = true;
 
@@ -125,6 +125,12 @@ esp_err_t voice_assistant_audio_capture_stop(void)
         waited_ms += XIAOZHI_ARB_WAIT_POLL_MS;
     }
     return ESP_ERR_TIMEOUT;
+}
+
+bool voice_assistant_audio_capture_owned(void)
+{
+    return atomic_load_explicit(&s_capture_request_id,
+                                memory_order_acquire) != 0U;
 }
 
 esp_err_t voice_assistant_audio_stream_begin(void)
@@ -293,4 +299,10 @@ void voice_assistant_audio_stream_release(void)
         &s_playback_request_id,
         0U,
         memory_order_acq_rel);
+}
+
+bool voice_assistant_audio_playback_owned(void)
+{
+    return atomic_load_explicit(&s_playback_request_id,
+                                memory_order_acquire) != 0U;
 }

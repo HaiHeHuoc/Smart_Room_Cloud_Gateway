@@ -1,0 +1,13 @@
+menu "Wake word manager"
+
+config WAKE_WORD_ENABLE
+    bool "Enable local WakeNet Hi ESP detector"
+    default n
+    depends on IDF_TARGET_ESP32S3
+    select SR_WN_WN9_HIESP
+    help
+        Build the standalone local WakeNet9 Hi ESP detector. It consumes only
+        copied PCM from audio_manager and does not start Xiaozhi, PTT, or a
+        conversation.
+
+endmenu

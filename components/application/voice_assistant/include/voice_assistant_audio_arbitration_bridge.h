@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -22,6 +23,13 @@ esp_err_t voice_assistant_audio_capture_start(void);
  * recording DSP or full arbiter completion.
  */
 esp_err_t voice_assistant_audio_capture_stop(void);
+
+/**
+ * Return whether a live capture reservation belongs to Xiaozhi. This is an
+ * atomic ownership snapshot for status fanout; it neither starts/stops I2S
+ * nor takes an arbiter lock.
+ */
+bool voice_assistant_audio_capture_owned(void);
 
 /**
  * Copy one decoded 16 kHz mono PCM16 packet into the selected stream.
@@ -49,6 +57,13 @@ esp_err_t voice_assistant_audio_stream_get_status(
 
 /** Forget a stream after its terminal status has been consumed. */
 void voice_assistant_audio_stream_release(void);
+
+/**
+ * Return whether a live playback reservation belongs to Xiaozhi. This is an
+ * atomic ownership snapshot for status fanout; it neither starts/stops I2S
+ * nor takes an arbiter lock.
+ */
+bool voice_assistant_audio_playback_owned(void);
 
 #ifdef __cplusplus
 }

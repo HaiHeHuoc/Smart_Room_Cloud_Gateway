@@ -4,10 +4,13 @@
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
+#include "freertos/queue.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
 #include "esp_netif.h"
 #include "esp_event.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "sdkconfig.h"
 
@@ -68,6 +71,8 @@
 /* Audio manager ------------------------------------------------------------ */
 #include "audio_manager.h"
 #include "voice_assistant.h"
+#include "voice_assistant_ptt.h"
+#include "wake_word_manager.h"
 
 /* Light manager ------------------------------------------------------------ */
 #include "light_manager.h"
@@ -78,6 +83,30 @@ static const char *const TAG = "MAIN_APP";
 /* Static Variables --------------------------------------------------------- */
 /* The UI manager borrows this handle for the lifetime of the application. */
 static display_driver_handle_t display_handle;
+
+#if CONFIG_WAKE_WORD_ENABLE
+#define APP_WAKE_VOICE_TASK_NAME "wake_to_voice"
+#define APP_WAKE_VOICE_TASK_STACK_BYTES 4096U
+#define APP_WAKE_VOICE_TASK_PRIORITY 4U
+#define APP_WAKE_VOICE_EVENT_QUEUE_LENGTH 8U
+
+typedef struct {
+    wake_word_manager_event_kind_t kind;
+    uint32_t generation;
+} app_wake_voice_event_t;
+
+/* The callback from the AFE fetch worker only copies an event and wakes this
+ * low-priority app policy task. Voice/PTT APIs can take locks, so they must
+ * never run directly in the AFE producer/consumer path. */
+static QueueHandle_t s_wake_voice_queue = NULL;
+static StaticQueue_t s_wake_voice_queue_control = {0};
+static uint8_t s_wake_voice_queue_storage[
+    APP_WAKE_VOICE_EVENT_QUEUE_LENGTH * sizeof(app_wake_voice_event_t)];
+static TaskHandle_t s_wake_voice_task = NULL;
+static portMUX_TYPE s_wake_voice_event_lock = portMUX_INITIALIZER_UNLOCKED;
+static bool s_wake_voice_event_overflow = false;
+static uint32_t s_wake_voice_active_generation = 0U;
+#endif
 
 /* Give DHT22 extra timing margin under concurrent audio/network workloads. */
 static const sensor_manager_config_t SENSOR_MANAGER_CONFIG =
@@ -271,6 +300,13 @@ static bool app_network_state_allows_audio_start(
  *         manager initialization or startup error.
  */
 static esp_err_t app_start_audio_manager_after_network_online(void);
+
+#if CONFIG_WAKE_WORD_ENABLE
+static esp_err_t app_wake_voice_bridge_start(void);
+static void app_wake_word_event_callback(
+    const wake_word_manager_event_t *event,
+    void *user_context);
+#endif
 
 /* Application -------------------------------------------------------------- */
 static void app_log_time_changed(const time_manager_status_t *status, void *context)
@@ -1589,6 +1625,162 @@ static bool app_network_state_allows_audio_start(
         APP_NETWORK_COORDINATOR_STATE_ONLINE;
 }
 
+#if CONFIG_WAKE_WORD_ENABLE
+static bool app_wake_voice_event_is_terminal(
+    wake_word_manager_event_kind_t kind)
+{
+    return (kind == WAKE_WORD_EVENT_UTTERANCE_COMPLETE) ||
+           (kind == WAKE_WORD_EVENT_MAX_UTTERANCE) ||
+           (kind == WAKE_WORD_EVENT_NO_SPEECH_TIMEOUT) ||
+           (kind == WAKE_WORD_EVENT_CANCELLED);
+}
+
+static void app_wake_voice_finish_active_turn(bool normal_end)
+{
+    if (s_wake_voice_active_generation == 0U) {
+        return;
+    }
+    const esp_err_t ret = normal_end
+        ? voice_assistant_ptt_finish_handsfree()
+        : voice_assistant_ptt_cancel();
+    if ((ret != ESP_OK) && (ret != ESP_ERR_INVALID_STATE)) {
+        APP_LOGW(TAG, WAKE_VOICE_TURN_FINISH_FAILED_CE0FEC46,
+                 "Wake-to-voice turn finish failed generation=%lu: %s",
+                 (unsigned long)s_wake_voice_active_generation,
+                 esp_err_to_name(ret));
+    }
+    (void)wake_word_manager_set_handsfree_handoff_active(false);
+    s_wake_voice_active_generation = 0U;
+}
+
+static void app_wake_voice_handle_event(const app_wake_voice_event_t *event)
+{
+    if (event == NULL) {
+        return;
+    }
+
+    if (event->kind == WAKE_WORD_EVENT_WAKE_DETECTED) {
+        if (s_wake_voice_active_generation != 0U) {
+            return;
+        }
+        esp_err_t ret = wake_word_manager_set_handsfree_handoff_active(true);
+        if (ret == ESP_OK) {
+            ret = voice_assistant_ptt_start_handsfree();
+        }
+        if (ret != ESP_OK) {
+            (void)wake_word_manager_set_handsfree_handoff_active(false);
+            APP_LOGW(TAG, WAKE_VOICE_TURN_REJECTED_5B4F50C9,
+                     "Wake-to-voice turn rejected generation=%lu: %s",
+                     (unsigned long)event->generation,
+                     esp_err_to_name(ret));
+            return;
+        }
+        s_wake_voice_active_generation = event->generation;
+        APP_LOGI(TAG, WAKE_VOICE_TURN_QUEUED_2717757F,
+                 "Wake-to-voice turn queued generation=%lu",
+                 (unsigned long)event->generation);
+        return;
+    }
+
+    if (!app_wake_voice_event_is_terminal(event->kind) ||
+        (event->generation != s_wake_voice_active_generation)) {
+        return;
+    }
+
+    const bool normal_end =
+        (event->kind == WAKE_WORD_EVENT_UTTERANCE_COMPLETE) ||
+        (event->kind == WAKE_WORD_EVENT_MAX_UTTERANCE);
+    app_wake_voice_finish_active_turn(normal_end);
+}
+
+static void app_wake_to_voice_task(void *context)
+{
+    (void)context;
+    for (;;) {
+        (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(500U));
+
+        bool overflow = false;
+        portENTER_CRITICAL(&s_wake_voice_event_lock);
+        overflow = s_wake_voice_event_overflow;
+        s_wake_voice_event_overflow = false;
+        portEXIT_CRITICAL(&s_wake_voice_event_lock);
+        if (overflow) {
+            APP_LOGE(TAG, WAKE_VOICE_EVENT_QUEUE_OVERFLOW_9E3A393B,
+                     "Wake-to-voice event queue overflow; cancelling active turn");
+            app_wake_voice_finish_active_turn(false);
+        }
+
+        app_wake_voice_event_t event = {0};
+        while (xQueueReceive(s_wake_voice_queue, &event, 0U) == pdTRUE) {
+            app_wake_voice_handle_event(&event);
+        }
+    }
+}
+
+static void app_wake_word_event_callback(
+    const wake_word_manager_event_t *event,
+    void *user_context)
+{
+    (void)user_context;
+    if ((event == NULL) || (s_wake_voice_queue == NULL) ||
+        (s_wake_voice_task == NULL)) {
+        return;
+    }
+    const wake_word_manager_event_kind_t kind =
+        (wake_word_manager_event_kind_t)event->kind;
+    if ((kind != WAKE_WORD_EVENT_WAKE_DETECTED) &&
+        !app_wake_voice_event_is_terminal(kind)) {
+        return;
+    }
+
+    const app_wake_voice_event_t queued = {
+        .kind = kind,
+        .generation = event->generation,
+    };
+    if (xQueueSend(s_wake_voice_queue, &queued, 0U) != pdTRUE) {
+        portENTER_CRITICAL(&s_wake_voice_event_lock);
+        s_wake_voice_event_overflow = true;
+        portEXIT_CRITICAL(&s_wake_voice_event_lock);
+    }
+    xTaskNotifyGive(s_wake_voice_task);
+}
+
+static esp_err_t app_wake_voice_bridge_start(void)
+{
+    if (s_wake_voice_task != NULL) {
+        return ESP_OK;
+    }
+    s_wake_voice_queue = xQueueCreateStatic(
+        APP_WAKE_VOICE_EVENT_QUEUE_LENGTH,
+        sizeof(app_wake_voice_event_t),
+        s_wake_voice_queue_storage,
+        &s_wake_voice_queue_control);
+    if (s_wake_voice_queue == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+    if (xTaskCreateWithCaps(app_wake_to_voice_task,
+                            APP_WAKE_VOICE_TASK_NAME,
+                            APP_WAKE_VOICE_TASK_STACK_BYTES,
+                            NULL,
+                            APP_WAKE_VOICE_TASK_PRIORITY,
+                            &s_wake_voice_task,
+                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+        s_wake_voice_task = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+    const esp_err_t ret = wake_word_manager_register_callback(
+        app_wake_word_event_callback, NULL);
+    if (ret != ESP_OK) {
+        /* Startup runs once; delete only the task we just created, not any
+         * shared audio/voice resource. */
+        vTaskDeleteWithCaps(s_wake_voice_task);
+        s_wake_voice_task = NULL;
+        return ret;
+    }
+    return ESP_OK;
+}
+#endif
+
 static esp_err_t app_start_audio_manager_after_network_online(void)
 {
     /*
@@ -1597,9 +1789,7 @@ static esp_err_t app_start_audio_manager_after_network_online(void)
      */
     const audio_manager_config_t audio_config =
         audio_manager_default_config();
-
-    esp_err_t audio_ret =
-        audio_manager_init(&audio_config);
+    esp_err_t audio_ret = audio_manager_init(&audio_config);
 
     if (audio_ret != ESP_OK)
     {
@@ -1624,6 +1814,33 @@ static esp_err_t app_start_audio_manager_after_network_online(void)
 
         return audio_ret;
     }
+
+#if CONFIG_WAKE_WORD_ENABLE
+    /* WebSocket uses a project-validated 12 KiB Internal-RAM stack. Start the
+     * mandatory GPIO38/PTT voice path first, then admit the optional local
+     * wake pipeline only if ESP-SR can still allocate its private 8 KiB AFE
+     * worker. This prevents a Wake allocation from breaking transport startup
+     * and leaves PTT available if the resource gate rejects Wake Word. */
+    audio_ret = wake_word_manager_init();
+    if (audio_ret != ESP_OK) {
+        APP_LOGW(TAG, WAKE_WORD_START_FAILED_C3A21C55,
+                 "Wake word unavailable after PTT voice start; GPIO38 remains available: %s",
+                 esp_err_to_name(audio_ret));
+    } else {
+        audio_ret = app_wake_voice_bridge_start();
+        if (audio_ret == ESP_OK) {
+            audio_ret = wake_word_manager_start();
+        }
+        if (audio_ret == ESP_OK) {
+            audio_ret = wake_word_manager_set_enabled(true);
+        }
+        if (audio_ret != ESP_OK) {
+            APP_LOGW(TAG, WAKE_WORD_START_FAILED_C3A21C55,
+                     "Wake word disabled; GPIO38 remains available: %s",
+                     esp_err_to_name(audio_ret));
+        }
+    }
+#endif
 
     APP_LOGI(
         TAG, AUDIO_MANAGER_TASK_STARTED_M_5C489DBF,

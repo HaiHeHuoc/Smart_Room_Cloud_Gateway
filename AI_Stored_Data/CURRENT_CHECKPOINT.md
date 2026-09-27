@@ -1,129 +1,102 @@
 # Current Working Checkpoint
 
-Purpose: compact handoff for the active focused fix. Repository/source and
-actual target evidence remain authoritative.
+Purpose: compact handoff for Sprint 24 AFE/WakeNet runtime stabilization.
+Repository source, build output, and target evidence remain authoritative.
 
-Updated: 2026-09-26
+Updated: 2026-09-27
 
-## Active work
+## Branch and integration state
 
-Branch: `fix/xiaozhi-ptt-uplink-drop`
+- Active branch: `fix/24-afe-runtime-stability`
+- Base HEAD: `0e524e1c8fcd7eeaabe755d4d6098d258feded78`
+  (`docs(ai): checkpoint PTT uplink robustness fix`). Sprint 24 work remains
+  uncommitted.
+- No commit, merge, rebase, push, or pull request was performed.
 
-Base integration branch: `main_including_Firebase_security`
+## Observed product failure and evidence
 
-Base HEAD: `18044491f201d9a944aa6cf170f8f85614f7057b`
+- Earlier target logs alternated between AFE feed-ring full and AFE empty while
+  the largest Internal-RAM block was about 7.5 KiB. That is insufficient for
+  ESP-SR's documented 8 KiB `afe_mase` worker stack and remains an admission
+  risk.
+- Xiaozhi's WebSocket wrapper deliberately requests a 12 KiB Internal stack.
+  A 7.5 KiB largest block cannot create it, matching
+  `websocket_client: Error create websocket task`.
+- Latest HIL reached a 31 KiB Internal largest block before AFE, built the AFE
+  pipeline, and connected the production WebSocket successfully. It still
+  produced AFE FEED-full spam after passive wake listening began. The fetch
+  worker could clear `afe_input_ready` after a fetch failure but then wait for
+  a later successful feed; a full ring cannot satisfy that condition. This is
+  a producer/consumer recovery deadlock, not a harmless ESP-SR warning.
+- Target HIL after the recovery fix is still required before acceptance.
 
-Current phase: focused Xiaozhi PTT uplink robustness fix before Sprint 24
-WakeNet implementation.
+## Implemented stabilization
 
-Sprint 23 was explicitly accepted by Hải on 2026-09-26. Broader Sprint-23
-closure documentation reconciliation on the integration branch remains
-separate from this focused code fix.
+- `wake_word_manager` validates ESP-SR geometry at runtime: PCM16, 16 kHz,
+  mono (`"M"` AFE), exact feed/fetch chunks, one feed/fetch channel, no AEC,
+  no NS/AGC/SE, and only stock `wn9_hiesp` WakeNet + VAD.
+- One `audio_manager` I2S RX owner copies 256-sample / 16-ms frames into one
+  fixed local-monitor queue (4 frames, 64 ms, 2,112 B PSRAM). Its zero-wait
+  producer cannot block PTT or invoke ESP-SR/network/UI work.
+- Feed and fetch are independent workers. Fetch waits for an initial input
+  notification, continuously drains ESP-SR while active, and resets only on
+  its own side of the generation fence. A fetch failure now performs that
+  generation reset instead of waiting indefinitely behind an already-full
+  ring; a non-negative full-ring feed also re-notifies the consumer. No
+  arbitrary delay or warning suppression was added.
+- Feed/fetch workers use 6 KiB PSRAM stacks at priority 5. ESP-SR's private
+  `afe_mase` worker is core 1, priority 6, 8 KiB Internal so it outranks the
+  bridge workers and drains the two-frame input ring. `audio_manager` remains
+  priority 7; `voice_uplink` is priority 6.
+- Voice/PTT and its 12 KiB Internal WebSocket task start first. WakeNet is
+  admitted afterwards only when a 10 KiB contiguous Internal block exists;
+  rejection is explicit and preserves GPIO38 PTT rather than destabilizing the
+  mandatory voice path.
+- Xiaozhi's dynamic chat-audio task stack is configured for PSRAM. Wake's
+  event callback only enqueues a bounded event; a PSRAM `wake_to_voice` task
+  invokes the PTT policy. GPIO and WakeNet are independent trigger sources.
+- During one accepted WakeNet-to-voice turn only, copied local frames remain
+  available for VAD to end the turn. Normal GPIO PTT and speaker playback
+  suppress the local monitor. Queue-overflow cancellation can now queue behind
+  a pending virtual press, so the bridge fails closed.
+- Voice UI status filters shared audio-manager state through Xiaozhi's atomic
+  capture/playback reservations. Passive WakeNet capture therefore does not
+  present as Xiaozhi `RECORDING` before a PTT turn is actually authorized.
 
-## User-visible symptom
+## Bounded diagnostics
 
-During a normal GPIO38 Push-To-Talk turn, capture starts successfully but
-Xiaozhi can hear the utterance incorrectly: missing words/syllables, dropped
-content, or reduced recognition accuracy.
-
-The selected fix intentionally does not wait for a pre-fix hardware baseline.
-It hardens the already bounded capture-to-uplink path while preserving current
-ownership.
-
-## Implemented changes
-
-### Voice uplink
-
-- `voice_uplink` priority raised from 5 to 6.
-- `audio_manager` remains priority 7 and sole I2S/RX/DMA owner.
-- Uplink PCM queue increased from 8 to 16 frames.
-- At 256 samples/frame and 16 kHz, queue jitter headroom increases from about
-  128 ms to about 256 ms.
-- Queue storage remains PSRAM-backed.
-- The audio-manager stream callback remains non-blocking and still uses
-  zero-wait `xQueueSend()`; network latency never blocks the I2S owner.
-- Turn summary now records queue peak depth, maximum Opus encode duration, and
-  maximum foundation/network send duration for post-fix HIL evidence.
-
-### Recording-critical background policy
-
-Existing behavior was preserved:
-
-- performance monitor defers during live voice recording;
-- persistent log writer parks/defers at its safe point;
-- ordinary periodic cloud uploads already defer during
-  `VOICE_RECORDING_CRITICAL`.
-
-Additional Local Web policy:
-
-- new Storage downloads are rejected while live recording is critical;
-- an in-progress Storage download terminates if recording becomes critical;
-- new Storage uploads are rejected while recording is critical;
-- an in-progress upload is aborted/cleaned if recording becomes critical;
-- Diagnostics export is rejected while recording is critical.
-
-No Wi-Fi, TCP/IP, ESP event, IPC, timer, or scheduler suspension was added.
-
-## Commits
-
-- `589bbdae0afcf29773345c80817abadd25fb2b6d`
-  `fix(voice): prioritize and buffer live PTT uplink`
-- `9c7742d3e53ac823543d50593ec121759b4648c2`
-  `fix(web): honor voice recording critical window`
-- `609aa0d4d6e34b5656a1021c1302154167728e73`
-  `fix(web): defer heavy transfers during PTT capture`
+- `wake_word_manager_get_status()` reports exact AFE geometry, PCM/feed/fetch
+  counters and failures, queue peak/drops, reset drops, max feed/fetch time,
+  worker stack high-water marks, and largest Internal block before/after AFE.
+- Boot logs report verified AFE geometry and resource-gate rejection without
+  per-frame logging.
 
 ## Validation actually performed
 
-- Pre-fix hardware test: intentionally skipped per Hải's instruction.
-- Source/diff review after the fix: PASS.
-- Branch comparison against base: three implementation files/areas changed,
-  plus this checkpoint.
-- Confirmed no global scheduler suspend and no Wi-Fi/TCPIP task suspend.
-- ESP-IDF build: NOT RUN in this connector-only session.
-- Target/HIL: NOT RUN yet.
+- `git diff --check`: PASS.
+- Wake runtime-policy host test: PASS.
+- Audio-manager host tests, including PCM distribution: PASS.
+- Voice-assistant host tests (playback, interruption, response epoch, and
+  transport fence): PASS.
+- ESP-IDF 6.0.1 serialized build, Wake enabled: PASS. Firmware `0x2f22c0`,
+  smallest app partition free `0x10dd40` (26%); ESP-SR packs only `wn9_hiesp`
+  (284.16 KiB). Windows requires `PYTHONIOENCODING=utf-8` for the model packer.
+- Isolated Wake-disabled build: PASS. Firmware `0x290cd0`, 36% app partition
+  free; `CONFIG_WAKE_WORD_ENABLE` and `CONFIG_SR_WN_WN9_HIESP` are unset.
 
-## Required post-fix HIL
+## HIL required before Sprint 24 acceptance
 
-Flash this branch and perform several PTT turns:
+1. Capture Internal/DMA/PSRAM free, minima, largest block, task count, and
+   stack high-water before Wake, after Wake, and during a Xiaozhi turn.
+2. Leave idle Wake listening for several minutes: no AFE full/empty spam, no
+   `AFE_FETCH_RECOVERY` loop, no nominal local-monitor drops, and no false
+   Xiaozhi `RECORDING` status before an authorized PTT turn.
+3. Repeat `Hi ESP`, then run Wake -> speech -> Xiaozhi -> TTS -> rearm.
+4. Verify GPIO38 PTT remains independent during/after Wake turns.
+5. Repeat many turns and confirm no task/memory leak, transport startup error,
+   uplink drop, stale generation, or false early VAD completion.
 
-1. Speak immediately after pressing GPIO38.
-2. Speak continuously for 5-10 seconds.
-3. Repeat while Web dashboard is open.
-4. Optionally attempt a Web upload/download during PTT and confirm it is
-   deferred/rejected instead of competing with the voice path.
+## Next action
 
-Capture the `VOICE_UPLINK` turn summary. Highest-value fields:
-
-- `queue_drops`
-- `stale_drops`
-- `queue_peak=<N>/16`
-- `max_encode_us`
-- `max_send_us`
-- `capture_to_first_pcm_ms`
-- `capture_to_first_opus_ms`
-
-Also inspect `audio_manager` diagnostics for RX overflow/timeouts.
-
-Expected nominal result:
-
-- queue_drops = 0
-- unexpected stale_drops = 0
-- RX overflow delta = 0
-- RX timeout delta = 0
-
-If queue depth still reaches 16/16 or queue_drops remain non-zero while RX is
-clean, the next justified architecture step is to decouple Opus encoding from
-the blocking network sender using a second bounded Opus packet queue.
-
-Do not increase I2S DMA descriptors or add another sender task before this
-post-fix evidence.
-
-## Scope boundary
-
-- No ESP-SR/WakeNet implementation in this fix branch.
-- No new I2S owner.
-- No direct provider handle leakage.
-- No unrelated architecture changes.
-- No merge into `main_including_Firebase_security` without Hải's explicit
-  instruction.
+Run the focused Sprint 24 HIL stability checklist before advancing to Prompt 6
+or any advanced conversation work.

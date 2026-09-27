@@ -53,6 +53,26 @@ static void clear_slot(capture_slot_t *slot)
     }
 }
 
+static bool request_uses_local_monitor(const audio_manager_request_t *request)
+{
+    return (request != NULL) &&
+           (request->client == AUDIO_MANAGER_CLIENT_WAKE_WORD);
+}
+
+static esp_err_t start_request_capture(const audio_manager_request_t *request)
+{
+    return request_uses_local_monitor(request)
+        ? audio_manager_start_local_monitor_capture()
+        : audio_manager_start_recording();
+}
+
+static esp_err_t stop_request_capture(const audio_manager_request_t *request)
+{
+    return request_uses_local_monitor(request)
+        ? audio_manager_stop_local_monitor_capture()
+        : audio_manager_stop_recording();
+}
+
 static void sync_status_locked(audio_manager_capture_arbiter_state_t state,
                                esp_err_t last_error)
 {
@@ -195,7 +215,7 @@ static void capture_arbiter_task(void *arg)
         }
 
         if (do_stop) {
-            const esp_err_t ret = audio_manager_stop_recording();
+            const esp_err_t ret = stop_request_capture(&s_current.request);
             if ((ret != ESP_OK) && (ret != ESP_ERR_INVALID_STATE)) {
                 if (take_lock()) {
                     sync_status_locked(AUDIO_MANAGER_CAPTURE_ARBITER_ERROR, ret);
@@ -206,7 +226,7 @@ static void capture_arbiter_task(void *arg)
         }
 
         if (do_start) {
-            const esp_err_t ret = audio_manager_start_recording();
+            const esp_err_t ret = start_request_capture(&start_slot.request);
             if (take_lock()) {
                 if (ret == ESP_OK) {
                     sync_status_locked(AUDIO_MANAGER_CAPTURE_ARBITER_STARTING, ESP_OK);
