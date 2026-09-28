@@ -1,99 +1,68 @@
 # Current Working Checkpoint
 
-Purpose: compact handoff for the active focused fix. Repository/source and
-actual target evidence remain authoritative.
+Purpose: compact, overwriteable handoff for the active integration state.
+Current source, `AGENTS.md`, canonical documentation, and explicit build/HIL
+evidence remain authoritative.
 
-Updated: 2026-09-26
+Updated: 2026-09-28
+Active branch: `main_including_Firebase_security`
+Source integration baseline: `44e6feb23f3358917171b6b326b56fdec8ae7ff3`
+Baseline commit: `merge: integrate PTT uplink robustness fix`
 
-## Active work
+## Current status
 
-Branch: `fix/xiaozhi-ptt-uplink-drop`
+- Sprint 18: COMPLETE / USER ACCEPTED BY HẢI ON 2026-09-16.
+- Sprint 19: SOURCE INTEGRATED / BUILD VERIFIED / TARGET HIL PARTIAL.
+- Sprint 20: IMPLEMENTED / BUILD VERIFIED / TARGET HIL PENDING.
+- Sprint 21: COMPLETE / USER ACCEPTED BY HẢI ON 2026-09-24.
+- Sprint 22: COMPLETE / BUILD VERIFIED / USER ACCEPTED BY HẢI ON 2026-09-25.
+- Sprint 23: COMPLETE / USER ACCEPTED BY HẢI ON 2026-09-26.
+- Sprint 24: PLANNED / NOT STARTED on this integration branch.
 
-Base integration branch: `main_including_Firebase_security`
+Sprint-23 source remains integrated. Its former target/browser HIL matrix is
+optional regression coverage after Hải's acceptance and must not be used to
+rewrite Sprint 23 back to IN PROGRESS.
 
-Base HEAD: `18044491f201d9a944aa6cf170f8f85614f7057b`
+## Integrated PTT uplink robustness fix
 
-Current phase: focused Xiaozhi PTT uplink robustness fix before Sprint 24
-WakeNet implementation.
+The focused `fix/xiaozhi-ptt-uplink-drop` work is now integrated into
+`main_including_Firebase_security` through baseline `44e6feb...`.
 
-Sprint 23 was explicitly accepted by Hải on 2026-09-26. Broader Sprint-23
-closure documentation reconciliation on the integration branch remains
-separate from this focused code fix.
+Effective source changes retained on the integration branch:
 
-## User-visible symptom
+- `voice_uplink` priority is 6, below the priority-7 `audio_manager` I2S owner.
+- PCM uplink queue length is 16 frames (~256 ms at 256 samples/frame, 16 kHz).
+- Audio capture callback remains zero-wait/non-blocking; network latency does
+  not take I2S ownership.
+- Per-turn diagnostics include queue peak depth, maximum Opus encode time, and
+  maximum provider/network send time in addition to existing queue/drop/timing
+  counters.
+- Local Web Storage upload/download and Diagnostics export reject or abort at
+  safe boundaries while `VOICE_RECORDING_CRITICAL` is active.
+- `performance_monitor` defers CPU/task/memory reporting during the recording
+  critical window and resumes from a lightweight transition notification.
+- No Wi-Fi/TCPIP task suspension, scheduler suspension, new I2S owner, or direct
+  provider-handle leakage was introduced.
 
-During a normal GPIO38 Push-To-Talk turn, capture starts successfully but
-Xiaozhi can hear the utterance incorrectly: missing words/syllables, dropped
-content, or reduced recognition accuracy.
+## Validation state for the robustness fix
 
-The selected fix intentionally does not wait for a pre-fix hardware baseline.
-It hardens the already bounded capture-to-uplink path while preserving current
-ownership.
-
-## Implemented changes
-
-### Voice uplink
-
-- `voice_uplink` priority raised from 5 to 6.
-- `audio_manager` remains priority 7 and sole I2S/RX/DMA owner.
-- Uplink PCM queue increased from 8 to 16 frames.
-- At 256 samples/frame and 16 kHz, queue jitter headroom increases from about
-  128 ms to about 256 ms.
-- Queue storage remains PSRAM-backed.
-- The audio-manager stream callback remains non-blocking and still uses
-  zero-wait `xQueueSend()`; network latency never blocks the I2S owner.
-- Turn summary now records queue peak depth, maximum Opus encode duration, and
-  maximum foundation/network send duration for post-fix HIL evidence.
-
-### Recording-critical background policy
-
-Existing behavior was preserved:
-
-- performance monitor defers during live voice recording;
-- persistent log writer parks/defers at its safe point;
-- ordinary periodic cloud uploads already defer during
-  `VOICE_RECORDING_CRITICAL`.
-
-Additional Local Web policy:
-
-- new Storage downloads are rejected while live recording is critical;
-- an in-progress Storage download terminates if recording becomes critical;
-- new Storage uploads are rejected while recording is critical;
-- an in-progress upload is aborted/cleaned if recording becomes critical;
-- Diagnostics export is rejected while recording is critical.
-
-No Wi-Fi, TCP/IP, ESP event, IPC, timer, or scheduler suspension was added.
-
-## Commits
-
-- `589bbdae0afcf29773345c80817abadd25fb2b6d`
-  `fix(voice): prioritize and buffer live PTT uplink`
-- `9c7742d3e53ac823543d50593ec121759b4648c2`
-  `fix(web): honor voice recording critical window`
-- `609aa0d4d6e34b5656a1021c1302154167728e73`
-  `fix(web): defer heavy transfers during PTT capture`
-
-## Validation actually performed
-
-- Pre-fix hardware test: intentionally skipped per Hải's instruction.
-- Source/diff review after the fix: PASS.
-- Branch comparison against base: three implementation files/areas changed,
-  plus this checkpoint.
-- Confirmed no global scheduler suspend and no Wi-Fi/TCPIP task suspend.
-- ESP-IDF build: NOT RUN in this connector-only session.
-- Target/HIL: NOT RUN yet.
+- Source/diff inspection: PASS.
+- Merge into the requested integration branch: CONFIRMED.
+- ESP-IDF build specifically for this robustness merge: NOT RECORDED here.
+- Post-fix target/HIL for PTT audio quality and queue behavior: NOT RECORDED.
+- Do not inherit earlier build/HIL evidence as proof for these affected paths.
 
 ## Required post-fix HIL
 
-Flash this branch and perform several PTT turns:
+Run several GPIO38 PTT turns and capture the `VOICE_UPLINK` turn summary:
 
-1. Speak immediately after pressing GPIO38.
+1. Speak immediately after pressing PTT.
 2. Speak continuously for 5-10 seconds.
-3. Repeat while Web dashboard is open.
-4. Optionally attempt a Web upload/download during PTT and confirm it is
-   deferred/rejected instead of competing with the voice path.
+3. Repeat while Local Web is open.
+4. Optionally attempt Storage upload/download during PTT and verify it is
+   rejected/deferred instead of competing with capture.
 
-Capture the `VOICE_UPLINK` turn summary. Highest-value fields:
+Highest-value fields:
 
 - `queue_drops`
 - `stale_drops`
@@ -103,27 +72,25 @@ Capture the `VOICE_UPLINK` turn summary. Highest-value fields:
 - `capture_to_first_pcm_ms`
 - `capture_to_first_opus_ms`
 
-Also inspect `audio_manager` diagnostics for RX overflow/timeouts.
+Also inspect `audio_manager` RX overflow/timeout diagnostics.
 
-Expected nominal result:
+Expected nominal evidence is zero queue drops, zero unexpected stale drops,
+zero RX overflow delta, and zero RX timeout delta. If the queue still reaches
+16/16 or drops frames while RX remains clean, the next justified architecture
+step is a second bounded Opus packet queue between encoding and blocking send;
+do not increase DMA descriptors or add another sender task before that evidence.
 
-- queue_drops = 0
-- unexpected stale_drops = 0
-- RX overflow delta = 0
-- RX timeout delta = 0
+## Durable boundaries
 
-If queue depth still reaches 16/16 or queue_drops remain non-zero while RX is
-clean, the next justified architecture step is to decouple Opus encoding from
-the blocking network sender using a second bounded Opus packet queue.
+- Preserve existing manager/service ownership and `application -> service ->
+  driver/framework` dependency direction.
+- Local Web remains a frontend and does not own Wi-Fi/provisioning, SD/FATFS,
+  LVGL, audio/I2S, NeoPixel/RMT/GPIO, or provider lifecycle.
+- Never expose credentials, tokens, PoP/session material, private provider
+  handles, raw pointers, or unrestricted filesystem content.
+- Sprint 24 Wake Word + Advanced Voice UX does not start automatically.
 
-Do not increase I2S DMA descriptors or add another sender task before this
-post-fix evidence.
+## Next action
 
-## Scope boundary
-
-- No ESP-SR/WakeNet implementation in this fix branch.
-- No new I2S owner.
-- No direct provider handle leakage.
-- No unrelated architecture changes.
-- No merge into `main_including_Firebase_security` without Hải's explicit
-  instruction.
+Primary gate: run the post-fix PTT HIL above and record only observed evidence.
+After that, Sprint 24 may start only when Hải explicitly requests it.
