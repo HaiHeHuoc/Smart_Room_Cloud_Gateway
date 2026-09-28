@@ -46,6 +46,7 @@ Primary gate: validate the PTT uplink robustness merge on target hardware.
 After that, older Sprint-19/20/22/23 matrices remain useful regression work but
 do not reopen already accepted Sprints 21-23 without a concrete regression.
 Sprint 24 remains PLANNED / NOT STARTED until Hải explicitly starts it.
+
 ## Sprint 22 target HIL matrix
 
 - [ ] Browser/API: open Dashboard first, confirm HTTP 200/no-store snapshot and
