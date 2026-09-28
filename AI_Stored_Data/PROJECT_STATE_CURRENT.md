@@ -1,9 +1,9 @@
 # Smart Room Cloud Gateway — Current Project State
 
 Updated: 2026-09-28
-Active release-hardening branch: `release/V2.0.0`
-Source integration branch: `main_including_Firebase_security`
-Exact V2 baseline: `44e6feb23f3358917171b6b326b56fdec8ae7ff3` (`merge: integrate PTT uplink robustness fix`)
+Active V2 integration branch: `main_including_Firebase_security`
+Release branch: `release/V2.0.0`
+V2 baseline: `44e6feb23f3358917171b6b326b56fdec8ae7ff3` (`merge: integrate PTT uplink robustness fix`)
 Sprint-18 closure authority: explicit user acceptance by Hải on 2026-09-16
 
 > This file is the current-state companion for cross-session AI handoff.
@@ -69,9 +69,9 @@ Sprint 21   Local Web Control V3: Lights / COMPLETE / USER ACCEPTED BY HẢI
             ON 2026-09-24
 Sprint 22   Local Web Control V4: Dashboard + System Status / COMPLETE /
             BUILD VERIFIED / USER ACCEPTED BY Hai ON 2026-09-25
-Sprint 23   Local Web Control V5: Scenes + Logs + Diagnostics / SOURCE INTEGRATED /
-            BUILD VERIFIED / USER ACCEPTED BY HAI ON 2026-09-26 /
-            TARGET/BROWSER HIL EVIDENCE PENDING
+Sprint 23   Local Web Control V5: Scenes + Logs + Diagnostics / COMPLETE /
+            USER ACCEPTED BY HẢI ON 2026-09-26
+            Target/browser HIL remains optional release-regression evidence
 Sprint 24   Wake Word + Advanced Voice UX / SUSPENDED FOR V2 RELEASE
 ```
 
@@ -205,33 +205,27 @@ This work item is closed by Hải's explicit acceptance on 2026-09-16.
 
 ## What happens next
 
-Sprint 22 is complete, build verified, and user-accepted on 2026-09-25.
-Sprint 23 is source-integrated and build verified. Its target/browser HIL matrix
-is the current acceptance gate; the older Sprint-22 HIL matrix remains useful
-non-blocking regression coverage.
+Sprint 23 is complete by explicit user acceptance on 2026-09-26. Its former
+target/browser HIL matrix remains useful regression coverage but is no longer a
+closure gate.
 
-Highest-value next validation is:
+The active integration branch now also contains the focused Xiaozhi PTT uplink
+robustness fix merged at `44e6feb23f3358917171b6b326b56fdec8ae7ff3`.
+The highest-value immediate gate is post-fix PTT HIL:
 
 ```text
-1. Run Sprint-22 Dashboard HIL: confirm each partial-manager state, endpoint
-   recovery, active/hidden-tab polling, responsive layout, and four-tab
-   keyboard navigation.
-2. Complete the remaining Sprint-19 storage HIL that is still unverified:
-   upload through 20 MiB, interruption/partial cleanup, file/folder mutations,
-   and SD removal/remount/recovery.
-3. Run Sprint-20 target HIL for browser playback/control, PTT and
-   Xiaozhi arbitration, pause/resume/restart/stop, progress, volume 0/100,
-   PC/mobile tabs, and storage/playback contention.
-4. Use WAV files below 2 GiB for supported playback validation. FAT32 storage
-   may list/download 2-4 GiB files, but the current WAV playback reader does not
-   support files at or above 2 GiB.
+1. Verify normal GPIO38 PTT turns no longer lose words/syllables.
+2. Capture VOICE_UPLINK queue_drops, stale_drops, queue_peak/16,
+   max_encode_us, max_send_us, and first-PCM/first-Opus timing.
+3. Check audio_manager RX overflow/timeout deltas remain zero.
+4. Repeat while Local Web is open and optionally attempt Storage transfer to
+   confirm recording-critical rejection/defer behavior.
 ```
 
 Sprint 23 source is integrated and user accepted; its target/browser HIL remains
 release-validation evidence. Sprint 24 Wake Word/Advanced Voice UX is SUSPENDED
 FOR V2 RELEASE, is neither complete nor cancelled, and does not start
 automatically.
-
 ## Deferred regression work — non-blocking
 
 The following may still be useful later but **must not reopen Sprint 18 merely
@@ -293,9 +287,10 @@ Only a concrete regression or explicit Hải instruction should reopen Sprint 18
   Sprint 22 on 2026-09-25; its target/browser HIL remains non-blocking regression
   coverage.
 - Sprint 23 adds fixed owner-routed Scenes, bounded sanitized Logs, copied
-  Diagnostics/export, and seven Local Web tabs. It remains included in the V2
-  baseline at `44e6feb23f3358917171b6b326b56fdec8ae7ff3`; its recorded
-  host/build evidence passes and target/browser HIL evidence remains pending.
+  Diagnostics/export, and seven Local Web tabs. The feature source was integrated
+  through `2bf646f2f6ba4a70457f3d0a88e2a13edb4bd23f`; host/build evidence passes.
+  Hải accepted Sprint 23 on 2026-09-26, so its former target/browser HIL matrix
+  is optional regression coverage rather than a closure gate.
 ### Historical Prompt 20.1 contract detail
 ## Sprint 20 Local Web Playback + Volume — Prompt 20.1 integrated
 
@@ -335,6 +330,29 @@ list/download FAT32 files in the 2-4 GiB range.
 
 Target HIL for Prompt 20.1 remains pending.
 
+## Post-Sprint-23 PTT uplink robustness fix — integrated / HIL pending
+
+Source integration baseline `44e6feb23f3358917171b6b326b56fdec8ae7ff3`
+contains the focused `fix/xiaozhi-ptt-uplink-drop` work.
+
+Current effective behavior:
+
+- `voice_uplink` runs at priority 6 while `audio_manager` remains priority 7 and
+  sole I2S/RX/DMA owner;
+- the PSRAM-backed PCM uplink queue is 16 frames (~256 ms at 16 kHz with
+  256-sample frames) and the capture callback remains zero-wait/non-blocking;
+- per-turn diagnostics include queue peak, maximum Opus encode time, and maximum
+  provider/network send time;
+- Local Web Storage upload/download and Diagnostics export honor
+  `VOICE_RECORDING_CRITICAL` at safe rejection/abort boundaries;
+- `performance_monitor` defers its diagnostic sampling/report burst while the
+  recording-critical window is active and resumes through a lightweight
+  transition notification;
+- no scheduler/Wi-Fi/TCPIP suspension or new audio ownership was introduced.
+
+Recorded source/diff review is PASS. A build specifically validating this merge
+and post-fix target PTT HIL are not recorded in this state document; do not
+inherit older evidence as proof for the affected paths.
 ## Security invariants
 
 Never store real Wi-Fi credentials, Firebase passwords/API secrets, PoP values,
