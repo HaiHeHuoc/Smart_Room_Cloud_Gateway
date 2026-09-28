@@ -13,6 +13,7 @@
 #include "voice_assistant.h"
 #include "voice_assistant_downlink.h"
 #include "voice_assistant_playback_control.h"
+#include "voice_assistant_ptt_owner_policy.h"
 
 #define PTT_TASK_NAME                 "voice_ptt"
 /* PTT now also handles the bounded post-abort transport-fence path. Keep the
@@ -35,6 +36,8 @@ typedef enum {
 
 typedef struct {
     ptt_command_type_t type;
+    voice_assistant_ptt_source_t source;
+    uint32_t client_id;
     uint32_t generation;
 } ptt_command_t;
 
@@ -52,6 +55,9 @@ static bool s_command_pending = false;
  * still waiting in the policy queue. The release is queued after that press
  * and prevents a fast tap from becoming an indefinitely authorized capture. */
 static bool s_release_queued = false;
+static voice_assistant_ptt_owner_policy_t s_owner = {
+    .source = VOICE_ASSISTANT_PTT_SOURCE_NONE,
+};
 
 static voice_assistant_ptt_status_t s_status = {
     .state = VOICE_ASSISTANT_PTT_UNINITIALIZED,
@@ -59,6 +65,12 @@ static voice_assistant_ptt_status_t s_status = {
 };
 static voice_assistant_ptt_status_callback_t s_callback = NULL;
 static void *s_callback_context = NULL;
+
+static esp_err_t ptt_queue_release(
+    voice_assistant_ptt_source_t source,
+    uint32_t client_id,
+    uint32_t ptt_generation,
+    bool idle_is_success);
 
 static bool ptt_take_lock(void)
 {
@@ -102,6 +114,10 @@ static void ptt_set_status(
     }
     previous = s_status.state;
     s_status.state = state;
+    if (!pressed) {
+        voice_assistant_ptt_owner_policy_release(&s_owner);
+    }
+    s_status.source = s_owner.source;
     s_status.pressed = pressed;
     s_status.capture_authorized = capture_authorized;
     s_status.session_generation = session_generation;
@@ -628,6 +644,36 @@ static void ptt_handle_cancel(void)
                    ESP_ERR_INVALID_STATE);
 }
 
+/* The browser cleanup hooks are best effort. The PTT owner remains
+ * authoritative: it queues the same release intent when the monotonic lease
+ * expires, even if the HTTP client disappeared without a STOP request. */
+static void ptt_reconcile_web_lease(void)
+{
+    uint32_t client_id = 0U;
+    uint32_t generation = 0U;
+    bool release_was_queued = false;
+
+    if (!ptt_take_lock()) {
+        return;
+    }
+    const bool expired = voice_assistant_ptt_owner_policy_web_lease_expired(
+        &s_owner, esp_timer_get_time(), &client_id, &generation);
+    release_was_queued = s_release_queued;
+    xSemaphoreGive(s_lock);
+
+    if (!expired) {
+        return;
+    }
+
+    const esp_err_t release_ret = ptt_queue_release(
+        VOICE_ASSISTANT_PTT_SOURCE_WEB, client_id, generation, false);
+    if ((release_ret == ESP_OK) && !release_was_queued) {
+        APP_LOGW(TAG, WEB_PTT_LEASE_EXPIRED_0B2F465E,
+                 "web PTT lease expired; release queued generation=%u",
+                 (unsigned)generation);
+    }
+}
+
 static void ptt_task(void *argument)
 {
     (void)argument;
@@ -670,11 +716,14 @@ static void ptt_task(void *argument)
             ptt_finish_command(command.type);
         }
         ptt_reconcile_voice_state();
+        ptt_reconcile_web_lease();
     }
 
     if (ptt_take_lock()) {
+        voice_assistant_ptt_owner_policy_release(&s_owner);
         s_status = (voice_assistant_ptt_status_t) {
             .state = VOICE_ASSISTANT_PTT_UNINITIALIZED,
+            .source = VOICE_ASSISTANT_PTT_SOURCE_NONE,
             .last_error = ESP_OK,
         };
         s_task = NULL;
@@ -686,71 +735,152 @@ static void ptt_task(void *argument)
     vTaskDelete(NULL);
 }
 
-static esp_err_t ptt_queue_command(ptt_command_type_t type)
+static bool ptt_state_accepts_start(voice_assistant_ptt_state_t state)
+{
+    return (state == VOICE_ASSISTANT_PTT_IDLE) ||
+           (state == VOICE_ASSISTANT_PTT_RELEASED) ||
+           (state == VOICE_ASSISTANT_PTT_ERROR);
+}
+
+static esp_err_t ptt_queue_start(
+    voice_assistant_ptt_source_t source,
+    uint32_t client_id,
+    uint32_t *ptt_generation)
+{
+    if ((s_lock == NULL) || (s_queue == NULL) || (s_task == NULL) ||
+        (ptt_generation == NULL)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!ptt_take_lock()) {
+        return ESP_ERR_TIMEOUT;
+    }
+    if (s_command_pending || !ptt_state_accepts_start(s_status.state) ||
+        s_owner.pressed) {
+        xSemaphoreGive(s_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const uint32_t previous_generation = s_status.ptt_generation;
+    uint32_t next_generation = previous_generation + 1U;
+    if (next_generation == 0U) {
+        next_generation = 1U;
+    }
+    const int64_t now_us = esp_timer_get_time();
+    if (!voice_assistant_ptt_owner_policy_reserve(
+            &s_owner, source, client_id, next_generation, now_us)) {
+        xSemaphoreGive(s_lock);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    s_status.ptt_generation = next_generation;
+    s_status.source = source;
+    s_status.pressed = true;
+    s_status.capture_authorized = false;
+    s_status.pressed_at_us = now_us;
+    s_status.authorized_at_us = 0;
+    s_command_pending = true;
+    const ptt_command_t command = {
+        .type = PTT_COMMAND_PRESS,
+        .source = source,
+        .client_id = client_id,
+        .generation = next_generation,
+    };
+    xSemaphoreGive(s_lock);
+
+    if (xQueueSend(s_queue, &command, 0U) != pdTRUE) {
+        if (ptt_take_lock()) {
+            s_command_pending = false;
+            s_status.ptt_generation = previous_generation;
+            s_status.pressed = false;
+            s_status.capture_authorized = false;
+            s_status.pressed_at_us = 0;
+            s_status.authorized_at_us = 0;
+            voice_assistant_ptt_owner_policy_release(&s_owner);
+            s_status.source = VOICE_ASSISTANT_PTT_SOURCE_NONE;
+            xSemaphoreGive(s_lock);
+        }
+        return ESP_ERR_TIMEOUT;
+    }
+
+    *ptt_generation = next_generation;
+    return ESP_OK;
+}
+
+static esp_err_t ptt_queue_release(
+    voice_assistant_ptt_source_t source,
+    uint32_t client_id,
+    uint32_t ptt_generation,
+    bool idle_is_success)
 {
     if ((s_lock == NULL) || (s_queue == NULL) || (s_task == NULL)) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    ptt_command_t command = {.type = type, .generation = 0U};
     if (!ptt_take_lock()) {
         return ESP_ERR_TIMEOUT;
     }
+    if (!voice_assistant_ptt_owner_policy_matches(
+            &s_owner, source, client_id, ptt_generation)) {
+        const bool idle = !s_owner.pressed && !s_status.pressed;
+        xSemaphoreGive(s_lock);
+        return (idle && idle_is_success) ? ESP_OK : ESP_ERR_INVALID_STATE;
+    }
+
+    if (s_release_queued) {
+        xSemaphoreGive(s_lock);
+        return ESP_OK;
+    }
+    if (s_command_pending && (s_status.pressed == false)) {
+        xSemaphoreGive(s_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
 
     const bool command_was_pending = s_command_pending;
-
-    if (s_command_pending) {
-        if (type != PTT_COMMAND_RELEASE) {
-            xSemaphoreGive(s_lock);
-            return ESP_ERR_INVALID_STATE;
-        }
-
-        if (s_release_queued || !s_status.pressed) {
-            /* Repeated GPIO samples of one released level are idempotent. */
-            xSemaphoreGive(s_lock);
-            return ESP_OK;
-        }
-    }
-
-    if (type == PTT_COMMAND_PRESS) {
-        if ((s_status.state != VOICE_ASSISTANT_PTT_IDLE) &&
-            (s_status.state != VOICE_ASSISTANT_PTT_RELEASED) &&
-            (s_status.state != VOICE_ASSISTANT_PTT_ERROR)) {
-            xSemaphoreGive(s_lock);
-            return ESP_ERR_INVALID_STATE;
-        }
-        ++s_status.ptt_generation;
-        if (s_status.ptt_generation == 0U) {
-            s_status.ptt_generation = 1U;
-        }
-        command.generation = s_status.ptt_generation;
-        s_status.pressed = true;
-        s_status.capture_authorized = false;
-        s_status.pressed_at_us = esp_timer_get_time();
-        s_status.authorized_at_us = 0;
-    } else {
-        if ((type == PTT_COMMAND_RELEASE) && !s_status.pressed) {
-            xSemaphoreGive(s_lock);
-            return ESP_OK;
-        }
-        command.generation = s_status.ptt_generation;
-    }
-
-    if (type == PTT_COMMAND_RELEASE) {
-        s_release_queued = true;
-    }
+    s_release_queued = true;
     s_command_pending = true;
+    const ptt_command_t command = {
+        .type = PTT_COMMAND_RELEASE,
+        .source = source,
+        .client_id = client_id,
+        .generation = ptt_generation,
+    };
     xSemaphoreGive(s_lock);
 
     if (xQueueSend(s_queue, &command, 0U) != pdTRUE) {
         if (ptt_take_lock()) {
+            s_release_queued = false;
             s_command_pending = command_was_pending;
-            if (type == PTT_COMMAND_PRESS) {
-                s_status.pressed = false;
-            }
-            if (type == PTT_COMMAND_RELEASE) {
-                s_release_queued = false;
-            }
+            xSemaphoreGive(s_lock);
+        }
+        return ESP_ERR_TIMEOUT;
+    }
+    return ESP_OK;
+}
+
+static esp_err_t ptt_queue_cancel(void)
+{
+    if ((s_lock == NULL) || (s_queue == NULL) || (s_task == NULL)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!ptt_take_lock()) {
+        return ESP_ERR_TIMEOUT;
+    }
+    if (s_command_pending) {
+        xSemaphoreGive(s_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+    s_command_pending = true;
+    const ptt_command_t command = {
+        .type = PTT_COMMAND_CANCEL,
+        .source = s_owner.source,
+        .client_id = s_owner.client_id,
+        .generation = s_status.ptt_generation,
+    };
+    xSemaphoreGive(s_lock);
+    if (xQueueSend(s_queue, &command, 0U) != pdTRUE) {
+        if (ptt_take_lock()) {
+            s_command_pending = false;
             xSemaphoreGive(s_lock);
         }
         return ESP_ERR_TIMEOUT;
@@ -775,6 +905,8 @@ esp_err_t voice_assistant_ptt_init(void)
     }
     memset(&s_status, 0, sizeof(s_status));
     s_status.state = VOICE_ASSISTANT_PTT_IDLE;
+    voice_assistant_ptt_owner_policy_release(&s_owner);
+    s_status.source = VOICE_ASSISTANT_PTT_SOURCE_NONE;
     s_status.last_error = ESP_OK;
     s_command_pending = false;
     s_release_queued = false;
@@ -848,17 +980,55 @@ esp_err_t voice_assistant_ptt_start(void)
 
 esp_err_t voice_assistant_ptt_press(void)
 {
-    return ptt_queue_command(PTT_COMMAND_PRESS);
+    uint32_t ignored_generation = 0U;
+    return ptt_queue_start(
+        VOICE_ASSISTANT_PTT_SOURCE_GPIO, 0U, &ignored_generation);
 }
 
 esp_err_t voice_assistant_ptt_release(void)
 {
-    return ptt_queue_command(PTT_COMMAND_RELEASE);
+    uint32_t generation = 0U;
+    if (!ptt_take_lock()) {
+        return (s_lock == NULL) ? ESP_ERR_INVALID_STATE : ESP_ERR_TIMEOUT;
+    }
+    generation = s_owner.ptt_generation;
+    xSemaphoreGive(s_lock);
+    return ptt_queue_release(
+        VOICE_ASSISTANT_PTT_SOURCE_GPIO, 0U, generation, true);
 }
 
 esp_err_t voice_assistant_ptt_cancel(void)
 {
-    return ptt_queue_command(PTT_COMMAND_CANCEL);
+    return ptt_queue_cancel();
+}
+
+esp_err_t voice_assistant_ptt_web_start(
+    uint32_t client_id,
+    uint32_t *ptt_generation)
+{
+    return ptt_queue_start(
+        VOICE_ASSISTANT_PTT_SOURCE_WEB, client_id, ptt_generation);
+}
+
+esp_err_t voice_assistant_ptt_web_keepalive(
+    uint32_t client_id,
+    uint32_t ptt_generation)
+{
+    if (!ptt_take_lock()) {
+        return (s_lock == NULL) ? ESP_ERR_INVALID_STATE : ESP_ERR_TIMEOUT;
+    }
+    const bool refreshed = voice_assistant_ptt_owner_policy_refresh_web_lease(
+        &s_owner, client_id, ptt_generation, esp_timer_get_time());
+    xSemaphoreGive(s_lock);
+    return refreshed ? ESP_OK : ESP_ERR_INVALID_STATE;
+}
+
+esp_err_t voice_assistant_ptt_web_stop(
+    uint32_t client_id,
+    uint32_t ptt_generation)
+{
+    return ptt_queue_release(
+        VOICE_ASSISTANT_PTT_SOURCE_WEB, client_id, ptt_generation, false);
 }
 
 esp_err_t voice_assistant_ptt_register_status_callback(
@@ -916,5 +1086,18 @@ const char *voice_assistant_ptt_state_to_string(voice_assistant_ptt_state_t stat
             return "ERROR";
         default:
             return "UNKNOWN";
+    }
+}
+
+const char *voice_assistant_ptt_source_to_string(voice_assistant_ptt_source_t source)
+{
+    switch (source) {
+        case VOICE_ASSISTANT_PTT_SOURCE_GPIO:
+            return "GPIO";
+        case VOICE_ASSISTANT_PTT_SOURCE_WEB:
+            return "WEB";
+        case VOICE_ASSISTANT_PTT_SOURCE_NONE:
+        default:
+            return "NONE";
     }
 }

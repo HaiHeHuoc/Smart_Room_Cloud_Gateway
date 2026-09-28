@@ -9,6 +9,7 @@ idf_component_register(
         "modules/ui/src/voice_assistant_ui_gui_adapter.c"
         "modules/ptt/src/voice_assistant_ptt.c"
         "modules/ptt/src/voice_assistant_ptt_gpio.c"
+        "modules/ptt/src/voice_assistant_ptt_owner_policy.c"
         "modules/playback/src/voice_assistant_playback_control.c"
         "modules/playback/src/voice_assistant_playback_turn_policy.c"
         "modules/codec/src/voice_assistant_opus.c"
@@ -22,6 +23,7 @@ idf_component_register(
         "modules/codec/include"
         "modules/bootstrap/include"
         "modules/playback/include"
+        "modules/ptt/include"
 
     REQUIRES
         esp_common

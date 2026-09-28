@@ -27,12 +27,14 @@
 #include "sensor_manager.h"
 #include "smart_room_mcp_adapter.h"
 #include "voice_assistant_playback_control.h"
+#include "voice_assistant_ptt.h"
+#include "voice_assistant_ui_model.h"
 #include "voice_recording_critical.h"
 #include "wifi_manager.h"
 
 #define LOCAL_WEB_HTTP_STACK_SIZE_BYTES 6144U
 #define LOCAL_WEB_HTTP_MAX_OPEN_SOCKETS 2U
-#define LOCAL_WEB_HTTP_ROUTE_COUNT 29U
+#define LOCAL_WEB_HTTP_ROUTE_COUNT 33U
 #define LOCAL_WEB_HTTP_MAX_URI_LEN 1280U
 #define LOCAL_WEB_RESPONSE_CHUNK_SIZE 512U
 #define LOCAL_WEB_TRANSFER_CHUNK_SIZE SD_CARD_MANAGER_TRANSFER_CHUNK_SIZE
@@ -42,6 +44,7 @@
     ((LOCAL_WEB_LOGICAL_PATH_MAX_LEN * 3U * 2U) + 24U)
 #define LOCAL_WEB_LIGHT_QUERY_MAX_LEN 160U
 #define LOCAL_WEB_SCENE_QUERY_MAX_LEN 32U
+#define LOCAL_WEB_VOICE_QUERY_MAX_LEN 64U
 
 static const char *const TAG = "local_web_server";
 
@@ -90,6 +93,10 @@ static esp_err_t local_web_logs_files_get(httpd_req_t *request);
 static esp_err_t local_web_logs_read_get(httpd_req_t *request);
 static esp_err_t local_web_diagnostics_status_get(httpd_req_t *request);
 static esp_err_t local_web_diagnostics_export_get(httpd_req_t *request);
+static esp_err_t local_web_voice_status_get(httpd_req_t *request);
+static esp_err_t local_web_voice_ptt_start_post(httpd_req_t *request);
+static esp_err_t local_web_voice_ptt_keepalive_post(httpd_req_t *request);
+static esp_err_t local_web_voice_ptt_stop_post(httpd_req_t *request);
 static esp_err_t local_web_send_error(
     httpd_req_t *request,
     const char *http_status,
@@ -132,6 +139,13 @@ static bool local_web_scene_parse_apply_query(httpd_req_t *request,
                                               char scene_id[SCENE_MANAGER_ID_MAX_LEN + 1U]);
 static esp_err_t local_web_scene_send_status(httpd_req_t *request,
                                              const scene_manager_status_t *status);
+static bool local_web_voice_parse_control_query(
+    httpd_req_t *request,
+    bool require_generation,
+    uint32_t *client_id,
+    uint32_t *ptt_generation);
+static const char *local_web_voice_state_name(voice_assistant_ui_state_t state);
+static const char *local_web_voice_ptt_source_name(voice_assistant_ptt_source_t source);
 
 static const char *local_web_audio_state_name(
     audio_manager_playback_control_state_t state)
@@ -860,6 +874,203 @@ static esp_err_t local_web_logs_read_get(httpd_req_t *request)
     }
     return httpd_resp_sendstr_chunk(request, "]}") == ESP_OK
         ? httpd_resp_send_chunk(request, NULL, 0U) : ESP_FAIL;
+}
+
+static const char *local_web_voice_state_name(voice_assistant_ui_state_t state)
+{
+    switch (state) {
+        case VOICE_ASSISTANT_UI_CONNECTING: return "starting";
+        case VOICE_ASSISTANT_UI_READY: return "ready";
+        case VOICE_ASSISTANT_UI_LISTENING: return "listening";
+        case VOICE_ASSISTANT_UI_THINKING: return "processing";
+        case VOICE_ASSISTANT_UI_SPEAKING: return "speaking";
+        case VOICE_ASSISTANT_UI_RECOVERING: return "recovering";
+        case VOICE_ASSISTANT_UI_ERROR: return "error";
+        case VOICE_ASSISTANT_UI_IDLE:
+        default: return "idle";
+    }
+}
+
+static const char *local_web_voice_ptt_source_name(voice_assistant_ptt_source_t source)
+{
+    switch (source) {
+        case VOICE_ASSISTANT_PTT_SOURCE_GPIO: return "gpio";
+        case VOICE_ASSISTANT_PTT_SOURCE_WEB: return "web";
+        case VOICE_ASSISTANT_PTT_SOURCE_NONE:
+        default: return "none";
+    }
+}
+
+static bool local_web_voice_parse_control_query(
+    httpd_req_t *request,
+    bool require_generation,
+    uint32_t *client_id,
+    uint32_t *ptt_generation)
+{
+    if ((request == NULL) || (client_id == NULL) || (ptt_generation == NULL) ||
+        (httpd_req_get_url_query_len(request) == 0U) ||
+        (httpd_req_get_url_query_len(request) >= LOCAL_WEB_VOICE_QUERY_MAX_LEN) ||
+        (httpd_req_get_url_query_len(request) >= sizeof(s_query_buffer)) ||
+        (httpd_req_get_url_query_str(request, s_query_buffer,
+                                     sizeof(s_query_buffer)) != ESP_OK)) {
+        return false;
+    }
+
+    bool client_seen = false;
+    bool generation_seen = false;
+    char *field = s_query_buffer;
+    while (field[0] != '\0') {
+        char *const separator = strchr(field, '&');
+        if (separator != NULL) {
+            *separator = '\0';
+        }
+        char *const equals = strchr(field, '=');
+        if ((equals == NULL) || (equals == field) || (equals[1] == '\0')) {
+            return false;
+        }
+        *equals = '\0';
+
+        uint64_t value = 0U;
+        if (!local_web_audio_uint64_parse(equals + 1U, &value) ||
+            (value == 0U) || (value > UINT32_MAX)) {
+            return false;
+        }
+        if ((strcmp(field, "client") == 0) && !client_seen) {
+            *client_id = (uint32_t)value;
+            client_seen = true;
+        } else if ((strcmp(field, "generation") == 0) && !generation_seen) {
+            *ptt_generation = (uint32_t)value;
+            generation_seen = true;
+        } else {
+            return false;
+        }
+
+        if (separator == NULL) {
+            break;
+        }
+        field = separator + 1U;
+    }
+
+    return client_seen && (require_generation == generation_seen) &&
+           (!require_generation || (*ptt_generation != 0U));
+}
+
+static esp_err_t local_web_voice_status_get(httpd_req_t *request)
+{
+    voice_assistant_ptt_status_t ptt = {0};
+    voice_assistant_ui_model_t voice = {0};
+    const bool ptt_available = voice_assistant_ptt_get_status(&ptt) == ESP_OK;
+    const bool voice_available = voice_assistant_ui_model_get(&voice) == ESP_OK;
+
+    httpd_resp_set_type(request, "application/json");
+    httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+    if (!ptt_available || !voice_available) {
+        return httpd_resp_sendstr(request, "{\"ok\":true,\"available\":false}");
+    }
+
+    if (local_web_send_chunkf(
+            request,
+            "{\"ok\":true,\"available\":true,\"state\":\"%s\","
+            "\"ptt\":{\"active\":%s,\"owner\":\"%s\","
+            "\"generation\":%" PRIu32 ",\"capture_authorized\":%s},"
+            "\"last_error\":%d,\"user_text\":",
+            local_web_voice_state_name(voice.state),
+            ptt.pressed ? "true" : "false",
+            local_web_voice_ptt_source_name(ptt.source),
+            ptt.ptt_generation,
+            ptt.capture_authorized ? "true" : "false",
+            (int)voice.last_error) != ESP_OK) {
+        return ESP_FAIL;
+    }
+    if (voice.user_text_valid) {
+        if ((httpd_resp_sendstr_chunk(request, "\"") != ESP_OK) ||
+            (local_web_send_json_escaped(request, voice.user_text) != ESP_OK) ||
+            (httpd_resp_sendstr_chunk(request, "\"") != ESP_OK)) {
+            return ESP_FAIL;
+        }
+    } else if (httpd_resp_sendstr_chunk(request, "null") != ESP_OK) {
+        return ESP_FAIL;
+    }
+    if (httpd_resp_sendstr_chunk(request, ",\"assistant_text\":") != ESP_OK) {
+        return ESP_FAIL;
+    }
+    if (voice.assistant_text_valid) {
+        if ((httpd_resp_sendstr_chunk(request, "\"") != ESP_OK) ||
+            (local_web_send_json_escaped(request, voice.assistant_text) != ESP_OK) ||
+            (httpd_resp_sendstr_chunk(request, "\"}") != ESP_OK)) {
+            return ESP_FAIL;
+        }
+    } else if (httpd_resp_sendstr_chunk(request, "null}") != ESP_OK) {
+        return ESP_FAIL;
+    }
+    return httpd_resp_send_chunk(request, NULL, 0U);
+}
+
+static esp_err_t local_web_voice_ptt_start_post(httpd_req_t *request)
+{
+    uint32_t client_id = 0U;
+    uint32_t ignored_generation = 0U;
+    if (!local_web_voice_parse_control_query(
+            request, false, &client_id, &ignored_generation)) {
+        return local_web_send_error(request, "400 Bad Request", "invalid_ptt_request");
+    }
+
+    uint32_t generation = 0U;
+    const esp_err_t result = voice_assistant_ptt_web_start(client_id, &generation);
+    if (result == ESP_ERR_INVALID_STATE) {
+        return local_web_send_error(request, "409 Conflict", "ptt_busy");
+    }
+    if (result == ESP_ERR_INVALID_ARG) {
+        return local_web_send_error(request, "400 Bad Request", "invalid_ptt_request");
+    }
+    if (result != ESP_OK) {
+        return local_web_send_error(request, "503 Service Unavailable", "ptt_unavailable");
+    }
+    httpd_resp_set_type(request, "application/json");
+    httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+    return local_web_send_responsef(
+        request,
+        "{\"ok\":true,\"generation\":%" PRIu32 ","
+        "\"keepalive_interval_ms\":%u,\"lease_timeout_ms\":%u}",
+        generation,
+        (unsigned)VOICE_ASSISTANT_PTT_WEB_KEEPALIVE_INTERVAL_MS,
+        (unsigned)VOICE_ASSISTANT_PTT_WEB_LEASE_TIMEOUT_MS);
+}
+
+static esp_err_t local_web_voice_ptt_keepalive_post(httpd_req_t *request)
+{
+    uint32_t client_id = 0U;
+    uint32_t generation = 0U;
+    if (!local_web_voice_parse_control_query(
+            request, true, &client_id, &generation)) {
+        return local_web_send_error(request, "400 Bad Request", "invalid_ptt_request");
+    }
+    const esp_err_t result = voice_assistant_ptt_web_keepalive(client_id, generation);
+    if (result == ESP_ERR_INVALID_STATE) {
+        return local_web_send_error(request, "409 Conflict", "ptt_stale");
+    }
+    if (result != ESP_OK) {
+        return local_web_send_error(request, "503 Service Unavailable", "ptt_unavailable");
+    }
+    return httpd_resp_sendstr(request, "{\"ok\":true}");
+}
+
+static esp_err_t local_web_voice_ptt_stop_post(httpd_req_t *request)
+{
+    uint32_t client_id = 0U;
+    uint32_t generation = 0U;
+    if (!local_web_voice_parse_control_query(
+            request, true, &client_id, &generation)) {
+        return local_web_send_error(request, "400 Bad Request", "invalid_ptt_request");
+    }
+    const esp_err_t result = voice_assistant_ptt_web_stop(client_id, generation);
+    if (result == ESP_ERR_INVALID_STATE) {
+        return local_web_send_error(request, "409 Conflict", "ptt_stale");
+    }
+    if (result != ESP_OK) {
+        return local_web_send_error(request, "503 Service Unavailable", "ptt_unavailable");
+    }
+    return httpd_resp_sendstr(request, "{\"ok\":true}");
 }
 
 static esp_err_t local_web_diagnostics_status_get(httpd_req_t *request)
@@ -1744,6 +1955,22 @@ static esp_err_t local_web_register_routes(httpd_handle_t server)
     };
     static const httpd_uri_t diagnostics_status = { .uri = "/api/diagnostics/status", .method = HTTP_GET, .handler = local_web_diagnostics_status_get };
     static const httpd_uri_t diagnostics_export = { .uri = "/api/diagnostics/export", .method = HTTP_GET, .handler = local_web_diagnostics_export_get };
+    static const httpd_uri_t voice_status = {
+        .uri = "/api/voice/status", .method = HTTP_GET,
+        .handler = local_web_voice_status_get,
+    };
+    static const httpd_uri_t voice_ptt_start = {
+        .uri = "/api/voice/ptt/start", .method = HTTP_POST,
+        .handler = local_web_voice_ptt_start_post,
+    };
+    static const httpd_uri_t voice_ptt_keepalive = {
+        .uri = "/api/voice/ptt/keepalive", .method = HTTP_POST,
+        .handler = local_web_voice_ptt_keepalive_post,
+    };
+    static const httpd_uri_t voice_ptt_stop = {
+        .uri = "/api/voice/ptt/stop", .method = HTTP_POST,
+        .handler = local_web_voice_ptt_stop_post,
+    };
 
     esp_err_t result = httpd_register_uri_handler(server, &root);
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &storage_status);
@@ -1772,5 +1999,9 @@ static esp_err_t local_web_register_routes(httpd_handle_t server)
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &logs_read);
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &diagnostics_status);
     if (result == ESP_OK) result = httpd_register_uri_handler(server, &diagnostics_export);
+    if (result == ESP_OK) result = httpd_register_uri_handler(server, &voice_status);
+    if (result == ESP_OK) result = httpd_register_uri_handler(server, &voice_ptt_start);
+    if (result == ESP_OK) result = httpd_register_uri_handler(server, &voice_ptt_keepalive);
+    if (result == ESP_OK) result = httpd_register_uri_handler(server, &voice_ptt_stop);
     return result;
 }

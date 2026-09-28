@@ -27,6 +27,17 @@ if ($LASTEXITCODE -ne 0) { throw 'Voice bootstrap lifecycle test build failed' }
 & (Join-Path $outputRoot 'voice_bootstrap_lifecycle_tests.exe')
 if ($LASTEXITCODE -ne 0) { throw 'Voice bootstrap lifecycle tests failed' }
 
+& $gcc -std=c11 -Wall -Wextra -Werror `
+    -I (Join-Path $testRoot 'include') `
+    -I (Join-Path $componentRoot 'include') `
+    -I (Join-Path $componentRoot 'modules\ptt\include') `
+    (Join-Path $componentRoot 'modules\ptt\src\voice_assistant_ptt_owner_policy.c') `
+    (Join-Path $testRoot 'test_voice_ptt_owner_policy.c') `
+    -o (Join-Path $outputRoot 'voice_ptt_owner_policy_tests.exe')
+if ($LASTEXITCODE -ne 0) { throw 'Voice PTT owner-policy test build failed' }
+& (Join-Path $outputRoot 'voice_ptt_owner_policy_tests.exe')
+if ($LASTEXITCODE -ne 0) { throw 'Voice PTT owner-policy tests failed' }
+
 $downlinkSource = Get-Content `
     (Join-Path $componentRoot 'modules\downlink\src\voice_assistant_downlink.c') `
     -Raw

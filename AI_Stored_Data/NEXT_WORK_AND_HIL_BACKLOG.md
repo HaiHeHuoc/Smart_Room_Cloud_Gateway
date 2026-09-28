@@ -1,6 +1,6 @@
 # Next Work + Deferred HIL Backlog
 
-Updated: 2026-09-28
+Updated: 2026-09-29
 Active V2 integration branch: `main_including_Firebase_security`
 Release branch: `release/V2.0.0`
 V2 baseline: `44e6feb23f3358917171b6b326b56fdec8ae7ff3` (PTT uplink robustness merge)
@@ -53,6 +53,34 @@ release-validation/regression work; neither changes Sprint 24 status.
 After that, older Sprint-19/20/22/23 matrices remain useful regression work but
 do not reopen already accepted Sprints 21-23 without a concrete regression.
 Sprint 24 remains PLANNED / NOT STARTED until Hải explicitly starts it.
+
+## V2 Local Web Xiaozhi Remote PTT — mandatory Prompt-6 HIL
+
+This explicit late-V2 exception requires the affected Prompt-5 software gate
+and then this Prompt-6 target matrix on the exact built source. The browser is
+only a GPIO38-equivalent PTT frontend; all audio must come from the ESP32
+microphone. For every recording case, retain `queue_drops == 0`, unexpected
+`stale_drops == 0`, and zero audio-manager RX overflow/timeout delta.
+
+- [ ] WEB-HIL-01: basic browser hold/speak/release starts and ends one normal turn.
+- [ ] WEB-HIL-02: speak immediately after Web PTT START; capture first-PCM and
+  first-Opus timing plus audible/semantic result.
+- [ ] WEB-HIL-03: hold Web PTT for 10 seconds; confirm no stuck state or queue loss.
+- [ ] WEB-HIL-04: perform five repeated Web PTT turns.
+- [ ] WEB-HIL-05: Web PTT while Dashboard polling is active.
+- [ ] WEB-HIL-06: Web PTT while a Storage request is attempted; confirm the
+  existing recording-critical policy rejects/defers it safely.
+- [ ] WEB-HIL-07: Web PTT with ordinary cloud/Firebase activity.
+- [ ] WEB-HIL-08: close the browser while held; the 8-second device lease must
+  release recording without a browser STOP.
+- [ ] WEB-HIL-09: lose Wi-Fi/control connectivity while held; no recording may
+  remain stuck after lease expiry.
+- [ ] WEB-HIL-10: GPIO38 active then Web START returns deterministic BUSY.
+- [ ] WEB-HIL-11: Web active then GPIO38 press causes no generation or audio corruption.
+- [ ] WEB-HIL-12: send/observe a stale Web STOP after a newer generation; it
+  must not stop the newer turn.
+- [ ] WEB-HIL-13: repeatedly switch GPIO -> Web -> GPIO -> Web and inspect
+  session/PTT generations, audio errors, and transcript behavior.
 
 ## Sprint 22 target HIL matrix
 

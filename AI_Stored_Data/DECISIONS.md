@@ -429,7 +429,21 @@ robustness fix`). This is the V2 release-hardening baseline.
   suspension, I2S-owner changes, unbounded queues/DMA, or priority changes
   without evidence.
 
-## STATUS OVERRIDE — Sprint 23 final closure
+## DECISION - V2 Local Web Xiaozhi Remote PTT exception
+
+Date: 2026-09-29
+
+V2 feature freeze has one explicitly approved exception: **Local Web Xiaozhi
+Remote PTT**. The browser is only a remote PTT frontend for the existing ESP32
+microphone path. GPIO38 and Local Web are the two PTT sources, with one
+generation-fenced active owner at a time; neither source preempts the other.
+Web must use the public voice/PTT policy API and a bounded device-side lease.
+It must not capture browser microphone audio, send browser PCM/Opus/WebRTC,
+own I2S/DMA/audio_manager, or create another Xiaozhi pipeline. Sprint 24
+remains **SUSPENDED FOR V2 RELEASE**, and feature freeze resumes after this
+exception.
+
+## STATUS OVERRIDE - Sprint 23 final closure
 
 Date: 2026-09-26
 Authority: explicit user acceptance recorded in the repository handoff.

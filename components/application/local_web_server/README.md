@@ -15,12 +15,12 @@ browser download filename through `Content-Disposition`), raw-body
 `POST /api/storage/upload?path=<logical-path>` (at most 8 MiB), and bounded
 `POST` delete, rename, mkdir, and rmdir operations.
 
-The HTTP server reserves 29 URI-handler slots for the current 27 registered
+The HTTP server reserves 33 URI-handler slots for the current 31 registered
 routes, retaining two bounded spare slots. A route addition must still review
 that count; otherwise ESP-IDF returns `ESP_ERR_HTTPD_HANDLERS_FULL` and startup
 rolls back.
 
-The component calls only public `sd_card_manager` APIs. The SD manager keeps
+The storage routes call only public `sd_card_manager` APIs. The SD manager keeps
 mount/recovery and VFS lease ownership and exposes only copied metadata. The
 logical Web root `/` is mapped internally to the approved mounted SD root; raw
 VFS paths and filesystem handles never enter HTTP responses.
@@ -51,6 +51,32 @@ shows an SD-unavailable state without a page reload. A later transition to
 ready reloads the current directory and audio catalog once. This remains
 browser polling only: it does not add a WebSocket or give the Web component SD
 mount/recovery ownership.
+
+## Xiaozhi remote PTT presentation
+
+The explicit late-V2 Xiaozhi tab is an HTTP frontend for the existing ESP32
+PTT path. It adds `GET /api/voice/status` plus bounded `POST`
+`/api/voice/ptt/start`, `/api/voice/ptt/keepalive`, and
+`/api/voice/ptt/stop` routes. A start returns the PTT generation and the
+configured 2-second keepalive / 8-second device-side lease. Keepalive and stop
+must provide the same nonzero browser client ID and generation; stale or
+different-client commands return a conflict rather than changing a newer turn.
+
+The routes only validate bounded decimal query fields, call the public
+`voice_assistant_ptt_web_*` API, and serialize copied PTT/UI-model state and
+bounded transcripts. They do not call `audio_manager`, I2S, DMA, microphone,
+Opus, or Xiaozhi provider/transport APIs. The device-side PTT policy releases
+an expired Web lease through the normal PTT release path, so a tab/browser or
+Wi-Fi control loss cannot leave capture held indefinitely. GPIO38 remains a
+separate frontend and wins no implicit preemption: either active source causes
+the other start request to receive `ptt_busy`.
+
+The browser uses Pointer Events for hold-to-talk and attempts STOP on pointer
+up/cancel, blur, page hide, and document hiding. It polls copied status only
+while the visible Xiaozhi tab is active and renders all transcript text through
+`textContent`. Browser microphone streaming is deliberately unsupported:
+there is no `getUserMedia`, `MediaRecorder`, WebRTC, browser PCM, or audio
+upload path.
 
 ## Playback presentation edge
 

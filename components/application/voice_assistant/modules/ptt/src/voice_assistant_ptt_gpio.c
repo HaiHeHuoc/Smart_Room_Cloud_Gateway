@@ -46,6 +46,17 @@ static bool ptt_gpio_is_pressed(void)
     return (level == (int)s_config.active_level);
 }
 
+/* A Web-held turn is an expected arbitration conflict, not a GPIO delivery
+ * failure. Consume this physical edge once so the debounce worker does not
+ * retry/log every 50 ms while the user holds GPIO38 during a Web turn. */
+static bool ptt_gpio_is_busy_by_web_owner(void)
+{
+    voice_assistant_ptt_status_t status = {0};
+    return (voice_assistant_ptt_get_status(&status) == ESP_OK) &&
+           status.pressed &&
+           (status.source == VOICE_ASSISTANT_PTT_SOURCE_WEB);
+}
+
 static void ptt_gpio_task(void *argument)
 {
     (void)argument;
@@ -98,6 +109,13 @@ static void ptt_gpio_task(void *argument)
                 delivered = stable;
                 delivery_attempted = false;
                 APP_LOGI(TAG, EDGE_S_1A00268C, "edge=%s", stable ? "PRESS" : "RELEASE");
+            } else if ((ret == ESP_ERR_INVALID_STATE) &&
+                       ptt_gpio_is_busy_by_web_owner()) {
+                delivered = stable;
+                delivery_attempted = false;
+                APP_LOGI(TAG, EDGE_S_IGNORED_WEB_PTT_OWNER_7D247165,
+                         "edge=%s ignored while Web PTT owns the turn",
+                         stable ? "PRESS" : "RELEASE");
             } else if (!retry) {
                 APP_LOGW(TAG, EDGE_S_DEFERRED_S_E25A0C6D,
                          "edge=%s deferred: %s",
