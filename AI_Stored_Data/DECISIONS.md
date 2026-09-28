@@ -400,3 +400,25 @@ Durable rules:
 This is a workflow/token-efficiency decision only. It does not weaken build,
 test, HIL, security, architecture, or evidence requirements and does not allow
 important resume context to be dropped.
+
+## STATUS OVERRIDE — Sprint 23 final closure
+
+Date: 2026-09-26
+Authority: explicit user acceptance recorded in the repository handoff.
+
+Sprint 23 — Local Web Control V5: Scenes + Logs + Diagnostics is **COMPLETE /
+USER ACCEPTED BY HẢI**.
+
+Consequences:
+
+- older `SOURCE INTEGRATED / BUILD VERIFIED / TARGET HIL PENDING` text remains
+  historical evidence vocabulary, not the current Sprint-23 closure gate;
+- the former Sprint-23 target/browser HIL matrix is optional regression
+  coverage and must not automatically reopen the sprint;
+- this closure does not fabricate target/HIL evidence that was never
+  observed; source/build evidence and user acceptance remain distinct;
+- Sprint 24 Wake Word + Advanced Voice UX remains a separate future sprint
+  and does not start automatically.
+
+The later PTT uplink robustness merge is a focused regression/hardening change
+after Sprint-23 acceptance and does not alter the historical Sprint-23 closure.
