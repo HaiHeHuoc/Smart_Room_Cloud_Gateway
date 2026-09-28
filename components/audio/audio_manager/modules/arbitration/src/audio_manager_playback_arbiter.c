@@ -46,6 +46,8 @@ static const char *const TAG = "AUDIO_PB_ARB";
 static SemaphoreHandle_t s_lock = NULL;
 static TaskHandle_t s_task = NULL;
 static TaskHandle_t s_start_waiter = NULL;
+static TaskHandle_t s_stop_waiter = NULL;
+static volatile bool s_shutdown_requested = false;
 static playback_slot_t s_current = {0};
 static playback_slot_t s_pending = {0};
 /* One arbiter-owned paused WAV may yield logical current ownership while its
@@ -397,6 +399,9 @@ static void playback_arbiter_task(void *arg)
     }
 
     for (;;) {
+        if (s_shutdown_requested) {
+            break;
+        }
         audio_manager_status_t manager = {0};
         const esp_err_t status_ret = audio_manager_get_status(&manager);
         if (status_ret != ESP_OK) {
@@ -620,6 +625,22 @@ static void playback_arbiter_task(void *arg)
 
         vTaskDelay(pdMS_TO_TICKS(PLAYBACK_ARBITER_POLL_MS));
     }
+
+    if (take_lock()) {
+        clear_slot(&s_current);
+        clear_slot(&s_pending);
+        clear_slot(&s_ptt_suspended);
+        s_current_valid = false;
+        s_pending_valid = false;
+        s_ptt_suspended_valid = false;
+        sync_status_locked(AUDIO_MANAGER_PLAYBACK_ARBITER_UNINITIALIZED, ESP_OK);
+        s_task = NULL;
+        xSemaphoreGive(s_lock);
+    }
+    if (s_stop_waiter != NULL) {
+        xTaskNotifyGive(s_stop_waiter);
+    }
+    vTaskDelete(NULL);
 }
 
 esp_err_t audio_manager_playback_arbiter_init(void)
@@ -644,6 +665,31 @@ esp_err_t audio_manager_playback_arbiter_init(void)
     s_terminal_next = 0U;
     s_status.state = AUDIO_MANAGER_PLAYBACK_ARBITER_IDLE;
     s_status.last_error = ESP_OK;
+    s_shutdown_requested = false;
+    return ESP_OK;
+}
+
+esp_err_t audio_manager_playback_arbiter_stop_and_deinit(void)
+{
+    if (s_lock == NULL) {
+        return ESP_OK;
+    }
+    const esp_err_t stop_ret = audio_manager_stop_playback();
+    if ((stop_ret != ESP_OK) && (stop_ret != ESP_ERR_INVALID_STATE)) {
+        return stop_ret;
+    }
+    s_shutdown_requested = true;
+    if (s_task != NULL) {
+        s_stop_waiter = xTaskGetCurrentTaskHandle();
+        xTaskNotifyGive(s_task);
+        if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(PLAYBACK_ARBITER_START_MS)) == 0U) {
+            return ESP_ERR_TIMEOUT;
+        }
+    }
+    s_start_waiter = NULL;
+    s_stop_waiter = NULL;
+    vSemaphoreDelete(s_lock);
+    s_lock = NULL;
     return ESP_OK;
 }
 

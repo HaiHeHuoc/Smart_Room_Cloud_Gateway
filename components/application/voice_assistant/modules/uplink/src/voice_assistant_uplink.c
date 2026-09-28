@@ -55,6 +55,8 @@ static QueueHandle_t s_queue = NULL;
 static StaticQueue_t s_queue_control = {0};
 static uint8_t *s_queue_storage = NULL;
 static TaskHandle_t s_task = NULL;
+static TaskHandle_t s_stop_waiter = NULL;
+static volatile bool s_shutdown_requested = false;
 static voice_assistant_uplink_status_t s_status = {0};
 /* Owned exclusively by the uplink task after initialization. */
 static int16_t s_pcm_frame[VOICE_ASSISTANT_OPUS_PCM_SAMPLES] = {0};
@@ -654,6 +656,9 @@ static void uplink_task(void *argument)
     APP_LOGI(TAG, COORDINATOR_STARTED_E5C98CE5, "coordinator started");
 
     for (;;) {
+        if (s_shutdown_requested) {
+            break;
+        }
         uplink_frame_item_t item = {0};
         if (xQueueReceive(
                 s_queue,
@@ -685,6 +690,26 @@ static void uplink_task(void *argument)
 
         uplink_reconcile_ptt();
     }
+
+    uint32_t session_generation = 0U;
+    uint32_t ptt_generation = 0U;
+    portENTER_CRITICAL(&s_lock);
+    session_generation = s_status.session_generation;
+    ptt_generation = s_turn_ptt_generation;
+    portEXIT_CRITICAL(&s_lock);
+    (void)voice_assistant_audio_capture_stop();
+    if ((session_generation != 0U) && (ptt_generation != 0U)) {
+        (void)voice_recording_critical_exit(session_generation, ptt_generation);
+    }
+    portENTER_CRITICAL(&s_lock);
+    s_status.running = false;
+    s_status.turn_active = false;
+    s_task = NULL;
+    portEXIT_CRITICAL(&s_lock);
+    if (s_stop_waiter != NULL) {
+        xTaskNotifyGive(s_stop_waiter);
+    }
+    vTaskDelete(NULL);
 }
 
 esp_err_t voice_assistant_uplink_init(void)
@@ -714,6 +739,7 @@ esp_err_t voice_assistant_uplink_init(void)
     }
     memset(&s_status, 0, sizeof(s_status));
     s_status.last_error = ESP_OK;
+    s_shutdown_requested = false;
 
     const esp_err_t codec_ret = voice_assistant_opus_encoder_init();
     if (codec_ret != ESP_OK) {
@@ -733,6 +759,33 @@ esp_err_t voice_assistant_uplink_init(void)
         s_queue_storage = NULL;
         return ret;
     }
+    return ESP_OK;
+}
+
+esp_err_t voice_assistant_uplink_stop_and_deinit(void)
+{
+    if (s_queue == NULL) {
+        return ESP_OK;
+    }
+
+    s_shutdown_requested = true;
+    if (s_task != NULL) {
+        s_stop_waiter = xTaskGetCurrentTaskHandle();
+        xTaskNotifyGive(s_task);
+        if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000U)) == 0U) {
+            return ESP_ERR_TIMEOUT;
+        }
+    }
+    const esp_err_t callback_ret = audio_manager_stream_register_callback(NULL, NULL);
+    if (callback_ret != ESP_OK) {
+        return callback_ret;
+    }
+    vQueueDelete(s_queue);
+    s_queue = NULL;
+    heap_caps_free(s_queue_storage);
+    s_queue_storage = NULL;
+    s_stop_waiter = NULL;
+    memset(&s_status, 0, sizeof(s_status));
     return ESP_OK;
 }
 

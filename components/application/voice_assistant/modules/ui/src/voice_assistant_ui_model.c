@@ -383,6 +383,31 @@ esp_err_t voice_assistant_ui_model_start(void)
     return ESP_OK;
 }
 
+esp_err_t voice_assistant_ui_model_stop_and_deinit(void)
+{
+    if (s_lock == NULL) {
+        return ESP_OK;
+    }
+
+    const esp_err_t text_ret = xiaozhi_foundation_text_register_callback(NULL, NULL);
+    const esp_err_t voice_ret = voice_assistant_register_status_callback(NULL, NULL);
+    if ((text_ret != ESP_OK) || (voice_ret != ESP_OK)) {
+        return (text_ret != ESP_OK) ? text_ret : voice_ret;
+    }
+    if (!ui_take_lock()) {
+        return ESP_ERR_TIMEOUT;
+    }
+    s_started = false;
+    s_callback = NULL;
+    s_callback_context = NULL;
+    memset(&s_model, 0, sizeof(s_model));
+    s_capture_active = false;
+    xSemaphoreGive(s_lock);
+    vSemaphoreDelete(s_lock);
+    s_lock = NULL;
+    return ESP_OK;
+}
+
 esp_err_t voice_assistant_ui_model_register_callback(
     voice_assistant_ui_model_callback_t callback,
     void *user_context)

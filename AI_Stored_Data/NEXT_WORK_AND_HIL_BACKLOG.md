@@ -1,8 +1,9 @@
 # Next Work + Deferred HIL Backlog
 
-Updated: 2026-09-26
-Active branch: `main_including_Firebase_security`
-Source integration baseline: `2bf646f2f6ba4a70457f3d0a88e2a13edb4bd23f` (Sprint-23 V5 merge)
+Updated: 2026-09-28
+Active release-hardening branch: `release/V2.0.0`
+Source integration branch: `main_including_Firebase_security`
+Exact V2 baseline: `44e6feb23f3358917171b6b326b56fdec8ae7ff3` (PTT uplink robustness merge)
 Sprint-18 closure authority: explicit user acceptance by Hải on 2026-09-16.
 Sprint 19-23 source is integrated/build verified as noted below. Sprint 21 and
 Sprint 22 are closed by user acceptance. Sprint-23 target/browser HIL is the
@@ -21,14 +22,21 @@ Sprint 21    Local Web Control V3: Lights / COMPLETE / USER ACCEPTED BY HẢI ON
 Sprint 22    Local Web Control V4: Dashboard + System Status / COMPLETE /
              BUILD VERIFIED / USER ACCEPTED BY Hai ON 2026-09-25
 Sprint 23    Local Web Control V5: Scenes + Logs + Diagnostics / SOURCE INTEGRATED /
-             BUILD VERIFIED / TARGET HIL PENDING
-Sprint 24    Wake Word + Advanced Voice UX / PLANNED / NOT STARTED
+             BUILD VERIFIED / USER ACCEPTED BY HAI ON 2026-09-26 /
+             TARGET/BROWSER HIL EVIDENCE PENDING
+Sprint 24    Wake Word + Advanced Voice UX / SUSPENDED FOR V2 RELEASE
 ```
 
 ## Immediate next work
 
-Run Sprint-23 target/browser HIL. Sprint-22 HIL remains valuable regression
-coverage but does not block its user-accepted closure.
+Prompts 2-5 completed the V2 source/runtime-policy audit, clean ESP-IDF build,
+and all self-contained host suites. V2-R08/P1 is resolved in source: bootstrap
+rollback is transactional, cleanup timeout fails closed without deinitializing
+dependencies of a possibly live owner, and automatic retry is allowed only
+after complete rollback. The V2 source gate is ready for Prompt 6 HIL; do not
+begin it automatically and do not begin Sprint 24. Sprint-23 target/browser HIL
+and Sprint-22 HIL remain release-validation/regression work; neither changes
+Sprint 24 status.
 
 1. Sprint 22: verify Dashboard endpoint/card partial failures and recovery;
    active-tab and hidden-document polling; return during an in-flight request;

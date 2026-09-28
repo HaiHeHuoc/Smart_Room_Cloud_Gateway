@@ -37,6 +37,8 @@ typedef struct {
 
 esp_err_t audio_manager_capture_arbiter_init(void);
 esp_err_t audio_manager_capture_arbiter_start(void);
+/** Cooperatively stop the arbiter task and release its policy state. */
+esp_err_t audio_manager_capture_arbiter_stop_and_deinit(void);
 
 /**
  * Submit one manual microphone-capture request.

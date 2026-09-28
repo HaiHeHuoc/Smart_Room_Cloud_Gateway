@@ -44,6 +44,8 @@ static SemaphoreHandle_t s_lock = NULL;
 static QueueHandle_t s_queue = NULL;
 static TaskHandle_t s_task = NULL;
 static TaskHandle_t s_start_waiter = NULL;
+static TaskHandle_t s_stop_waiter = NULL;
+static volatile bool s_shutdown_requested = false;
 static TickType_t s_arming_started = 0U;
 static bool s_command_pending = false;
 /* A physical RELEASE must not be discarded just because its matching PRESS is
@@ -642,6 +644,9 @@ static void ptt_task(void *argument)
     }
 
     for (;;) {
+        if (s_shutdown_requested) {
+            break;
+        }
         ptt_command_t command = {0};
         if (xQueueReceive(s_queue, &command, pdMS_TO_TICKS(PTT_POLL_MS)) == pdTRUE) {
             switch (command.type) {
@@ -666,6 +671,19 @@ static void ptt_task(void *argument)
         }
         ptt_reconcile_voice_state();
     }
+
+    if (ptt_take_lock()) {
+        s_status = (voice_assistant_ptt_status_t) {
+            .state = VOICE_ASSISTANT_PTT_UNINITIALIZED,
+            .last_error = ESP_OK,
+        };
+        s_task = NULL;
+        xSemaphoreGive(s_lock);
+    }
+    if (s_stop_waiter != NULL) {
+        xTaskNotifyGive(s_stop_waiter);
+    }
+    vTaskDelete(NULL);
 }
 
 static esp_err_t ptt_queue_command(ptt_command_type_t type)
@@ -760,7 +778,36 @@ esp_err_t voice_assistant_ptt_init(void)
     s_status.last_error = ESP_OK;
     s_command_pending = false;
     s_release_queued = false;
+    s_shutdown_requested = false;
     APP_LOGI(TAG, INITIALIZED_WITHOUT_GPIO_OWN_5DB50327, "initialized without GPIO ownership");
+    return ESP_OK;
+}
+
+esp_err_t voice_assistant_ptt_stop_and_deinit(void)
+{
+    if (s_lock == NULL) {
+        return ESP_OK;
+    }
+
+    s_shutdown_requested = true;
+    if (s_task != NULL) {
+        s_stop_waiter = xTaskGetCurrentTaskHandle();
+        xTaskNotifyGive(s_task);
+        if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(PTT_TASK_START_TIMEOUT_MS)) == 0U) {
+            return ESP_ERR_TIMEOUT;
+        }
+    }
+
+    s_callback = NULL;
+    s_callback_context = NULL;
+    s_start_waiter = NULL;
+    s_stop_waiter = NULL;
+    if (s_queue != NULL) {
+        vQueueDelete(s_queue);
+        s_queue = NULL;
+    }
+    vSemaphoreDelete(s_lock);
+    s_lock = NULL;
     return ESP_OK;
 }
 

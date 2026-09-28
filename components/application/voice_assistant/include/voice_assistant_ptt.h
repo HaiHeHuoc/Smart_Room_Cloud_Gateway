@@ -44,6 +44,9 @@ esp_err_t voice_assistant_ptt_init(void);
 /** Start the PTT policy task and enter IDLE. */
 esp_err_t voice_assistant_ptt_start(void);
 
+/** Stop the PTT policy task cooperatively and release its bounded state. */
+esp_err_t voice_assistant_ptt_stop_and_deinit(void);
+
 /**
  * Queue an authorized-user press intent.
  *

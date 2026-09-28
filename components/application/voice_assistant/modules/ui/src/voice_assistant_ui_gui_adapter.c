@@ -652,3 +652,44 @@ esp_err_t voice_assistant_ui_gui_adapter_start(void)
     APP_LOGI(TAG, PRODUCTION_VOICE_GUI_ADAPTER_231A1F97, "production voice GUI adapter started");
     return ESP_OK;
 }
+
+esp_err_t voice_assistant_ui_gui_adapter_stop_and_deinit(void)
+{
+    if (!s_initialized) {
+        return ESP_OK;
+    }
+    const esp_err_t unregister_ret =
+        voice_assistant_ui_model_register_callback(NULL, NULL);
+    if ((unregister_ret != ESP_OK) && (unregister_ret != ESP_ERR_INVALID_STATE)) {
+        return unregister_ret;
+    }
+    if (!gui_take_callback_lock(pdMS_TO_TICKS(VOICE_UI_CALLBACK_LOCK_TIMEOUT_MS))) {
+        return ESP_ERR_TIMEOUT;
+    }
+    s_started = false;
+    gui_cancel_dashboard_return_locked();
+    gui_cancel_xiaozhi_open_retry_locked();
+    gui_cancel_timer(s_model_sync_retry_timer, "sync");
+    gui_release_callback_lock();
+    esp_err_t ret = ESP_OK;
+    if (s_model_sync_retry_timer != NULL) {
+        ret = esp_timer_delete(s_model_sync_retry_timer);
+        s_model_sync_retry_timer = NULL;
+    }
+    if ((ret == ESP_OK) && (s_xiaozhi_open_retry_timer != NULL)) {
+        ret = esp_timer_delete(s_xiaozhi_open_retry_timer);
+        s_xiaozhi_open_retry_timer = NULL;
+    }
+    if ((ret == ESP_OK) && (s_dashboard_return_timer != NULL)) {
+        ret = esp_timer_delete(s_dashboard_return_timer);
+        s_dashboard_return_timer = NULL;
+    }
+    if (ret != ESP_OK) {
+        return ret;
+    }
+    vSemaphoreDelete(s_callback_lock);
+    s_callback_lock = NULL;
+    s_initialized = false;
+    s_interaction_screen_owned = false;
+    return ESP_OK;
+}

@@ -35,6 +35,8 @@ typedef struct {
 
 /** Initialize bounded voice-turn playback policy state. No task is created. */
 esp_err_t voice_assistant_playback_control_init(void);
+/** Reset only the voice-owned playback policy after all voice activity stops. */
+esp_err_t voice_assistant_playback_control_deinit(void);
 
 /**
  * Prepare one retained physical PTT press. Resumable local playback is paused

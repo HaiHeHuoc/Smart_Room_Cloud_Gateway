@@ -400,3 +400,31 @@ Durable rules:
 This is a workflow/token-efficiency decision only. It does not weaken build,
 test, HIL, security, architecture, or evidence requirements and does not allow
 important resume context to be dropped.
+
+## DECISION - V2 release feature freeze and baseline
+
+Date: 2026-09-28
+
+`release/V2.0.0` was created from
+`main_including_Firebase_security` at exact commit
+`44e6feb23f3358917171b6b326b56fdec8ae7ff3` (`merge: integrate PTT uplink
+robustness fix`). This is the V2 release-hardening baseline.
+
+- V2 includes Sprint 0-23 and the hardening already integrated at that commit.
+- Sprint 24 Wake Word + Advanced Voice UX is **SUSPENDED FOR V2 RELEASE**. It
+  is not complete or cancelled; its numbering, history, and WakeNet/Wake Word
+  plan remain preserved and it resumes only with explicit Hai instruction after
+  V2.
+- The branch is for evidence-driven stabilization, review, reliability/resource
+  fixes, diagnostics, validation, and release documentation. It is not for new
+  product features, speculative redesign, unrelated cosmetic cleanup, or
+  dependency churn.
+- Live Xiaozhi/PTT microphone capture is V2 release-critical. Hai reports that
+  current hardware recording is materially more stable and the earlier
+  unrelated-work data-loss symptom appears resolved. This does not prove that
+  all concurrent workload is safe; the required audit and measured HIL remain
+  release-hardening work.
+- `VOICE_RECORDING_CRITICAL` remains a cooperative safe-point policy. It does
+  not authorize scheduler, Wi-Fi/TCPIP, ESP system-task, or arbitrary-task
+  suspension, I2S-owner changes, unbounded queues/DMA, or priority changes
+  without evidence.

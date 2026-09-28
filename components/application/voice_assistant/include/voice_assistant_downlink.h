@@ -42,6 +42,9 @@ esp_err_t voice_assistant_downlink_init(void);
 /** Register the Xiaozhi response callback and start the downlink worker. */
 esp_err_t voice_assistant_downlink_start(void);
 
+/** Stop the downlink worker, unregister callbacks, and release response state. */
+esp_err_t voice_assistant_downlink_stop_and_deinit(void);
+
 /**
  * @brief Reserve the shared audio channel for the response to a completed
  *        local uplink.

@@ -1,8 +1,9 @@
 # Smart Room Cloud Gateway — Current Project State
 
-Updated: 2026-09-26
-Active integration branch: `main_including_Firebase_security`
-Source integration baseline: `2bf646f2f6ba4a70457f3d0a88e2a13edb4bd23f` (`merge: integrate Sprint 23 Local Web V5`)
+Updated: 2026-09-28
+Active release-hardening branch: `release/V2.0.0`
+Source integration branch: `main_including_Firebase_security`
+Exact V2 baseline: `44e6feb23f3358917171b6b326b56fdec8ae7ff3` (`merge: integrate PTT uplink robustness fix`)
 Sprint-18 closure authority: explicit user acceptance by Hải on 2026-09-16
 
 > This file is the current-state companion for cross-session AI handoff.
@@ -69,9 +70,32 @@ Sprint 21   Local Web Control V3: Lights / COMPLETE / USER ACCEPTED BY HẢI
 Sprint 22   Local Web Control V4: Dashboard + System Status / COMPLETE /
             BUILD VERIFIED / USER ACCEPTED BY Hai ON 2026-09-25
 Sprint 23   Local Web Control V5: Scenes + Logs + Diagnostics / SOURCE INTEGRATED /
-            BUILD VERIFIED / TARGET HIL PENDING
-Sprint 24   Wake Word + Advanced Voice UX / PLANNED / NOT STARTED
+            BUILD VERIFIED / USER ACCEPTED BY HAI ON 2026-09-26 /
+            TARGET/BROWSER HIL EVIDENCE PENDING
+Sprint 24   Wake Word + Advanced Voice UX / SUSPENDED FOR V2 RELEASE
 ```
+
+## V2 release-hardening state
+
+V2 feature freeze is active on `release/V2.0.0`, created from
+`main_including_Firebase_security` at
+`44e6feb23f3358917171b6b326b56fdec8ae7ff3`.
+
+V2 includes Sprint 0-23 plus already integrated stabilization. It excludes new
+product features, including Sprint 24 implementation, speculative architecture
+redesign, and unrelated cleanup. Sprint 24 remains preserved and may resume
+only after V2 when Hai explicitly requests it.
+
+The primary V2 release-critical validation area is live Xiaozhi/PTT microphone
+capture under concurrent system load. Current user observation is that recording
+is materially more stable and the former unrelated-work interference symptom
+appears resolved; this is not yet proof that every subsystem is non-interfering.
+Prompts 2-5 completed the source/runtime-policy audit, a clean ESP-IDF build,
+and all self-contained host suites. The former P1 post-network voice-bootstrap
+lifecycle gap has since been corrected and rebuilt: staged startup now performs
+bounded reverse cleanup, while a cleanup timeout fails closed without
+deinitializing dependencies of a possibly live owner. The V2 source gate is
+ready for Prompt-6 HIL; this is not a hardware acceptance or V2 release claim.
 
 ## Sprint 18 closure interpretation
 
@@ -203,9 +227,10 @@ Highest-value next validation is:
    support files at or above 2 GiB.
 ```
 
-Sprint 23 source is integrated; its target/browser HIL is the current acceptance
-gate. Sprint 24 Wake Word/Advanced Voice UX remains PLANNED / NOT STARTED and
-does not start automatically.
+Sprint 23 source is integrated and user accepted; its target/browser HIL remains
+release-validation evidence. Sprint 24 Wake Word/Advanced Voice UX is SUSPENDED
+FOR V2 RELEASE, is neither complete nor cancelled, and does not start
+automatically.
 
 ## Deferred regression work — non-blocking
 
@@ -268,9 +293,9 @@ Only a concrete regression or explicit Hải instruction should reopen Sprint 18
   Sprint 22 on 2026-09-25; its target/browser HIL remains non-blocking regression
   coverage.
 - Sprint 23 adds fixed owner-routed Scenes, bounded sanitized Logs, copied
-  Diagnostics/export, and seven Local Web tabs. Source is integrated through
-  `2bf646f2f6ba4a70457f3d0a88e2a13edb4bd23f`; host/build evidence passes and
-  target/browser HIL remains pending.
+  Diagnostics/export, and seven Local Web tabs. It remains included in the V2
+  baseline at `44e6feb23f3358917171b6b326b56fdec8ae7ff3`; its recorded
+  host/build evidence passes and target/browser HIL evidence remains pending.
 ### Historical Prompt 20.1 contract detail
 ## Sprint 20 Local Web Playback + Volume — Prompt 20.1 integrated
 

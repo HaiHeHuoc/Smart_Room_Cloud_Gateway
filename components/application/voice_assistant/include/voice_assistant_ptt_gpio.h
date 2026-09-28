@@ -35,6 +35,9 @@ esp_err_t voice_assistant_ptt_gpio_init(
 /** Start the bounded polling/debounce task. */
 esp_err_t voice_assistant_ptt_gpio_start(void);
 
+/** Stop GPIO delivery, remove this component's ISR handler, and release state. */
+esp_err_t voice_assistant_ptt_gpio_stop_and_deinit(void);
+
 #ifdef __cplusplus
 }
 #endif
