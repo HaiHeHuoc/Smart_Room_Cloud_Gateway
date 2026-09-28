@@ -1,12 +1,13 @@
 # Next Work + Deferred HIL Backlog
 
-Updated: 2026-09-26
+Updated: 2026-09-28
 Active branch: `main_including_Firebase_security`
-Source integration baseline: `2bf646f2f6ba4a70457f3d0a88e2a13edb4bd23f` (Sprint-23 V5 merge)
+Source integration baseline: `44e6feb23f3358917171b6b326b56fdec8ae7ff3` (PTT uplink robustness merge)
 Sprint-18 closure authority: explicit user acceptance by Hải on 2026-09-16.
-Sprint 19-23 source is integrated/build verified as noted below. Sprint 21 and
-Sprint 22 are closed by user acceptance. Sprint-23 target/browser HIL is the
-current acceptance gate; Sprint-22 HIL is non-blocking regression coverage.
+Sprint 19-23 source is integrated/build verified as noted below. Sprint 21,
+Sprint 22, and Sprint 23 are closed by user acceptance. Sprint-23 target/browser
+HIL and Sprint-22 HIL are non-blocking regression coverage. The current focused
+validation gate is the integrated Xiaozhi PTT uplink robustness fix.
 
 ## Current software state
 
@@ -20,33 +21,31 @@ Sprint 21    Local Web Control V3: Lights / COMPLETE / USER ACCEPTED BY HẢI ON
              2026-09-24; older HIL is deferred regression coverage
 Sprint 22    Local Web Control V4: Dashboard + System Status / COMPLETE /
              BUILD VERIFIED / USER ACCEPTED BY Hai ON 2026-09-25
-Sprint 23    Local Web Control V5: Scenes + Logs + Diagnostics / SOURCE INTEGRATED /
-             BUILD VERIFIED / TARGET HIL PENDING
+Sprint 23    Local Web Control V5: Scenes + Logs + Diagnostics / COMPLETE /
+             USER ACCEPTED BY HẢI ON 2026-09-26
 Sprint 24    Wake Word + Advanced Voice UX / PLANNED / NOT STARTED
 ```
 
 ## Immediate next work
 
-Run Sprint-23 target/browser HIL. Sprint-22 HIL remains valuable regression
-coverage but does not block its user-accepted closure.
+Primary gate: validate the PTT uplink robustness merge on target hardware.
 
-1. Sprint 22: verify Dashboard endpoint/card partial failures and recovery;
-   active-tab and hidden-document polling; return during an in-flight request;
-   desktop/tablet/320px layout; four-tab keyboard navigation; and quiet serial
-   behavior while SD/audio/light/Wi-Fi/cloud state changes externally.
-2. Sprint 19: exercise 20 MiB upload, interruption/partial cleanup, mutation
-   errors, and SD removal/reinsert. Capacity/status and browser-download fixes
-   are already user-confirmed on the prior target revision.
-3. Sprint 20: verify catalog-ID playback, pause/resume/restart/stop, volume
-   0/mid/100, seek during playing and user-paused state, PTT/Xiaozhi arbitration,
-   and supported WAV versus >=2 GiB rejection under SD contention.
-4. Sprint 21 optional regression: verify Light GET/POST state, RGB/black,
-   brightness 0/low/mid/100, all thirteen effects, Wake Up/Sleep Fade
-   completion, browser unavailable/busy recovery, Web/MCP last-writer behavior,
-   and copied `WEB_LIGHT` LCD status. This does not reopen Sprint 21.
-5. Record serial/resource evidence: no HTTP-to-LVGL call, no stuck effect
-   worker, expected SD recovery, and relevant task/memory trends.
+1. Run several normal GPIO38 PTT turns, including speech immediately after
+   press and continuous speech for 5-10 seconds.
+2. Capture the `VOICE_UPLINK` summary and check `queue_drops`, `stale_drops`,
+   `queue_peak=<N>/16`, `max_encode_us`, `max_send_us`,
+   `capture_to_first_pcm_ms`, and `capture_to_first_opus_ms`.
+3. Check `audio_manager` RX overflow/timeout deltas. Nominal evidence is zero
+   queue drops, zero unexpected stale drops, and zero RX overflow/timeout delta.
+4. Repeat with Local Web open; optionally attempt Storage upload/download and
+   confirm the recording-critical policy rejects/defers the heavy transfer.
+5. If queue depth still reaches 16/16 or drops occur while RX remains clean,
+   investigate a second bounded Opus packet queue between encode and blocking
+   send. Do not enlarge DMA descriptors or add another sender task first.
 
+After that, older Sprint-19/20/22/23 matrices remain useful regression work but
+do not reopen already accepted Sprints 21-23 without a concrete regression.
+Sprint 24 remains PLANNED / NOT STARTED until Hải explicitly starts it.
 ## Sprint 22 target HIL matrix
 
 - [ ] Browser/API: open Dashboard first, confirm HTTP 200/no-store snapshot and
@@ -72,7 +71,7 @@ coverage but does not block its user-accepted closure.
   induced, with no per-poll log spam, repeated HTTPD faults, heap decline, stack
   warning, or visible regression in Storage, Playback, or Lights.
 
-## Sprint 23 target/browser HIL matrix
+## Sprint 23 optional target/browser regression matrix
 
 - [ ] Navigation: seven tabs work on desktop/tablet/320 px; tab strip scrolls
   without page overflow; ArrowLeft/Right and Home/End preserve selection.
@@ -92,6 +91,8 @@ coverage but does not block its user-accepted closure.
 
 ## Deferred regression backlog — non-blocking
 
+- Sprint 23 seven-tab/Scenes/Logs/Diagnostics browser matrix after its
+  2026-09-26 user acceptance.
 - Combined audio/PTT/SD timing and lease behavior.
 - Long-duration Phase 16/16.1 streaming/arbitration endurance.
 - Long-duration Firebase/cloud plus Xiaozhi traffic.
