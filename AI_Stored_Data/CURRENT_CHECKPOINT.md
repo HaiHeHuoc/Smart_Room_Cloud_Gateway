@@ -3,7 +3,7 @@
 Purpose: compact V2 release-hardening handoff. Current source, `AGENTS.md`,
 canonical documents, and observed build/HIL evidence remain authoritative.
 
-Updated: 2026-09-28
+Updated: 2026-09-29
 
 ## Active V2 source
 
@@ -37,6 +37,48 @@ states, with at most three 1/2/4-second retries only after complete rollback.
 - Clean exported ESP-IDF v6.0.1 `esp32s3` build: PASS in `build_v2r08`.
   Application: `0x296640` of `0x400000`; free `0x1699c0` (35%).
 
+## V2 dashboard Web IPv4 usability change
+
+- Uncommitted release-branch change: `app_gui` reuses the copied
+  `ui_wifi_status_t` snapshot to render a centered `Web: <IPv4>` bottom row
+  on `SENSOR_DASHBOARD`. It shows `Web: --` without an address, including
+  after a disconnect, and restores the cached address after screen recreation.
+- The new separator is above the row and the existing vertical divider ends at
+  that separator. No task, queue, Wi-Fi query, audio, or Xiaozhi code changed.
+- Source contract checks and `git diff --check` passed. A clean exported
+  ESP-IDF v6.0.1 `idf.py build` passed after regenerating the ignored stale
+  default `build/` cache for `esp32s3`; the application uses `0x291740` of
+  `0x400000`, leaving `0x16e8c0` (36%). LCD HIL is not run.
+
+## APP_LOG ANSI console color
+
+- `sdkconfig.defaults` now sets `CONFIG_LOG_COLORS=y`, so the existing
+  `APP_LOG` console sink keeps ANSI level colors after a clean ESP-IDF
+  configuration. No logging frontend or backend code changed.
+- Regenerated ignored `sdkconfig` confirms the setting. A clean exported
+  ESP-IDF v6.0.1 `esp32s3` build passed: application `0x2966c0` of
+  `0x400000`, with `0x169940` (35%) free. Target terminal/HIL output was not
+  run.
+
+## V2 Local Web Xiaozhi Remote PTT exception
+
+- Explicit late-V2 feature: Local Web is a second PTT frontend only. GPIO38
+  and Web enter the same `voice_assistant_ptt` policy, playback arbitration,
+  `voice_assistant_uplink`, `audio_manager`, and Xiaozhi pipeline; browser
+  microphone/PCM/Opus/WebRTC are not supported.
+- The public PTT contract tracks `GPIO`/`WEB` source ownership. A Web start
+  returns a PTT generation; a matching client ID and generation are required
+  for keepalive/stop, so a stale command cannot affect a newer turn. A second
+  source receives BUSY and cannot preempt. Web renews every 2 s; the PTT task
+  releases an absent heartbeat after 8 s using `esp_timer_get_time()`.
+- Local Web exposes copied status/transcripts and bounded HTTP start,
+  keepalive, and stop routes; it owns no I2S, DMA, capture, Opus, or provider
+  resource. Pointer release/cancel/blur/hide/page-hide attempt STOP; the
+  device lease remains the fallback.
+- Relevant voice and Local Web host suites PASS; `git diff --check` PASS;
+  exported ESP-IDF v6.0.1 `esp32s3` build PASS. Application `0x299b60` of
+  `0x400000`, leaving `0x1664a0` (35%). No flash/browser/board HIL was run.
+
 ## Remaining V2 evidence
 
 - V2-R01 remains measure-first: a slow synchronous provider send can fill the
@@ -49,5 +91,6 @@ states, with at most three 1/2/4-second retries only after complete rollback.
 
 ## Next action
 
-Integrate the V2-R08 commit into the requested branch, then run Prompt 6 HIL
-against that exact final source. Do not start Sprint 24 automatically.
+Run the expanded Prompt-6 Web/GPIO PTT HIL matrix against this exact final
+source, including lease expiry, stale generation, and recording-critical
+contention. Do not start Sprint 24 automatically.

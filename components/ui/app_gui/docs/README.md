@@ -39,7 +39,7 @@ assistant, microphone, speaker, or independent GUI task.
 | `APP_GUI_SCREEN_WIFI_STATUS` | Existing Wi-Fi mode, SSID, and IPv4 screen. |
 | `APP_GUI_SCREEN_NETWORK_DETAIL` | Persistent read-only Network detail: state, SSID, IPv4, RSSI, and disconnect reason. |
 | `APP_GUI_SCREEN_CLOUD_DETAIL` | Persistent read-only Cloud detail: state, age of last successful sync, HTTP status, and last error. |
-| `APP_GUI_SCREEN_SENSOR_DASHBOARD` | Sensor dashboard with synchronized local time/date in its left header, temperature/humidity below, and Wi-Fi, cloud, sensor, and audio summaries in the right status column. |
+| `APP_GUI_SCREEN_SENSOR_DASHBOARD` | Sensor dashboard with synchronized local time/date in its left header, temperature/humidity below, Wi-Fi, cloud, sensor, and audio summaries in the right status column, and a centered bottom `Web: <IPv4>` row. |
 | `APP_GUI_SCREEN_XIAOZHI` | Project-owned Xiaozhi voice presentation: connection state, actual-microphone recording duration, and bounded USER/ASSISTANT transcript. It is entered through the existing explicit screen-request API. |
 | `APP_GUI_SCREEN_RESET_RESULT` | Factory-reset success or failure result; entered only through `app_gui_show_reset_result()`. |
 | `APP_GUI_SCREEN_WEB_LIGHT` | Read-only Local Web light state: power, logical RGB, brightness, and one of thirteen stable effect labels, including `SOS`, `LIGHTNING`, `WAKE UP`, `SLEEP FADE`, and `NOTIFICATION`. |
@@ -294,7 +294,8 @@ Status events never choose a screen:
 
 - Provisioning updates render only on `PROVISIONING`.
 - Wi-Fi updates render only on `WIFI_STATUS`, `NETWORK_DETAIL`, or update the
-  Wi-Fi summary on `SENSOR_DASHBOARD`.
+  Wi-Fi summary and bottom Web IPv4 row on `SENSOR_DASHBOARD`. The row shows
+  `Web: --` while a usable IPv4 address is unavailable.
 - Sensor updates render only on `SENSOR_DASHBOARD`.
 - Cloud updates render only on `CLOUD_DETAIL` or `SENSOR_DASHBOARD`.
 - Xiaozhi validation updates render only on `XIAOZHI`.
@@ -305,8 +306,8 @@ Status events never choose a screen:
 Entering `PROVISIONING` renders the latest provisioning model, or the default
 `STARTING` model before the first update, and renders the latest valid QR
 payload when available. Entering `WIFI_STATUS` renders the latest Wi-Fi model.
-Entering `SENSOR_DASHBOARD` renders the latest sensor, Wi-Fi summary, cloud
-models, and the current time/date header.
+Entering `SENSOR_DASHBOARD` renders the latest sensor, Wi-Fi summary and Web
+IPv4 row, cloud models, and the current time/date header.
 Entering `NETWORK_DETAIL` or `CLOUD_DETAIL` renders the corresponding latest
 cached model. Neither detail screen creates a timeout route.
 Entering `XIAOZHI` renders its newest complete cached snapshot, or a safe

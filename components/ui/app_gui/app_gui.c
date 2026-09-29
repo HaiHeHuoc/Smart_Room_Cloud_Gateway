@@ -95,17 +95,15 @@
 #define APP_GUI_DASHBOARD_CLOCK_LABEL_HEIGHT_PX   11
 #define APP_GUI_DASHBOARD_RIGHT_X_PX             82
 #define APP_GUI_DASHBOARD_RIGHT_WIDTH_PX         76
-#define APP_GUI_DASHBOARD_STATUS_PANEL_HEIGHT_PX \
-    (APP_GUI_DASHBOARD_HEIGHT_PX - \
-     APP_GUI_DASHBOARD_HEADER_HEIGHT_PX - 1)
 /*
- * Montserrat 10 has an 11-pixel line height. The 102-pixel status panel
- * therefore uses symmetric 12/11/12/11/12-pixel outer/inter-row gaps.
+ * Montserrat 10 has an 11-pixel line height. A uniform 22-pixel pitch keeps
+ * the right status column balanced while leaving two clear pixels above the
+ * Web-row separator after the Xiaozhi label.
  */
 #define APP_GUI_DASHBOARD_STATUS_LABEL_HEIGHT_PX 11
-#define APP_GUI_DASHBOARD_STATUS_OUTER_GAP_PX    12
+#define APP_GUI_DASHBOARD_STATUS_OUTER_GAP_PX    11
 #define APP_GUI_DASHBOARD_STATUS_SMALL_GAP_PX    11
-#define APP_GUI_DASHBOARD_STATUS_LARGE_GAP_PX    12
+#define APP_GUI_DASHBOARD_STATUS_LARGE_GAP_PX    11
 #define APP_GUI_DASHBOARD_STATUS_WIFI_Y_PX \
     (APP_GUI_DASHBOARD_HEADER_HEIGHT_PX + \
      APP_GUI_DASHBOARD_STATUS_OUTER_GAP_PX)
@@ -121,6 +119,22 @@
     (APP_GUI_DASHBOARD_STATUS_SENSOR_Y_PX + \
      APP_GUI_DASHBOARD_STATUS_LABEL_HEIGHT_PX + \
      APP_GUI_DASHBOARD_STATUS_SMALL_GAP_PX)
+#define APP_GUI_DASHBOARD_WEB_ROW_RULE_Y_PX \
+    (APP_GUI_DASHBOARD_STATUS_AUDIO_Y_PX + \
+     APP_GUI_DASHBOARD_STATUS_LABEL_HEIGHT_PX + 2)
+#define APP_GUI_DASHBOARD_STATUS_PANEL_HEIGHT_PX \
+    (APP_GUI_DASHBOARD_WEB_ROW_RULE_Y_PX - \
+     APP_GUI_DASHBOARD_HEADER_HEIGHT_PX + 1)
+#define APP_GUI_DASHBOARD_WEB_IP_X_PX \
+    APP_GUI_DASHBOARD_MARGIN_PX
+#define APP_GUI_DASHBOARD_WEB_IP_Y_PX \
+    (APP_GUI_DASHBOARD_WEB_ROW_RULE_Y_PX + 1)
+#define APP_GUI_DASHBOARD_WEB_IP_WIDTH_PX \
+    (APP_GUI_DASHBOARD_WIDTH_PX - \
+     (2 * APP_GUI_DASHBOARD_MARGIN_PX))
+#define APP_GUI_DASHBOARD_WEB_IP_HEIGHT_PX \
+    (APP_GUI_DASHBOARD_HEIGHT_PX - \
+     APP_GUI_DASHBOARD_WEB_IP_Y_PX - 1)
 
 /* Type Definitions --------------------------------------------------------- */
 typedef enum
@@ -181,6 +195,7 @@ typedef struct
     lv_obj_t *sensor_audio_label;
     lv_obj_t *sensor_state_label;
     lv_obj_t *sensor_wifi_label;
+    lv_obj_t *sensor_web_ip_label;
     lv_obj_t *sensor_wifi_dot;
     lv_obj_t *sensor_cloud_label;
     lv_obj_t *sensor_cloud_dot;
@@ -305,6 +320,7 @@ static lv_obj_t *s_sensor_humidity_label = NULL;
 static lv_obj_t *s_sensor_audio_label = NULL;
 static lv_obj_t *s_sensor_state_label = NULL;
 static lv_obj_t *s_sensor_wifi_label = NULL;
+static lv_obj_t *s_sensor_web_ip_label = NULL;
 static lv_obj_t *s_sensor_wifi_dot = NULL;
 static lv_obj_t *s_sensor_cloud_label = NULL;
 static lv_obj_t *s_sensor_cloud_dot = NULL;
@@ -481,6 +497,8 @@ static void app_gui_render_audio_status(
     const ui_audio_status_t *status);
 static void app_gui_render_dashboard_xiaozhi_status(
     const ui_xiaozhi_status_t *status);
+static void app_gui_render_sensor_web_ip_status(
+    const ui_wifi_status_t *status);
 static void app_gui_render_sensor_wifi_status(
     const ui_wifi_status_t *status);
 static void app_gui_render_cloud_status(
@@ -1160,6 +1178,7 @@ static void app_gui_capture_widget_refs(
     refs->sensor_audio_label = s_sensor_audio_label;
     refs->sensor_state_label = s_sensor_state_label;
     refs->sensor_wifi_label = s_sensor_wifi_label;
+    refs->sensor_web_ip_label = s_sensor_web_ip_label;
     refs->sensor_wifi_dot = s_sensor_wifi_dot;
     refs->sensor_cloud_label = s_sensor_cloud_label;
     refs->sensor_cloud_dot = s_sensor_cloud_dot;
@@ -1221,6 +1240,7 @@ static void app_gui_clear_widget_refs(void)
     s_sensor_audio_label = NULL;
     s_sensor_state_label = NULL;
     s_sensor_wifi_label = NULL;
+    s_sensor_web_ip_label = NULL;
     s_sensor_wifi_dot = NULL;
     s_sensor_cloud_label = NULL;
     s_sensor_cloud_dot = NULL;
@@ -1289,6 +1309,7 @@ static void app_gui_apply_widget_refs(
     s_sensor_audio_label = refs->sensor_audio_label;
     s_sensor_state_label = refs->sensor_state_label;
     s_sensor_wifi_label = refs->sensor_wifi_label;
+    s_sensor_web_ip_label = refs->sensor_web_ip_label;
     s_sensor_wifi_dot = refs->sensor_wifi_dot;
     s_sensor_cloud_label = refs->sensor_cloud_label;
     s_sensor_cloud_dot = refs->sensor_cloud_dot;
@@ -2734,6 +2755,12 @@ static esp_err_t app_gui_create_sensor_screen(
         APP_GUI_DASHBOARD_HEADER_HEIGHT_PX,
         1,
         APP_GUI_DASHBOARD_STATUS_PANEL_HEIGHT_PX);
+    lv_obj_t *web_row_rule = app_gui_create_dashboard_rule(
+        screen,
+        1,
+        APP_GUI_DASHBOARD_WEB_ROW_RULE_Y_PX,
+        APP_GUI_DASHBOARD_WIDTH_PX - 2,
+        1);
     s_sensor_wifi_dot = app_gui_create_dashboard_dot(
         screen,
         128,
@@ -2751,6 +2778,7 @@ static esp_err_t app_gui_create_sensor_screen(
         (humidity_header == NULL) ||
         (header_rule == NULL) ||
         (column_rule == NULL) ||
+        (web_row_rule == NULL) ||
         (s_sensor_wifi_dot == NULL) ||
         (s_sensor_cloud_dot == NULL)) {
         return ESP_ERR_NO_MEM;
@@ -2832,13 +2860,15 @@ static esp_err_t app_gui_create_sensor_screen(
             screen,
             APP_GUI_DASHBOARD_STATUS_SENSOR_Y_PX,
             "Sensor: --");
+    s_sensor_web_ip_label = lv_label_create(screen);
 
     if ((s_sensor_temperature_label == NULL) ||
         (s_sensor_humidity_label == NULL) ||
         (s_sensor_audio_label == NULL) ||
         (s_sensor_wifi_label == NULL) ||
         (s_sensor_cloud_label == NULL) ||
-        (s_sensor_state_label == NULL)) {
+        (s_sensor_state_label == NULL) ||
+        (s_sensor_web_ip_label == NULL)) {
         app_gui_clear_widget_refs();
         return ESP_ERR_NO_MEM;
     }
@@ -2900,6 +2930,31 @@ static esp_err_t app_gui_create_sensor_screen(
             LV_PART_MAIN);
     }
 
+    lv_label_set_text(s_sensor_web_ip_label, "Web: --");
+    lv_label_set_long_mode(
+        s_sensor_web_ip_label,
+        LV_LABEL_LONG_MODE_CLIP);
+    lv_obj_set_pos(
+        s_sensor_web_ip_label,
+        APP_GUI_DASHBOARD_WEB_IP_X_PX,
+        APP_GUI_DASHBOARD_WEB_IP_Y_PX);
+    lv_obj_set_size(
+        s_sensor_web_ip_label,
+        APP_GUI_DASHBOARD_WEB_IP_WIDTH_PX,
+        APP_GUI_DASHBOARD_WEB_IP_HEIGHT_PX);
+    lv_obj_set_style_text_font(
+        s_sensor_web_ip_label,
+        &lv_font_montserrat_10,
+        LV_PART_MAIN);
+    lv_obj_set_style_text_color(
+        s_sensor_web_ip_label,
+        lv_color_hex(0xF2F5F7),
+        LV_PART_MAIN);
+    lv_obj_set_style_text_align(
+        s_sensor_web_ip_label,
+        LV_TEXT_ALIGN_CENTER,
+        LV_PART_MAIN);
+
     lv_obj_set_style_text_color(
         s_sensor_wifi_label,
         wifi_color,
@@ -2918,6 +2973,9 @@ static esp_err_t app_gui_create_sensor_screen(
         s_sensor_audio_label,
         inactive_color,
         LV_PART_MAIN);
+
+    app_gui_render_sensor_web_ip_status(
+        wifi_status_available ? &wifi_status : NULL);
 
     return ESP_OK;
 }
@@ -3917,11 +3975,42 @@ static void app_gui_render_dashboard_xiaozhi_status(
         LV_PART_MAIN);
 }
 
+static void app_gui_render_sensor_web_ip_status(
+    const ui_wifi_status_t *status)
+{
+    if (s_sensor_web_ip_label == NULL) {
+        return;
+    }
+
+    char web_ip_text[32] = {0};
+
+    if ((status != NULL) &&
+        status->has_ipv4_address &&
+        (status->ipv4_address[0] != '\0')) {
+        (void)snprintf(
+            web_ip_text,
+            sizeof(web_ip_text),
+            "Web: %s",
+            status->ipv4_address);
+    } else {
+        (void)snprintf(web_ip_text, sizeof(web_ip_text), "Web: --");
+    }
+
+    app_gui_set_label_text_if_changed(
+        s_sensor_web_ip_label,
+        web_ip_text);
+}
+
 static void app_gui_render_sensor_wifi_status(
     const ui_wifi_status_t *status)
 {
-    if ((status == NULL) ||
-        (s_sensor_wifi_label == NULL) ||
+    if (status == NULL) {
+        return;
+    }
+
+    app_gui_render_sensor_web_ip_status(status);
+
+    if ((s_sensor_wifi_label == NULL) ||
         (s_sensor_wifi_dot == NULL)) {
         return;
     }
