@@ -8,7 +8,12 @@ Updated: 2026-09-29
 ## Active V2 source
 
 - V2 baseline: `44e6feb23f3358917171b6b326b56fdec8ae7ff3`.
-- V2-R08 candidate: `v2r08` commit `1511d7e`.
+- V2-R08 lifecycle recovery: commit `1511d7e`.
+- Exact V2 promotion source: `release/V2.0.0` through `4dc89c2`
+  (`Adjust UI`), carried by `integration/v2-to-main` for the
+  `main_including_Firebase_security` review/merge path. Until that PR merges,
+  `release/V2.0.0` remains the source of record; after it merges, the target
+  contains this V2 source chain.
 - Sprint 24 Wake Word + Advanced Voice UX remains **SUSPENDED FOR V2 RELEASE**.
 - No target HIL is recorded for V2-R08.
 
@@ -39,7 +44,7 @@ states, with at most three 1/2/4-second retries only after complete rollback.
 
 ## V2 dashboard Web IPv4 usability change
 
-- Uncommitted release-branch change: `app_gui` reuses the copied
+- Committed release-source change: `4dc89c2` makes `app_gui` reuse the copied
   `ui_wifi_status_t` snapshot to render a centered `Web: <IPv4>` bottom row
   on `SENSOR_DASHBOARD`. It shows `Web: --` without an address, including
   after a disconnect, and restores the cached address after screen recreation.
@@ -48,7 +53,8 @@ states, with at most three 1/2/4-second retries only after complete rollback.
 - Source contract checks and `git diff --check` passed. A clean exported
   ESP-IDF v6.0.1 `idf.py build` passed after regenerating the ignored stale
   default `build/` cache for `esp32s3`; the application uses `0x291740` of
-  `0x400000`, leaving `0x16e8c0` (36%). LCD HIL is not run.
+  `0x400000`, leaving `0x16e8c0` (36%). A prior COM4 flash/boot reached the
+  dashboard, but that is boot sanity only; no formal LCD visual HIL is recorded.
 
 ## APP_LOG ANSI console color
 
@@ -91,6 +97,7 @@ states, with at most three 1/2/4-second retries only after complete rollback.
 
 ## Next action
 
-Run the expanded Prompt-6 Web/GPIO PTT HIL matrix against this exact final
-source, including lease expiry, stale generation, and recording-critical
-contention. Do not start Sprint 24 automatically.
+After the V2 integration PR is manually merged, run the expanded Prompt-6
+Web/GPIO PTT HIL matrix against the resulting target source, including lease
+expiry, stale generation, and recording-critical contention. Do not start
+Sprint 24 automatically.

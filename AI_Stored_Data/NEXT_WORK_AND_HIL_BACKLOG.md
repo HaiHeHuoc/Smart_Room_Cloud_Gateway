@@ -1,8 +1,9 @@
 # Next Work + Deferred HIL Backlog
 
 Updated: 2026-09-29
-Active V2 integration branch: `main_including_Firebase_security`
+V2 integration target: `main_including_Firebase_security`
 Release branch: `release/V2.0.0`
+V2 promotion candidate: `integration/v2-to-main` from release source `4dc89c2`
 V2 baseline: `44e6feb23f3358917171b6b326b56fdec8ae7ff3` (PTT uplink robustness merge)
 Sprint-18 closure authority: explicit user acceptance by Hải on 2026-09-16.
 Sprint 19-23 source is integrated/build verified as noted below. Sprint 21,

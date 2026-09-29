@@ -1,8 +1,9 @@
 # Smart Room Cloud Gateway — Current Project State
 
-Updated: 2026-09-28
-Active V2 integration branch: `main_including_Firebase_security`
+Updated: 2026-09-29
+V2 integration target: `main_including_Firebase_security`
 Release branch: `release/V2.0.0`
+V2 promotion candidate: `integration/v2-to-main` from release source `4dc89c2`
 V2 baseline: `44e6feb23f3358917171b6b326b56fdec8ae7ff3` (`merge: integrate PTT uplink robustness fix`)
 Sprint-18 closure authority: explicit user acceptance by Hải on 2026-09-16
 
@@ -80,6 +81,14 @@ Sprint 24   Wake Word + Advanced Voice UX / SUSPENDED FOR V2 RELEASE
 V2 feature freeze is active on `release/V2.0.0`, created from
 `main_including_Firebase_security` at
 `44e6feb23f3358917171b6b326b56fdec8ae7ff3`.
+
+The V2 promotion candidate carries the release chain through `4dc89c2`,
+including V2-R08 fail-closed bootstrap recovery, the Local Web Xiaozhi PTT
+frontend, and the dashboard Web IPv4 usability change. Its PR is the only
+planned path into `main_including_Firebase_security`: until manual merge,
+`release/V2.0.0` remains the source of record; after merge, the target contains
+that V2 source chain. This source integration is not a hardware acceptance or a
+V2 release claim.
 
 V2 includes Sprint 0-23 plus already integrated stabilization. It excludes new
 product features, including Sprint 24 implementation, speculative architecture
