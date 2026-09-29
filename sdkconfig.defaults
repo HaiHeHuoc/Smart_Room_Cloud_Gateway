@@ -5,6 +5,9 @@
 CONFIG_IDF_TARGET="esp32s3"
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
+# Keep the project APP_LOG console sink's level colors in emitted ANSI output.
+# This also makes the color behavior survive a clean ESP-IDF configuration.
+CONFIG_LOG_COLORS=y
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y
 CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y

@@ -75,6 +75,16 @@
 /* Constants ---------------------------------------------------------------- */
 static const char *const TAG = "MAIN_APP";
 
+typedef enum {
+    APP_AUDIO_BOOT_NEEDS_START = 0,
+    APP_AUDIO_BOOT_RETRY_WAIT,
+    APP_AUDIO_BOOT_READY,
+    APP_AUDIO_BOOT_FATAL,
+} app_audio_boot_state_t;
+
+#define APP_AUDIO_BOOT_MAX_RETRIES 3U
+#define APP_AUDIO_BOOT_RETRY_BASE_MS 1000U
+
 /* Static Variables --------------------------------------------------------- */
 /* The UI manager borrows this handle for the lifetime of the application. */
 static display_driver_handle_t display_handle;
@@ -765,13 +775,16 @@ void smart_room_app_start(void)
     }
 
     bool cloud_started = false;
-    bool audio_start_attempted = false;
+    app_audio_boot_state_t audio_boot_state = APP_AUDIO_BOOT_NEEDS_START;
+    TickType_t audio_retry_due_at = 0U;
+    uint32_t audio_retry_count = 0U;
     bool local_web_started = false;
     bool network_failure_screen_requested = false;
 
     while (1)
     {
-        if (!cloud_started || !audio_start_attempted
+        if (!cloud_started || (audio_boot_state != APP_AUDIO_BOOT_READY &&
+                               audio_boot_state != APP_AUDIO_BOOT_FATAL)
 #if CONFIG_LOCAL_WEB_SERVER_ENABLE
             || !local_web_started
 #endif
@@ -834,17 +847,19 @@ void smart_room_app_start(void)
                         esp_err_to_name(screen_state_ret));
                 }
             }
-            else if (!audio_start_attempted &&
+            else if (((audio_boot_state == APP_AUDIO_BOOT_NEEDS_START) ||
+                      ((audio_boot_state == APP_AUDIO_BOOT_RETRY_WAIT) &&
+                       ((TickType_t)(xTaskGetTickCount() - audio_retry_due_at) <
+                        (TickType_t)0x80000000U))) &&
                      app_network_state_allows_audio_start(
                          network_state))
             {
-                audio_start_attempted = true;
-
                 const esp_err_t audio_ret =
                     app_start_audio_manager_after_network_online();
 
                 if (audio_ret == ESP_OK)
                 {
+                    audio_boot_state = APP_AUDIO_BOOT_READY;
                     APP_LOGI(
                         TAG, AUDIO_MANAGER_STARTED_AFTER_5EA81CA8,
                         "Audio manager started after network handoff: state=%s",
@@ -853,10 +868,31 @@ void smart_room_app_start(void)
                 }
                 else
                 {
-                    APP_LOGE(
-                        TAG, AUDIO_MANAGER_STARTUP_AFTER_808939E3,
-                        "Audio manager startup after network handoff failed: %s",
-                        esp_err_to_name(audio_ret));
+                    const bool retry_safe =
+                        voice_assistant_bootstrap_retry_is_safe();
+                    if (retry_safe &&
+                        (audio_retry_count < APP_AUDIO_BOOT_MAX_RETRIES)) {
+                        const uint32_t delay_ms = APP_AUDIO_BOOT_RETRY_BASE_MS <<
+                                                  audio_retry_count;
+                        ++audio_retry_count;
+                        audio_retry_due_at = xTaskGetTickCount() +
+                                             pdMS_TO_TICKS(delay_ms);
+                        audio_boot_state = APP_AUDIO_BOOT_RETRY_WAIT;
+                        APP_LOGW(
+                            TAG, AUDIO_MANAGER_STARTUP_AFTER_808939E3,
+                            "Audio bootstrap failed error=%s rollback=complete; retry=%u/%u backoff_ms=%u",
+                            esp_err_to_name(audio_ret),
+                            (unsigned)audio_retry_count,
+                            (unsigned)APP_AUDIO_BOOT_MAX_RETRIES,
+                            (unsigned)delay_ms);
+                    } else {
+                        audio_boot_state = APP_AUDIO_BOOT_FATAL;
+                        APP_LOGE(
+                            TAG, AUDIO_MANAGER_STARTUP_AFTER_808939E3,
+                            "Audio bootstrap failed error=%s rollback=%s; automatic retry blocked",
+                            esp_err_to_name(audio_ret),
+                            retry_safe ? "retry-limit" : "incomplete");
+                    }
                 }
             }
             else if (!cloud_started &&
@@ -914,7 +950,8 @@ void smart_room_app_start(void)
 
         vTaskDelay(
             pdMS_TO_TICKS(
-                (cloud_started && audio_start_attempted
+                (cloud_started && ((audio_boot_state == APP_AUDIO_BOOT_READY) ||
+                                   (audio_boot_state == APP_AUDIO_BOOT_FATAL))
 #if CONFIG_LOCAL_WEB_SERVER_ENABLE
                  && local_web_started
 #endif

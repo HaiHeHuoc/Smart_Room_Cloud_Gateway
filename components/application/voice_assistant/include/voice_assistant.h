@@ -70,6 +70,17 @@ esp_err_t voice_assistant_init(void);
 esp_err_t voice_assistant_start(void);
 
 /**
+ * @brief Cooperatively stop and deinitialize the voice lifecycle owner.
+ *
+ * This is the reverse operation for bootstrap only.  It first closes an
+ * active Xiaozhi session, unregisters its observer, then asks the voice task
+ * to exit and waits for its acknowledgement.  It never deletes an owning task
+ * from another context.  A non-OK result means the owner is still unsafe to
+ * restart and callers must not retry bootstrap.
+ */
+esp_err_t voice_assistant_stop_and_deinit(void);
+
+/**
  * @brief Start the ready audio manager, its arbiters, and the production voice stack.
  *
  * Call only from the application boot/lifecycle task after audio_manager_init().
@@ -82,6 +93,9 @@ esp_err_t voice_assistant_start(void);
 esp_err_t voice_assistant_start_after_audio_ready(
     audio_manager_status_callback_t application_callback,
     void *application_callback_context);
+
+/** True only when the most recent failed bootstrap completed every rollback. */
+bool voice_assistant_bootstrap_retry_is_safe(void);
 
 /** Begin one logical conversation session asynchronously. */
 esp_err_t voice_assistant_begin_session(void);

@@ -22,6 +22,8 @@ static const char *const TAG = "VOICE_PTT_GPIO";
 static voice_assistant_ptt_gpio_config_t s_config = {0};
 static TaskHandle_t s_task = NULL;
 static bool s_initialized = false;
+static volatile bool s_shutdown_requested = false;
+static TaskHandle_t s_stop_waiter = NULL;
 
 static void IRAM_ATTR ptt_gpio_edge_isr(void *argument)
 {
@@ -42,6 +44,17 @@ static bool ptt_gpio_is_pressed(void)
 {
     const int level = gpio_get_level(s_config.gpio_num);
     return (level == (int)s_config.active_level);
+}
+
+/* A Web-held turn is an expected arbitration conflict, not a GPIO delivery
+ * failure. Consume this physical edge once so the debounce worker does not
+ * retry/log every 50 ms while the user holds GPIO38 during a Web turn. */
+static bool ptt_gpio_is_busy_by_web_owner(void)
+{
+    voice_assistant_ptt_status_t status = {0};
+    return (voice_assistant_ptt_get_status(&status) == ESP_OK) &&
+           status.pressed &&
+           (status.source == VOICE_ASSISTANT_PTT_SOURCE_WEB);
 }
 
 static void ptt_gpio_task(void *argument)
@@ -65,6 +78,9 @@ static void ptt_gpio_task(void *argument)
              stable ? "pressed" : "released");
 
     for (;;) {
+        if (s_shutdown_requested) {
+            break;
+        }
         const bool sampled = ptt_gpio_is_pressed();
         const TickType_t now = xTaskGetTickCount();
 
@@ -93,6 +109,13 @@ static void ptt_gpio_task(void *argument)
                 delivered = stable;
                 delivery_attempted = false;
                 APP_LOGI(TAG, EDGE_S_1A00268C, "edge=%s", stable ? "PRESS" : "RELEASE");
+            } else if ((ret == ESP_ERR_INVALID_STATE) &&
+                       ptt_gpio_is_busy_by_web_owner()) {
+                delivered = stable;
+                delivery_attempted = false;
+                APP_LOGI(TAG, EDGE_S_IGNORED_WEB_PTT_OWNER_7D247165,
+                         "edge=%s ignored while Web PTT owns the turn",
+                         stable ? "PRESS" : "RELEASE");
             } else if (!retry) {
                 APP_LOGW(TAG, EDGE_S_DEFERRED_S_E25A0C6D,
                          "edge=%s deferred: %s",
@@ -112,6 +135,13 @@ static void ptt_gpio_task(void *argument)
             pdTRUE,
             pdMS_TO_TICKS(s_config.poll_period_ms));
     }
+
+    TaskHandle_t waiter = s_stop_waiter;
+    s_task = NULL;
+    if (waiter != NULL) {
+        xTaskNotifyGive(waiter);
+    }
+    vTaskDelete(NULL);
 }
 
 esp_err_t voice_assistant_ptt_gpio_init(
@@ -156,6 +186,7 @@ esp_err_t voice_assistant_ptt_gpio_init(
     }
 
     s_config = *config;
+    s_shutdown_requested = false;
     s_initialized = true;
     APP_LOGI(TAG, INITIALIZED_GPIO_D_ACTIVE_LE_F3856C8D,
              "initialized gpio=%d active_level=%u poll=%ums debounce=%ums",
@@ -163,6 +194,31 @@ esp_err_t voice_assistant_ptt_gpio_init(
              (unsigned)s_config.active_level,
              (unsigned)s_config.poll_period_ms,
              (unsigned)s_config.debounce_ms);
+    return ESP_OK;
+}
+
+esp_err_t voice_assistant_ptt_gpio_stop_and_deinit(void)
+{
+    if (!s_initialized) {
+        return ESP_OK;
+    }
+
+    s_shutdown_requested = true;
+    if (s_task != NULL) {
+        s_stop_waiter = xTaskGetCurrentTaskHandle();
+        xTaskNotifyGive(s_task);
+        if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000U)) == 0U) {
+            return ESP_ERR_TIMEOUT;
+        }
+    }
+
+    const esp_err_t handler_ret = gpio_isr_handler_remove(s_config.gpio_num);
+    if ((handler_ret != ESP_OK) && (handler_ret != ESP_ERR_INVALID_STATE)) {
+        return handler_ret;
+    }
+    s_stop_waiter = NULL;
+    s_config = (voice_assistant_ptt_gpio_config_t){0};
+    s_initialized = false;
     return ESP_OK;
 }
 

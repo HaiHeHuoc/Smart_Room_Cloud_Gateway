@@ -52,6 +52,8 @@ typedef void (*voice_assistant_ui_model_callback_t)(
 
 esp_err_t voice_assistant_ui_model_init(void);
 esp_err_t voice_assistant_ui_model_start(void);
+/** Unregister borrowed observers and release the copied UI model. */
+esp_err_t voice_assistant_ui_model_stop_and_deinit(void);
 esp_err_t voice_assistant_ui_model_register_callback(
     voice_assistant_ui_model_callback_t callback,
     void *user_context);

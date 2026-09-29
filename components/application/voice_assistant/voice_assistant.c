@@ -33,6 +33,7 @@ typedef enum {
     VOICE_ASSISTANT_COMMAND_AUTO_RECOVER,
     VOICE_ASSISTANT_COMMAND_FOUNDATION_STATUS,
     VOICE_ASSISTANT_COMMAND_AUDIO_STATUS,
+    VOICE_ASSISTANT_COMMAND_SHUTDOWN,
 } voice_assistant_command_type_t;
 
 typedef struct {
@@ -48,6 +49,7 @@ static SemaphoreHandle_t s_status_lock = NULL;
 static QueueHandle_t s_command_queue = NULL;
 static TaskHandle_t s_task_handle = NULL;
 static TaskHandle_t s_start_waiter = NULL;
+static TaskHandle_t s_stop_waiter = NULL;
 
 static voice_assistant_status_t s_status = {
     .state = VOICE_ASSISTANT_STATE_UNINITIALIZED,
@@ -531,7 +533,8 @@ static void voice_assistant_task(void *argument)
         xTaskNotifyGive(waiter);
     }
 
-    for (;;) {
+    bool shutting_down = false;
+    while (!shutting_down) {
         voice_assistant_command_t command = {0};
         if (xQueueReceive(s_command_queue, &command,
                           pdMS_TO_TICKS(VOICE_ASSISTANT_RECOVERY_POLL_MS)) == pdTRUE) {
@@ -691,6 +694,25 @@ static void voice_assistant_task(void *argument)
                 voice_assistant_handle_audio_marker();
                 break;
 
+            case VOICE_ASSISTANT_COMMAND_SHUTDOWN: {
+                xiaozhi_foundation_session_status_t foundation = {0};
+                const esp_err_t status_ret =
+                    xiaozhi_foundation_session_get_status(&foundation);
+                const esp_err_t stop_ret = ((status_ret == ESP_OK) && foundation.active)
+                                           ? xiaozhi_foundation_session_stop()
+                                           : status_ret;
+                if ((stop_ret != ESP_OK) && (stop_ret != ESP_ERR_INVALID_STATE)) {
+                    voice_assistant_set_status(VOICE_ASSISTANT_STATE_ERROR, false,
+                                               stop_ret);
+                } else {
+                    voice_assistant_set_status(VOICE_ASSISTANT_STATE_INITIALIZED,
+                                               false, ESP_OK);
+                }
+                voice_assistant_finish_public_command();
+                shutting_down = true;
+                break;
+            }
+
             default:
                 APP_LOGE(TAG, UNKNOWN_COMMAND_D_60C4DA83, "Unknown command=%d", (int)command.type);
                 voice_assistant_set_status(
@@ -706,6 +728,15 @@ static void voice_assistant_task(void *argument)
         voice_assistant_handle_audio_marker();
         voice_assistant_poll_auto_recovery();
     }
+
+    if (voice_assistant_take_lock()) {
+        s_task_handle = NULL;
+        xSemaphoreGive(s_status_lock);
+    }
+    if (s_stop_waiter != NULL) {
+        xTaskNotifyGive(s_stop_waiter);
+    }
+    vTaskDelete(NULL);
 }
 
 esp_err_t voice_assistant_init(void)
@@ -736,6 +767,7 @@ esp_err_t voice_assistant_init(void)
     s_auto_recovery_waiting_for_network = false;
     s_auto_recovery_due_at = 0U;
     s_auto_recovery_attempt = 0U;
+    s_stop_waiter = NULL;
     portENTER_CRITICAL(&s_pending_status_lock);
     s_foundation_status_pending = false;
     s_pending_foundation_status = (xiaozhi_foundation_session_status_t) {
@@ -769,6 +801,54 @@ esp_err_t voice_assistant_init(void)
 
     APP_LOGI(TAG, INITIALIZED_WITH_XIAOZHI_SES_ED17880B, "initialized with Xiaozhi session observer");
     voice_assistant_publish_status();
+    return ESP_OK;
+}
+
+esp_err_t voice_assistant_stop_and_deinit(void)
+{
+    if (s_status_lock == NULL) {
+        return ESP_OK;
+    }
+    if (s_task_handle != NULL) {
+        const voice_assistant_command_t command = {
+            .type = VOICE_ASSISTANT_COMMAND_SHUTDOWN,
+        };
+        if (!voice_assistant_take_lock()) {
+            return ESP_ERR_TIMEOUT;
+        }
+        s_command_pending = true;
+        s_stop_waiter = xTaskGetCurrentTaskHandle();
+        xSemaphoreGive(s_status_lock);
+        if (xQueueSend(s_command_queue, &command, 0U) != pdTRUE) {
+            if (voice_assistant_take_lock()) {
+                s_command_pending = false;
+                s_stop_waiter = NULL;
+                xSemaphoreGive(s_status_lock);
+            }
+            return ESP_ERR_TIMEOUT;
+        }
+        if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(VOICE_ASSISTANT_START_TIMEOUT_MS)) == 0U) {
+            return ESP_ERR_TIMEOUT;
+        }
+    }
+    const esp_err_t observer_ret =
+        xiaozhi_foundation_session_register_status_callback(NULL, NULL);
+    if (observer_ret != ESP_OK) {
+        return observer_ret;
+    }
+    s_status_callback = NULL;
+    s_status_callback_context = NULL;
+    s_start_waiter = NULL;
+    s_stop_waiter = NULL;
+    if (s_command_queue != NULL) {
+        vQueueDelete(s_command_queue);
+        s_command_queue = NULL;
+    }
+    vSemaphoreDelete(s_status_lock);
+    s_status_lock = NULL;
+    memset(&s_status, 0, sizeof(s_status));
+    s_status.state = VOICE_ASSISTANT_STATE_UNINITIALIZED;
+    s_status.audio.state = VOICE_ASSISTANT_AUDIO_UNAVAILABLE;
     return ESP_OK;
 }
 

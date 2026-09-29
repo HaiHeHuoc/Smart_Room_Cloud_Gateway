@@ -23,6 +23,8 @@ esp_err_t voice_assistant_ui_gui_adapter_init(void);
  * voice model itself.
  */
 esp_err_t voice_assistant_ui_gui_adapter_start(void);
+/** Unregister the model observer and delete adapter-owned timers. */
+esp_err_t voice_assistant_ui_gui_adapter_stop_and_deinit(void);
 
 #ifdef __cplusplus
 }

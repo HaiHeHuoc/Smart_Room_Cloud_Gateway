@@ -24,6 +24,8 @@ static const char *const TAG = "AUDIO_CAP_ARB";
 static SemaphoreHandle_t s_lock = NULL;
 static TaskHandle_t s_task = NULL;
 static TaskHandle_t s_start_waiter = NULL;
+static TaskHandle_t s_stop_waiter = NULL;
+static volatile bool s_shutdown_requested = false;
 static capture_slot_t s_current = {0};
 static capture_slot_t s_pending = {0};
 static bool s_current_valid = false;
@@ -116,6 +118,9 @@ static void capture_arbiter_task(void *arg)
     }
 
     for (;;) {
+        if (s_shutdown_requested) {
+            break;
+        }
         audio_manager_status_t manager = {0};
         const esp_err_t status_ret = audio_manager_get_status(&manager);
         if (status_ret != ESP_OK) {
@@ -233,6 +238,20 @@ static void capture_arbiter_task(void *arg)
             pdTRUE,
             pdMS_TO_TICKS(CAPTURE_ARBITER_POLL_MS));
     }
+
+    if (take_lock()) {
+        clear_slot(&s_current);
+        clear_slot(&s_pending);
+        s_current_valid = false;
+        s_pending_valid = false;
+        sync_status_locked(AUDIO_MANAGER_CAPTURE_ARBITER_UNINITIALIZED, ESP_OK);
+        s_task = NULL;
+        xSemaphoreGive(s_lock);
+    }
+    if (s_stop_waiter != NULL) {
+        xTaskNotifyGive(s_stop_waiter);
+    }
+    vTaskDelete(NULL);
 }
 
 esp_err_t audio_manager_capture_arbiter_init(void)
@@ -247,6 +266,31 @@ esp_err_t audio_manager_capture_arbiter_init(void)
     memset(&s_status, 0, sizeof(s_status));
     s_status.state = AUDIO_MANAGER_CAPTURE_ARBITER_IDLE;
     s_status.last_error = ESP_OK;
+    s_shutdown_requested = false;
+    return ESP_OK;
+}
+
+esp_err_t audio_manager_capture_arbiter_stop_and_deinit(void)
+{
+    if (s_lock == NULL) {
+        return ESP_OK;
+    }
+    const esp_err_t stop_ret = audio_manager_stop_recording();
+    if ((stop_ret != ESP_OK) && (stop_ret != ESP_ERR_INVALID_STATE)) {
+        return stop_ret;
+    }
+    s_shutdown_requested = true;
+    if (s_task != NULL) {
+        s_stop_waiter = xTaskGetCurrentTaskHandle();
+        xTaskNotifyGive(s_task);
+        if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(CAPTURE_ARBITER_START_MS)) == 0U) {
+            return ESP_ERR_TIMEOUT;
+        }
+    }
+    s_start_waiter = NULL;
+    s_stop_waiter = NULL;
+    vSemaphoreDelete(s_lock);
+    s_lock = NULL;
     return ESP_OK;
 }
 

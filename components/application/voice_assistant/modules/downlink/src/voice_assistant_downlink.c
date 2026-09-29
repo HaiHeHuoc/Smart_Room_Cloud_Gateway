@@ -77,6 +77,8 @@ static QueueHandle_t s_queue = NULL;
 static StaticQueue_t s_queue_control = {0};
 static uint8_t *s_queue_storage = NULL;
 static TaskHandle_t s_task = NULL;
+static TaskHandle_t s_stop_waiter = NULL;
+static volatile bool s_shutdown_requested = false;
 /* ESP-Xiaozhi invokes the response callbacks synchronously from the 4 KiB
  * WebSocket task. Keep the 2 KiB queue staging item out of that task's stack.
  * The atomic flag rejects unexpected concurrent callback entry rather than
@@ -268,6 +270,9 @@ static esp_err_t downlink_write_pcm_with_backpressure(
     bool backpressured = false;
 
     for (;;) {
+        if (s_shutdown_requested) {
+            return ESP_ERR_INVALID_STATE;
+        }
         if (downlink_response_is_tainted(response_epoch)) {
             return ESP_ERR_INVALID_RESPONSE;
         }
@@ -730,6 +735,19 @@ static void downlink_task(void *argument)
              (unsigned)DOWNLINK_RESPONSE_ACTIVITY_TIMEOUT_MS);
 
     for (;;) {
+        if (s_shutdown_requested) {
+            uint32_t generation = 0U;
+            uint32_t response_epoch = 0U;
+            portENTER_CRITICAL(&s_lock);
+            generation = s_status.session_generation;
+            response_epoch = s_active_response_epoch;
+            portEXIT_CRITICAL(&s_lock);
+            if ((generation != 0U) && (response_epoch != 0U)) {
+                downlink_abort_response(generation, response_epoch,
+                                        ESP_ERR_INVALID_STATE, false, false);
+            }
+            break;
+        }
         /* Check before every dequeue, not only after an empty poll. This keeps
          * the collection deadline effective even if the server repeatedly
          * emits non-terminal events. */
@@ -1011,6 +1029,19 @@ static void downlink_task(void *argument)
                      (unsigned long long)pcm_bytes);
         }
     }
+
+    portENTER_CRITICAL(&s_lock);
+    s_status.running = false;
+    s_status.awaiting_response = false;
+    s_status.collecting = false;
+    s_status.finalizing = false;
+    s_status.playback_requested = false;
+    s_task = NULL;
+    portEXIT_CRITICAL(&s_lock);
+    if (s_stop_waiter != NULL) {
+        xTaskNotifyGive(s_stop_waiter);
+    }
+    vTaskDelete(NULL);
 }
 
 esp_err_t voice_assistant_downlink_init(void)
@@ -1063,6 +1094,43 @@ esp_err_t voice_assistant_downlink_init(void)
         .initialized = true,
         .last_error = ESP_OK,
     };
+    s_shutdown_requested = false;
+    portEXIT_CRITICAL(&s_lock);
+    return ESP_OK;
+}
+
+esp_err_t voice_assistant_downlink_stop_and_deinit(void)
+{
+    bool initialized = false;
+    portENTER_CRITICAL(&s_lock);
+    initialized = s_status.initialized;
+    portEXIT_CRITICAL(&s_lock);
+    if (!initialized) {
+        return ESP_OK;
+    }
+
+    s_shutdown_requested = true;
+    if (s_task != NULL) {
+        s_stop_waiter = xTaskGetCurrentTaskHandle();
+        xTaskNotifyGive(s_task);
+        if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000U)) == 0U) {
+            return ESP_ERR_TIMEOUT;
+        }
+    }
+    const esp_err_t callback_ret =
+        xiaozhi_foundation_response_register_callback(NULL, NULL);
+    if (callback_ret != ESP_OK) {
+        return callback_ret;
+    }
+    if (s_queue != NULL) {
+        vQueueDelete(s_queue);
+        s_queue = NULL;
+    }
+    heap_caps_free(s_queue_storage);
+    s_queue_storage = NULL;
+    s_stop_waiter = NULL;
+    portENTER_CRITICAL(&s_lock);
+    s_status = (voice_assistant_downlink_status_t){0};
     portEXIT_CRITICAL(&s_lock);
     return ESP_OK;
 }

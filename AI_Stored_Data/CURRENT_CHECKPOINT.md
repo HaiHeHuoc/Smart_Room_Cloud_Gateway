@@ -1,96 +1,103 @@
 # Current Working Checkpoint
 
-Purpose: compact, overwriteable handoff for the active integration state.
-Current source, `AGENTS.md`, canonical documentation, and explicit build/HIL
-evidence remain authoritative.
+Purpose: compact V2 release-hardening handoff. Current source, `AGENTS.md`,
+canonical documents, and observed build/HIL evidence remain authoritative.
 
-Updated: 2026-09-28
-Active branch: `main_including_Firebase_security`
-Source integration baseline: `44e6feb23f3358917171b6b326b56fdec8ae7ff3`
-Baseline commit: `merge: integrate PTT uplink robustness fix`
+Updated: 2026-09-29
 
-## Current status
+## Active V2 source
 
-- Sprint 18: COMPLETE / USER ACCEPTED BY HẢI ON 2026-09-16.
-- Sprint 19: SOURCE INTEGRATED / BUILD VERIFIED / TARGET HIL PARTIAL.
-- Sprint 20: IMPLEMENTED / BUILD VERIFIED / TARGET HIL PENDING.
-- Sprint 21: COMPLETE / USER ACCEPTED BY HẢI ON 2026-09-24.
-- Sprint 22: COMPLETE / BUILD VERIFIED / USER ACCEPTED BY HẢI ON 2026-09-25.
-- Sprint 23: COMPLETE / USER ACCEPTED BY HẢI ON 2026-09-26.
-- Sprint 24: PLANNED / NOT STARTED on this integration branch.
+- V2 baseline: `44e6feb23f3358917171b6b326b56fdec8ae7ff3`.
+- V2-R08 lifecycle recovery: commit `1511d7e`.
+- Exact V2 promotion source: `release/V2.0.0` through `4dc89c2`
+  (`Adjust UI`), carried by `integration/v2-to-main` for the
+  `main_including_Firebase_security` review/merge path. Until that PR merges,
+  `release/V2.0.0` remains the source of record; after it merges, the target
+  contains this V2 source chain.
+- Sprint 24 Wake Word + Advanced Voice UX remains **SUSPENDED FOR V2 RELEASE**.
+- No target HIL is recorded for V2-R08.
 
-Sprint-23 source remains integrated. Its former target/browser HIL matrix is
-optional regression coverage after Hải's acceptance and must not be used to
-rewrite Sprint 23 back to IN PROGRESS.
+## V2-R08 lifecycle recovery
 
-## Integrated PTT uplink robustness fix
+`voice_assistant` now owns staged startup across audio manager, both arbiters,
+voice task, UI, playback policy, PTT, uplink/downlink, GPIO38, and Xiaozhi
+session. A failed stage reverses successful owners in dependency order.
 
-The focused `fix/xiaozhi-ptt-uplink-drop` work is now integrated into
-`main_including_Firebase_security` through baseline `44e6feb...`.
+Each owner uses bounded cooperative stop/deinit. If any cleanup times out or
+fails, rollback stops immediately, retains dependencies of the possibly live
+owner, marks retry unsafe, and transitions the application to its fatal path.
+It does not deinitialize audio resources underneath a still-running task.
 
-Effective source changes retained on the integration branch:
+`smart_room_app` uses explicit NEEDS_START / RETRY_WAIT / READY / FATAL boot
+states, with at most three 1/2/4-second retries only after complete rollback.
 
-- `voice_uplink` priority is 6, below the priority-7 `audio_manager` I2S owner.
-- PCM uplink queue length is 16 frames (~256 ms at 256 samples/frame, 16 kHz).
-- Audio capture callback remains zero-wait/non-blocking; network latency does
-  not take I2S ownership.
-- Per-turn diagnostics include queue peak depth, maximum Opus encode time, and
-  maximum provider/network send time in addition to existing queue/drop/timing
-  counters.
-- Local Web Storage upload/download and Diagnostics export reject or abort at
-  safe boundaries while `VOICE_RECORDING_CRITICAL` is active.
-- `performance_monitor` defers CPU/task/memory reporting during the recording
-  critical window and resumes from a lightweight transition notification.
-- No Wi-Fi/TCPIP task suspension, scheduler suspension, new I2S owner, or direct
-  provider-handle leakage was introduced.
+## Validation performed
 
-## Validation state for the robustness fix
+- `voice_assistant` host suite: PASS, including transaction rollback, transient
+  retry, repeated cleanup, and fail-closed cleanup-timeout behavior.
+- `audio_manager` host suite: PASS, including arbiter lifecycle ownership.
+- `xiaozhi_foundation` host suite: PASS.
+- `system/common` VRC host suite: PASS.
+- `git diff --check`: PASS before commit.
+- Clean exported ESP-IDF v6.0.1 `esp32s3` build: PASS in `build_v2r08`.
+  Application: `0x296640` of `0x400000`; free `0x1699c0` (35%).
 
-- Source/diff inspection: PASS.
-- Merge into the requested integration branch: CONFIRMED.
-- ESP-IDF build specifically for this robustness merge: NOT RECORDED here.
-- Post-fix target/HIL for PTT audio quality and queue behavior: NOT RECORDED.
-- Do not inherit earlier build/HIL evidence as proof for these affected paths.
+## V2 dashboard Web IPv4 usability change
 
-## Required post-fix HIL
+- Committed release-source change: `4dc89c2` makes `app_gui` reuse the copied
+  `ui_wifi_status_t` snapshot to render a centered `Web: <IPv4>` bottom row
+  on `SENSOR_DASHBOARD`. It shows `Web: --` without an address, including
+  after a disconnect, and restores the cached address after screen recreation.
+- The new separator is above the row and the existing vertical divider ends at
+  that separator. No task, queue, Wi-Fi query, audio, or Xiaozhi code changed.
+- Source contract checks and `git diff --check` passed. A clean exported
+  ESP-IDF v6.0.1 `idf.py build` passed after regenerating the ignored stale
+  default `build/` cache for `esp32s3`; the application uses `0x291740` of
+  `0x400000`, leaving `0x16e8c0` (36%). A prior COM4 flash/boot reached the
+  dashboard, but that is boot sanity only; no formal LCD visual HIL is recorded.
 
-Run several GPIO38 PTT turns and capture the `VOICE_UPLINK` turn summary:
+## APP_LOG ANSI console color
 
-1. Speak immediately after pressing PTT.
-2. Speak continuously for 5-10 seconds.
-3. Repeat while Local Web is open.
-4. Optionally attempt Storage upload/download during PTT and verify it is
-   rejected/deferred instead of competing with capture.
+- `sdkconfig.defaults` now sets `CONFIG_LOG_COLORS=y`, so the existing
+  `APP_LOG` console sink keeps ANSI level colors after a clean ESP-IDF
+  configuration. No logging frontend or backend code changed.
+- Regenerated ignored `sdkconfig` confirms the setting. A clean exported
+  ESP-IDF v6.0.1 `esp32s3` build passed: application `0x2966c0` of
+  `0x400000`, with `0x169940` (35%) free. Target terminal/HIL output was not
+  run.
 
-Highest-value fields:
+## V2 Local Web Xiaozhi Remote PTT exception
 
-- `queue_drops`
-- `stale_drops`
-- `queue_peak=<N>/16`
-- `max_encode_us`
-- `max_send_us`
-- `capture_to_first_pcm_ms`
-- `capture_to_first_opus_ms`
+- Explicit late-V2 feature: Local Web is a second PTT frontend only. GPIO38
+  and Web enter the same `voice_assistant_ptt` policy, playback arbitration,
+  `voice_assistant_uplink`, `audio_manager`, and Xiaozhi pipeline; browser
+  microphone/PCM/Opus/WebRTC are not supported.
+- The public PTT contract tracks `GPIO`/`WEB` source ownership. A Web start
+  returns a PTT generation; a matching client ID and generation are required
+  for keepalive/stop, so a stale command cannot affect a newer turn. A second
+  source receives BUSY and cannot preempt. Web renews every 2 s; the PTT task
+  releases an absent heartbeat after 8 s using `esp_timer_get_time()`.
+- Local Web exposes copied status/transcripts and bounded HTTP start,
+  keepalive, and stop routes; it owns no I2S, DMA, capture, Opus, or provider
+  resource. Pointer release/cancel/blur/hide/page-hide attempt STOP; the
+  device lease remains the fallback.
+- Relevant voice and Local Web host suites PASS; `git diff --check` PASS;
+  exported ESP-IDF v6.0.1 `esp32s3` build PASS. Application `0x299b60` of
+  `0x400000`, leaving `0x1664a0` (35%). No flash/browser/board HIL was run.
 
-Also inspect `audio_manager` RX overflow/timeout diagnostics.
+## Remaining V2 evidence
 
-Expected nominal evidence is zero queue drops, zero unexpected stale drops,
-zero RX overflow delta, and zero RX timeout delta. If the queue still reaches
-16/16 or drops frames while RX remains clean, the next justified architecture
-step is a second bounded Opus packet queue between encoding and blocking send;
-do not increase DMA descriptors or add another sender task before that evidence.
-
-## Durable boundaries
-
-- Preserve existing manager/service ownership and `application -> service ->
-  driver/framework` dependency direction.
-- Local Web remains a frontend and does not own Wi-Fi/provisioning, SD/FATFS,
-  LVGL, audio/I2S, NeoPixel/RMT/GPIO, or provider lifecycle.
-- Never expose credentials, tokens, PoP/session material, private provider
-  handles, raw pointers, or unrestricted filesystem content.
-- Sprint 24 Wake Word + Advanced Voice UX does not start automatically.
+- V2-R01 remains measure-first: a slow synchronous provider send can fill the
+  bounded 16-frame PCM queue and deliberately drop PCM to protect I2S.
+- V2-R02/R03/R04 require target measurement of scheduler pressure, optional SD
+  work, and in-flight cloud HTTPS/TLS overlap.
+- Prompt 6 must capture RX overflow/timeout deltas, `queue_drops`,
+  `stale_drops`, queue peak, first PCM/Opus timing, max encode/send duration,
+  task/stack state, PSRAM state, and user-observed speech quality.
 
 ## Next action
 
-Primary gate: run the post-fix PTT HIL above and record only observed evidence.
-After that, Sprint 24 may start only when Hải explicitly requests it.
+After the V2 integration PR is manually merged, run the expanded Prompt-6
+Web/GPIO PTT HIL matrix against the resulting target source, including lease
+expiry, stale generation, and recording-critical contention. Do not start
+Sprint 24 automatically.

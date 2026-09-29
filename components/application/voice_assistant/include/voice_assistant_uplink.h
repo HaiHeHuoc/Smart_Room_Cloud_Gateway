@@ -29,6 +29,9 @@ esp_err_t voice_assistant_uplink_init(void);
 /** Start the coordinator task; no microphone capture starts here. */
 esp_err_t voice_assistant_uplink_start(void);
 
+/** Stop the uplink worker, unregister its PCM tap, and release its queue. */
+esp_err_t voice_assistant_uplink_stop_and_deinit(void);
+
 /** Copy current uplink diagnostics. */
 esp_err_t voice_assistant_uplink_get_status(
     voice_assistant_uplink_status_t *status);

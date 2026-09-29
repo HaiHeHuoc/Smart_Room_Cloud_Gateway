@@ -1,8 +1,10 @@
 # Next Work + Deferred HIL Backlog
 
-Updated: 2026-09-28
-Active branch: `main_including_Firebase_security`
-Source integration baseline: `44e6feb23f3358917171b6b326b56fdec8ae7ff3` (PTT uplink robustness merge)
+Updated: 2026-09-29
+V2 integration target: `main_including_Firebase_security`
+Release branch: `release/V2.0.0`
+V2 promotion candidate: `integration/v2-to-main` from release source `4dc89c2`
+V2 baseline: `44e6feb23f3358917171b6b326b56fdec8ae7ff3` (PTT uplink robustness merge)
 Sprint-18 closure authority: explicit user acceptance by Hải on 2026-09-16.
 Sprint 19-23 source is integrated/build verified as noted below. Sprint 21,
 Sprint 22, and Sprint 23 are closed by user acceptance. Sprint-23 target/browser
@@ -23,12 +25,18 @@ Sprint 22    Local Web Control V4: Dashboard + System Status / COMPLETE /
              BUILD VERIFIED / USER ACCEPTED BY Hai ON 2026-09-25
 Sprint 23    Local Web Control V5: Scenes + Logs + Diagnostics / COMPLETE /
              USER ACCEPTED BY HẢI ON 2026-09-26
-Sprint 24    Wake Word + Advanced Voice UX / PLANNED / NOT STARTED
+             Target/browser HIL remains optional release-regression evidence
+Sprint 24    Wake Word + Advanced Voice UX / SUSPENDED FOR V2 RELEASE
 ```
 
 ## Immediate next work
 
-Primary gate: validate the PTT uplink robustness merge on target hardware.
+V2-R08/P1 is resolved in source: bootstrap rollback is transactional, cleanup
+timeout fails closed without deinitializing dependencies of a possibly live
+owner, and automatic retry is allowed only after complete rollback. The V2
+source gate is ready for Prompt 6 HIL; do not start it automatically and do not
+begin Sprint 24. Sprint-23 target/browser HIL and Sprint-22 HIL remain
+release-validation/regression work; neither changes Sprint 24 status.
 
 1. Run several normal GPIO38 PTT turns, including speech immediately after
    press and continuous speech for 5-10 seconds.
@@ -46,6 +54,34 @@ Primary gate: validate the PTT uplink robustness merge on target hardware.
 After that, older Sprint-19/20/22/23 matrices remain useful regression work but
 do not reopen already accepted Sprints 21-23 without a concrete regression.
 Sprint 24 remains PLANNED / NOT STARTED until Hải explicitly starts it.
+
+## V2 Local Web Xiaozhi Remote PTT — mandatory Prompt-6 HIL
+
+This explicit late-V2 exception requires the affected Prompt-5 software gate
+and then this Prompt-6 target matrix on the exact built source. The browser is
+only a GPIO38-equivalent PTT frontend; all audio must come from the ESP32
+microphone. For every recording case, retain `queue_drops == 0`, unexpected
+`stale_drops == 0`, and zero audio-manager RX overflow/timeout delta.
+
+- [ ] WEB-HIL-01: basic browser hold/speak/release starts and ends one normal turn.
+- [ ] WEB-HIL-02: speak immediately after Web PTT START; capture first-PCM and
+  first-Opus timing plus audible/semantic result.
+- [ ] WEB-HIL-03: hold Web PTT for 10 seconds; confirm no stuck state or queue loss.
+- [ ] WEB-HIL-04: perform five repeated Web PTT turns.
+- [ ] WEB-HIL-05: Web PTT while Dashboard polling is active.
+- [ ] WEB-HIL-06: Web PTT while a Storage request is attempted; confirm the
+  existing recording-critical policy rejects/defers it safely.
+- [ ] WEB-HIL-07: Web PTT with ordinary cloud/Firebase activity.
+- [ ] WEB-HIL-08: close the browser while held; the 8-second device lease must
+  release recording without a browser STOP.
+- [ ] WEB-HIL-09: lose Wi-Fi/control connectivity while held; no recording may
+  remain stuck after lease expiry.
+- [ ] WEB-HIL-10: GPIO38 active then Web START returns deterministic BUSY.
+- [ ] WEB-HIL-11: Web active then GPIO38 press causes no generation or audio corruption.
+- [ ] WEB-HIL-12: send/observe a stale Web STOP after a newer generation; it
+  must not stop the newer turn.
+- [ ] WEB-HIL-13: repeatedly switch GPIO -> Web -> GPIO -> Web and inspect
+  session/PTT generations, audio errors, and transcript behavior.
 
 ## Sprint 22 target HIL matrix
 

@@ -97,8 +97,8 @@ independent.
 
 After network `ONLINE` and audio startup, the production composition queues one
 `voice_assistant_begin_session()` call. This establishes the long-lived service
-connection without opening a microphone/audio channel; GPIO38 remains the sole
-user authorization for a conversation turn. GPIO38 is active-high: wire the
+connection without opening a microphone/audio channel; GPIO38 remains the
+physical user authorization for a conversation turn. GPIO38 is active-high: wire the
 switch to 3.3 V and fit a 10 kOhm external pull-down to GND at the switch. The
 ESP32-S3 internal pull-down remains enabled as a supplementary boot bias, but
 is not sufficient as the sole release path on a long/noisy external wire.
@@ -109,6 +109,31 @@ turn, the capture arbiter is notified immediately rather than waiting for its
 normal status-poll timeout. A release whose raw level never becomes LOW is an
 electrical wiring fault; software then bounds the behavior only through the
 manual-recording safety limit and cannot infer a physical release.
+
+## V2 Local Web remote PTT
+
+The explicit late-V2 Local Web Xiaozhi Remote PTT exception adds a second
+frontend, not a second voice path. `voice_assistant_ptt` remains the sole PTT
+authority and records the held source as `GPIO` or `WEB`; one source may own a
+pressed intent at a time. A competing press returns a bounded busy result and
+never steals an active generation. GPIO38 continues to use its original
+`voice_assistant_ptt_press()` / `voice_assistant_ptt_release()` path.
+
+Local Web calls only `voice_assistant_ptt_web_start()`,
+`voice_assistant_ptt_web_keepalive()`, and
+`voice_assistant_ptt_web_stop()`. These APIs queue the same existing PTT
+policy, playback arbitration, uplink, and `audio_manager` path. They do not
+expose I2S, DMA, PCM, Opus, provider handles, or a Xiaozhi transport API.
+Web start returns the PTT generation; subsequent keepalive/stop calls must
+match both that generation and the browser's bounded client ID, so stale Web
+commands cannot affect a newer turn.
+
+The browser renews a held turn every 2 seconds. The PTT owner uses
+`esp_timer_get_time()` and releases an unrenewed Web intent after 8 seconds.
+Browser `pointercancel`, blur, hidden-document, and page-hide cleanup attempt
+an earlier stop, but the device-side lease remains authoritative. GPIO turns
+do not have a Web lease. Browser microphone capture, audio upload, WebRTC, and
+any duplicate audio/Xiaozhi pipeline are intentionally unsupported.
 
 ## Callback and stale-event policy
 

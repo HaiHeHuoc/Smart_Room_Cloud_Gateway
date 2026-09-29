@@ -12,6 +12,7 @@
     button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.light-grid{display:grid;gap:12px;margin-top:14px}.light-row{display:grid;grid-template-columns:minmax(88px,1fr) minmax(44px,2fr) auto;gap:10px;align-items:center}.light-row input,.light-row select{min-width:0}.light-row input[type="color"]{height:42px;width:52px;padding:2px;background:#263a53;border:1px solid #4e6d90;border-radius:7px}.light-row input[type="range"]{accent-color:var(--accent);min-height:34px;width:100%}.light-row output{font-variant-numeric:tabular-nums;white-space:nowrap}.light-summary{display:flex;gap:10px;align-items:center;color:var(--muted);margin:0}.light-swatch{width:44px;height:44px;border:1px solid var(--line);border-radius:50%;background:#000;flex:none}.light-power{min-height:42px;accent-color:var(--accent)}@media(max-width:480px){.light-row{grid-template-columns:1fr auto}.light-row input[type="range"],.light-row select{grid-column:1/-1}.light-row input[type="color"]{justify-self:end}}
     .dashboard-header{margin-top:16px}.dashboard-header .state{margin:8px 0 0}.dashboard-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:12px}.dashboard-card{margin-top:0;min-width:0}.dashboard-card h2{font-size:1rem;margin:0}.dashboard-card p{margin:8px 0 0}.dashboard-primary{font-size:1.12rem;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}.dashboard-secondary,.dashboard-detail{color:var(--muted);font-size:.9rem}.dashboard-badge{border:1px solid var(--line);border-radius:999px;padding:3px 8px;color:var(--muted);font-size:.82rem;white-space:nowrap}.dashboard-badge[data-state="ready"]{border-color:#5bbd8a;color:#9be1bb}.dashboard-badge[data-state="attention"]{border-color:#d3ab55;color:#ffd887}.dashboard-badge[data-state="unavailable"]{border-color:#bc6970;color:var(--err)}.dashboard-light{display:flex;gap:8px;align-items:center}.dashboard-light .light-swatch{width:24px;height:24px}.dashboard-card progress{accent-color:var(--accent)}@media(max-width:760px){.dashboard-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:480px){.dashboard-grid{grid-template-columns:1fr}}
     .scene-grid,.diagnostics-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:12px}.scene-card,.diagnostic-card{margin-top:0;min-width:0}.scene-card h2,.diagnostic-card h2{font-size:1rem;margin:0}.scene-card p,.diagnostic-card p{margin:8px 0 0}.scene-card button{width:100%;min-height:40px;margin-top:12px}.result-list{display:grid;gap:4px;color:var(--muted);font-size:.9rem}.log-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.log-summary .metric{min-width:0}.log-records{border-top:1px solid var(--line);margin-top:12px}.log-record{padding:10px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}.log-record time{font-variant-numeric:tabular-nums;color:var(--muted);font-size:.9rem}.log-record .level{font-weight:700;margin-left:8px}.log-record .tag{display:block;color:var(--accent);font-size:.9rem;margin-top:4px}.log-record .event{display:block;margin-top:2px}.diagnostic-card .metric{margin-top:8px}.diagnostic-note{color:var(--muted);font-size:.9rem;overflow-wrap:anywhere}@media(max-width:760px){.scene-grid,.diagnostics-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:480px){.scene-grid,.diagnostics-grid,.log-summary{grid-template-columns:1fr}.tab-list{margin-left:-12px;margin-right:-12px;padding-left:12px;padding-right:12px}}
+    .voice-ptt{display:block;width:min(100%,360px);min-height:64px;margin:18px auto;background:#254a68;border-color:var(--accent);font-weight:700;letter-spacing:.03em}.voice-ptt[data-active="true"]{background:#387c59;border-color:#8edbb0}.voice-ptt[data-busy="true"]{background:#563d3d;border-color:#bc6970}.voice-transcript{display:grid;gap:8px}.voice-transcript p{margin:0;overflow-wrap:anywhere}.voice-speaker{color:var(--accent);font-size:.9rem}
   </style>
 </head>
 <body>
@@ -21,6 +22,7 @@
       <button class="tab" id="tab-dashboard" type="button" role="tab" aria-selected="true" aria-controls="panel-dashboard" data-tab="dashboard"><img class="icon" src="/api/assets/icon?name=dashboard" alt="">Dashboard</button>
       <button class="tab" id="tab-storage" type="button" role="tab" aria-selected="false" aria-controls="panel-storage" data-tab="storage" tabindex="-1"><img class="icon" src="/api/assets/icon?name=folder" alt="">Storage</button>
       <button class="tab" id="tab-playback" type="button" role="tab" aria-selected="false" aria-controls="panel-playback" data-tab="playback" tabindex="-1"><img class="icon" src="/api/assets/icon?name=playback" alt="">Playback</button>
+      <button class="tab" id="tab-voice" type="button" role="tab" aria-selected="false" aria-controls="panel-voice" data-tab="voice" tabindex="-1">Xiaozhi</button>
       <button class="tab" id="tab-lights" type="button" role="tab" aria-selected="false" aria-controls="panel-lights" data-tab="lights" tabindex="-1"><img class="icon" src="/api/assets/icon?name=lights" alt="">Lights</button>
       <button class="tab" id="tab-scenes" type="button" role="tab" aria-selected="false" aria-controls="panel-scenes" data-tab="scenes" tabindex="-1"><img class="icon" src="/api/assets/icon?name=scenes" alt="">Scenes</button>
       <button class="tab" id="tab-logs" type="button" role="tab" aria-selected="false" aria-controls="panel-logs" data-tab="logs" tabindex="-1"><img class="icon" src="/api/assets/icon?name=logs" alt="">Logs</button>
@@ -57,6 +59,18 @@
         <input id="pb-progress" type="range" min="0" max="1" value="0" step="1" aria-label="Playback position" disabled>
         <p class="playback-row meta"><span id="pb-position">--:--</span><span aria-hidden="true">/</span><span id="pb-duration">--:--</span></p>
         <label class="playback-row"><img class="icon" src="/api/assets/icon?name=volume" alt="">Volume <input id="pb-volume" type="range" min="0" max="100" value="100" aria-label="Playback volume"> <span id="pb-volume-value">100%</span></label>
+      </section>
+    </section>
+    <section class="tab-panel" id="panel-voice" role="tabpanel" aria-labelledby="tab-voice" hidden>
+      <section class="card">
+        <nav><strong>Xiaozhi remote PTT</strong><span id="voice-status" class="meta" role="status">Open Xiaozhi to load status.</span></nav>
+        <p id="voice-feedback" class="state" role="status">Uses the ESP32 microphone only.</p>
+        <button id="voice-ptt" class="voice-ptt" type="button" aria-pressed="false" aria-describedby="voice-feedback" disabled>HOLD TO TALK</button>
+        <p class="diagnostic-note">Hold to start the existing device PTT path. Browser microphone capture is not supported.</p>
+      </section>
+      <section class="card voice-transcript" aria-live="polite">
+        <p><span class="voice-speaker">You</span><br><span id="voice-user-text">No transcript yet.</span></p>
+        <p><span class="voice-speaker">Xiaozhi</span><br><span id="voice-assistant-text">No response yet.</span></p>
       </section>
     </section>
     <section class="tab-panel" id="panel-lights" role="tabpanel" aria-labelledby="tab-lights" hidden>
@@ -116,8 +130,8 @@
       const join = (parent, name) => `${parent === '/' ? '' : parent}/${name}`;
       const parent = value => value === '/' ? '/' : (value.slice(0, value.lastIndexOf('/')) || '/');
       const STORAGE_POLL_INTERVAL_MS = 2000, LIGHT_POLL_INTERVAL_MS = 2000, DASHBOARD_POLL_INTERVAL_MS = 2000, LIGHT_WRITE_DEBOUNCE_MS = 250;
-      const SCENE_POLL_INTERVAL_MS = 5000, LOGS_POLL_INTERVAL_MS = 5000, DIAGNOSTICS_POLL_INTERVAL_MS = 5000;
-      let path = '/', busy = false, catalogIds = new Map(), polling = false, pollTimer = 0, storagePolling = false, storagePollTimer = 0, storageAvailable = null, catalogRetryTimer = 0, catalogLoadGeneration = 0, activeTab = 'dashboard', scrubbing = false, playbackGeneration = 0, playbackRate = 0, lightPolling = false, lightPollTimer = 0, lightCommitTimer = 0, lightCommitActive = false, lightAvailable = null, lightGeneration = 0, lightPending = {}, lightModel = null, dashboardPolling = false, dashboardPollTimer = 0, dashboardGeneration = 0, dashboardRefreshQueued = false, dashboardUpdatedAt = 0, dashboardFreshnessTimer = 0, sceneCatalogLoaded = false, scenePolling = false, scenePollTimer = 0, sceneGeneration = 0, sceneApplyActive = false, logsPolling = false, logsPollTimer = 0, logsGeneration = 0, logsFilesLoaded = false, logsFilesLoading = false, logReadActive = false, selectedLogId = '', selectedLogOffset = 0, selectedLogNextOffset = 0, selectedLogEof = true, diagnosticsPolling = false, diagnosticsPollTimer = 0, diagnosticsGeneration = 0, diagnosticsUpdatedAt = 0;
+      const SCENE_POLL_INTERVAL_MS = 5000, LOGS_POLL_INTERVAL_MS = 5000, DIAGNOSTICS_POLL_INTERVAL_MS = 5000, VOICE_POLL_INTERVAL_MS = 1000, VOICE_KEEPALIVE_INTERVAL_MS = 2000;
+      let path = '/', busy = false, catalogIds = new Map(), polling = false, pollTimer = 0, storagePolling = false, storagePollTimer = 0, storageAvailable = null, catalogRetryTimer = 0, catalogLoadGeneration = 0, activeTab = 'dashboard', scrubbing = false, playbackGeneration = 0, playbackRate = 0, lightPolling = false, lightPollTimer = 0, lightCommitTimer = 0, lightCommitActive = false, lightAvailable = null, lightGeneration = 0, lightPending = {}, lightModel = null, dashboardPolling = false, dashboardPollTimer = 0, dashboardGeneration = 0, dashboardRefreshQueued = false, dashboardUpdatedAt = 0, dashboardFreshnessTimer = 0, sceneCatalogLoaded = false, scenePolling = false, scenePollTimer = 0, sceneGeneration = 0, sceneApplyActive = false, logsPolling = false, logsPollTimer = 0, logsGeneration = 0, logsFilesLoaded = false, logsFilesLoading = false, logReadActive = false, selectedLogId = '', selectedLogOffset = 0, selectedLogNextOffset = 0, selectedLogEof = true, diagnosticsPolling = false, diagnosticsPollTimer = 0, diagnosticsGeneration = 0, diagnosticsUpdatedAt = 0, voicePolling = false, voicePollTimer = 0, voiceStartPending = false, voicePointerDown = false, voiceHolding = false, voiceGeneration = 0, voiceKeepaliveTimer = 0, voiceModel = null;
       let logFilesModel = null;
       const setState = (text, error = false) => { state.textContent = text; state.className = `state${error ? ' error' : ''}`; };
       const setStorageControls = () => { const enabled = storageAvailable === true && !busy; q('#file').disabled = !enabled; q('#upload').disabled = !enabled; q('#mkdir').disabled = !enabled; q('#up').disabled = !enabled || path === '/'; };
@@ -127,7 +141,7 @@
 
       function stopInactivePolling() {
         dashboardGeneration++; sceneGeneration++; logsGeneration++; diagnosticsGeneration++;
-        clearTimeout(dashboardPollTimer); clearTimeout(storagePollTimer); clearTimeout(pollTimer); clearTimeout(lightPollTimer); clearTimeout(scenePollTimer); clearTimeout(logsPollTimer); clearTimeout(diagnosticsPollTimer);
+        clearTimeout(dashboardPollTimer); clearTimeout(storagePollTimer); clearTimeout(pollTimer); clearTimeout(lightPollTimer); clearTimeout(scenePollTimer); clearTimeout(logsPollTimer); clearTimeout(diagnosticsPollTimer); clearTimeout(voicePollTimer);
       }
       function selectTab(nextTab) {
         stopInactivePolling();
@@ -141,11 +155,121 @@
         q(`#tab-${nextTab}`).scrollIntoView({block:'nearest', inline:'nearest'});
         if (nextTab === 'dashboard') tickDashboard();
         else if (nextTab === 'playback') { tickPlayback(); if (catalogIds.size === 0) loadTracks(); }
+        else if (nextTab === 'voice') activateVoice();
         else if (nextTab === 'lights') tickLights();
         else if (nextTab === 'storage') tickStorage();
         else if (nextTab === 'scenes') activateScenes();
         else if (nextTab === 'logs') activateLogs();
         else if (nextTab === 'diagnostics') activateDiagnostics();
+      }
+
+      const voiceActive = () => activeTab === 'voice' && !document.hidden;
+      const voiceClientId = (() => {
+        const values = new Uint32Array(1);
+        if (window.crypto && typeof window.crypto.getRandomValues === 'function') window.crypto.getRandomValues(values);
+        else values[0] = (Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0;
+        return values[0] || 1;
+      })();
+      const setVoiceFeedback = (text, error = false) => { const target = q('#voice-feedback'); target.textContent = text; target.className = `state${error ? ' error' : ''}`; };
+      const clearVoiceKeepalive = () => { clearInterval(voiceKeepaliveTimer); voiceKeepaliveTimer = 0; };
+      function renderVoice(data) {
+        voiceModel = data;
+        const available = data && data.available === true;
+        const stateName = String(data && data.state || 'idle').toLowerCase();
+        const ptt = data && data.ptt || {}, owner = String(ptt.owner || 'none').toLowerCase();
+        const generation = finiteNumber(ptt.generation) ? ptt.generation : 0;
+        const pttActive = ptt.active === true;
+        const ownedByThisPage = pttActive && owner === 'web' && voiceGeneration !== 0 && generation === voiceGeneration;
+        const busyByOther = pttActive && !ownedByThisPage;
+        if (voiceHolding && !ownedByThisPage && !voiceStartPending) {
+          voiceHolding = false; clearVoiceKeepalive();
+        }
+        const button = q('#voice-ptt');
+        const canStart = available && !voiceStartPending && !busyByOther && ['ready','speaking'].includes(stateName);
+        button.disabled = !canStart && !ownedByThisPage;
+        button.dataset.active = String(ownedByThisPage);
+        button.dataset.busy = String(busyByOther);
+        button.setAttribute('aria-pressed', String(ownedByThisPage));
+        button.textContent = voiceStartPending ? 'STARTING...' : ownedByThisPage ? 'RELEASE TO STOP' : busyByOther ? `BUSY - ${owner === 'gpio' ? 'GPIO38' : 'WEB'} PTT` : 'HOLD TO TALK';
+        q('#voice-status').textContent = available ? `${stateName.toUpperCase()}${pttActive ? ` / PTT ${owner.toUpperCase()}` : ''}` : 'Voice unavailable';
+        q('#voice-user-text').textContent = data && typeof data.user_text === 'string' && data.user_text ? data.user_text : 'No transcript yet.';
+        q('#voice-assistant-text').textContent = data && typeof data.assistant_text === 'string' && data.assistant_text ? data.assistant_text : 'No response yet.';
+        if (!available) setVoiceFeedback('Voice status is unavailable.', true);
+        else if (busyByOther) setVoiceFeedback(`PTT is owned by ${owner === 'gpio' ? 'GPIO38' : 'another Web client'}.`, true);
+        else if (ownedByThisPage) setVoiceFeedback('Holding PTT. Audio comes from the ESP32 microphone.');
+        else if (stateName === 'error') setVoiceFeedback('Voice service reported an error. Wait for recovery.', true);
+        else if (stateName === 'recovering' || stateName === 'starting') setVoiceFeedback('Voice service is recovering; hold-to-talk is temporarily unavailable.');
+        else setVoiceFeedback('Ready. Hold to talk using the ESP32 microphone.');
+      }
+      async function tickVoice() {
+        if (voicePolling || !voiceActive()) return;
+        voicePolling = true;
+        try {
+          const response = await fetch('/api/voice/status', {cache:'no-store'}), data = await response.json();
+          if (!response.ok || data.ok !== true) throw Error(data.error || 'voice_status_failed');
+          if (voiceActive()) renderVoice(data);
+        } catch (error) {
+          if (voiceActive()) setVoiceFeedback(`Voice status unavailable (${error.message}).`, true);
+        } finally {
+          voicePolling = false; clearTimeout(voicePollTimer);
+          if (voiceActive()) voicePollTimer = setTimeout(tickVoice, VOICE_POLL_INTERVAL_MS);
+        }
+      }
+      function activateVoice() { setVoiceFeedback('Loading current Xiaozhi status...'); tickVoice(); }
+      async function sendVoiceKeepalive() {
+        if (!voiceHolding || !voiceGeneration) return;
+        try { await post(`/api/voice/ptt/keepalive?client=${encodeURIComponent(voiceClientId)}&generation=${encodeURIComponent(voiceGeneration)}`); }
+        catch (error) {
+          voiceHolding = false; clearVoiceKeepalive();
+          if (voiceActive()) setVoiceFeedback(`PTT keepalive lost (${error.message}); waiting for device status.`, true);
+          tickVoice();
+        }
+      }
+      function startVoiceKeepalive(intervalMs) {
+        clearVoiceKeepalive();
+        voiceKeepaliveTimer = setInterval(() => { void sendVoiceKeepalive(); }, intervalMs);
+      }
+      async function releaseVoicePtt(reason = '') {
+        voicePointerDown = false;
+        const generation = voiceGeneration;
+        const wasHeld = voiceHolding;
+        voiceHolding = false; clearVoiceKeepalive();
+        if (generation && (wasHeld || voiceStartPending)) {
+          try { await post(`/api/voice/ptt/stop?client=${encodeURIComponent(voiceClientId)}&generation=${encodeURIComponent(generation)}`); }
+          catch (error) { if (voiceActive()) setVoiceFeedback(`PTT stop was not confirmed (${error.message}); the device lease will release it.`, true); }
+        }
+        if (reason && voiceActive()) setVoiceFeedback(reason);
+        tickVoice();
+      }
+      async function startVoicePtt() {
+        if (voiceStartPending || voiceHolding || !voicePointerDown) return;
+        voiceStartPending = true;
+        if (voiceActive()) renderVoice(voiceModel || {available:true, state:'starting', ptt:{}});
+        try {
+          const data = await post(`/api/voice/ptt/start?client=${encodeURIComponent(voiceClientId)}`);
+          if (!finiteNumber(data.generation) || data.generation <= 0) throw Error('invalid_ptt_generation');
+          voiceGeneration = data.generation;
+          if (!voicePointerDown) { await releaseVoicePtt('PTT released before start completed.'); return; }
+          voiceHolding = true;
+          startVoiceKeepalive(finiteNumber(data.keepalive_interval_ms) ? data.keepalive_interval_ms : VOICE_KEEPALIVE_INTERVAL_MS);
+        } catch (error) {
+          if (voiceActive()) setVoiceFeedback(error.message === 'ptt_busy' ? 'PTT is busy with another source.' : `PTT start rejected (${error.message}).`, true);
+        } finally {
+          voiceStartPending = false;
+          tickVoice();
+        }
+      }
+      function onVoicePointerDown(event) {
+        if (event.button !== undefined && event.button !== 0) return;
+        if (voiceStartPending || voiceHolding || event.currentTarget.disabled) return;
+        event.preventDefault(); voicePointerDown = true;
+        if (event.currentTarget.setPointerCapture) event.currentTarget.setPointerCapture(event.pointerId);
+        void startVoicePtt();
+      }
+      function onVoicePointerRelease(event) {
+        if (!voicePointerDown && !voiceHolding && !voiceStartPending) return;
+        if (event) event.preventDefault();
+        void releaseVoicePtt();
       }
 
       const dashboardStateLabel = value => ({uninitialized: 'Uninitialized', initialized: 'Initializing', running: 'Running', ready: 'Ready', attention: 'Attention', unavailable: 'Unavailable', degraded: 'Degraded', mounting: 'Mounting', recovering: 'Recovering', retry_wait: 'Retry wait', connected: 'Connected', connecting: 'Connecting', waiting_for_ip: 'Waiting for IP', disconnected: 'Disconnected', failed: 'Failed', online: 'Online', waiting_for_network: 'Waiting for network', waiting_for_data: 'Waiting for data', uploading: 'Uploading', auth_error: 'Authentication error', synced: 'Synchronized', syncing: 'Synchronizing', unsynced: 'Not synchronized', idle: 'Idle', starting: 'Starting', playing: 'Playing', pausing: 'Pausing', paused: 'Paused', resuming: 'Resuming', stopping: 'Stopping', complete: 'Complete', recording: 'Recording', processing: 'Processing', playback: 'Playback', error: 'Error'})[String(value || '').toLowerCase()] || 'Unknown';
@@ -584,6 +708,18 @@
           tabs[next].focus(); selectTab(tabs[next].dataset.tab);
         };
       });
+      const voiceButton = q('#voice-ptt');
+      voiceButton.addEventListener('pointerdown', onVoicePointerDown);
+      voiceButton.addEventListener('pointerup', onVoicePointerRelease);
+      voiceButton.addEventListener('pointercancel', onVoicePointerRelease);
+      voiceButton.addEventListener('lostpointercapture', onVoicePointerRelease);
+      window.addEventListener('blur', () => { if (voicePointerDown || voiceHolding || voiceStartPending) void releaseVoicePtt('PTT released after browser focus changed.'); });
+      window.addEventListener('pagehide', () => {
+        if (voicePointerDown || voiceHolding || voiceStartPending) {
+          if (voiceGeneration && navigator.sendBeacon) navigator.sendBeacon(`/api/voice/ptt/stop?client=${encodeURIComponent(voiceClientId)}&generation=${encodeURIComponent(voiceGeneration)}`, '');
+          void releaseVoicePtt();
+        }
+      });
       q('#pb-play').onclick = async () => { try { await playTrack(q('#pb-track').value); } catch (error) { q('#pb-state').textContent = `Play rejected (${error.message})`; } };
       for (const action of ['pause','resume','restart','stop']) q(`#pb-${action}`).onclick = async () => { try { await post(`/api/audio/control?action=${action}`); tickPlayback(); } catch (error) { q('#pb-state').textContent = `Control rejected (${error.message})`; } };
       q('#pb-volume').onchange = async event => { try { const data = await post(`/api/audio/volume?percent=${event.target.value}`); q('#pb-volume-value').textContent = `${data.volume_percent}%`; } catch (error) { q('#pb-state').textContent = `Volume rejected (${error.message})`; } };
@@ -598,7 +734,7 @@
       q('#logs-refresh').onclick = async () => { logsFilesLoaded = false; await loadLogsFiles(true); tickLogs(); };
       q('#logs-restart').onclick = () => loadLogPage(selectedLogId, 0);
       q('#logs-next').onclick = () => loadLogPage(selectedLogId, selectedLogNextOffset);
-      document.addEventListener('visibilitychange', () => { if (document.hidden) stopInactivePolling(); else selectTab(activeTab); });
+      document.addEventListener('visibilitychange', () => { if (document.hidden) { if (voicePointerDown || voiceHolding || voiceStartPending) void releaseVoicePtt(); stopInactivePolling(); } else selectTab(activeTab); });
       tickDashboard();
     })();
   </script>

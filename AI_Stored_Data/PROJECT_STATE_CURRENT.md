@@ -1,8 +1,10 @@
 # Smart Room Cloud Gateway — Current Project State
 
-Updated: 2026-09-28
-Active integration branch: `main_including_Firebase_security`
-Source integration baseline: `44e6feb23f3358917171b6b326b56fdec8ae7ff3` (`merge: integrate PTT uplink robustness fix`)
+Updated: 2026-09-29
+V2 integration target: `main_including_Firebase_security`
+Release branch: `release/V2.0.0`
+V2 promotion candidate: `integration/v2-to-main` from release source `4dc89c2`
+V2 baseline: `44e6feb23f3358917171b6b326b56fdec8ae7ff3` (`merge: integrate PTT uplink robustness fix`)
 Sprint-18 closure authority: explicit user acceptance by Hải on 2026-09-16
 
 > This file is the current-state companion for cross-session AI handoff.
@@ -70,8 +72,39 @@ Sprint 22   Local Web Control V4: Dashboard + System Status / COMPLETE /
             BUILD VERIFIED / USER ACCEPTED BY Hai ON 2026-09-25
 Sprint 23   Local Web Control V5: Scenes + Logs + Diagnostics / COMPLETE /
             USER ACCEPTED BY HẢI ON 2026-09-26
-Sprint 24   Wake Word + Advanced Voice UX / PLANNED / NOT STARTED
+            Target/browser HIL remains optional release-regression evidence
+Sprint 24   Wake Word + Advanced Voice UX / SUSPENDED FOR V2 RELEASE
 ```
+
+## V2 release-hardening state
+
+V2 feature freeze is active on `release/V2.0.0`, created from
+`main_including_Firebase_security` at
+`44e6feb23f3358917171b6b326b56fdec8ae7ff3`.
+
+The V2 promotion candidate carries the release chain through `4dc89c2`,
+including V2-R08 fail-closed bootstrap recovery, the Local Web Xiaozhi PTT
+frontend, and the dashboard Web IPv4 usability change. Its PR is the only
+planned path into `main_including_Firebase_security`: until manual merge,
+`release/V2.0.0` remains the source of record; after merge, the target contains
+that V2 source chain. This source integration is not a hardware acceptance or a
+V2 release claim.
+
+V2 includes Sprint 0-23 plus already integrated stabilization. It excludes new
+product features, including Sprint 24 implementation, speculative architecture
+redesign, and unrelated cleanup. Sprint 24 remains preserved and may resume
+only after V2 when Hai explicitly requests it.
+
+The primary V2 release-critical validation area is live Xiaozhi/PTT microphone
+capture under concurrent system load. Current user observation is that recording
+is materially more stable and the former unrelated-work interference symptom
+appears resolved; this is not yet proof that every subsystem is non-interfering.
+Prompts 2-5 completed the source/runtime-policy audit, a clean ESP-IDF build,
+and all self-contained host suites. The former P1 post-network voice-bootstrap
+lifecycle gap has since been corrected and rebuilt: staged startup now performs
+bounded reverse cleanup, while a cleanup timeout fails closed without
+deinitializing dependencies of a possibly live owner. The V2 source gate is
+ready for Prompt-6 HIL; this is not a hardware acceptance or V2 release claim.
 
 ## Sprint 18 closure interpretation
 
@@ -198,9 +231,10 @@ The highest-value immediate gate is post-fix PTT HIL:
    confirm recording-critical rejection/defer behavior.
 ```
 
-Do not claim this robustness fix build/HIL passed until explicit evidence is
-recorded. Sprint 24 Wake Word/Advanced Voice UX remains PLANNED / NOT STARTED
-on this integration branch and does not start automatically.
+Sprint 23 source is integrated and user accepted; its target/browser HIL remains
+release-validation evidence. Sprint 24 Wake Word/Advanced Voice UX is SUSPENDED
+FOR V2 RELEASE, is neither complete nor cancelled, and does not start
+automatically.
 ## Deferred regression work — non-blocking
 
 The following may still be useful later but **must not reopen Sprint 18 merely

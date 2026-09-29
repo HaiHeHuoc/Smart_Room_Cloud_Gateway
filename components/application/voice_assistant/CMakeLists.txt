@@ -2,12 +2,14 @@ idf_component_register(
     SRCS
         "voice_assistant.c"
         "voice_assistant_bootstrap.c"
+        "modules/bootstrap/src/voice_assistant_bootstrap_lifecycle.c"
         "modules/audio/src/voice_assistant_audio_adapter.c"
         "modules/audio/src/voice_assistant_audio_arbitration_bridge.c"
         "modules/ui/src/voice_assistant_ui_model.c"
         "modules/ui/src/voice_assistant_ui_gui_adapter.c"
         "modules/ptt/src/voice_assistant_ptt.c"
         "modules/ptt/src/voice_assistant_ptt_gpio.c"
+        "modules/ptt/src/voice_assistant_ptt_owner_policy.c"
         "modules/playback/src/voice_assistant_playback_control.c"
         "modules/playback/src/voice_assistant_playback_turn_policy.c"
         "modules/codec/src/voice_assistant_opus.c"
@@ -19,7 +21,9 @@ idf_component_register(
 
     PRIV_INCLUDE_DIRS
         "modules/codec/include"
+        "modules/bootstrap/include"
         "modules/playback/include"
+        "modules/ptt/include"
 
     REQUIRES
         esp_common

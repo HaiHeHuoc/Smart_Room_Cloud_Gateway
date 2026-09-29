@@ -164,6 +164,17 @@ esp_err_t voice_assistant_playback_control_init(void)
     return ESP_OK;
 }
 
+esp_err_t voice_assistant_playback_control_deinit(void)
+{
+    if (!s_initialized) {
+        return ESP_OK;
+    }
+    s_initialized = false;
+    s_ptt_preparing = false;
+    s_turn = (voice_playback_turn_policy_t){0};
+    return ESP_OK;
+}
+
 esp_err_t voice_assistant_playback_prepare_ptt(
     uint32_t ptt_generation,
     uint32_t session_generation)

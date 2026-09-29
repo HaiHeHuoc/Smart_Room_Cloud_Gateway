@@ -90,7 +90,8 @@ if ($adapterTracksSource -match 'scan_catalog\(&catalog\)') {
 }
 if (($adapterTracksSource -notmatch 'make_catalog_track_id_unique') -or
     ($adapterTracksSource -notmatch 'catalog_contains_track_id') -or
-    ($adapterTracksSource -notmatch 'stem_length == 0U')) {
+    ($adapterTracksSource -notmatch 'initial_length\s*>=\s*sizeof\(base_id\)') -or
+    ($adapterTracksSource -notmatch 'id_result\s*>=\s*sizeof\(entry->public_track\.id\)')) {
     throw 'Audio catalog does not disambiguate bounded logical track IDs'
 }
 $sessionSource = Get-Content `

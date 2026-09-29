@@ -10,6 +10,18 @@ extern "C"
 {
 #endif
 
+/** The frontend that currently owns a pressed PTT intent. */
+typedef enum {
+    VOICE_ASSISTANT_PTT_SOURCE_NONE = 0,
+    VOICE_ASSISTANT_PTT_SOURCE_GPIO,
+    VOICE_ASSISTANT_PTT_SOURCE_WEB,
+} voice_assistant_ptt_source_t;
+
+/* The browser renews at 2 s. Eight seconds tolerates short HTTP/Wi-Fi jitter
+ * while still bounding a disappeared Local Web client. */
+#define VOICE_ASSISTANT_PTT_WEB_KEEPALIVE_INTERVAL_MS 2000U
+#define VOICE_ASSISTANT_PTT_WEB_LEASE_TIMEOUT_MS       8000U
+
 typedef enum {
     VOICE_ASSISTANT_PTT_UNINITIALIZED = 0,
     VOICE_ASSISTANT_PTT_IDLE,
@@ -23,6 +35,8 @@ typedef enum {
 
 typedef struct {
     voice_assistant_ptt_state_t state;
+    /** Source holding the current pressed intent, or NONE when no turn is held. */
+    voice_assistant_ptt_source_t source;
     uint32_t ptt_generation;
     uint32_t session_generation;
     /** Monotonic debounced GPIO press delivery time, or zero before this intent. */
@@ -43,6 +57,9 @@ esp_err_t voice_assistant_ptt_init(void);
 
 /** Start the PTT policy task and enter IDLE. */
 esp_err_t voice_assistant_ptt_start(void);
+
+/** Stop the PTT policy task cooperatively and release its bounded state. */
+esp_err_t voice_assistant_ptt_stop_and_deinit(void);
 
 /**
  * Queue an authorized-user press intent.
@@ -77,6 +94,27 @@ esp_err_t voice_assistant_ptt_release(void);
  */
 esp_err_t voice_assistant_ptt_cancel(void);
 
+/**
+ * Reserve one Web-owned PTT intent and return its generation.
+ *
+ * This queues the same policy path used by GPIO. It never touches I2S,
+ * audio_manager, or the Xiaozhi transport. At most one source may reserve a
+ * turn; a concurrent GPIO or Web request returns ESP_ERR_INVALID_STATE.
+ */
+esp_err_t voice_assistant_ptt_web_start(
+    uint32_t client_id,
+    uint32_t *ptt_generation);
+
+/** Renew the bounded Web PTT lease for the matching client and generation. */
+esp_err_t voice_assistant_ptt_web_keepalive(
+    uint32_t client_id,
+    uint32_t ptt_generation);
+
+/** Release only the matching Web PTT generation; stale commands are rejected. */
+esp_err_t voice_assistant_ptt_web_stop(
+    uint32_t client_id,
+    uint32_t ptt_generation);
+
 /** Register/remove one copied PTT-status observer. */
 esp_err_t voice_assistant_ptt_register_status_callback(
     voice_assistant_ptt_status_callback_t callback,
@@ -86,6 +124,7 @@ esp_err_t voice_assistant_ptt_register_status_callback(
 esp_err_t voice_assistant_ptt_get_status(voice_assistant_ptt_status_t *status);
 
 const char *voice_assistant_ptt_state_to_string(voice_assistant_ptt_state_t state);
+const char *voice_assistant_ptt_source_to_string(voice_assistant_ptt_source_t source);
 
 #ifdef __cplusplus
 }

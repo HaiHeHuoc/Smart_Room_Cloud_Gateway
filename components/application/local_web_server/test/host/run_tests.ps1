@@ -24,7 +24,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Local Web path-policy test build failed' }
 if ($LASTEXITCODE -ne 0) { throw 'Local Web path-policy tests failed' }
 
 $serverSource = Get-Content (Join-Path $componentRoot 'src\local_web_server.c') -Raw
-if (($serverSource -notmatch 'LOCAL_WEB_HTTP_ROUTE_COUNT 29U') -or
+if (($serverSource -notmatch 'LOCAL_WEB_HTTP_ROUTE_COUNT 33U') -or
     ($serverSource -notmatch 'config\.max_uri_handlers = LOCAL_WEB_HTTP_ROUTE_COUNT') -or
     ($serverSource -notmatch '"/api/assets/icon"') -or
     ($serverSource -notmatch 'local_web_icon_logical_path') -or
@@ -34,7 +34,7 @@ if (($serverSource -notmatch 'LOCAL_WEB_HTTP_ROUTE_COUNT 29U') -or
     ($serverSource -notmatch 'app_gui_post_web_light_status')) {
     throw 'HTTPD URI-handler capacity does not cover the registered route set'
 }
-if (([regex]::Matches($serverSource, '\.uri = ')).Count -ne 27) {
+if (([regex]::Matches($serverSource, '\.uri = ')).Count -ne 31) {
     throw 'HTTPD URI-handler route inventory changed without a capacity review'
 }
 
@@ -166,7 +166,7 @@ if (($webPage -notmatch 'id="tab-lights"') -or
 if (($webPage -notmatch 'id="tab-scenes"') -or
     ($webPage -notmatch 'id="tab-logs"') -or
     ($webPage -notmatch 'id="tab-diagnostics"') -or
-    ([regex]::Matches($webPage, '<button class="tab"').Count -ne 7) -or
+    ([regex]::Matches($webPage, '<button class="tab"').Count -ne 8) -or
     ($webPage -notmatch 'SCENE_POLL_INTERVAL_MS = 5000') -or
     ($webPage -notmatch "fetch\('/api/scenes'") -or
     ($webPage -notmatch '/api/scenes/apply') -or
@@ -174,7 +174,34 @@ if (($webPage -notmatch 'id="tab-scenes"') -or
     ($webPage -notmatch 'Last applied:') -or
     ($webPage -notmatch 'Last requested:') -or
     ($webPage -match 'Current Scene:|Active scene:')) {
-    throw 'Scenes UI, result semantics, or seven-tab navigation is incomplete'
+    throw 'Scenes UI, result semantics, or tab navigation is incomplete'
+}
+
+if (($serverSource -notmatch '"/api/voice/status"') -or
+    ($serverSource -notmatch '"/api/voice/ptt/start"') -or
+    ($serverSource -notmatch '"/api/voice/ptt/keepalive"') -or
+    ($serverSource -notmatch '"/api/voice/ptt/stop"') -or
+    ($serverSource -notmatch 'voice_assistant_ptt_web_start') -or
+    ($serverSource -notmatch 'voice_assistant_ptt_web_keepalive') -or
+    ($serverSource -notmatch 'voice_assistant_ptt_web_stop') -or
+    ($serverSource -notmatch 'voice_assistant_ui_model_get') -or
+    ($serverSource -match 'voice_assistant_audio_capture_(start|stop)') -or
+    ($serverSource -match 'xiaozhi_foundation_audio_')) {
+    throw 'Web PTT endpoint bypasses the public PTT/UI contract'
+}
+
+if (($webPage -notmatch 'id="tab-voice"') -or
+    ($webPage -notmatch 'id="voice-ptt"') -or
+    ($webPage -notmatch 'pointerdown') -or
+    ($webPage -notmatch 'pointercancel') -or
+    ($webPage -notmatch 'pagehide') -or
+    ($webPage -notmatch 'visibilitychange') -or
+    ($webPage -notmatch 'VOICE_KEEPALIVE_INTERVAL_MS = 2000') -or
+    ($webPage -notmatch '/api/voice/ptt/keepalive') -or
+    ($webPage -notmatch '/api/voice/ptt/stop') -or
+    ($webPage -notmatch 'voice-assistant-text') -or
+    ($webPage -match 'getUserMedia|MediaRecorder|RTCPeerConnection|WebRTC|audioContext')) {
+    throw 'Web Xiaozhi PTT UI lacks bounded hold/lease behavior or requests browser audio'
 }
 
 if (($webPage -notmatch "fetch\('/api/logs/status'") -or
