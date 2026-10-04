@@ -116,7 +116,8 @@ that worker or lower-level effects directly.
 
 ## Target test loop
 
-`CONFIG_LIGHT_MANAGER_TEST_LOOP` defaults to `n`. When explicitly enabled in
+`CONFIG_LIGHT_MANAGER_TEST_LOOP` defaults to `n`. When explicitly enabled at
+**Smart Room Cloud Gateway -> Light Manager -> Validation / Debug options** in
 `menuconfig`, `main` starts the infinite `light_test` task immediately after a
 successful `light_manager_init()`. It writes `LIGHT_TEST` serial markers and
 waits `CONFIG_LIGHT_MANAGER_TEST_STEP_DELAY_MS` (default: 8000 ms) after every

@@ -31,4 +31,159 @@ menu "Smart Room Cloud Gateway"
 
     endmenu
 
+    menu "Local Web Server"
+
+        config LOCAL_WEB_SERVER_ENABLE
+            bool "Enable local Storage Web UI"
+            default y
+            help
+                Starts the local HTTP Storage UI only after the application has an
+                online network handoff. It provides bounded SD browsing and transfer
+                controls, but never configures or controls Wi-Fi.
+
+    endmenu
+
+    menu "Audio Manager"
+
+        config AUDIO_MANAGER_MANUAL_RECORD_MAX_SECONDS
+            int "Maximum manual recording duration (seconds)"
+            range 1 120
+            default 30
+            help
+                Compile-time upper bound for audio_manager_start_recording().
+                Manual capture stops when the application requests stop or this
+                duration is reached, whichever happens first. The manager allocates
+                one shared retained-recording PSRAM buffer large enough for the
+                larger of this limit and the fixed record_duration_seconds value.
+
+        config AUDIO_MANAGER_WAV_PREFETCH_SECONDS
+            int "WAV prefetch block duration (seconds)"
+            range 1 30
+            default 10
+            help
+                Each logical WAV prefetch block holds this many seconds of the
+                accepted PCM16 mono 16-kHz source. At the default, one block is
+                320000 bytes and the two PSRAM ping-pong blocks use 640000 bytes
+                only while a WAV is active. The SD reader still uses bounded 4 KiB
+                raw reads. The I2S-owning manager consumes only a READY block and
+                applies its fixed PCM16 full-scale-to-output-ceiling map during TX;
+                no whole-file WAV scan or source-file modification is performed.
+
+    endmenu
+
+    menu "Light Manager"
+
+        menu "Validation / Debug options"
+
+            config LIGHT_MANAGER_TEST_LOOP
+                bool "Run infinite NeoPixel light-manager API/effect test loop"
+                default n
+                help
+                    Starts a target-hardware-only task immediately after successful
+                    light_manager initialization. The task loops forever through the
+                    five public Smart Room effects, their state snapshots, a solid
+                    restore, and blink OFF/ON resumption, logging each action and
+                    waiting eight seconds between actions.
+
+                    This is validation infrastructure, not product behavior. Keep it
+                    disabled in normal firmware. It does not add MCP, GUI, cloud, or
+                    named-color behavior.
+
+            config LIGHT_MANAGER_TEST_STEP_DELAY_MS
+                int "Light-manager test step delay (milliseconds)"
+                range 1000 60000
+                default 8000
+                depends on LIGHT_MANAGER_TEST_LOOP
+                help
+                    Delay after every test action. The default is eight seconds so a
+                    single onboard NeoPixel can be observed between serial log steps.
+
+        endmenu
+
+    endmenu
+
+    menu "Application Log Manager"
+
+        config LOG_MANAGER_ENABLE
+            bool "Enable persistent application logger"
+            depends on SPIRAM
+            default y
+
+        config LOG_MANAGER_BUFFER_KIB
+            int "PSRAM ring size (KiB)"
+            range 16 2048
+            default 512
+
+        config LOG_MANAGER_RECORD_BYTES
+            int "Maximum record bytes (including newline and terminator)"
+            range 256 1024
+            default 512
+
+        config LOG_MANAGER_WRITE_BYTES
+            int "Batch write threshold (bytes)"
+            range 1024 16384
+            default 4096
+
+        config LOG_MANAGER_WRITE_MS
+            int "Maximum batch delay (ms)"
+            range 100 10000
+            default 1000
+
+        config LOG_MANAGER_SYNC_MS
+            int "Durability sync interval (ms)"
+            range 1000 60000
+            default 5000
+
+        config LOG_MANAGER_ROTATE_KIB
+            int "Maximum file size (KiB)"
+            range 64 65536
+            default 5120
+
+        config LOG_MANAGER_RETAIN_MIB
+            int "Maximum retained log data (MiB)"
+            range 8 2048
+            default 256
+
+        config LOG_MANAGER_CONSOLE_LEVEL
+            int "Console level (0=none, 1=error through 5=verbose)"
+            range 0 5
+            default 3
+
+        config LOG_MANAGER_STORAGE_LEVEL
+            int "Persistent level (0=none, 1=error through 5=verbose)"
+            range 0 5
+            default 4
+
+    endmenu
+
+    menu "Performance Monitor"
+
+        config PERFORMANCE_MONITOR_ENABLE
+            bool "Enable runtime performance monitor"
+            default y
+            depends on FREERTOS_GENERATE_RUN_TIME_STATS
+            help
+                Start the low-priority performance monitor during Smart Room product
+                boot. It periodically logs CPU, Internal RAM, PSRAM, DMA-capable RAM,
+                application partition use, and task stack high-water marks.
+
+                Disable this option when a production deployment does not require
+                periodic diagnostic logging.
+
+    endmenu
+
+    menu "Xiaozhi / Voice Assistant"
+
+        config SMART_ROOM_XIAOZHI_FIRST_BOOT_ACTIVATION
+            bool "Enable Xiaozhi first-boot activation flow"
+            default y
+            help
+                Read the managed Xiaozhi get_info activation response before starting
+                the WebSocket session. When the backend requests activation, keep the
+                product running, publish a bounded copied activation snapshot, and
+                retry from the voice lifecycle task. Disable only to retain the
+                pre-activation session behavior for compatibility testing.
+
+    endmenu
+
 endmenu

@@ -63,10 +63,11 @@ after MCP engine creation and detach before engine destruction.
 
 `xiaozhi_foundation` is also the sole direct caller of the managed
 `esp_xiaozhi_chat_get_info()` activation contract. The default Menuconfig option
-`CONFIG_SMART_ROOM_XIAOZHI_FIRST_BOOT_ACTIVATION` is enabled. When upstream
-returns `has_activation_code`, the component copies the code and optional
-message into fixed project-owned storage, frees upstream info exactly once, and
-publishes `ACTIVATION_REQUIRED` rather than a terminal session error. No
+at **Smart Room Cloud Gateway -> Xiaozhi / Voice Assistant** is
+`CONFIG_SMART_ROOM_XIAOZHI_FIRST_BOOT_ACTIVATION`, enabled by default. When
+upstream returns `has_activation_code`, the component copies the code and
+optional message into fixed project-owned storage, frees upstream info exactly
+once, and publishes `ACTIVATION_REQUIRED` rather than a terminal session error. No
 upstream pointer, challenge value, managed handle, or persisted "activated"
 state crosses the public boundary.
 

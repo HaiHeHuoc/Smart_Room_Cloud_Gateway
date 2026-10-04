@@ -66,10 +66,11 @@ The production session is separate from Phase-12 P2-E/P2-F validation. Session
 start requires real WebSocket CONNECTED evidence and remains alive until stop or
 failure.
 
-With the default Menuconfig first-boot activation flow enabled, a backend
-`has_activation_code` response is not a terminal session failure. The copied
-foundation snapshot places the voice state in `ACTIVATION_REQUIRED`; the UI
-adapter queues the activation code to the LCD-owned Xiaozhi screen and serial
+With the default Menuconfig first-boot activation flow enabled at **Smart Room
+Cloud Gateway -> Xiaozhi / Voice Assistant**, a backend `has_activation_code`
+response is not a terminal session failure. The copied foundation snapshot
+places the voice state in `ACTIVATION_REQUIRED`; the UI adapter queues the
+activation code to the LCD-owned Xiaozhi screen and serial
 logging identifies the same code. PTT is unavailable in that state and cannot
 authorize capture. The existing voice orchestration task, not an upstream timer
 or detached worker, retries `get_info` after 10, 20, 40, then 60-second capped
