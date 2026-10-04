@@ -48,6 +48,8 @@ Version 2 adds the current audio/voice/Xiaozhi path:
   recording and playback;
 - project-owned `voice_assistant` orchestration over `xiaozhi_foundation`;
 - Xiaozhi WebSocket voice transport and streaming downlink;
+- Menuconfig-controlled first-boot Xiaozhi activation with bounded copied code
+  display and lifecycle-owned retry;
 - MCP read-only Smart Room tools;
 - Phase-18.1 bounded NeoPixel light control through `light.set_state`, with
   `light.get_state` and `light.get_capabilities` companions.
@@ -205,6 +207,14 @@ Configure Firebase under:
 Smart Room Cloud Gateway
 └── Firebase development configuration
 ```
+
+For Xiaozhi, keep **Xiaozhi foundation -> Enable Xiaozhi first-boot activation
+flow** enabled for production. When the backend requests activation, the device
+keeps local services running, shows the bounded code on the Xiaozhi screen and
+serial console, and retries `get_info` with a project-owned backoff. It never
+stores an "already activated" marker; the backend response remains
+authoritative. The tracked `sdkconfig.activation_disabled.defaults` exists only
+for compatibility-build validation, not normal deployment.
 
 Complete guides:
 

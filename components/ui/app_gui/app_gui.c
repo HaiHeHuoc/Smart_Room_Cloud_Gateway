@@ -1729,6 +1729,9 @@ static const char *app_gui_xiaozhi_state_to_string(
         case UI_XIAOZHI_STATE_CONNECTING:
             return "CONNECTING";
 
+        case UI_XIAOZHI_STATE_ACTIVATION_REQUIRED:
+            return "ACTIVATION";
+
         case UI_XIAOZHI_STATE_READY:
             return "READY";
 
@@ -1764,6 +1767,9 @@ static const char *app_gui_xiaozhi_detail_text(
         case UI_XIAOZHI_STATE_CONNECTING:
             return "Connecting to Xiaozhi";
 
+        case UI_XIAOZHI_STATE_ACTIVATION_REQUIRED:
+            return "Enter the activation code";
+
         case UI_XIAOZHI_STATE_READY:
             return "Ready for interaction";
 
@@ -1796,6 +1802,9 @@ static lv_color_t app_gui_xiaozhi_state_color(
     switch (state) {
         case UI_XIAOZHI_STATE_CONNECTING:
             return lv_color_hex(APP_GUI_THEME_INFORMATION);
+
+        case UI_XIAOZHI_STATE_ACTIVATION_REQUIRED:
+            return lv_color_hex(APP_GUI_THEME_PROGRESS);
 
         case UI_XIAOZHI_STATE_READY:
             return lv_color_hex(APP_GUI_THEME_SUCCESS);
@@ -3936,6 +3945,10 @@ static void app_gui_render_dashboard_xiaozhi_status(
 
         case UI_XIAOZHI_STATE_CONNECTING:
             text = "Xiaozhi: Conn";
+            break;
+
+        case UI_XIAOZHI_STATE_ACTIVATION_REQUIRED:
+            text = "Xiaozhi: Activate";
             break;
 
         case UI_XIAOZHI_STATE_READY:

@@ -31,6 +31,7 @@ typedef enum {
     VOICE_ASSISTANT_COMMAND_ROTATE_SESSION,
     VOICE_ASSISTANT_COMMAND_RECOVER,
     VOICE_ASSISTANT_COMMAND_AUTO_RECOVER,
+    VOICE_ASSISTANT_COMMAND_RETRY_ACTIVATION,
     VOICE_ASSISTANT_COMMAND_FOUNDATION_STATUS,
     VOICE_ASSISTANT_COMMAND_AUDIO_STATUS,
     VOICE_ASSISTANT_COMMAND_SHUTDOWN,
@@ -74,6 +75,13 @@ static bool s_auto_recovery_scheduled = false;
 static bool s_auto_recovery_waiting_for_network = false;
 static TickType_t s_auto_recovery_due_at = 0U;
 static uint32_t s_auto_recovery_attempt = 0U;
+/* Activation is a backend-controlled first-boot condition, not a session
+ * failure. Its bounded backoff is serviced only by this owned lifecycle task
+ * and is cancelled by READY or shutdown; no detached poller is created. */
+static bool s_activation_retry_scheduled = false;
+static bool s_activation_retry_waiting_for_network = false;
+static TickType_t s_activation_retry_due_at = 0U;
+static uint32_t s_activation_retry_attempt = 0U;
 /* Foundation and audio producers may run while the bounded command queue is
  * full. Keep one latest copied snapshot for each source; a queue marker only
  * wakes the coordinator, while the task also drains these snapshots after
@@ -106,6 +114,10 @@ static void voice_assistant_schedule_auto_recovery(esp_err_t error);
 static void voice_assistant_cancel_auto_recovery(void);
 static void voice_assistant_poll_auto_recovery(void);
 static esp_err_t voice_assistant_queue_auto_recovery(void);
+static void voice_assistant_schedule_activation_retry(void);
+static void voice_assistant_cancel_activation_retry(void);
+static void voice_assistant_poll_activation_retry(void);
+static esp_err_t voice_assistant_queue_activation_retry(void);
 
 static bool voice_assistant_audio_status_is_valid(
     const voice_assistant_audio_status_t *status)
@@ -156,6 +168,9 @@ static void voice_assistant_set_status(
     s_status.state = state;
     s_status.session_active = session_active;
     s_status.last_error = last_error;
+    if (state != VOICE_ASSISTANT_STATE_ACTIVATION_REQUIRED) {
+        memset(&s_status.activation, 0, sizeof(s_status.activation));
+    }
     generation = s_status.session_generation;
     xSemaphoreGive(s_status_lock);
 
@@ -168,6 +183,40 @@ static void voice_assistant_set_status(
                  session_active ? "yes" : "no",
                  esp_err_to_name(last_error));
     }
+    voice_assistant_publish_status();
+}
+
+static void voice_assistant_set_activation_required(
+    const xiaozhi_foundation_activation_status_t *activation)
+{
+    if ((activation == NULL) || !activation->required) {
+        return;
+    }
+    if (!voice_assistant_take_lock()) {
+        APP_LOGE(TAG, ACTIVATION_STATE_DROPPED_LOCK_7DF0A4C0,
+                 "Activation state dropped: lock timeout");
+        return;
+    }
+    s_status.state = VOICE_ASSISTANT_STATE_ACTIVATION_REQUIRED;
+    s_status.session_active = false;
+    s_status.last_error = ESP_OK;
+    _Static_assert(
+        sizeof(s_status.activation.code) == sizeof(activation->code),
+        "Voice activation code bounds must match foundation");
+    _Static_assert(
+        sizeof(s_status.activation.message) == sizeof(activation->message),
+        "Voice activation message bounds must match foundation");
+    s_status.activation.required = activation->required;
+    s_status.activation.code_available = activation->code_available;
+    s_status.activation.code_truncated = activation->code_truncated;
+    memcpy(s_status.activation.code, activation->code,
+           sizeof(s_status.activation.code));
+    s_status.activation.message_available = activation->message_available;
+    s_status.activation.message_truncated = activation->message_truncated;
+    memcpy(s_status.activation.message, activation->message,
+           sizeof(s_status.activation.message));
+    s_status.activation.backend_timeout_ms = activation->backend_timeout_ms;
+    xSemaphoreGive(s_status_lock);
     voice_assistant_publish_status();
 }
 
@@ -242,6 +291,7 @@ static void voice_assistant_foundation_status_callback(
         return;
     }
     if ((status->state != XIAOZHI_FOUNDATION_SESSION_CONNECTING) &&
+        (status->state != XIAOZHI_FOUNDATION_SESSION_ACTIVATION_REQUIRED) &&
         (status->state != XIAOZHI_FOUNDATION_SESSION_READY) &&
         (status->state != XIAOZHI_FOUNDATION_SESSION_ERROR)) {
         return;
@@ -328,6 +378,7 @@ static void voice_assistant_handle_foundation_status(void)
 
         case XIAOZHI_FOUNDATION_SESSION_READY:
             voice_assistant_cancel_auto_recovery();
+            voice_assistant_cancel_activation_retry();
             if ((current == VOICE_ASSISTANT_STATE_CONNECTING) ||
                 (current == VOICE_ASSISTANT_STATE_READY) ||
                 ((current == VOICE_ASSISTANT_STATE_ERROR) &&
@@ -344,6 +395,13 @@ static void voice_assistant_handle_foundation_status(void)
                          voice_assistant_state_to_string(current),
                          (unsigned)foundation_status.client_generation);
             }
+            break;
+
+        case XIAOZHI_FOUNDATION_SESSION_ACTIVATION_REQUIRED:
+            voice_assistant_cancel_auto_recovery();
+            voice_assistant_set_activation_required(
+                &foundation_status.activation);
+            voice_assistant_schedule_activation_retry();
             break;
 
         case XIAOZHI_FOUNDATION_SESSION_ERROR:
@@ -518,6 +576,132 @@ static void voice_assistant_poll_auto_recovery(void)
     }
 }
 
+static void voice_assistant_schedule_activation_retry(void)
+{
+    if (s_activation_retry_scheduled) {
+        return;
+    }
+    if (s_activation_retry_attempt < UINT32_MAX) {
+        ++s_activation_retry_attempt;
+    }
+    const uint32_t delay_ms =
+        xiaozhi_foundation_activation_retry_delay_ms(
+            s_activation_retry_attempt);
+    s_activation_retry_due_at = xTaskGetTickCount() + pdMS_TO_TICKS(delay_ms);
+    s_activation_retry_scheduled = true;
+    s_activation_retry_waiting_for_network = false;
+    APP_LOGI(TAG, ACTIVATION_RETRY_SCHEDULED_A_49C6E2CA,
+             "activation retry scheduled attempt=%u delay_ms=%u",
+             (unsigned)s_activation_retry_attempt, (unsigned)delay_ms);
+}
+
+static void voice_assistant_cancel_activation_retry(void)
+{
+    s_activation_retry_scheduled = false;
+    s_activation_retry_waiting_for_network = false;
+    s_activation_retry_due_at = 0U;
+    s_activation_retry_attempt = 0U;
+}
+
+static esp_err_t voice_assistant_queue_activation_retry(void)
+{
+    voice_assistant_command_t command = {
+        .type = VOICE_ASSISTANT_COMMAND_RETRY_ACTIVATION,
+    };
+    if (!voice_assistant_take_lock()) {
+        return ESP_ERR_TIMEOUT;
+    }
+    if ((s_status.state != VOICE_ASSISTANT_STATE_ACTIVATION_REQUIRED) ||
+        s_command_pending || (s_status.session_generation == 0U)) {
+        xSemaphoreGive(s_status_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+    command.generation = s_status.session_generation;
+    s_command_pending = true;
+    xSemaphoreGive(s_status_lock);
+    if (xQueueSend(s_command_queue, &command, 0U) != pdTRUE) {
+        if (voice_assistant_take_lock()) {
+            s_command_pending = false;
+            xSemaphoreGive(s_status_lock);
+        }
+        return ESP_ERR_TIMEOUT;
+    }
+    return ESP_OK;
+}
+
+static void voice_assistant_poll_activation_retry(void)
+{
+    if (!s_activation_retry_scheduled) {
+        return;
+    }
+    if (voice_assistant_get_state_unlocked_copy() !=
+        VOICE_ASSISTANT_STATE_ACTIVATION_REQUIRED) {
+        voice_assistant_cancel_activation_retry();
+        return;
+    }
+    const TickType_t now = xTaskGetTickCount();
+    if ((int32_t)(now - s_activation_retry_due_at) < 0) {
+        return;
+    }
+    app_network_coordinator_state_t network_state =
+        APP_NETWORK_COORDINATOR_STATE_UNINITIALIZED;
+    const esp_err_t network_ret =
+        app_network_coordinator_get_state(&network_state);
+    if ((network_ret != ESP_OK) ||
+        (network_state != APP_NETWORK_COORDINATOR_STATE_ONLINE)) {
+        if (!s_activation_retry_waiting_for_network) {
+            APP_LOGI(TAG, ACTIVATION_RETRY_WAITING_FOR_NE_65BAB910,
+                     "activation retry waiting for network state=%s status=%s",
+                     app_network_coordinator_state_to_string(network_state),
+                     esp_err_to_name(network_ret));
+            s_activation_retry_waiting_for_network = true;
+        }
+        s_activation_retry_due_at =
+            now + pdMS_TO_TICKS(VOICE_ASSISTANT_RECOVERY_POLL_MS);
+        return;
+    }
+    s_activation_retry_scheduled = false;
+    s_activation_retry_waiting_for_network = false;
+    const esp_err_t queue_ret = voice_assistant_queue_activation_retry();
+    if (queue_ret != ESP_OK) {
+        APP_LOGW(TAG, ACTIVATION_RETRY_QUEUE_FAILED_5BF1DB4B,
+                 "activation retry queue failed: %s", esp_err_to_name(queue_ret));
+        voice_assistant_schedule_activation_retry();
+    }
+}
+
+static void voice_assistant_apply_session_start_result(
+    uint32_t generation,
+    esp_err_t start_ret)
+{
+    if (start_ret != ESP_OK) {
+        voice_assistant_set_status(VOICE_ASSISTANT_STATE_ERROR, false, start_ret);
+        voice_assistant_schedule_auto_recovery(start_ret);
+        return;
+    }
+
+    xiaozhi_foundation_session_status_t foundation = {0};
+    const esp_err_t status_ret =
+        xiaozhi_foundation_session_get_status(&foundation);
+    if ((status_ret != ESP_OK) ||
+        (foundation.client_generation != generation)) {
+        const esp_err_t normalized =
+            (status_ret == ESP_OK) ? ESP_ERR_INVALID_STATE : status_ret;
+        voice_assistant_set_status(VOICE_ASSISTANT_STATE_ERROR, false, normalized);
+        voice_assistant_schedule_auto_recovery(normalized);
+    } else if (foundation.state ==
+               XIAOZHI_FOUNDATION_SESSION_ACTIVATION_REQUIRED) {
+        voice_assistant_set_activation_required(&foundation.activation);
+        voice_assistant_schedule_activation_retry();
+    } else {
+        voice_assistant_set_status(
+            (foundation.state == XIAOZHI_FOUNDATION_SESSION_CONNECTING) ?
+                VOICE_ASSISTANT_STATE_CONNECTING : VOICE_ASSISTANT_STATE_READY,
+            foundation.active,
+            ESP_OK);
+    }
+}
+
 static void voice_assistant_task(void *argument)
 {
     (void)argument;
@@ -548,28 +732,27 @@ static void voice_assistant_task(void *argument)
                 }
                 voice_assistant_set_status(
                     VOICE_ASSISTANT_STATE_CONNECTING, true, ESP_OK);
-                const esp_err_t ret =
-                    xiaozhi_foundation_session_start(command.generation);
-                if (ret == ESP_OK) {
-                    xiaozhi_foundation_session_status_t foundation = {0};
-                    const esp_err_t status_ret =
-                        xiaozhi_foundation_session_get_status(&foundation);
-                    voice_assistant_set_status(
-                        ((status_ret == ESP_OK) &&
-                         (foundation.state ==
-                          XIAOZHI_FOUNDATION_SESSION_CONNECTING)) ?
-                            VOICE_ASSISTANT_STATE_CONNECTING :
-                            VOICE_ASSISTANT_STATE_READY,
-                        (status_ret == ESP_OK) ? foundation.active : true,
-                        ESP_OK);
-                } else {
-                    voice_assistant_set_status(
-                        VOICE_ASSISTANT_STATE_ERROR, false, ret);
-                    voice_assistant_schedule_auto_recovery(ret);
-                }
+                voice_assistant_apply_session_start_result(
+                    command.generation,
+                    xiaozhi_foundation_session_start(command.generation));
                 voice_assistant_finish_public_command();
                 break;
             }
+
+            case VOICE_ASSISTANT_COMMAND_RETRY_ACTIVATION:
+                if (!voice_assistant_generation_is_current(command.generation) ||
+                    (voice_assistant_get_state_unlocked_copy() !=
+                     VOICE_ASSISTANT_STATE_ACTIVATION_REQUIRED)) {
+                    voice_assistant_finish_public_command();
+                    break;
+                }
+                voice_assistant_set_status(
+                    VOICE_ASSISTANT_STATE_CONNECTING, false, ESP_OK);
+                voice_assistant_apply_session_start_result(
+                    command.generation,
+                    xiaozhi_foundation_session_start(command.generation));
+                voice_assistant_finish_public_command();
+                break;
 
             case VOICE_ASSISTANT_COMMAND_END_SESSION: {
                 if (!voice_assistant_generation_is_current(command.generation)) {
@@ -727,6 +910,7 @@ static void voice_assistant_task(void *argument)
         voice_assistant_handle_foundation_status();
         voice_assistant_handle_audio_marker();
         voice_assistant_poll_auto_recovery();
+        voice_assistant_poll_activation_retry();
     }
 
     if (voice_assistant_take_lock()) {
@@ -767,6 +951,10 @@ esp_err_t voice_assistant_init(void)
     s_auto_recovery_waiting_for_network = false;
     s_auto_recovery_due_at = 0U;
     s_auto_recovery_attempt = 0U;
+    s_activation_retry_scheduled = false;
+    s_activation_retry_waiting_for_network = false;
+    s_activation_retry_due_at = 0U;
+    s_activation_retry_attempt = 0U;
     s_stop_waiter = NULL;
     portENTER_CRITICAL(&s_pending_status_lock);
     s_foundation_status_pending = false;
@@ -1144,6 +1332,7 @@ const char *voice_assistant_state_to_string(voice_assistant_state_t state)
         case VOICE_ASSISTANT_STATE_INITIALIZED: return "INITIALIZED";
         case VOICE_ASSISTANT_STATE_IDLE: return "IDLE";
         case VOICE_ASSISTANT_STATE_CONNECTING: return "CONNECTING";
+        case VOICE_ASSISTANT_STATE_ACTIVATION_REQUIRED: return "ACTIVATION_REQUIRED";
         case VOICE_ASSISTANT_STATE_READY: return "READY";
         case VOICE_ASSISTANT_STATE_LISTENING: return "LISTENING";
         case VOICE_ASSISTANT_STATE_THINKING: return "THINKING";

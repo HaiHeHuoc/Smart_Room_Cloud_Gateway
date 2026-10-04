@@ -344,6 +344,15 @@ static void ptt_reconcile_voice_state(void)
         return;
     }
 
+    if (voice.state == VOICE_ASSISTANT_STATE_ACTIVATION_REQUIRED) {
+        ptt_set_status(VOICE_ASSISTANT_PTT_ERROR,
+                       false,
+                       false,
+                       voice.session_generation,
+                       ESP_ERR_INVALID_STATE);
+        return;
+    }
+
     /* A retained press that requested recovery has no session generation until
      * cleanup reaches IDLE. Start one fresh session and continue arming the
      * same physical press instead of requiring a second button press. */
@@ -480,6 +489,17 @@ static void ptt_handle_press(const ptt_command_t *command)
         APP_LOGI(TAG, PRESS_RETAINED_THROUGH_BOUND_7A551615,
                  "press retained through bounded recovery generation=%u",
                  (unsigned)command->generation);
+        return;
+    }
+
+    if (voice.state == VOICE_ASSISTANT_STATE_ACTIVATION_REQUIRED) {
+        ptt_set_status(VOICE_ASSISTANT_PTT_ERROR,
+                       false,
+                       false,
+                       voice.session_generation,
+                       ESP_ERR_INVALID_STATE);
+        APP_LOGI(TAG, PTT_UNAVAILABLE_ACTIVATION_REQUI_2B7D0B65,
+                 "PTT unavailable while Xiaozhi activation is required");
         return;
     }
 

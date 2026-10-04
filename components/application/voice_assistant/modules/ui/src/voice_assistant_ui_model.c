@@ -1,5 +1,6 @@
 #include "voice_assistant_ui_model.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_log.h"
@@ -33,6 +34,7 @@ static voice_assistant_ui_state_t ui_map_voice_state(voice_assistant_state_t sta
 {
     switch (state) {
         case VOICE_ASSISTANT_STATE_CONNECTING: return VOICE_ASSISTANT_UI_CONNECTING;
+        case VOICE_ASSISTANT_STATE_ACTIVATION_REQUIRED: return VOICE_ASSISTANT_UI_ACTIVATION_REQUIRED;
         case VOICE_ASSISTANT_STATE_READY: return VOICE_ASSISTANT_UI_READY;
         case VOICE_ASSISTANT_STATE_LISTENING: return VOICE_ASSISTANT_UI_LISTENING;
         case VOICE_ASSISTANT_STATE_THINKING: return VOICE_ASSISTANT_UI_THINKING;
@@ -156,10 +158,27 @@ static void ui_voice_status_callback(
         s_model.listening_stopped_at_us = 0;
         s_capture_active = false;
     }
+    const voice_assistant_ui_state_t previous_state = s_model.state;
     ui_update_capture_timestamps_locked(status);
     s_model.state = ui_map_presentation_state(status);
     s_model.session_generation = status->session_generation;
     s_model.last_error = status->last_error;
+    if ((status->state == VOICE_ASSISTANT_STATE_ACTIVATION_REQUIRED) &&
+        status->activation.code_available) {
+        ui_clear_text_locked();
+        s_model.assistant_text_valid = true;
+        s_model.assistant_text_truncated = status->activation.code_truncated;
+        (void)snprintf(
+            s_model.assistant_text,
+            sizeof(s_model.assistant_text),
+            "Activation code: %s",
+            status->activation.code);
+    } else if ((previous_state == VOICE_ASSISTANT_UI_ACTIVATION_REQUIRED) &&
+               (s_model.state != VOICE_ASSISTANT_UI_ACTIVATION_REQUIRED)) {
+        /* Do not leave a prior activation code visible after the backend has
+         * accepted it or supplied a newer non-activation response. */
+        ui_clear_text_locked();
+    }
     if ((s_model.state == VOICE_ASSISTANT_UI_ERROR) &&
         (s_model.last_error == ESP_OK)) {
         s_model.last_error = (status->audio.last_error == ESP_OK)

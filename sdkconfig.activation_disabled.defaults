@@ -1,0 +1,2 @@
+# Compatibility-test profile: retain the pre-activation Xiaozhi session path.
+CONFIG_SMART_ROOM_XIAOZHI_FIRST_BOOT_ACTIVATION=n

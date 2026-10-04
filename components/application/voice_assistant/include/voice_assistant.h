@@ -17,6 +17,7 @@ typedef enum {
     VOICE_ASSISTANT_STATE_INITIALIZED,
     VOICE_ASSISTANT_STATE_IDLE,
     VOICE_ASSISTANT_STATE_CONNECTING,
+    VOICE_ASSISTANT_STATE_ACTIVATION_REQUIRED,
     VOICE_ASSISTANT_STATE_READY,
     VOICE_ASSISTANT_STATE_LISTENING,
     VOICE_ASSISTANT_STATE_THINKING,
@@ -44,12 +45,28 @@ typedef struct {
     esp_err_t last_error;
 } voice_assistant_audio_status_t;
 
+#define VOICE_ASSISTANT_ACTIVATION_CODE_MAX_BYTES    64U
+#define VOICE_ASSISTANT_ACTIVATION_MESSAGE_MAX_BYTES 128U
+
+/** Bounded activation facts copied from the foundation session snapshot. */
+typedef struct {
+    bool required;
+    bool code_available;
+    bool code_truncated;
+    char code[VOICE_ASSISTANT_ACTIVATION_CODE_MAX_BYTES];
+    bool message_available;
+    bool message_truncated;
+    char message[VOICE_ASSISTANT_ACTIVATION_MESSAGE_MAX_BYTES];
+    uint32_t backend_timeout_ms;
+} voice_assistant_activation_status_t;
+
 /** Copied project-owned state safe for application/UI adapters. */
 typedef struct {
     voice_assistant_state_t state;
     uint32_t session_generation;
     bool session_active;
     esp_err_t last_error;
+    voice_assistant_activation_status_t activation;
     voice_assistant_audio_status_t audio;
 } voice_assistant_status_t;
 

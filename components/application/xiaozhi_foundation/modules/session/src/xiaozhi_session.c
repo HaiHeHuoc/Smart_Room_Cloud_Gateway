@@ -10,6 +10,8 @@
 #include "esp_xiaozhi_chat.h"
 #include "esp_xiaozhi_info.h"
 
+#include "xiaozhi_activation_policy.h"
+
 #include "xiaozhi_mcp_cloud_push_latest.h"
 #include "xiaozhi_mcp_cloud_sync.h"
 #include "xiaozhi_mcp_audio_playback.h"
@@ -42,6 +44,12 @@
 #define XIAOZHI_SESSION_UPSTREAM_CHAT_LOG_TAG    "ESP_XIAOZHI_CHAT"
 #define XIAOZHI_SESSION_UPSTREAM_MCP_MANAGER_TAG "esp_mcp_mgr"
 #define XIAOZHI_SESSION_UPSTREAM_MCP_ENGINE_TAG  "esp_mcp_engine"
+
+#if defined(CONFIG_SMART_ROOM_XIAOZHI_FIRST_BOOT_ACTIVATION)
+#define XIAOZHI_SESSION_FIRST_BOOT_ACTIVATION_ENABLED true
+#else
+#define XIAOZHI_SESSION_FIRST_BOOT_ACTIVATION_ENABLED false
+#endif
 
 static const char *const TAG = "XZ_SESSION";
 
@@ -708,6 +716,7 @@ esp_err_t xiaozhi_foundation_session_start(uint32_t client_generation)
     s_intentional_stop = false;
     s_transport_phase = XIAOZHI_SESSION_TRANSPORT_NORMAL;
     s_status.client_generation = client_generation;
+    xiaozhi_activation_status_clear(&s_status.activation);
     xiaozhi_session_reset_uplink_locked();
     portEXIT_CRITICAL(&s_lock);
 
@@ -727,11 +736,19 @@ esp_err_t xiaozhi_foundation_session_start(uint32_t client_generation)
         APP_LOGE(TAG, GET_INFO_FAILED_S_AC4D5479, "get_info failed: %s", esp_err_to_name(ret));
         goto fail;
     }
-    if (!info.has_websocket_config) {
-        ret = ESP_ERR_NOT_SUPPORTED;
-        APP_LOGE(TAG, SERVER_DID_NOT_PROVIDE_WEBSO_7E20F73B, "server did not provide WebSocket configuration");
-        goto fail;
-    }
+    const bool has_websocket_config = info.has_websocket_config;
+    const xiaozhi_activation_upstream_info_t activation_upstream = {
+        .has_activation_code = info.has_activation_code,
+        .activation_code = info.activation_code,
+        .activation_message = info.activation_message,
+        .activation_timeout_ms = info.activation_timeout_ms,
+    };
+    xiaozhi_foundation_activation_status_t activation = {0};
+    const bool activation_required = xiaozhi_activation_status_from_upstream(
+        XIAOZHI_SESSION_FIRST_BOOT_ACTIVATION_ENABLED,
+        &activation_upstream,
+        &activation);
+
     ret = esp_xiaozhi_chat_free_info(&info);
     info_must_be_freed = false;
     memset(&info, 0, sizeof(info));
@@ -740,6 +757,28 @@ esp_err_t xiaozhi_foundation_session_start(uint32_t client_generation)
         goto fail;
     }
 
+    if (activation_required) {
+        portENTER_CRITICAL(&s_lock);
+        s_lifecycle_busy = false;
+        s_intentional_stop = false;
+        s_status.active = false;
+        s_status.activation = activation;
+        portEXIT_CRITICAL(&s_lock);
+        xiaozhi_session_set_status(
+            XIAOZHI_FOUNDATION_SESSION_ACTIVATION_REQUIRED,
+            false,
+            ESP_OK);
+        APP_LOGW(TAG, ACTIVATION_REQUIRED_CODE_S_0F92249D,
+                 "Xiaozhi activation required code=%s",
+                 activation.code);
+        return ESP_OK;
+    }
+
+    if (!has_websocket_config) {
+        ret = ESP_ERR_NOT_SUPPORTED;
+        APP_LOGE(TAG, SERVER_DID_NOT_PROVIDE_WEBSO_7E20F73B, "server did not provide WebSocket configuration");
+        goto fail;
+    }
     ret = esp_mcp_create(&s_mcp);
     if (ret != ESP_OK) {
         APP_LOGE(TAG, MCP_CREATE_FAILED_S_4371E85C, "MCP create failed: %s", esp_err_to_name(ret));
@@ -1413,6 +1452,7 @@ const char *xiaozhi_foundation_session_state_to_string(
     switch (state) {
         case XIAOZHI_FOUNDATION_SESSION_STOPPED: return "STOPPED";
         case XIAOZHI_FOUNDATION_SESSION_CONNECTING: return "CONNECTING";
+        case XIAOZHI_FOUNDATION_SESSION_ACTIVATION_REQUIRED: return "ACTIVATION_REQUIRED";
         case XIAOZHI_FOUNDATION_SESSION_READY: return "READY";
         case XIAOZHI_FOUNDATION_SESSION_ERROR: return "ERROR";
         default: return "UNKNOWN";

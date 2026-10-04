@@ -218,6 +218,24 @@ boot
 Use an Espressif-compatible provisioning client that supports BLE transport and
 Security 1. Do not publish a readable provisioning QR or Proof of Possession.
 
+### Xiaozhi first-boot activation
+
+The production default under `idf.py menuconfig` -> **Xiaozhi foundation** is
+**Enable Xiaozhi first-boot activation flow**. After network and audio startup,
+the foundation calls the managed provider's `get_info` operation. If the backend
+returns an activation code, the rest of the gateway remains available while
+Xiaozhi PTT is deliberately unavailable. The code is copied with a fixed bound
+to the serial console and Xiaozhi LCD screen; follow the Xiaozhi backend/account
+activation procedure, then leave the device powered. The existing voice task
+will retry using its own 10/20/40/60-second capped backoff and proceeds to a
+normal WebSocket session after a later backend response no longer requires
+activation.
+
+`activation_timeout_ms` from the provider response is informational only; it is
+not used as a polling interval. Firmware does not persist an activated flag or
+activation code. For a compatibility-only disabled-feature build, configure
+with `sdkconfig.activation_disabled.defaults` in addition to `sdkconfig.defaults`.
+
 ## 9. Functional Verification
 
 ### Display

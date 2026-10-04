@@ -1,0 +1,13 @@
+menu "Xiaozhi foundation"
+
+config SMART_ROOM_XIAOZHI_FIRST_BOOT_ACTIVATION
+    bool "Enable Xiaozhi first-boot activation flow"
+    default y
+    help
+        Read the managed Xiaozhi get_info activation response before starting
+        the WebSocket session. When the backend requests activation, keep the
+        product running, publish a bounded copied activation snapshot, and
+        retry from the voice lifecycle task. Disable only to retain the
+        pre-activation session behavior for compatibility testing.
+
+endmenu

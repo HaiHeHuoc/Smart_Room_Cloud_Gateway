@@ -59,6 +59,24 @@ production session after required audio/arbitration state is ready.
 `xiaozhi_foundation` owns the managed engine/session lifecycle: MCP tools attach
 after MCP engine creation and detach before engine destruction.
 
+## First-boot activation
+
+`xiaozhi_foundation` is also the sole direct caller of the managed
+`esp_xiaozhi_chat_get_info()` activation contract. The default Menuconfig option
+`CONFIG_SMART_ROOM_XIAOZHI_FIRST_BOOT_ACTIVATION` is enabled. When upstream
+returns `has_activation_code`, the component copies the code and optional
+message into fixed project-owned storage, frees upstream info exactly once, and
+publishes `ACTIVATION_REQUIRED` rather than a terminal session error. No
+upstream pointer, challenge value, managed handle, or persisted "activated"
+state crosses the public boundary.
+
+`activation_timeout_ms` is retained only as an informational copied value. It
+does not control retries: `voice_assistant` owns the cooperative 10/20/40/60
+second capped retry schedule on its existing lifecycle task and cancels it at
+READY or shutdown. While activation is required, no WebSocket/MCP session or
+PTT capture is authorized; unrelated gateway services keep their normal
+lifecycle.
+
 The component does not own:
 
 - I2S/DMA/audio hardware;

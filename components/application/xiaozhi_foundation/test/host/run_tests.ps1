@@ -11,6 +11,17 @@ New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
 & $gcc -std=c11 -Wall -Wextra -Werror `
     -I (Join-Path $testRoot 'include') `
     -I (Join-Path $componentRoot 'include') `
+    -I (Join-Path $componentRoot 'modules\activation\include') `
+    (Join-Path $componentRoot 'modules\activation\src\xiaozhi_activation_policy.c') `
+    (Join-Path $testRoot 'test_xiaozhi_activation_policy.c') `
+    -o (Join-Path $outputRoot 'xiaozhi_activation_policy_tests.exe')
+if ($LASTEXITCODE -ne 0) { throw 'Xiaozhi activation policy test build failed' }
+& (Join-Path $outputRoot 'xiaozhi_activation_policy_tests.exe')
+if ($LASTEXITCODE -ne 0) { throw 'Xiaozhi activation policy tests failed' }
+
+& $gcc -std=c11 -Wall -Wextra -Werror `
+    -I (Join-Path $testRoot 'include') `
+    -I (Join-Path $componentRoot 'include') `
     -I (Join-Path $componentRoot 'modules\mcp_audio_playback\include') `
     (Join-Path $componentRoot 'modules\mcp_audio_playback\src\xiaozhi_mcp_audio_playback_policy.c') `
     (Join-Path $testRoot 'test_mcp_audio_playback_policy.c') `
@@ -126,8 +137,23 @@ if (($sessionSource -notmatch 'xiaozhi_mcp_cloud_push_latest_attach\(s_mcp\)') -
     ($sessionSource -notmatch 'xiaozhi_mcp_cloud_push_latest_detach\(\)')) {
     throw 'Cloud push-latest MCP lifecycle attachment is incomplete'
 }
+if (($sessionSource -notmatch 'esp_xiaozhi_chat_get_info\(&info\)') -or
+    ($sessionSource -notmatch 'esp_xiaozhi_chat_free_info\(&info\)') -or
+    ($sessionSource -notmatch 'XIAOZHI_FOUNDATION_SESSION_ACTIVATION_REQUIRED') -or
+    ($sessionSource -notmatch 'xiaozhi_activation_status_clear\(&s_status\.activation\)')) {
+    throw 'First-boot activation lifecycle or stale-snapshot clearing is incomplete'
+}
+$activationSource = Get-Content `
+    (Join-Path $componentRoot 'modules\activation\src\xiaozhi_activation_policy.c') `
+    -Raw
+if (($activationSource -notmatch 'XIAOZHI_ACTIVATION_RETRY_INITIAL_MS') -or
+    ($activationSource -notmatch 'XIAOZHI_ACTIVATION_RETRY_MAX_MS') -or
+    ($activationSource -match 'activation_challenge|nvs_')) {
+    throw 'Activation policy does not preserve the bounded non-persistent boundary'
+}
 Write-Output 'MCP read-only state boundary: PASS'
 Write-Output 'MCP bounded track-tool boundary: PASS'
 Write-Output 'MCP cloud push-latest provider boundary: PASS'
 Write-Output 'MCP asynchronous catalog-cache boundary: PASS'
 Write-Output 'Xiaozhi transport packet fence boundary: PASS'
+Write-Output 'Xiaozhi first-boot activation boundary: PASS'

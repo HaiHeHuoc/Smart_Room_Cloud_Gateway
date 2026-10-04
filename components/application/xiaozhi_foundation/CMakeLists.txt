@@ -1,4 +1,5 @@
 set(xiaozhi_foundation_sources
+    "modules/activation/src/xiaozhi_activation_policy.c"
     "modules/mcp_audio_playback/src/xiaozhi_mcp_audio_playback.c"
     "modules/mcp_audio_playback/src/xiaozhi_mcp_audio_playback_policy.c"
     "modules/mcp_cloud_push_latest/src/xiaozhi_mcp_cloud_push_latest.c"
@@ -34,6 +35,7 @@ idf_component_register(
         "include"
 
     PRIV_INCLUDE_DIRS
+        "modules/activation/include"
         "modules/mcp_audio_playback/include"
         "modules/mcp_cloud_push_latest/include"
         "modules/mcp_cloud_sync/include"

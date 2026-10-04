@@ -51,6 +51,8 @@ static ui_xiaozhi_state_t gui_map_state(voice_assistant_ui_state_t state)
     switch (state) {
         case VOICE_ASSISTANT_UI_CONNECTING:
             return UI_XIAOZHI_STATE_CONNECTING;
+        case VOICE_ASSISTANT_UI_ACTIVATION_REQUIRED:
+            return UI_XIAOZHI_STATE_ACTIVATION_REQUIRED;
         case VOICE_ASSISTANT_UI_READY:
             return UI_XIAOZHI_STATE_READY;
         case VOICE_ASSISTANT_UI_LISTENING:
@@ -106,6 +108,7 @@ static bool gui_state_belongs_to_active_turn(voice_assistant_ui_state_t state)
            (state == VOICE_ASSISTANT_UI_THINKING) ||
            (state == VOICE_ASSISTANT_UI_SPEAKING) ||
            (state == VOICE_ASSISTANT_UI_RECOVERING) ||
+           (state == VOICE_ASSISTANT_UI_ACTIVATION_REQUIRED) ||
            (state == VOICE_ASSISTANT_UI_ERROR);
 }
 
@@ -384,6 +387,15 @@ static void gui_apply_screen_policy_locked(voice_assistant_ui_state_t state)
         s_interaction_screen_owned = true;
         gui_cancel_dashboard_return_locked();
         (void)gui_request_xiaozhi_screen_locked(true);
+        return;
+    }
+
+    if (state == VOICE_ASSISTANT_UI_ACTIVATION_REQUIRED) {
+        s_interaction_screen_owned = true;
+        gui_cancel_dashboard_return_locked();
+        if (previous != state) {
+            (void)gui_request_xiaozhi_screen_locked(true);
+        }
         return;
     }
 

@@ -25,20 +25,50 @@ extern "C"
 typedef enum {
     XIAOZHI_FOUNDATION_SESSION_STOPPED = 0,
     XIAOZHI_FOUNDATION_SESSION_CONNECTING,
+    XIAOZHI_FOUNDATION_SESSION_ACTIVATION_REQUIRED,
     XIAOZHI_FOUNDATION_SESSION_READY,
     XIAOZHI_FOUNDATION_SESSION_ERROR,
 } xiaozhi_foundation_session_state_t;
+
+#define XIAOZHI_FOUNDATION_ACTIVATION_CODE_MAX_BYTES    64U
+#define XIAOZHI_FOUNDATION_ACTIVATION_MESSAGE_MAX_BYTES 128U
+
+/**
+ * Bounded activation facts copied from the backend get_info response.
+ *
+ * This project never persists an "already activated" flag. The next
+ * get_info response is authoritative, and no provider-owned string pointer
+ * escapes this boundary.
+ */
+typedef struct {
+    bool required;
+    bool code_available;
+    bool code_truncated;
+    char code[XIAOZHI_FOUNDATION_ACTIVATION_CODE_MAX_BYTES];
+    bool message_available;
+    bool message_truncated;
+    char message[XIAOZHI_FOUNDATION_ACTIVATION_MESSAGE_MAX_BYTES];
+    /** Informational backend field; never used as the project retry period. */
+    uint32_t backend_timeout_ms;
+} xiaozhi_foundation_activation_status_t;
 
 typedef struct {
     xiaozhi_foundation_session_state_t state;
     uint32_t client_generation;
     bool active;
     esp_err_t last_error;
+    xiaozhi_foundation_activation_status_t activation;
 } xiaozhi_foundation_session_status_t;
 
 typedef void (*xiaozhi_foundation_session_status_callback_t)(
     const xiaozhi_foundation_session_status_t *status,
     void *user_context);
+
+/**
+ * Return the project-owned bounded delay for an activation recheck attempt.
+ * The upstream activation_timeout_ms response field is not a polling policy.
+ */
+uint32_t xiaozhi_foundation_activation_retry_delay_ms(uint32_t attempt);
 
 esp_err_t xiaozhi_foundation_session_register_status_callback(
     xiaozhi_foundation_session_status_callback_t callback,
