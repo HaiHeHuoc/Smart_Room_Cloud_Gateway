@@ -221,7 +221,6 @@ Complete guides:
 
 - [Hardware, build, flash, and first-boot setup](docs/SETUP.md)
 - [Firebase Authentication and Security setup](components/cloud/firebase_auth/docs/FIREBASE_SETUP_AND_SECURITY.md)
-- [Xiaozhi roadmap](XIAOZHI_IMPLEMENTATION_ROADMAP.md)
 
 ## Security Model
 
@@ -267,7 +266,6 @@ components/storage/      NVS configuration and SD card
 components/system/       shared board/config/logging/time/diagnostics
 components/ui/           LVGL runtime, screens, filesystem and image handling
 docs/                    architecture, setup, demo, limitations and media
-AI_Stored_Data/          AI handoff/support metadata; never a runtime dependency
 ```
 
 ## Documentation
@@ -282,8 +280,6 @@ AI_Stored_Data/          AI handoff/support metadata; never a runtime dependency
 - [Voice assistant](components/application/voice_assistant/README.md)
 - [Audio manager](components/audio/audio_manager/docs/README.md)
 - [Known limitations and future work](docs/KNOWN_LIMITATIONS.md)
-- [Historical Version-1 roadmap](ESP32S3_Smart_Room_Cloud_Gateway_Roadmap.md)
-- [Version-2 Xiaozhi roadmap](XIAOZHI_IMPLEMENTATION_ROADMAP.md)
 
 ## Current Roadmap Status
 
@@ -299,11 +295,11 @@ Sprint 20   IMPLEMENTED / BUILD VERIFIED / TARGET HIL PENDING
 Sprint 21   COMPLETE / USER ACCEPTED BY HAI ON 2026-09-24
 Sprint 22   COMPLETE / BUILD VERIFIED / USER ACCEPTED BY HAI ON 2026-09-25
 Sprint 23   IMPLEMENTED / BUILD VERIFIED / TARGET HIL PENDING
-Sprint 24   PLANNED / NOT STARTED
+Sprint 24   SUSPENDED PERMANENTLY
 ```
 
-Historical phase documents remain historical evidence; current source and
-current canonical project state take precedence when older status text differs.
+Current source, released configuration, and the public documentation above are
+the release reference when older historical material differs.
 
 ## License
 

@@ -362,7 +362,7 @@ corrected ESP32-S3 image built and flashed successfully, and three GPIO38 PTT
 turns completed Opus uplink, response decode, SD-backed WAV playback and
 operator-confirmed audible output before returning to `IDLE`. Fault-injection
 cases (stalled response, network loss, SD unavailable and queue pressure) are
-explicitly deferred; see `AI_Stored_Data/PHASE14_HIL_TEST_PLAN.md`.
+explicitly deferred target-hardware validation.
 
 The current targeted transport regression trace has verified boot connection,
 unexpected-disconnect reconnect, a response-pending GPIO38 press rejection,

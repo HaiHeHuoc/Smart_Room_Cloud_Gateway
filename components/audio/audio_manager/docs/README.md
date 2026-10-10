@@ -15,6 +15,24 @@ is an application lifecycle policy, not an audio-to-network dependency: it
 keeps audio I2S/DMA/task allocation out of BLE provisioning, Station
 association, and IPv4 handoff.
 
+## Validation And Regression Boundary
+
+The accepted audio baseline has distinct evidence levels:
+
+- **Software verification:** the native WAV parser/resume-seek suite covers
+  32 cases without SD or I2S, and an ESP-IDF 6.0.1 firmware build validated
+  component integration.
+- **Owner-confirmed target acceptance:** the production fixed/manual recording
+  and recorded-playback path was accepted at Phase 11 closure. The associated
+  lifecycle stress checkpoint exercised repeated start/stop, init/deinit,
+  bounded queue/recovery, and SD/WAV cycles without monotonic Internal RAM,
+  DMA-capable RAM, or PSRAM loss across its accepted run.
+- **Regression trigger:** repeat the relevant target checks after changes to
+  audio GPIO or clocks, I2S DMA geometry, microphone slot selection, DSP or
+  output gain, SD media/prefetch/recovery, task priority or stack placement,
+  or public audio lifecycle APIs. Software checks do not substitute for target
+  hardware evidence.
+
 ## State Model
 
 ```text
