@@ -85,15 +85,14 @@ accepted checkpoint covers GPIO 9 active-low polling, 40 ms debounce, single
 press/release events, one long-press event after approximately 5 seconds, and
 continued startup of unrelated services.
 
-Persistent reset execution was added in Phase 7.3, LVGL reset confirmation in
-Phase 7.4, and active-provisioning reset arbitration in Phase 7.5. Their final
-cross-phase regression and documentation closure is recorded by Phase 7.6.
+Persistent reset execution, LVGL reset confirmation, and active-provisioning
+reset arbitration are integrated in the current product behavior.
 
 ## Sprint 7 Closure
 
 **COMPLETE / HARDWARE ACCEPTANCE CONFIRMED BY USER**
 
-Sprint 7 was closed on 2026-08-02. The button component remained unchanged by
-Phase 7.6; only its documentation and public contract wording were refreshed.
-See [`PHASE_7_6_CLOSURE.md`](../../../PHASE_7_6_CLOSURE.md) for the integrated
-factory-reset acceptance record.
+The factory-reset button path has owner-confirmed target acceptance. This
+component publishes debounced input only; reset execution remains owned by
+`app_reset_coordinator`. Repeat target checks after changing board input,
+debounce, reset timing, or provisioning/reset interaction.

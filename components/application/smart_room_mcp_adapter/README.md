@@ -60,8 +60,8 @@ runtime tool call
 - Audio providers translate only bounded action/status enums. Control is
   delegated to `voice_assistant` turn policy and then the public
   `audio_manager` control surface; the adapter never touches I2S, DMA, FILE,
-  or PCM buffers. For Phase 18.2.2, an adapter-owned low-priority worker alone
-  acquires a short SD lease and performs the bounded non-recursive
+  or PCM buffers. An adapter-owned low-priority worker alone acquires a short
+  SD lease and performs the bounded non-recursive
   `/sdcard/audio/` scan. MCP callbacks only copy the published cache with a
   zero-wait mutex or return a bounded unavailable result; they never perform
   VFS I/O or hold an SD lease on the Xiaozhi WebSocket callback path. The
@@ -82,7 +82,7 @@ runtime tool call
 - The adapter does not own LVGL, I2S/DMA, Wi-Fi/provisioning, Firebase
   transport, storage lifecycle, or hardware drivers.
 
-## Phase 18.1
+## Product Tool Semantics
 
 The accepted light-control path is:
 
@@ -95,23 +95,17 @@ light.set_state
 ```
 
 `light.get_state` and `light.get_capabilities` are read-only companions.
-Phase 18.1 is complete and accepted. Phase 18.2.1 Prompt 3 now adds control of
-an already-existing resumable source plus a read-only copied playback snapshot;
-it does not select tracks or expose an arbitrary path. Phase 18.2.2 remains
-the audio selection owner; the Phase 18.3/18.4 reconciliation is recorded
-below.
+`audio.control_playback` controls an already-existing resumable source and
+returns a read-only copied playback snapshot; it does not select tracks or
+expose an arbitrary path. `audio.list_tracks`, `audio.play_track`, and
+`audio.play_recorded` provide bounded audio selection through the catalog and
+existing playback owner.
 
-Phase 18.3 is **SUPERSEDED / ABSORBED INTO 18.2.2**: its historical bounded
-playback-start scope is already covered by `audio.list_tracks`,
-`audio.play_track`, and `audio.play_recorded`. The number remains for
-traceability; no duplicate provider or production feature was added.
-
-Phase 18.4 adds `cloud.push_latest {}`. Its provider calls only the public
+`cloud.push_latest {}` calls only the public
 `cloud_manager_request_push_latest()` scheduling API and translates copied
 outcomes. It never receives Firebase/auth/HTTP/URL/task data and never supplies
 telemetry. `accepted` is scheduling only, never upload completion; repeated
 delivery is coalesced as `busy` by `cloud_manager`.
 
-The application-structure cleanup only consolidated existing provider logic. It
-added no new MCP tool, transport/protocol behavior, hardware ownership, or
-Phase-18.2 functionality.
+The adapter consolidates provider logic only. It adds no transport/protocol,
+hardware, or direct driver ownership.

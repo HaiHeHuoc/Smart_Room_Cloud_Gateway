@@ -71,8 +71,9 @@ profiles.
 
 It is a product-specific composition component, not a generic service facade.
 
-## Roadmap Guard
+## Release Boundary
 
-The structure cleanup adds no MCP tool and does not start Phase 18.2. Current
-roadmap state remains Phase 18 in progress with Phase 18.1 complete and
-18.2-18.4 not started until explicitly requested.
+`smart_room_app` composes the current product services but does not add an MCP
+tool, bypass component ownership, or make target-hardware claims. Wake word and
+advanced always-on voice behavior are suspended and outside the V2.0.0 product
+scope.

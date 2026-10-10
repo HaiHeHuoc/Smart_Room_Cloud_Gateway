@@ -2,265 +2,162 @@
 
 ## Goal
 
-Document the production ownership, task, queue, callback, storage, and recovery design of the ESP32-S3 Smart Room Cloud Gateway.
+The gateway is organized by runtime ownership. Each component owns its driver,
+state, task, and cleanup rules; the product application composes components but
+does not bypass their public boundaries.
 
 ## System Context
 
 ```mermaid
-flowchart LR
-    Phone[Provisioning client]
-    Firebase[Firebase Realtime Database]
-    LCD[ST7735 LCD]
-    SD[MicroSD]
-    DHT[DHT22]
-    Button[Reset button]
-
-    subgraph ESP32S3[ESP32-S3]
-        Entry[main/main.c]
-        App[smart_room_app]
-        MCP[smart_room_mcp_adapter]
-        Xiaozhi[xiaozhi_foundation]
-        Coordinator[app_network_coordinator]
-        Provisioning[provisioning_manager]
-        WiFi[wifi_manager]
-        Config[config_manager]
-        Sensor[sensor_manager]
-        Cloud[cloud_manager]
-        Auth[firebase_auth]
-        GUI[app_gui]
-        LVGL[ui_manager_lvgl]
-        Reset[app_reset_coordinator]
-        Input[button_manager]
-        Storage[sd_card_manager and lvgl_sd_fs]
-        Perf[performance_monitor]
-    end
-
-    Entry --> App
-    App --> Coordinator
-    App --> MCP --> Xiaozhi
-    Phone <-->|BLE Security 1| Provisioning
-    Provisioning --> Coordinator
-    Coordinator --> Config
-    Coordinator --> WiFi
-    WiFi --> Cloud
-    Sensor --> Cloud
-    Sensor --> GUI
-    WiFi --> GUI
-    Cloud --> GUI
-    Auth --> Cloud
-    Cloud <-->|HTTPS REST| Firebase
-    GUI --> LVGL --> LCD
-    SD --> Storage --> GUI
-    DHT --> Sensor
-    Button --> Input --> Reset
-    Reset --> Config
-    Perf -. diagnostics .-> ESP32S3
+flowchart TD
+    Main[main/main.c] --> App[smart_room_app]
+    App --> Network[app_network_coordinator]
+    Network --> WiFi[wifi_manager]
+    Network --> Provision[provisioning_manager]
+    App --> Cloud[cloud_manager]
+    Cloud --> Auth[firebase_auth]
+    App --> Audio[audio_manager]
+    App --> Voice[voice_assistant]
+    Voice --> Xiaozhi[xiaozhi_foundation]
+    App --> MCP[smart_room_mcp_adapter]
+    MCP --> Xiaozhi
+    App --> Storage[sd_card_manager]
+    App --> UI[app_gui]
+    UI --> LVGL[ui_manager_lvgl]
+    App --> Light[light_manager]
+    App --> Web[local_web_server]
 ```
 
 ## Component Ownership
 
-Application logging is centralized in [`log_manager`](../components/system/log_manager/README.md).
-`smart_room_app` initializes it after the thin `main` entrypoint transfers
-control to product composition, and forwards
-SD/time availability hints. `APP_LOGx` sends independently filtered console output
-and bounded PSRAM records; one unpinned writer owns all log file I/O, batching,
-sync, rotation and retention. `sd_card_manager` retains mount/recovery and lease
-ownership; `time_manager` retains SNTP/clock validity. Neither depends on the
-logger. Early/pre-init logs remain console-only. Hardware acceptance is pending.
-
-`common` also owns the small `VOICE_RECORDING_CRITICAL` runtime contract. Its
-only writer is `voice_uplink` after actual capture admission; background
-components receive only a copied active query and a task-notification edge.
-They defer their own optional work at safe points and never gain PTT, I2S,
-provider, task, or network ownership from this contract.
-
-| Component | Owns | Does not own |
+| Owner | Responsibility | Does not own |
 |---|---|---|
-| `main/main.c` | ESP-IDF entry into product composition | Product callbacks, policy, manager lifecycle, or hardware resources |
-| `smart_room_app` | Startup ordering, product policy, copied cross-component callback routing | Manager/driver implementation, LVGL, I2S, MCP engine/session |
-| `smart_room_mcp_adapter` | Registration and public-snapshot implementation of Smart Room MCP providers | MCP engine/session, domain manager ownership, drivers, GPIO, RMT, I2S, LVGL |
-| `wifi_manager` | Station lifecycle, driver serialization, reconnect | Provisioning policy, NVS schema, GUI |
-| `light_manager` | Static product light state and board-injected NeoPixel composition | RMT/LED-strip handles, named-color parsing, MCP, GUI policy |
-| `provisioning_manager` | Temporary BLE provisioning lifecycle and verified credential handoff | Persistent storage, reconnect, GUI |
-| `config_manager` | NVS schema, validation, migration, read/write/erase | Wi-Fi driver or provisioning transport |
-| `app_network_coordinator` | Boot policy, provisioning sessions, persistence/adoption ordering | Driver internals, LVGL rendering |
-| `sensor_manager` | Periodic DHT22 sampling, validation, stale/error state | GUI and cloud ownership; it may skip one bit-timed read during live capture |
-| `firebase_auth` | Sign-in, token cache, refresh, invalidation | Telemetry scheduling |
-| `cloud_manager` | Latest-value telemetry, HTTP client, retry/backoff | Wi-Fi connect/disconnect; it never aborts in-flight HTTP for voice capture |
-| `app_gui` | Screens, copied models, queues, UI task, LVGL objects | Network and storage policy |
-| `ui_manager_lvgl` | LVGL initialization, tick, display binding, mutex | Application screen policy |
-| `button_manager` | Polling, debounce, press/release/long-press events | Erase, reboot, LVGL |
-| `app_reset_coordinator` | Ordered reset transaction and verified reboot | Button electrical handling |
-| `performance_monitor` | CPU, heap, task, and stack diagnostics | Audio/network ownership; it self-defers reports from the common runtime hint |
+| `smart_room_app` | Product startup order, policy values, and copied callback routing | Reusable driver internals |
+| `app_network_coordinator` | Boot/provisioning/online handoff policy | Wi-Fi driver reconnect |
+| `wifi_manager` | Station connection, DHCP state, reconnect policy | BLE provisioning or UI |
+| `provisioning_manager` | Temporary BLE provisioning transport and verified credential handoff | Persistent configuration |
+| `config_manager` | NVS schema, configuration, identity, clear/reset semantics | Wi-Fi connection |
+| `audio_manager` | I2S RX/TX, DMA, PCM, recording, playback, WAV reader lifecycle | Voice/session policy or LVGL |
+| `voice_assistant` | Conversation lifecycle, PTT owner/lease policy, audio arbitration requests | I2S/DMA ownership |
+| `xiaozhi_foundation` | Managed Xiaozhi WebSocket/MCP engine, session, provider attachment | Product drivers or GUI |
+| `smart_room_mcp_adapter` | Domain provider adaptation through public owner APIs | Managed MCP handles or hardware |
+| `sd_card_manager` | SDSPI/FAT VFS lifecycle, recovery, and leases | WAV decode or LVGL rendering |
+| `cloud_manager` / `firebase_auth` | Latest-value telemetry/retry and token lifecycle | GUI or sensor ownership |
+| `local_web_server` | Bounded HTTP presentation and request translation | Browser audio capture or Wi-Fi lifecycle |
+| `scene_manager` / `light_manager` | Scene decisions and logical light state/effects | Direct MCP engine ownership |
+| `app_gui` / `ui_manager_lvgl` | Copied UI models, screens, LVGL task and synchronization | Arbitrary callback rendering |
+| `log_manager` / `performance_monitor` | Persistent diagnostics and periodic resource observation | Application policy |
+| `app_reset_coordinator` | Ordered factory-reset transaction | Button debounce or driver internals |
 
-## Boot Sequence
+## Boot And Initialization Flow
 
 ```mermaid
 sequenceDiagram
-    participant Main as main/main.c
+    participant Main as main
     participant App as smart_room_app
-    participant GUI as app_gui
-    participant Local as Local services
-    participant Coord as app_network_coordinator
-    participant WiFi as wifi_manager
-    participant Prov as provisioning_manager
-    participant Cloud as cloud_manager
-
+    participant Core as storage/UI/input/network services
+    participant Net as app_network_coordinator
+    participant AV as audio and voice
     Main->>App: smart_room_app_start()
-    App->>App: NVS, config, netif, event loop
-    App->>GUI: display, LVGL, SD, GUI task
-    App->>Local: performance, reset, button
-    App->>WiFi: initialize and register callback
-    App->>Cloud: initialize auth and telemetry queue
-    App->>Local: start sensor sampling
-    App->>Coord: start one-shot boot coordinator
-
-    alt valid stored Wi-Fi configuration
-        Coord->>WiFi: connect stored credentials
-        WiFi-->>Coord: GOT_IP
-        Coord-->>GUI: Wi-Fi status route
-    else not configured
-        Coord->>Prov: start BLE provisioning session
-        Prov-->>GUI: copied progress and QR payload
-        Prov-->>Coord: verified credential copy
-        Coord->>Coord: persist and read back
-        Coord->>WiFi: adopt active Station connection
-        Coord-->>GUI: success and Wi-Fi status route
-    end
-
-    App->>Cloud: start only after network handoff permits
+    App->>Core: initialize services in dependency order
+    App->>App: register copied callbacks and MCP providers
+    App->>Net: start one-shot network coordination
+    Net-->>App: online handoff after valid network state
+    App->>AV: start cloud and audio/voice lifecycle
 ```
 
-## Runtime Event Flow
+The actual call order in `smart_room_app` is authoritative. Audio and voice are
+deferred until the network coordinator reaches its required online/handoff
+state; this is product policy, not transfer of I2S ownership.
+
+## Data And Control Flow
+
+- Sensor callbacks copy current state to the GUI model and latest cloud
+  telemetry snapshot.
+- Wi-Fi callbacks update network coordination, cloud network epoch, and copied
+  UI state.
+- Cloud work runs in the cloud owner task; UI callbacks do not perform HTTP or
+  authentication work.
+- Button events are copied to reset coordination; reset does not run in the
+  debounce callback.
+- Local Web handlers validate bounded requests and call public owners. They do
+  not call LVGL or drive I2S directly.
+
+## Xiaozhi Voice And MCP Flow
 
 ```text
-DHT22
-  -> sensor_manager task
-  -> copied sensor callback
-      -> app_gui sensor queue
-      -> cloud_manager latest-value queue
+GPIO38 or Local Web PTT
+    -> voice_assistant owner/lease policy
+    -> audio_manager capture arbitration
+    -> xiaozhi_foundation managed WebSocket session
+    -> response delivery gate / audio playback policy
 
-Wi-Fi event loop
-  -> wifi_manager state machine
-  -> copied status callback
-      -> app_network_coordinator runtime state
-      -> app_gui Wi-Fi queue
-      -> cloud_manager network epoch/notification
-
-cloud_manager task
-  -> firebase_auth
-  -> esp_http_client
-  -> copied cloud status callback
-  -> app_gui cloud queue
-
-voice_uplink after capture arbiter confirms RX active
-  -> VOICE_RECORDING_CRITICAL enter
-  -> audio_manager stream callback -> bounded PCM queue -> Opus -> Xiaozhi
-  -> release/cancel/error -> disarm + bounded capture-stop -> critical exit
-      -> lightweight wake only: log writer / cloud worker / performance monitor
+Xiaozhi MCP tool
+    -> xiaozhi_foundation schema and lifecycle boundary
+    -> smart_room_mcp_adapter provider
+    -> owning public manager API
+    -> bounded copied result
 ```
 
-Callbacks copy bounded data and return promptly. They do not call LVGL, perform NVS erase, start provisioning, reboot, or execute long network operations.
+`xiaozhi_foundation` retains managed provider/session handles. MCP callbacks do
+not own storage handles, audio buffers, GPIO/RMT objects, Firebase credentials,
+or LVGL. A controlled-action admission is not automatically completion of the
+underlying asynchronous operation.
 
-## GUI Threading Contract
+## Audio And Storage Boundaries
 
-Only the `app_gui` UI task creates, updates, loads, and deletes LVGL objects.
+`audio_manager` is the only I2S/DMA owner. Its private WAV worker owns a
+temporary `FILE *`, raw read buffer, and SD lease; the manager consumes only
+bounded READY PCM blocks. `sd_card_manager` retains card mount/unmount and VFS
+recovery ownership. This separation prevents a VFS remount beneath an active
+stream and avoids a second I2S owner.
 
-```text
-producer task/callback
-    -> copy status or command into a bounded queue
-    -> return
+## Local Web Request Handling
 
-app_gui UI task
-    -> drain commands and latest-value models
-    -> take LVGL mutex
-    -> build/render/switch screens
-    -> call lv_timer_handler()
-    -> release LVGL mutex
-```
+The Local Web server starts only after application online handoff when enabled.
+It exposes bounded endpoints for storage, audio, lights, dashboard, scenes,
+logs, diagnostics, and remote PTT. HTTP callbacks translate requests to public
+component APIs and return copied snapshots or accepted/busy/error outcomes.
+Browser JavaScript does not capture microphone input or carry Xiaozhi audio.
 
-Current application screens:
+## Task, Queue, And Callback Rules
 
-- Boot
-- BLE provisioning with QR code
-- Wi-Fi status
-- Sensor dashboard with cloud summary
-- Factory-reset result
-
-## Wi-Fi And Cloud Recovery
-
-```mermaid
-stateDiagram-v2
-    [*] --> Connecting
-    Connecting --> Online: GOT_IP
-    Connecting --> RetryWait: disconnect or failure
-    Online --> RetryWait: runtime disconnect
-    RetryWait --> Connecting: reconnect deadline
-
-    state Cloud {
-        [*] --> WaitNetwork
-        WaitNetwork --> Sync: IPv4 available and telemetry pending
-        Sync --> CloudOnline: success
-        Sync --> CloudRetry: transport or retryable HTTP failure
-        Sync --> AuthRecovery: authentication failure
-        CloudRetry --> Sync: deadline or network notification
-        AuthRecovery --> Sync: bounded recovery succeeds
-        AuthRecovery --> CloudError: terminal rejection
-    }
-```
-
-`wifi_manager` owns reconnect. `cloud_manager` consumes connectivity facts and never calls Wi-Fi connect/disconnect. The cloud task uses a non-zero network epoch to discard stale HTTP client state after network changes.
-
-Telemetry is latest-value only. During an outage, newer sensor data replaces older pending data instead of growing an unbounded history queue.
-
-During a live microphone capture, a new periodic telemetry upload waits at the
-cloud task's pre-attempt boundary. Existing HTTP/TLS work and any already
-accepted `cloud.push_latest` request are not cancelled.
-
-## Factory Reset Flow
-
-```text
-button_manager long press
-    -> non-blocking copied event
-    -> app_reset_coordinator
-    -> app_network_coordinator reset gate and quiescence
-    -> wifi_manager persistent driver cleanup
-    -> config_manager application Wi-Fi erase and verification
-    -> app_gui reset-result presentation
-    -> esp_restart()
-    -> boot into provisioning
-```
-
-Persistent cleanup failure suppresses reboot. GUI presentation failure cannot suppress a reboot after storage cleanup has already been verified.
+- Callbacks are short and copy bounded state before returning.
+- `app_gui`/`ui_manager_lvgl` own LVGL. No arbitrary producer callback may call
+  LVGL directly.
+- Component owner tasks perform long-lived network, audio, storage, and retry
+  work. Public APIs use finite waits and documented admission results.
+- Lifecycle teardown is cooperative. A resource-owning task is not force
+  deleted while its resources may still be live.
 
 ## Memory Strategy
 
-- DMA buffers and descriptors remain in DMA-capable internal RAM.
-- Critical control state, driver state, locks, and system tasks remain internal.
-- Selected bulk buffers, GUI/cloud task stacks, sensor stack, and button stack use PSRAM.
-- `performance_monitor` task stack intentionally remains internal.
-- Large project-owned allocations use explicit heap capabilities instead of a project-wide task-stack policy.
+- Internal/DMA-capable memory holds ISR-visible I2S staging and time-sensitive
+  data.
+- PSRAM holds large non-DMA buffers such as retained audio and WAV prefetch
+  storage.
+- Internal and DMA heap figures overlap; they must not be summed as independent
+  capacity.
+- Provider, web, and GUI boundaries use bounded copied models rather than
+  exposing driver handles or long-lived borrowed buffers.
 
-Representative measured state:
+## Failure And Recovery Boundaries
 
-| Metric | Value |
-|---|---:|
-| Internal free | 203,951 B |
-| Internal minimum | 160,427 B |
-| Largest internal block | 88,064 B |
-| PSRAM free | 8,163,340 B |
-| DMA-capable free | 196,163 B |
-| CPU used | 3.2% |
+- Wi-Fi reconnect is owned by `wifi_manager`; provisioning is a temporary
+  coordinator-controlled transport.
+- Cloud retry and token refresh remain within cloud/auth owners.
+- Audio cancellation and shutdown are cooperative; persistent SD failures end
+  the active operation after the bounded recovery policy.
+- Xiaozhi transport recovery uses its managed lifecycle and fails closed when a
+  required response/transport fence cannot be established.
+- Factory reset coordinates stop/clear/reboot policy without allowing unrelated
+  components to persist or adopt configuration after reset wins.
 
-These numbers are snapshots and must be compared under equivalent workload and lifecycle conditions.
+## Design Rules
 
-## Design Principles
-
-1. One clear owner for every driver, state machine, queue, and persistent record.
-2. No LVGL calls outside the UI task.
-3. No blocking or logging while holding short critical sections.
-4. Finite timeouts for cross-component waits.
-5. Deep-copy callback data with documented lifetime.
-6. Latest-value queues when historical delivery is not required.
-7. Securely clear transient credentials and provisioning payloads.
-8. Measure memory and stack behavior before optimizing.
+1. Keep hardware and persistent state in their owning component.
+2. Prefer copied bounded snapshots across task and provider boundaries.
+3. Treat a build, admission result, host test, and target evidence as distinct
+   levels of validation.
+4. Do not add a cross-component shortcut that bypasses lifecycle cleanup,
+   thread ownership, or secret-handling boundaries.

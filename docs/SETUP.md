@@ -1,315 +1,180 @@
 # Setup And Build Guide
 
-## Supported Baseline
+## Supported Target
 
-| Item | Version / configuration |
-|---|---|
-| MCU | ESP32-S3 N16R8 |
-| Framework | ESP-IDF 6.0.1 |
-| Flash | 16 MB |
-| PSRAM | 8 MiB Octal, 80 MHz |
-| Display | ST7735 128x160 SPI TFT |
-| Sensor | DHT22 |
-| Storage | FAT-formatted microSD |
-| Input | Active-low GPIO9 reset button |
+This release targets an ESP32-S3 N16R8 with 16 MB flash and 8 MB PSRAM using
+ESP-IDF 6.0.1. Use the current
+[`board_config.h`](../components/system/common/include/board_config.h) for the
+authoritative wiring values; do not duplicate pins in application code.
 
-## 1. Install And Activate ESP-IDF
+## Hardware Requirements
 
-Install ESP-IDF 6.0.1 using Espressif's installer or command-line workflow.
-Activate its environment and confirm:
+- ESP32-S3 N16R8 board and USB data cable
+- ST7735 128×160 SPI display
+- DHT22 sensor
+- microSD card formatted for FAT
+- INMP441 microphone and MAX98357A amplifier/speaker for V2 audio
+- Buttons for GPIO9 factory reset and GPIO38 PTT
+- One NeoPixel on GPIO48 when light control is used
 
-```bash
-idf.py --version
+Current board mapping includes LCD SPI2 on GPIO10–15, SD SPI3 on GPIO8 and
+GPIO16–18, DHT22 on GPIO4, reset on GPIO9, PTT on GPIO38, NeoPixel on GPIO48,
+and I2S audio on GPIO47/21/2/7. GPIO38 is active-high and requires the
+documented external 10 kOhm pull-down for a reliable physical switch.
+
+## Install ESP-IDF
+
+Install ESP-IDF 6.0.1 using Espressif's official instructions. In PowerShell,
+activate the matching environment before invoking `idf.py`:
+
+```powershell
+. C:\esp\v6.0.1\esp-idf\export.ps1
 ```
 
-## 2. Clone And Select The Target
+Use the actual installation path on the development machine. Do not copy a
+local `sdkconfig` containing credentials between machines or into Git.
 
-```bash
-git clone https://github.com/HaiHeHuoc/Smart_Room_Cloud_Gateway.git
+## Clone, Configure, And Build
+
+```powershell
+git clone <repository-url>
 cd Smart_Room_Cloud_Gateway
 idf.py set-target esp32s3
+idf.py menuconfig
+idf.py build
 ```
 
-Managed dependencies are resolved from `main/idf_component.yml` during
-configuration and build.
+The project requires the configured flash/PSRAM target and its partition table.
+Avoid changing partition, Kconfig, or dependency files solely to make a local
+build appear smaller.
 
-## 3. Wire The Hardware
+## SD Card Preparation
 
-### ST7735 LCD
+Use a FAT-formatted card. The firmware mounts it at `/sdcard`; the current
+board configuration uses a conservative 4 MHz SDSPI clock. Keep WAV tracks in
+the product audio directory expected by the Local Web/MCP catalog. The audio
+path accepts PCM16 mono 16 kHz WAV files smaller than 2 GiB.
 
-| Signal | ESP32-S3 GPIO |
-|---|---:|
-| MOSI / SDA | 11 |
-| SCLK / SCL | 12 |
-| CS | 10 |
-| DC / A0 | 13 |
-| RST / RES | 14 |
-| BL / LED | 15 |
-| MISO | Not used by LCD |
+SD mount/recovery remains asynchronous. A card that is absent, damaged, or
+removed during use can make storage features unavailable without making the
+rest of the gateway a storage owner.
 
-### Integrated microSD Interface
+## Firebase Development Configuration
 
-| Signal | ESP32-S3 GPIO |
-|---|---:|
-| MOSI | 16 |
-| MISO | 17 |
-| SCLK | 18 |
-| CS | 8 |
-
-### Sensor And Button
-
-| Function | ESP32-S3 GPIO | Notes |
-|---|---:|---|
-| DHT22 data | 4 | Use the required pull-up for the selected module |
-| Factory-reset button | 9 | Active low, internal pull-up, five-second hold |
-
-Use 3.3 V logic and a common ground. Confirm the source-of-truth definitions in
-`components/system/common/include/board_config.h` before applying power.
-
-## 4. Prepare The SD Card
-
-- Format the card with a supported FAT filesystem.
-- Insert it before boot when SD-backed assets or WAV playback are needed
-  immediately. The application itself can boot without a card.
-- Automatic formatting is disabled.
-- The current SDSPI clock is configured at 10 MHz; retain it only after
-  confirming stable cold mounts and WAV playback on the target hardware.
-
-The card mounts at `/sdcard`; LVGL exposes it through the `S:` drive. Boot
-first shows the built-in `Starting...` screen, then the SD recovery task waits
-one second for a cold card and retries every two seconds for up to 90 seconds.
-If that initial window expires, GUI/Wi-Fi/sensor/audio continue and SD retry
-remains active in the background every two seconds. Never rely on firmware
-power-cycling or exact idle removal detection: this board has no configured
-card-detect or SD power-enable GPIO.
-
-### Optional continuous WAV-only stress
-
-For the current audio stress target, copy the test file to this card-relative
-location:
-
-```text
-audio/input.wav
-```
-
-The audio manager receives it as `/sdcard/audio/input.wav`. It must be a
-RIFF/WAVE PCM16 little-endian, mono, 16000 Hz file; typical YouTube audio must
-be converted before use. Under `idf.py menuconfig` -> **Smart Room Cloud
-Gateway -> Audio Manager**, select:
-
-- Leave `Run the golden record/DSP/playback stability loop` disabled.
-- Select `Run a continuous WAV playback stress coordinator` with path
-  `/sdcard/audio/input.wav`, post-completion delay 60 seconds, and priority 6.
-- Leave `WAV prefetch block duration` at the default 10 seconds for the first
-  continuity test. This creates two 320000-byte PSRAM cache blocks only while
-  WAV playback is active; it does not load the full WAV into memory.
-
-This test creates a coordinator only; `audio_manager` remains the sole I2S,
-while its private reader owns the WAV stream and SD lease. With golden disabled,
-it does not record from the microphone or run DSP: each iteration streams the
-full WAV to EOF/error, sleeps 60 seconds, then starts the file again. Expect
-`WAV_STRESS`, `AUDIO_WAV_PREFETCH`, and `WAV_DIAG` logs, but no `CYCLE_DIAG`.
-The deliberate first-cache fill is reported as `initial_wait`; sound starts
-only after that fill and it is expected startup latency, not a playback glitch.
-The manager does not scan the WAV before playback. Instead it maps every signed
-PCM16 sample from the full `[-32768, +32767]` range to the shared `[-9000,
-+9000]` output range with fixed Q16 gain 18000, then applies configured volume.
-No SD file is created or modified. At volume 100, require `fixed_gain_q16=18000`
-and `output_peak <= 9000` in `WAV_DIAG`.
-For a 30/60-second file, check every 10-second boundary and require
-`prefetch_starve=0`, `prefetch_fill_fail=0`, and matching expected/read/streamed
-byte counts, with `max_prefetch_fill_us` comfortably below 10 seconds, before
-treating the audible result as stable. `audio_manager_stop()` is also a valid
-cooperative stop path; a wedged SD/VFS call can still cause its documented
-timeout. Stop with a reboot for the current long-running firmware setup.
-
-If one refill reports a confirmed media error, the reader closes the failed
-handle, releases its SD lease, waits up to five seconds for the background SD
-remount, then opens the file again and resumes once at the last committed PCM
-offset. A recovered run may therefore show `raw_read_fail=1` together with
-`result=ESP_OK`, `sd_resume_attempt=1`, and `sd_resume_ok=1`. It is accepted only
-when `expected_bytes == read_bytes == streamed_bytes`, TX error counters remain
-zero, and no cleanup-error log appears. Repeated failure at the same file area
-is treated as a persistent media/file fault and ends that iteration.
-
-The expected one-fault recovery sequence contains `WAV read failed`,
-`SD I/O failure reported`, `waiting for SD recovery`, `SD filesystem is ready`,
-then `WAV resumed with a fresh file`. The recovered fill must still complete
-inside the ten-second cache margin. Use a controlled transient fault where
-possible; physically removing a card can create persistent media or filesystem
-damage and is not, by itself, proof of the resume path.
-
-## 5. Configure Firebase Securely
-
-Follow the complete guide:
-
-- [`components/cloud/firebase_auth/docs/FIREBASE_SETUP_AND_SECURITY.md`](../components/cloud/firebase_auth/docs/FIREBASE_SETUP_AND_SECURITY.md)
-
-The minimum steps are:
-
-1. Enable Firebase Email/Password Authentication.
-2. Create a dedicated device user and record its UID.
-3. Create Realtime Database.
-4. Publish restrictive `auth.uid` Security Rules.
-5. Review Firebase API-key restrictions and quotas.
-6. Run `idf.py menuconfig` and set local development values under:
+Set Firebase development values only through Menuconfig:
 
 ```text
 Smart Room Cloud Gateway
-└── Firebase development configuration
+  -> Firebase development configuration
 ```
 
-The generated `sdkconfig` is ignored by Git, but its values are compiled into
-the firmware image. Never publish a firmware binary built with real credentials.
+The API key, dedicated device email/password, and optional expected UID are
+compiled into local development firmware. They are not production secret
+storage. Never commit the generated `sdkconfig`, firmware binaries, tokens, or
+database screenshots containing private data. See
+[Firebase setup and security](../components/cloud/firebase_auth/docs/FIREBASE_SETUP_AND_SECURITY.md).
 
-## 6. Build
+## Project Menuconfig
 
-```bash
-idf.py build
+```text
+Smart Room Cloud Gateway
+  -> Firebase development configuration
+  -> Local Web Server
+  -> Audio Manager
+  -> Light Manager -> Validation / Debug options
+  -> Application Log Manager
+  -> Performance Monitor
+  -> Xiaozhi / Voice Assistant
 ```
 
-For a clean rebuild:
+`LOCAL_WEB_SERVER_ENABLE`, logging, and performance monitoring are product
+configuration choices. Keep the Light Manager infinite validation loop disabled
+outside an intentional target regression run.
 
-```bash
-idf.py fullclean
-idf.py build
+## Xiaozhi Prerequisites
+
+Prepare the Xiaozhi account/agent and network access required by the managed
+provider before attempting a voice session. Provider enrollment and console
+procedures are external-service operations: follow the current instructions
+provided by Xiaozhi rather than relying on undocumented website navigation in
+this repository. Do not publish activation codes, session data, or account
+information.
+
+## Xiaozhi First-Boot Activation
+
+The default option is:
+
+```text
+Smart Room Cloud Gateway
+  -> Xiaozhi / Voice Assistant
+      -> Enable Xiaozhi first-boot activation flow
 ```
 
-## 7. Flash And Monitor
+The Kconfig symbol is `CONFIG_SMART_ROOM_XIAOZHI_FIRST_BOOT_ACTIVATION` and it
+defaults to enabled.
 
-```bash
+1. Boot the configured device and allow its normal network/audio/voice startup
+   policy to reach the Xiaozhi lifecycle.
+2. If the backend reports that activation is required, the firmware publishes a
+   bounded copied code and optional message to its voice UI model and serial
+   log, while leaving unrelated gateway services running.
+3. Register the device using the code through the current Xiaozhi-provided
+   account/agent flow. Do not publish the code.
+4. The firmware rechecks `get_info` on its lifecycle-owned 10/20/40/60-second
+   capped schedule. A reboot is not required for the next recheck; a power
+   cycle simply performs the same backend-authoritative check again.
+
+While activation is required, WebSocket/MCP session startup and PTT capture are
+not authorized. The firmware does not write an "already activated" marker to
+NVS, so factory reset or erase-flash does not override the backend result. To
+retain the previous compatibility behavior for a controlled test build, disable
+the option in Menuconfig or use `sdkconfig.activation_disabled.defaults` as a
+build profile; do not use that profile for normal deployment.
+
+Verify readiness from the copied voice/session status after the backend no
+longer requests activation. Common failures are missing network connectivity,
+incorrect provider/account enrollment, an expired/wrong activation code, or
+the backend continuing to request activation. Capture sanitized logs and check
+the external service account before changing firmware.
+
+## Flash And Monitor
+
+Use the actual serial port:
+
+```powershell
 idf.py -p <PORT> flash monitor
 ```
 
-Typical port names:
+On first boot, either stored Wi-Fi configuration is loaded or BLE provisioning
+is started. Follow the displayed provisioning flow, then allow Station
+association and IPv4 acquisition before expecting cloud, Local Web, audio, or
+voice startup.
 
-```text
-Windows: COM5
-Linux:   /dev/ttyACM0
-macOS:   /dev/cu.usbmodemXXXX
-```
+## Local Web, PTT, And MCP Checks
 
-Exit the monitor with `Ctrl+]`.
+When the gateway is online and Local Web is enabled, open the address reported
+by the device on the same trusted network. Exercise storage, audio, light,
+dashboard, scenes, logs, and diagnostics with sanitized test data. Remote PTT
+is a device-microphone control surface: the browser must not be treated as an
+audio capture client.
 
-## 8. First Boot
+For Xiaozhi, verify the session reaches READY before using GPIO38 PTT. MCP
+queries return copied state; action admission such as `cloud.push_latest` or
+playback scheduling is not proof that the later cloud/audio operation completed.
 
-### Stored Wi-Fi Configuration Is Valid
+## Troubleshooting
 
-```text
-boot
--> display, LVGL, SD, and configuration initialization
--> Wi-Fi connect and IPv4
--> Wi-Fi status screen
--> sensor dashboard
--> Firebase authentication and telemetry
-```
-
-### No Valid Wi-Fi Configuration
-
-```text
-boot
--> BLE provisioning screen and QR
--> phone sends credentials
--> Wi-Fi and IPv4 verification
--> NVS save and read-back
--> BLE cleanup and Station adoption
--> Wi-Fi status and sensor dashboard
-```
-
-Use an Espressif-compatible provisioning client that supports BLE transport and
-Security 1. Do not publish a readable provisioning QR or Proof of Possession.
-
-### Xiaozhi first-boot activation
-
-The production default under `idf.py menuconfig` -> **Smart Room Cloud Gateway
--> Xiaozhi / Voice Assistant** is **Enable Xiaozhi first-boot activation flow**.
-After network and audio startup, the foundation calls the managed provider's
-`get_info` operation. If the backend returns an activation code, the rest of
-the gateway remains available while Xiaozhi PTT is deliberately unavailable.
-The code is copied with a fixed bound to the serial console and Xiaozhi LCD
-screen; follow the Xiaozhi backend/account
-activation procedure, then leave the device powered. The existing voice task
-will retry using its own 10/20/40/60-second capped backoff and proceeds to a
-normal WebSocket session after a later backend response no longer requires
-activation.
-
-`activation_timeout_ms` from the provider response is informational only; it is
-not used as a polling interval. Firmware does not persist an activated flag or
-activation code. For a compatibility-only disabled-feature build, configure
-with `sdkconfig.activation_disabled.defaults` in addition to `sdkconfig.defaults`.
-
-## 9. Functional Verification
-
-### Display
-
-- Correct orientation and RGB order.
-- No clipping on the 160x128 logical layout.
-- Provisioning QR is scannable.
-- Sensor, Wi-Fi, and cloud states update without freezing.
-
-### Sensor
-
-- Temperature and humidity update approximately every two seconds.
-- Invalid readings enter stale/error handling without crashing the UI.
-
-### Firebase
-
-- Authentication succeeds with the dedicated device account.
-- The configured UID guard accepts the expected identity.
-- Latest telemetry changes in Realtime Database.
-- Anonymous database access is rejected.
-- Wi-Fi loss enters Wait/Retry and recovery returns to Online.
-
-### Factory Reset
-
-1. Hold GPIO9 for five seconds.
-2. Verify the reset-result screen.
-3. Verify reboot.
-4. Verify the device returns to provisioning.
-5. Reprovision without running `erase-flash`.
-
-## 10. Runtime Diagnostics
-
-`performance_monitor` can report:
-
-- total and per-core CPU use;
-- Internal, PSRAM, and DMA-capable heap;
-- minimum free heap and largest block;
-- allocation/free block counts and fragmentation estimate;
-- task state, CPU percentage, stack high-water, and stack placement.
-
-Internal and DMA-capable totals overlap and must not be added.
-
-## 11. Common Problems
-
-| Symptom | Checks |
+| Symptom | Check |
 |---|---|
-| Blank LCD | Power, CS/DC/RST/BL, SPI host, ST7735 variant |
-| Wrong colors | RGB/BGR order and RGB565 byte order |
-| SD mount keeps retrying | FAT format, wiring, CS, stable 3.3 V, and recovery logs; the rest of the app should remain live |
-| Provisioning QR missing | QR support, active session, GUI logs |
-| Provisioning receives credentials but no IPv4 | AP credentials, DHCP, signal, grace logs |
-| Firebase login fails | Provider enabled, user enabled, menuconfig values, API restrictions |
-| Database permission denied | UID and Realtime Database Security Rules |
-| TLS/auth retry | Internet, certificate bundle, API restrictions, account state |
-| Reset does not trigger | Active-low GPIO9, debounce, full five-second hold |
-| Dependencies do not resolve | Activate ESP-IDF and allow Component Manager access |
+| No display | Verify ST7735 wiring and board mapping before changing LVGL code. |
+| SD unavailable | Verify card format, SPI wiring, and card health; wait for recovery status. |
+| Local Web unavailable | Confirm `LOCAL_WEB_SERVER_ENABLE`, Wi-Fi/IPv4, and same-network access. |
+| No PTT session | Confirm GPIO38 wiring/pull-down, Xiaozhi READY state, and no activation requirement. |
+| Activation code never clears | Check current Xiaozhi account/agent registration and backend response; do not store a local bypass. |
+| Cloud upload fails | Check sanitized Firebase configuration, network state, and restrictive database rules. |
 
-## 12. Reset Local Build Configuration
+## Resetting Local Build State
 
-Linux/macOS:
-
-```bash
-rm -f sdkconfig sdkconfig.old
-idf.py reconfigure
-```
-
-Windows PowerShell:
-
-```powershell
-Remove-Item sdkconfig,sdkconfig.old -ErrorAction SilentlyContinue
-idf.py reconfigure
-```
-
-Run `idf.py menuconfig` again before building so local Firebase development
-configuration is restored.
+Use `idf.py fullclean` only when a clean build is needed. It removes generated
+build output, not source history. Re-enter local Menuconfig secrets afterward
+if the generated configuration has been removed.

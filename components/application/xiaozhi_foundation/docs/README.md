@@ -89,7 +89,7 @@ The component does not own:
 
 ## Controlled Action Ownership
 
-For Phase 18.1, the production path is:
+The production light-control path is:
 
 ```text
 Xiaozhi backend
@@ -102,7 +102,7 @@ Xiaozhi backend
 `light_manager` remains the light-state/effect owner. MCP never drives GPIO/RMT
 or the NeoPixel component directly.
 
-For Phase 18.4, `cloud.push_latest {}` is a no-argument controlled action:
+`cloud.push_latest {}` is a no-argument controlled action:
 
 ```text
 Xiaozhi backend
@@ -118,7 +118,7 @@ means `upload_complete=false`; an MCP callback never waits for network work or
 claims Firebase success. `not_ready`, `offline`, `busy`, `invalid_state`, and
 `failed` remain bounded provider outcomes.
 
-## Phase 18.2.2 Bounded Audio Selection
+## Bounded Audio Selection
 
 `audio.list_tracks` and `audio.play_track` are provider-bound tools, not a
 filesystem API. The MCP layer accepts only an exact bounded logical `track_id`
@@ -163,7 +163,7 @@ authorize microphone capture in that case.
 
 ## Retired Validation Infrastructure
 
-The Phase-12 temporary validation runtime, P2-F fixture paths,
-lifecycle/fault matrices, resource-attribution tracing, and their Menuconfig
-settings were removed during cleanup. Historical evidence remains in project
-state records; it is not a runnable current production profile.
+Temporary validation runtime, fixture paths, lifecycle/fault matrices, and
+resource-attribution tracing are not runnable product profiles. Current
+validation boundaries are documented in the public component documentation and
+hardware-acceptance material; they do not create a production feature.

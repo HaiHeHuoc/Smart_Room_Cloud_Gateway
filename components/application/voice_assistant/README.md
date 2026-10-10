@@ -217,7 +217,7 @@ capture: the downlink owner first taints old PCM, cooperatively terminates its
 arbiter stream, closes the audio channel, clears response state, and only then
 allows the same retained physical press to continue.
 
-## Phase 18.2.1 playback/PTT policy
+## Playback And PTT Policy
 
 GPIO38 interruption is local product policy, never an MCP round trip. For a
 playing resumable WAV or retained recording, the PTT task requests
