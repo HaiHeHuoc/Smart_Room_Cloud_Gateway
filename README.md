@@ -208,12 +208,13 @@ Smart Room Cloud Gateway
 └── Firebase development configuration
 ```
 
-For Xiaozhi, keep **Xiaozhi foundation -> Enable Xiaozhi first-boot activation
-flow** enabled for production. When the backend requests activation, the device
-keeps local services running, shows the bounded code on the Xiaozhi screen and
-serial console, and retries `get_info` with a project-owned backoff. It never
-stores an "already activated" marker; the backend response remains
-authoritative. The tracked `sdkconfig.activation_disabled.defaults` exists only
+For Xiaozhi, keep **Smart Room Cloud Gateway -> Xiaozhi / Voice Assistant ->
+Enable Xiaozhi first-boot activation flow** enabled for production. When the
+backend requests activation, the device keeps local services running, shows the
+bounded code on the Xiaozhi screen and serial console, and retries `get_info`
+with a project-owned backoff. It never stores an "already activated" marker;
+the backend response remains authoritative. The tracked
+`sdkconfig.activation_disabled.defaults` exists only
 for compatibility-build validation, not normal deployment.
 
 Complete guides:

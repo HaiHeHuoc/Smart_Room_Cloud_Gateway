@@ -94,7 +94,8 @@ audio/input.wav
 
 The audio manager receives it as `/sdcard/audio/input.wav`. It must be a
 RIFF/WAVE PCM16 little-endian, mono, 16000 Hz file; typical YouTube audio must
-be converted before use. Under `idf.py menuconfig` -> `Audio manager`, select:
+be converted before use. Under `idf.py menuconfig` -> **Smart Room Cloud
+Gateway -> Audio Manager**, select:
 
 - Leave `Run the golden record/DSP/playback stability loop` disabled.
 - Select `Run a continuous WAV playback stress coordinator` with path
@@ -220,12 +221,13 @@ Security 1. Do not publish a readable provisioning QR or Proof of Possession.
 
 ### Xiaozhi first-boot activation
 
-The production default under `idf.py menuconfig` -> **Xiaozhi foundation** is
-**Enable Xiaozhi first-boot activation flow**. After network and audio startup,
-the foundation calls the managed provider's `get_info` operation. If the backend
-returns an activation code, the rest of the gateway remains available while
-Xiaozhi PTT is deliberately unavailable. The code is copied with a fixed bound
-to the serial console and Xiaozhi LCD screen; follow the Xiaozhi backend/account
+The production default under `idf.py menuconfig` -> **Smart Room Cloud Gateway
+-> Xiaozhi / Voice Assistant** is **Enable Xiaozhi first-boot activation flow**.
+After network and audio startup, the foundation calls the managed provider's
+`get_info` operation. If the backend returns an activation code, the rest of
+the gateway remains available while Xiaozhi PTT is deliberately unavailable.
+The code is copied with a fixed bound to the serial console and Xiaozhi LCD
+screen; follow the Xiaozhi backend/account
 activation procedure, then leave the device powered. The existing voice task
 will retry using its own 10/20/40/60-second capped backoff and proceeds to a
 normal WebSocket session after a later backend response no longer requires

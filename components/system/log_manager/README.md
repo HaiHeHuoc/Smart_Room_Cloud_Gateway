@@ -89,7 +89,7 @@ Files use unbuffered stdio over already-batched writes; `fflush` plus `fsync`
 implements the separate durability operation. Sync deadlines are checked during
 large backlog drains as well as between wakes. SD latency can extend a deadline.
 
-| Kconfig (`Component config -> Application log manager`) | Default |
+| Kconfig (`Smart Room Cloud Gateway -> Application Log Manager`) | Default |
 |---|---:|
 | Enable persistent logger (requires SPIRAM) | enabled |
 | PSRAM ring | 512 KiB |
