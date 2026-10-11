@@ -1,6 +1,9 @@
-# Version 2 Owner Media Upload Area
+# Version 2 Media
 
-Upload only the exact filenames reserved by
-[`../V2_MEDIA_ASSETS.md`](../V2_MEDIA_ASSETS.md). The manifest defines required
-sanitization, capture criteria, and documentation references. This directory
-contains no placeholder evidence.
+This directory contains the published Version 2 image evidence and the editable
+Mermaid schematic source. The two demonstration videos are intentionally hosted
+externally; their links are in [`../V2_MEDIA_ASSETS.md`](../V2_MEDIA_ASSETS.md).
+
+Before replacing or adding assets, follow the manifest's sanitization and
+capture rules. Do not add video binaries, firmware images, credentials, or
+unsanitized serial logs.

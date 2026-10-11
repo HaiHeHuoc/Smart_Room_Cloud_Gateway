@@ -141,8 +141,16 @@ The following real images and video are **Version 1 hardware evidence**:
 | ![V1 Wi-Fi](docs/media/screen-wifi.jpg) | ![V1 dashboard](docs/media/screen-dashboard.jpg) | ![V1 reset result](docs/media/screen-reset-result.jpg) |
 
 [Watch the Version 1 hardware demo](https://youtube.com/shorts/9C5_hecEgXA?feature=share).
-The V2 demonstration procedure is ready in [Demo](docs/DEMO.md); its canonical
-owner-upload paths are listed in [V2 Media Assets](docs/media/V2_MEDIA_ASSETS.md).
+
+### Version 2 evidence
+
+| Prototype | LCD dashboard | Local Web |
+|---|---|---|
+| ![V2 powered prototype](docs/media/v2/v2-hardware-overview.jpg) | ![V2 LCD dashboard](docs/media/v2/v2-lcd-dashboard.jpg) | ![V2 Local Web overview](docs/media/v2/v2-local-web-overview.jpg) |
+
+[Watch the V2 PTT demonstration](https://youtube.com/shorts/rdfI0ZxzbNA?feature=share)
+and [the full V2 demonstration](https://youtu.be/r4Q5xO2WkmA). More screenshots,
+the schematic, and the asset status are in [V2 Media Assets](docs/media/V2_MEDIA_ASSETS.md).
 
 ## Documentation
 

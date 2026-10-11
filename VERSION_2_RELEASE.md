@@ -119,9 +119,9 @@ hardware, browser, endurance, and service-loss scenarios remain unverified.
 
 ## Hardware Acceptance Status
 
-Version 1 hardware evidence is retained in `docs/media/`. Version 2 media and
-remaining owner-provided hardware evidence are pending; see
-[the V2 media manifest](docs/media/V2_MEDIA_ASSETS.md).
+Version 1 hardware evidence is retained in `docs/media/`. Published Version 2
+media, external video links, and any still-missing optional captures are listed
+in [the V2 media manifest](docs/media/V2_MEDIA_ASSETS.md).
 
 ## Known Limitations And Deferred Features
 
@@ -131,9 +131,10 @@ capture, and a 64-bit-safe WAV path for files at or above 2 GiB.
 
 ## Media And Product Evidence
 
-Existing Version 1 media remains unchanged. Canonical Version 2 paths and
-capture requirements are fixed in [V2 Media Assets](docs/media/V2_MEDIA_ASSETS.md).
-Every missing V2 asset is explicitly marked `PENDING OWNER UPLOAD`.
+Existing Version 1 media remains unchanged. Canonical Version 2 paths, external
+video links, and capture requirements are listed in
+[V2 Media Assets](docs/media/V2_MEDIA_ASSETS.md). Missing optional assets remain
+explicitly identified there.
 
 ## Release Boundary
 

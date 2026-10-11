@@ -1,0 +1,35 @@
+
+flowchart TB
+    ESP["ESP32-S3 N16R8"]
+
+    subgraph DISPLAY["Display & Storage"]
+        LCD["ST7735 LCD 128x160"]
+        SD["microSD Card"]
+    end
+
+    subgraph AUDIO["I2S Audio"]
+        MIC["INMP441 Microphone"]
+        AMP["MAX98357A Amplifier"]
+        SPK["Speaker"]
+    end
+
+    subgraph IO["Sensors & Controls"]
+        DHT["DHT22 Sensor"]
+        RESET["Factory Reset Button"]
+        PTT["PTT Button"]
+        LED["Onboard NeoPixel"]
+    end
+
+    ESP -->|"SPI2: SCLK GPIO12, MOSI GPIO11, CS GPIO10, DC GPIO13, RST GPIO14, BL GPIO15"| LCD
+    ESP <-->|"SPI3: SCLK GPIO18, MOSI GPIO16, MISO GPIO17, CS GPIO8"| SD
+
+    ESP -->|"BCLK GPIO47, WS GPIO21"| MIC
+    MIC -->|"SD data → GPIO2"| ESP
+
+    ESP -->|"BCLK GPIO47, LRC GPIO21, DIN GPIO7"| AMP
+    AMP -->|"SPK+ / SPK−"| SPK
+
+    DHT -->|"DATA GPIO4"| ESP
+    RESET -->|"GPIO9, active HIGH"| ESP
+    PTT -->|"GPIO38, active HIGH"| ESP
+    ESP -->|"GPIO48"| LED
